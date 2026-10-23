@@ -116,9 +116,9 @@ export class ProfileWorkerSupervisor {
    */
   async adoptImportCandidate(profileId: string, worker: ProfileWorkerHandle,
     assertFenced: () => void): Promise<void> {
-    let adopted = false
+    const state = { adopted: false }
     try {
-      await this.serial(profileId, async () => {
+      await this.serial(profileId, () => {
         if (this.closed) throw new HostAuthorityError('unavailable')
         assertFenced()
         if (this.workers.has(profileId)) throw new HostAuthorityError('conflict')
@@ -126,10 +126,11 @@ export class ProfileWorkerSupervisor {
           throw new HostAuthorityError('unavailable')
         }
         this.workers.set(profileId, worker)
-        adopted = true
+        state.adopted = true
+        return Promise.resolve()
       })
     } finally {
-      if (!adopted) {
+      if (!state.adopted) {
         worker.closeNotifications()
         worker.abort()
         await worker.done.catch(() => undefined)

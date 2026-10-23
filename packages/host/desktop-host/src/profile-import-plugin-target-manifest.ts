@@ -60,10 +60,14 @@ export async function planProfileImportPluginTargetManifest(input: Readonly<{
   const dsh = record(manifest.dsh)
   const profile = record(dsh.profile)
   const bundles = profile.bundles
-  if (!Array.isArray(bundles) || bundles.some(name => typeof name !== 'string')
-    || new Set(bundles).size !== bundles.length) throw Error('profile_import_plugin_target_manifest_invalid')
+  if (!Array.isArray(bundles)) throw Error('profile_import_plugin_target_manifest_invalid')
+  const bundleNames: string[] = bundles.map((name: unknown) => {
+    if (typeof name !== 'string') throw Error('profile_import_plugin_target_manifest_invalid')
+    return name
+  })
+  if (new Set(bundleNames).size !== bundleNames.length) throw Error('profile_import_plugin_target_manifest_invalid')
   const names = plan.plugins.map(plugin => plugin.name)
-  if (names.some(name => Object.hasOwn(dependencies, name) || bundles.includes(name))) {
+  if (names.some(name => Object.hasOwn(dependencies, name) || bundleNames.includes(name))) {
     throw Error('profile_import_plugin_target_conflict')
   }
   const nextDependencies = { ...dependencies }
@@ -71,7 +75,7 @@ export async function planProfileImportPluginTargetManifest(input: Readonly<{
     nextDependencies[plugin.name] = bundledDependencySpec(plugin.archiveDigest)
   }
   const nextManifest = `${JSON.stringify({ ...manifest, dependencies: nextDependencies,
-    dsh: { ...dsh, profile: { ...profile, bundles: [...bundles, ...names] } } }, null, 2)}\n`
+    dsh: { ...dsh, profile: { ...profile, bundles: [...bundleNames, ...names] } } }, null, 2)}\n`
   if (readExtensionStateFile(path, uid, 1_048_576, 'profile_import_manifest_unsafe') !== currentManifest
     || JSON.stringify(await checkPlan()) !== JSON.stringify(plan)) {
     throw Error('profile_import_inventory_changed')

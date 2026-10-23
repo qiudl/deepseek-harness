@@ -93,6 +93,45 @@ export class ProfileImportSessionCoordinator {
     if (failed?.status === 'rejected') throw failed.reason
   }
 
+  private inspectPair(source: Profile, target: Profile, uid: number, signal?: AbortSignal) {
+    return Promise.all([
+      inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target, uid,
+        ...(signal ? { signal } : {}) }),
+      inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target, uid,
+        ...(signal ? { signal } : {}) }),
+    ])
+  }
+
+  private assertPluginPublisher(input: CommitInput & Readonly<{
+    pluginJournal: FileProfileImportPluginPublishJournal
+    pluginPublisher: ProfileImportPluginPublisherInput
+  }>): void {
+    const { source, target, pluginPublisher } = input
+    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
+      || pluginPublisher.profileRoot !== target.profileRoot
+      || pluginPublisher.operationId !== input.operationId
+      || pluginPublisher.sourceProfileId !== source.profileId
+      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
+      throw Error('profile_import_operation_not_recoverable')
+    }
+  }
+
+  private async quiesceAndSettle(sourceProfileId: string, targetProfileId: string,
+    operationId: string): Promise<void> {
+    await this.fence.quiescePair({ sourceProfileId, targetProfileId, operationId,
+      revoke: (id) =>{  this.workers.revoke(id) }, stop: id => this.workers.stop(id) })
+    await this.settleExtensions(sourceProfileId, targetProfileId)
+  }
+
+  private async requirePluginOperation(input: CommitInput,
+    phases: readonly ProfileImportOperation['phase'][], failure: string): Promise<ProfileImportOperation> {
+    const current = await this.journal.load(input.operationId)
+    if (!current || current.sourceProfileId !== input.source.profileId
+      || current.targetProfileId !== input.target.profileId || current.selectedPluginNames.length === 0
+      || !phases.includes(current.phase)) throw Error(failure)
+    return current
+  }
+
   async prepare(input: PrepareInput): Promise<ProfileImportOperation> {
     if (input.selectedPluginNames.length > 0) throw new Error('profile_import_plugins_unavailable')
     return this.prepareInternal(input)
@@ -109,12 +148,7 @@ export class ProfileImportSessionCoordinator {
     const { source, target, uid, signal, selectedSessionIds, selectedPluginNames } = input
     signal?.throwIfAborted()
     await input.assertAuthority()
-    const [sourceInventory, targetInventory] = await Promise.all([
-      inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target, uid,
-        ...(signal ? { signal } : {}) }),
-      inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target, uid,
-        ...(signal ? { signal } : {}) }),
-    ])
+    const [sourceInventory, targetInventory] = await this.inspectPair(source, target, uid, signal)
     const preview = compareProfileImportInventory(sourceInventory, targetInventory)
     if (preview.previewDigest !== input.expectedPreviewDigest) throw new Error('profile_import_inventory_changed')
     const candidates = new Map(preview.sessions.map(row => [row.source.id, row.state]))
@@ -135,7 +169,7 @@ export class ProfileImportSessionCoordinator {
       targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1,
     })
     await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
+      operationId: input.operationId, revoke: (id) =>{  this.workers.revoke(id) },
       stop: id => this.workers.stop(id),
     })
     await this.settleExtensions(source.profileId, target.profileId)
@@ -165,12 +199,7 @@ export class ProfileImportSessionCoordinator {
         || JSON.stringify(plugin.record.selectedPluginNames) !== JSON.stringify(selectedPluginNames)) {
         throw Error('profile_import_plugin_publish_changed')
       }
-      const [sourceFinal, targetFinal] = await Promise.all([
-        inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target,
-          uid, ...(signal ? { signal } : {}) }),
-        inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target,
-          uid, ...(signal ? { signal } : {}) }),
-      ])
+      const [sourceFinal, targetFinal] = await this.inspectPair(source, target, uid, signal)
       if (sourceFinal.snapshotDigest !== prepared.sourceSnapshotDigest
         || targetFinal.snapshotDigest !== prepared.targetSnapshotDigest) {
         throw Error('profile_import_inventory_changed')
@@ -200,7 +229,7 @@ export class ProfileImportSessionCoordinator {
     if (pending) {
       await this.fence.quiescePair({ sourceProfileId: current.sourceProfileId,
         targetProfileId: current.targetProfileId, operationId: current.operationId,
-        revoke: id => this.workers.revoke(id), stop: id => this.workers.stop(id) })
+        revoke: (id) =>{  this.workers.revoke(id) }, stop: id => this.workers.stop(id) })
       await this.settleExtensions(current.sourceProfileId, current.targetProfileId)
     }
     const aborted = current.phase === 'aborted' ? current : await (async () => {
@@ -227,7 +256,7 @@ export class ProfileImportSessionCoordinator {
       if (active.generation !== current.stagedGeneration) throw new Error('profile_import_generation_changed')
       if (this.fence.hasPendingPair(source.profileId, target.profileId, current.operationId)) {
         await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-          operationId: current.operationId, revoke: id => this.workers.revoke(id),
+          operationId: current.operationId, revoke: (id) =>{  this.workers.revoke(id) },
           stop: id => this.workers.stop(id) })
         await this.settleExtensions(source.profileId, target.profileId)
         const proof = await this.inspectCommitEvidence(input, ['committed'])
@@ -241,7 +270,7 @@ export class ProfileImportSessionCoordinator {
       throw new Error('profile_import_operation_not_committable')
     }
     await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: current.operationId, revoke: id => this.workers.revoke(id),
+      operationId: current.operationId, revoke: (id) =>{  this.workers.revoke(id) },
       stop: id => this.workers.stop(id) })
     await this.settleExtensions(source.profileId, target.profileId)
     if (current.phase === 'staged') {
@@ -299,20 +328,10 @@ export class ProfileImportSessionCoordinator {
     activateCandidate: (leaseFd: number) => Promise<void>
   }>): Promise<ProfileImportOperation> {
     const { source, target, pluginPublisher } = input
-    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
-      || pluginPublisher.profileRoot !== target.profileRoot
-      || pluginPublisher.operationId !== input.operationId
-      || pluginPublisher.sourceProfileId !== source.profileId
-      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
+    this.assertPluginPublisher(input)
     await input.assertAuthority()
-    const current = await this.journal.load(input.operationId)
-    if (!current || current.sourceProfileId !== source.profileId
-      || current.targetProfileId !== target.profileId || current.selectedPluginNames.length === 0
-      || !['staged', 'committing', 'committed'].includes(current.phase)) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
+    const current = await this.requirePluginOperation(input, ['staged', 'committing', 'committed'],
+      'profile_import_operation_not_recoverable')
     let operation: ProfileImportOperation = current
     if (current.phase === 'committed'
       && !this.fence.hasPendingPair(source.profileId, target.profileId, current.operationId)) {
@@ -330,10 +349,7 @@ export class ProfileImportSessionCoordinator {
       await input.assertAuthority()
       return current
     }
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id) })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceAndSettle(source.profileId, target.profileId, input.operationId)
     const candidateLease = await input.candidateLease.acquireForSpawn()
     try {
       if (operation.phase === 'staged') {
@@ -453,20 +469,10 @@ export class ProfileImportSessionCoordinator {
   assertOldCandidateStopped?: () => Promise<void>,
   restoreOldRuntime?: (oldGeneration: number, stagedGeneration: number) => Promise<void>): Promise<ProfileImportOperation> {
     const { source, target, pluginPublisher } = input
-    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
-      || pluginPublisher.profileRoot !== target.profileRoot
-      || pluginPublisher.operationId !== input.operationId
-      || pluginPublisher.sourceProfileId !== source.profileId
-      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
+    this.assertPluginPublisher(input)
     await input.assertAuthority()
-    const current = await this.journal.load(input.operationId)
-    if (!current || current.sourceProfileId !== source.profileId
-      || current.targetProfileId !== target.profileId || current.selectedPluginNames.length === 0
-      || !['staged', 'committing', 'aborted'].includes(current.phase)) {
-      throw Error('profile_import_operation_not_abortable')
-    }
+    const current = await this.requirePluginOperation(input, ['staged', 'committing', 'aborted'],
+      'profile_import_operation_not_abortable')
     const plugin = await inspectProfileImportPluginPublishRecovery({
       journal: input.pluginJournal, profileRoot: target.profileRoot,
       operationId: input.operationId, sourceProfileId: source.profileId,
@@ -486,10 +492,7 @@ export class ProfileImportSessionCoordinator {
       if (plugin.action !== 'rolled_back') throw Error('profile_import_plugin_publish_changed')
       return current
     }
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id) })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceAndSettle(source.profileId, target.profileId, input.operationId)
     if (current.phase === 'staged') {
       if (plugin.action !== 'ready'
         || (await this.inspectCommitEvidence(input, ['staged'], true, true)).pointer !== 'old') {
@@ -498,8 +501,7 @@ export class ProfileImportSessionCoordinator {
     } else if (current.phase === 'committing' && plugin.action !== 'rolled_back') {
       const proof = await this.inspectCommittingWithPlugins(input)
       if (proof.pointer !== 'old'
-        && (assertCandidateStopped === undefined || proof.pointer !== 'staged'
-          || proof.pluginAction !== 'published')) {
+        && (assertCandidateStopped === undefined || proof.pluginAction !== 'published')) {
         throw Error('profile_import_generation_changed')
       }
     } else {

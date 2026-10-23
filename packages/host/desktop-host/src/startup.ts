@@ -492,7 +492,7 @@ export async function startDesktopHostApplication(
   })
   const workers = new ProfileWorkerSupervisor(
     dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)),
-    profileId => importWorkerFence.assertOpen(profileId),
+    (profileId) =>{  importWorkerFence.assertOpen(profileId) },
   )
   try {
     ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
@@ -741,7 +741,7 @@ export async function startDesktopHostApplication(
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
-      profileId => importWorkerFence.assertOpen(profileId),
+      (profileId) =>{  importWorkerFence.assertOpen(profileId) },
     )
     ownerDirectory(join(root, 'control'), uid)
     const profileImportJournal = new FileProfileImportOperationJournal(
@@ -749,7 +749,7 @@ export async function startDesktopHostApplication(
     const profileImport = new ProfileImportSessionCoordinator(
       profileImportJournal,
       importWorkerFence, {
-        revoke: profileId => host.revokeProfile(profileId as never),
+        revoke: (profileId) =>{  host.revokeProfile(profileId as never) },
         stop: profileId => workers.dispose(profileId),
         settleExtensions: profileId => extensionOperations.settledProfile(profileId),
         settleHostOperations: profileId => importActivity.settled(profileId),
@@ -895,7 +895,7 @@ export async function startDesktopHostApplication(
         if (context.pluginJournal && dependencies.profileWorkerFactory !== undefined) {
           throw new HostAuthorityError('upgrade_required')
         }
-        const committed = context.pluginJournal && context.pluginPublisher
+        const committed = context.pluginJournal
           ? await profileImport.commitWithPlugins({ ...context.base,
             pluginJournal: context.pluginJournal, pluginPublisher: context.pluginPublisher,
             candidateLease: new FileProfileImportCandidateLease(context.base.target.profileRoot,
@@ -924,7 +924,7 @@ export async function startDesktopHostApplication(
       },
       abortProfileImport: async (input) => {
         const context = await importCommand(input)
-        const joint = context.pluginJournal && context.pluginPublisher
+        const joint = context.pluginJournal
           && !['prepared', 'fenced'].includes(context.operation.phase)
           ? { ...context.base, pluginJournal: context.pluginJournal,
             pluginPublisher: context.pluginPublisher,

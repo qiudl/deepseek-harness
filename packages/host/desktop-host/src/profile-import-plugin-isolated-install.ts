@@ -43,6 +43,15 @@ function installReceipt(operationId: string, plan: ProfileImportPluginPlan, lock
   })}\n`)
 }
 
+async function verifyInstalledPlugins(catalog: BundledPluginCatalog, plan: ProfileImportPluginPlan,
+  sandboxRoot: string, uid: number): Promise<void> {
+  for (const plugin of plan.plugins) {
+    const entry = catalog.get(plugin.name, plugin.version)
+    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
+    await verifyCopiedBundledPlugin(catalog, entry, sandboxRoot, uid, 'copied')
+  }
+}
+
 async function writePrivate(path: string, bytes: Buffer): Promise<void> {
   const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
   try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
@@ -126,9 +135,9 @@ export async function runPnpm(input: { nodeExecutablePath: string
         }, 2_000)
       }
     }
-    const abort = () => stop('profile_import_plugin_isolated_cancelled')
+    const abort = () =>{  stop('profile_import_plugin_isolated_cancelled') }
     signal?.addEventListener('abort', abort, { once: true })
-    const deadline = setTimeout(() => stop('profile_import_plugin_isolated_timeout'), 120_000)
+    const deadline = setTimeout(() =>{  stop('profile_import_plugin_isolated_timeout') }, 120_000)
     child.once('error', () => { reason = 'profile_import_plugin_isolated_launch_failed' })
     child.once('close', (code) => {
       clearTimeout(deadline)
@@ -188,11 +197,7 @@ export async function installStagedProfileImportPluginsInIsolation(input: Eviden
     throw Error('profile_import_plugin_isolated_resolution_invalid')
   }
   exactResolution(lockfile, plan, archives)
-  for (const plugin of plan.plugins) {
-    const entry = input.catalog.get(plugin.name, plugin.version)
-    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
-    await verifyCopiedBundledPlugin(input.catalog, entry, sandboxRoot, uid, 'copied')
-  }
+  await verifyInstalledPlugins(input.catalog, plan, sandboxRoot, uid)
   if (!(await check())) throw Error('profile_import_plugin_stage_missing')
   const lockfileDigest = createHash('sha256').update(lockfile).digest('hex')
   await writePrivate(join(sandboxRoot, 'install-receipt.json'), installReceipt(operationId, plan, lockfileDigest))
@@ -250,11 +255,7 @@ export async function inspectIsolatedProfileImportPluginInstall(input: Evidence)
     archives.set(plugin.name, bytes)
   }
   exactResolution(lockfile, plan, archives)
-  for (const plugin of plan.plugins) {
-    const entry = input.catalog.get(plugin.name, plugin.version)
-    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
-    await verifyCopiedBundledPlugin(input.catalog, entry, sandboxRoot, uid, 'copied')
-  }
+  await verifyInstalledPlugins(input.catalog, plan, sandboxRoot, uid)
   input.fence.assertOwnedPair(sourceProfileId, target.profileId, operationId)
   if (!(await inspectStagedProfileImportPluginArchives(input))) throw Error('profile_import_plugin_stage_missing')
   return { sandboxRoot, lockfileDigest }

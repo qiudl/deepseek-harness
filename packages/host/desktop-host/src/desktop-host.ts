@@ -175,15 +175,36 @@ export class DesktopHost {
     if (account.issuer !== input.issuer || account.subject !== input.subject) {
       throw new HostAuthorityError('profile_mismatch')
     }
+    return this.provisionVerifiedAccount(input, input.authorityBindingScope)
+  }
+
+  private async provisionVerifiedAccount(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly ownerId: string
+  }, scope?: string, requireScopedBinding = false): Promise<{
+    readonly profileId: PersonProfileId
+    readonly bindingGeneration: number
+  }> {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
+    let options: { readonly requireScopedBinding?: string } = {}
+    if (requireScopedBinding) {
+      if (scope === undefined) throw new HostAuthorityError('invalid_input')
+      options = { requireScopedBinding: scope }
+    }
     const profile = await this.options.registry.provisionAccount({
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
       authorityEnvironmentId: input.authorityEnvironmentId,
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
-      ...(input.authorityBindingScope === undefined ? {} : { authorityBindingScope: input.authorityBindingScope }),
+      ...(scope === undefined ? {} : { authorityBindingScope: scope }),
       unlockMaterial: input.unlockMaterial,
-    }, ensureWorker)
+    }, ensureWorker, options)
     this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
   }
@@ -214,17 +235,7 @@ export class DesktopHost {
     if (account.issuer !== input.issuer || account.subject !== input.subject) {
       throw new HostAuthorityError('profile_mismatch')
     }
-    const ensureWorker = this.options.ensureProfileWorker
-    if (!ensureWorker) throw new HostAuthorityError('unavailable')
-    const profile = await this.options.registry.provisionAccount({
-      issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
-      authorityEnvironmentId: input.authorityEnvironmentId,
-      authorityBindingVersion: input.authorityBindingVersion,
-      authorityBindingScope: account.bindingScope,
-      keyHandle: input.keyHandle, unlockMaterial: input.unlockMaterial,
-    }, ensureWorker, { requireScopedBinding: account.bindingScope })
-    this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)
-    return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+    return this.provisionVerifiedAccount(input, account.bindingScope, true)
   }
 
   /**

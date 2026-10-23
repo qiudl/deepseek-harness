@@ -223,8 +223,8 @@ export class ProfileRegistry {
         || input.authorityEnvironmentId === undefined || input.accountBindingHandle === undefined
         || (existing && (bindings?.length !== 1
           || bindings[0]?.authorityEnvironmentId !== input.authorityEnvironmentId
-          || bindings[0]?.handle !== input.accountBindingHandle
-          || bindings[0]?.authorityBindingScope !== options.requireScopedBinding))) {
+          || bindings[0].handle !== input.accountBindingHandle
+          || bindings[0].authorityBindingScope !== options.requireScopedBinding))) {
         throw new HostAuthorityError('profile_mismatch')
       }
     }

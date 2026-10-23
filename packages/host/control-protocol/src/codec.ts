@@ -592,6 +592,32 @@ function authorized(params: Record<string, unknown>): {
   }
 }
 
+const IMPORT_IDENTITY_KEYS = [
+  'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+  'account_issuer', 'account_subject', 'source_account_issuer', 'source_account_subject',
+  'source_profile_key_handle', 'source_unlock_material',
+] as const
+
+function importPreviewState(value: unknown): 'new' | 'same' | 'conflict' {
+  if (value !== 'new' && value !== 'same' && value !== 'conflict') reject()
+  return value
+}
+
+function importIdentity(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer),
+    account_subject: boundedText(params.account_subject, 512),
+    source_account_issuer: accountIssuer(params.source_account_issuer),
+    source_account_subject: boundedText(params.source_account_subject, 512),
+    source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
+    source_unlock_material: unlockMaterial(params.source_unlock_material),
+  }
+}
+
 function extensionKind(value: unknown): HostExtensionKind {
   if (value !== 'plugin' && value !== 'mcp' && value !== 'skill') reject()
   return value
@@ -2370,57 +2396,29 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     }
   }
   if (frame.method === 'profile.import_preview') {
-    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
-      'authority_binding_version', 'account_issuer', 'account_subject', 'source_account_issuer',
-      'source_account_subject', 'source_profile_key_handle',
-      'source_unlock_material', 'session_offset', 'plugin_offset',
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'session_offset', 'plugin_offset',
       ...(Object.hasOwn(params, 'expected_preview_digest') ? ['expected_preview_digest'] : [])])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_preview', params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
+      ...importIdentity(params),
       session_offset: nonnegative(params.session_offset), plugin_offset: nonnegative(params.plugin_offset),
       ...(Object.hasOwn(params, 'expected_preview_digest')
         ? { expected_preview_digest: digest(params.expected_preview_digest) } : {}),
     } }
   }
   if (frame.method === 'profile.import_status') {
-    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
-      'authority_binding_version', 'account_issuer', 'account_subject', 'source_account_issuer',
-      'source_account_subject', 'source_profile_key_handle', 'source_unlock_material', 'operation_offset'])
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'operation_offset'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_status', params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
+      ...importIdentity(params),
       operation_offset: nonnegative(params.operation_offset),
     } }
   }
   if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
     || frame.method === 'profile.import_abort') {
     const prepare = frame.method === 'profile.import_prepare'
-    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
-      'authority_binding_version', 'account_issuer', 'account_subject', 'source_account_issuer',
-      'source_account_subject', 'source_profile_key_handle', 'source_unlock_material', 'operation_id',
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'operation_id',
       ...(prepare ? ['expected_preview_digest', 'selected_session_ids', 'selected_plugin_names'] : [])])
     const identity = {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
+      ...importIdentity(params),
       operation_id: uuid(params.operation_id),
     }
     if (prepare) {
@@ -2929,11 +2927,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
       const item = record(value)
       exactKeys(item, ['id', 'created_at', ...(Object.hasOwn(item, 'parent_session') ? ['parent_session'] : []),
         'event_count', 'source_digest', 'state', ...(Object.hasOwn(item, 'target_digest') ? ['target_digest'] : [])])
-      if (item.state !== 'new' && item.state !== 'same' && item.state !== 'conflict') reject()
       return { id: boundedText(item.id, 512), created_at: nonnegative(item.created_at),
         ...(Object.hasOwn(item, 'parent_session') ? { parent_session: boundedText(item.parent_session, 512) } : {}),
         event_count: nonnegative(item.event_count), source_digest: digest(item.source_digest),
-        state: item.state as 'new' | 'same' | 'conflict',
+        state: importPreviewState(item.state),
         ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }
     })
     const plugins = result.plugins.map((value) => {
@@ -2941,10 +2938,9 @@ function decodeProfileResult(frame: Record<string, unknown>):
       exactKeys(item, ['name', 'version', 'source_digest', 'state',
         ...(Object.hasOwn(item, 'target_version') ? ['target_version'] : []),
         ...(Object.hasOwn(item, 'target_digest') ? ['target_digest'] : [])])
-      if (item.state !== 'new' && item.state !== 'same' && item.state !== 'conflict') reject()
       return { name: boundedText(item.name, 214),
         version: item.version === null ? null : boundedText(item.version, 128),
-        source_digest: digest(item.source_digest), state: item.state as 'new' | 'same' | 'conflict',
+        source_digest: digest(item.source_digest), state: importPreviewState(item.state),
         ...(Object.hasOwn(item, 'target_version') ? {
           target_version: item.target_version === null ? null : boundedText(item.target_version, 128) } : {}),
         ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }

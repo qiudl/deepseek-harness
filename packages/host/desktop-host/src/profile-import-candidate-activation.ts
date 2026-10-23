@@ -36,8 +36,9 @@ export async function activateProfileImportCandidate(input: Readonly<{
     profileRoot: input.profileRoot, credentialHandle: input.credentialHandle,
     pluginRoots: input.pluginRoots, env: {} }, input.leaseFd)
   let adopted = false
-  let exited = false
-  void worker.done.then(() => { exited = true }, () => { exited = true })
+  const state = { exited: false }
+  const hasExited = () => state.exited
+  void worker.done.then(() => { state.exited = true }, () => { state.exited = true })
   try {
     if (!worker.viewOrigin || !worker.bootstrapCookie) throw Error('profile_import_candidate_view_missing')
     await Promise.race([
@@ -48,11 +49,11 @@ export async function activateProfileImportCandidate(input: Readonly<{
       }),
     ])
     input.signal?.throwIfAborted()
-    if (exited) throw Error('profile_import_candidate_exited')
+    if (hasExited()) throw Error('profile_import_candidate_exited')
     input.assertFenced()
     await input.workers.adoptImportCandidate(input.profileId, worker, input.assertFenced)
     adopted = true
-    if (exited) throw Error('profile_import_candidate_exited')
+    if (hasExited()) throw Error('profile_import_candidate_exited')
     input.assertFenced()
   } catch (error) {
     if (adopted) await input.workers.dispose(input.profileId).catch(() => undefined)

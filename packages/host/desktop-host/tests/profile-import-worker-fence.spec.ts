@@ -25,10 +25,10 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     gate.reservePair(sourceId, targetId, operationId)
     gate.reservePair(sourceId, targetId, operationId)
     const restarted = new ProfileImportWorkerFence(files)
-    expect(() => restarted.assertOpen(sourceId)).toThrow(/unavailable/u)
-    expect(() => restarted.assertOpen(targetId)).toThrow(/unavailable/u)
-    expect(() => restarted.reservePair(sourceId, targetId, otherId)).toThrow(/conflict/u)
-    expect(() => restarted.clearPair(sourceId, targetId, otherId)).toThrow(/conflict/u)
+    expect(() =>{  restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
+    expect(() =>{  restarted.assertOpen(targetId) }).toThrow(/unavailable/u)
+    expect(() =>{  restarted.reservePair(sourceId, targetId, otherId) }).toThrow(/conflict/u)
+    expect(() =>{  restarted.clearPair(sourceId, targetId, otherId) }).toThrow(/conflict/u)
     restarted.clearPair(sourceId, targetId, operationId)
     restarted.assertOpen(sourceId)
     restarted.assertOpen(targetId)
@@ -45,16 +45,16 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
         files.replace(id, bytes)
       },
     })
-    expect(() => gate.reservePair(sourceId, targetId, operationId)).toThrow('second marker failed')
+    expect(() =>{  gate.reservePair(sourceId, targetId, operationId) }).toThrow('second marker failed')
     const restarted = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(root, uid))
-    expect(() => restarted.assertOpen(sourceId)).toThrow(/unavailable/u)
+    expect(() =>{  restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
     restarted.clearPair(sourceId, targetId, operationId)
     restarted.assertOpen(sourceId)
     restarted.assertOpen(targetId)
     restarted.reservePair(sourceId, targetId, operationId)
     restarted.assertOwnedPair(sourceId, targetId, operationId)
     await writeFile(join(root, sourceId, 'profile-import-fence.v1.json'), '{bad', { mode: 0o600 })
-    expect(() => restarted.assertOpen(sourceId)).toThrow(/unavailable/u)
+    expect(() =>{  restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
   })
 
   it('waits for both worker exits and retains markers if either stop fails', async () => {
@@ -65,8 +65,8 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
       stop: (id) => { order.push(`stop:${id}`); if (id === targetId) throw new Error('stop failed'); return Promise.resolve() },
     })).rejects.toThrow('stop failed')
     expect(order).toEqual([`revoke:${sourceId}`, `revoke:${targetId}`, `stop:${sourceId}`, `stop:${targetId}`])
-    expect(() => gate.assertOpen(sourceId)).toThrow(/unavailable/u)
-    expect(() => gate.assertOpen(targetId)).toThrow(/unavailable/u)
+    expect(() =>{  gate.assertOpen(sourceId) }).toThrow(/unavailable/u)
+    expect(() =>{  gate.assertOpen(targetId) }).toThrow(/unavailable/u)
   })
 
   it('rejects a linked marker and closes a worker started while its fence is written', async () => {
@@ -75,7 +75,7 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     const linked = join(root, 'linked.json')
     await writeFile(linked, '{}', { mode: 0o600 })
     await symlink(linked, marker)
-    expect(() => gate.assertOpen(sourceId)).toThrow()
+    expect(() =>{  gate.assertOpen(sourceId) }).toThrow()
     await rm(marker)
     let finish!: () => void
     const done = new Promise<void>((resolve) => { finish = resolve })
@@ -83,7 +83,7 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     const supervisor = new ProfileWorkerSupervisor(async () => {
       gate.reservePair(sourceId, targetId, operationId)
       return { closeNotifications: closed, abort: finish, done }
-    }, id => gate.assertOpen(id))
+    }, (id) =>{  gate.assertOpen(id) })
     await expect(supervisor.ensure({ profileId: sourceId, profileRoot: join(root, sourceId),
       credentialHandle: 'key', pluginRoots: [] })).rejects.toThrow(/unavailable/u)
     expect(closed).toHaveBeenCalledOnce()
@@ -96,14 +96,14 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     gate.reservePair(sourceId, targetId, operationId)
     let finish!: () => void
     const done = new Promise<void>((resolve) => { finish = resolve })
-    const abort = vi.fn(() => finish())
+    const abort = vi.fn(() =>{  finish() })
     const candidate = { viewOrigin: 'http://127.0.0.1:43123', generation: 1,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       closeNotifications: vi.fn(), abort, done }
     const workers = new ProfileWorkerSupervisor(async () => { throw Error('ordinary start not expected') },
-      id => gate.assertOpen(id))
+      (id) =>{  gate.assertOpen(id) })
     await workers.adoptImportCandidate(targetId, candidate,
-      () => gate.assertOwnedPair(sourceId, targetId, operationId))
+      () =>{  gate.assertOwnedPair(sourceId, targetId, operationId) })
     await expect(workers.activate(targetId)).rejects.toThrow(/unavailable/u)
     gate.clearPair(sourceId, targetId, operationId)
     expect(await workers.activate(targetId)).toMatchObject({ origin: candidate.viewOrigin, generation: 1 })
@@ -116,14 +116,14 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     const { gate } = await fixture()
     let finish!: () => void
     const done = new Promise<void>((resolve) => { finish = resolve })
-    const abort = vi.fn(() => finish())
+    const abort = vi.fn(() =>{  finish() })
     const candidate = { viewOrigin: 'http://127.0.0.1:43123', generation: 1,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       closeNotifications: vi.fn(), abort, done }
     const workers = new ProfileWorkerSupervisor(async () => { throw Error('ordinary start not expected') },
-      id => gate.assertOpen(id))
+      (id) =>{  gate.assertOpen(id) })
     await expect(workers.adoptImportCandidate(targetId, candidate,
-      () => gate.assertOwnedPair(sourceId, targetId, operationId))).rejects.toThrow(/conflict/u)
+      () =>{  gate.assertOwnedPair(sourceId, targetId, operationId) })).rejects.toThrow(/conflict/u)
     expect(abort).toHaveBeenCalledOnce()
     expect(candidate.closeNotifications).toHaveBeenCalledOnce()
     await workers.disposeAll()

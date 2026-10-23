@@ -183,8 +183,8 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect(staged.revision).toBe(3)
     expect(calls).toEqual([`revoke:${source.profileId}`, `revoke:${target.profileId}`,
       `stop:${source.profileId}`, `stop:${target.profileId}`])
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     expect(await target.target.activeGeneration()).toBe(1)
     expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1', '2'])
     const aborted = await coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} })
@@ -209,12 +209,12 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     })
     await expect(coordinator.prepare(base)).rejects.toThrow('target stop failed')
     expect((await journal.load(base.operationId))?.phase).toBe('prepared')
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     await expect(coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} }))
       .rejects.toThrow('target stop failed')
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     failStop = false
     await coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} })
     fence.assertOpen(source.profileId)
@@ -232,7 +232,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     })
     await expect(coordinator.prepare(base)).rejects.toThrow('extension still running')
     expect((await journal.load(base.operationId))?.phase).toBe('prepared')
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
     await expect(coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} }))
       .rejects.toThrow('extension still running')
     unsettled = false
@@ -278,7 +278,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     { journal: pluginJournal, prepare: async () => { throw Error('simulated plugin preparation failure') } }))
       .rejects.toThrow('simulated plugin preparation failure')
     expect((await journal.load(base.operationId))?.phase).toBe('fenced')
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1', '2'])
     const aborted = await coordinator.abort({ operationId: base.operationId, target,
       assertAuthority: async () => {} })
@@ -297,14 +297,14 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
     expect(await target.target.activeGeneration()).toBe(1)
     expect(await readFile(join(web, 'package.json'), 'utf8')).toContain('fixture-plugin')
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     const failedReceipt = vi.spyOn(journal, 'advance')
       .mockRejectedValueOnce(Error('simulated journal failure'))
     await expect(coordinator.commitWithPlugins(input)).rejects.toThrow('simulated journal failure')
     failedReceipt.mockRestore()
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
     expect(await target.target.activeGeneration()).toBe(2)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     await expect(coordinator.abortWithPlugins(input)).rejects.toThrow('profile_import_generation_changed')
     const committed = await coordinator.commitWithPlugins(input)
     expect(committed.phase).toBe('committed')
@@ -323,7 +323,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       expect(await readFile(join(web, 'package.json'), 'utf8')).toContain('fixture-plugin')
       expect(await readFile(join(target.profileRoot, 'cordis.patch.yml'), 'utf8'))
         .toContain('/migration-owner-state/2/')
-      expect(() => fence.assertOpen(target.profileId)).toThrow()
+      expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     })
     expect((await coordinator.commitWithPlugins({ ...input, activateCandidate })).phase).toBe('committed')
     expect(activateCandidate).toHaveBeenCalledOnce()
@@ -339,7 +339,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     acquire.mockRestore()
     expect((await journal.load(input.operationId))?.phase).toBe('staged')
     expect(await target.target.activeGeneration()).toBe(1)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     await hostLock.release()
   })
 
@@ -358,7 +358,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     failedAbort.mockRestore()
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
     expect(await readFile(join(web, 'package.json'))).toEqual(originalManifest)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     const aborted = await coordinator.abortWithPlugins(input)
     expect(aborted.phase).toBe('aborted')
     expect(await target.target.activeGeneration()).toBe(1)
@@ -384,7 +384,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       .rejects.toThrow('profile_import_candidate_running')
     await running.close()
     expect(await target.target.activeGeneration()).toBe(2)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     const aborted = await coordinator.rollbackFailedActivationWithPlugins(input)
     expect(aborted.phase).toBe('aborted')
     expect(await target.target.activeGeneration()).toBe(1)
@@ -506,7 +506,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     failRollback.mockRestore()
     expect(await target.target.activeGeneration()).toBe(1)
     expect(await readFile(join(target.profileRoot, 'cordis.patch.yml'))).toEqual(originalPatch)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     expect(await coordinator.abortWithPlugins(input)).toMatchObject({ phase: 'aborted' })
     expect(await readFile(join(web, 'package.json'))).toEqual(originalManifest)
     fence.assertOpen(target.profileId)
@@ -550,7 +550,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     await expect(coordinator.prepare(base)).rejects.toThrow('profile_import_inventory_changed')
     expect((await journal.load(base.operationId))?.phase).toBe('fenced')
     expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1'])
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
     await coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} })
     fence.assertOpen(source.profileId)
     fence.assertOpen(target.profileId)
@@ -573,8 +573,8 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       operation: committing, pointer: 'staged', sessionCount: 2,
     })
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
   })
 
   it('refuses a changed staged owner state during committing recovery', async () => {
@@ -589,8 +589,8 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
         ? { ...row, value: { name: 'headless', customPlugins: [] } } : row) }), { mode: 0o600 })
     await expect(coordinator.inspectCommitting({ operationId: base.operationId, source, target, uid,
       assertAuthority: async () => {} })).rejects.toThrow('profile_import_stage_mismatch')
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
   })
 
   it('inspects a released compressed V3 old target without requiring migration metadata', async () => {
@@ -656,7 +656,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     await expect(coordinator.commit(input)).rejects.toThrow('lost pointer response')
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
     expect(await target.target.activeGeneration()).toBe(2)
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     const restartedTarget = { ...target, target: new FileOwnerJsonlMigrationGenerationTarget(
       join(target.profileRoot, 'persistence'), uid, 1) }
     const restartedJournal = new FileProfileImportOperationJournal(
@@ -698,7 +698,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     const input = { operationId: base.operationId, source, target, uid, assertAuthority: async () => {} }
     await expect(coordinator.commit(input)).rejects.toThrow('marker write failed')
     expect((await journal.load(base.operationId))?.phase).toBe('committed')
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
     const restarted = new ProfileImportSessionCoordinator(new FileProfileImportOperationJournal(
       join(root, 'control', 'profile-import-operations'), uid),
     new ProfileImportWorkerFence(new FileProfileImportFenceFiles(join(root, 'profiles'), uid)), workers)
@@ -721,7 +721,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       assertAuthority: async () => {} })).rejects.toThrow('profile_import_stage_mismatch')
     expect((await journal.load(base.operationId))?.phase).toBe('staged')
     expect(await target.target.activeGeneration()).toBe(1)
-    expect(() => fence.assertOpen(source.profileId)).toThrow()
-    expect(() => fence.assertOpen(target.profileId)).toThrow()
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
   })
 })

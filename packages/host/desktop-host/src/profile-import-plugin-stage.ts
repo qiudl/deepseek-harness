@@ -5,7 +5,7 @@ import { lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import { type BundledPluginCatalog } from './bundled-plugins.ts'
-import { FileProfileImportOperationJournal } from './profile-import-operation-journal.ts'
+import { FileProfileImportOperationJournal, type ProfileImportOperation } from './profile-import-operation-journal.ts'
 import { planSelectedProfileImportPlugins, type ProfileImportPluginPlan } from './profile-import-plugin-plan.ts'
 import { ProfileImportWorkerFence } from './profile-import-worker-fence.ts'
 import { readOwnerPrivateFile } from './private-file-io.ts'
@@ -22,6 +22,17 @@ function receiptBytes(operationId: string, plan: ProfileImportPluginPlan): Buffe
     previewDigest: plan.previewDigest, planDigest: planDigest(plan),
     archives: plan.plugins.map(plugin => ({ name: plugin.name, digest: plugin.archiveDigest,
       file: `${plugin.archiveDigest}.tgz` })) })}\n`)
+}
+
+function matchesStageIntent(intent: ProfileImportOperation | null, sourceProfileId: string,
+  targetProfileId: string, plan: ProfileImportPluginPlan,
+  phases: readonly ProfileImportOperation['phase'][]): intent is ProfileImportOperation {
+  return intent !== null && phases.includes(intent.phase)
+    && intent.sourceProfileId === sourceProfileId && intent.targetProfileId === targetProfileId
+    && intent.previewDigest === plan.previewDigest
+    && intent.sourceSnapshotDigest === plan.sourceSnapshotDigest
+    && intent.targetSnapshotDigest === plan.targetSnapshotDigest
+    && JSON.stringify(intent.selectedPluginNames) === JSON.stringify(plan.plugins.map(plugin => plugin.name))
 }
 
 async function checkedDirectory(path: string, uid: number): Promise<void> {
@@ -76,12 +87,7 @@ export async function stageSelectedProfileImportPluginArchives(input: Readonly<{
   const { source, target, uid, operationId, fence, plan, signal } = input
   signal?.throwIfAborted()
   const intent = await input.journal.load(operationId)
-  if (!intent || intent.phase !== 'fenced' || intent.sourceProfileId !== source.profileId
-    || intent.targetProfileId !== target.profileId
-    || intent.previewDigest !== plan.previewDigest
-    || intent.sourceSnapshotDigest !== plan.sourceSnapshotDigest
-    || intent.targetSnapshotDigest !== plan.targetSnapshotDigest
-    || JSON.stringify(intent.selectedPluginNames) !== JSON.stringify(plan.plugins.map(plugin => plugin.name))) {
+  if (!matchesStageIntent(intent, source.profileId, target.profileId, plan, ['fenced'])) {
     throw Error('profile_import_plugin_stage_intent_invalid')
   }
   fence.assertOwnedPair(source.profileId, target.profileId, operationId)
@@ -145,13 +151,7 @@ export async function inspectStagedProfileImportPluginArchives(input: Readonly<{
 }>): Promise<{ stageRoot: string; plan: ProfileImportPluginPlan } | null> {
   const { target, sourceProfileId, uid, operationId, fence, plan } = input
   const intent = await input.journal.load(operationId)
-  if (!intent || !['fenced', 'staged', 'committing'].includes(intent.phase)
-    || intent.sourceProfileId !== sourceProfileId
-    || intent.targetProfileId !== target.profileId
-    || intent.previewDigest !== plan.previewDigest
-    || intent.sourceSnapshotDigest !== plan.sourceSnapshotDigest
-    || intent.targetSnapshotDigest !== plan.targetSnapshotDigest
-    || JSON.stringify(intent.selectedPluginNames) !== JSON.stringify(plan.plugins.map(plugin => plugin.name))) {
+  if (!matchesStageIntent(intent, sourceProfileId, target.profileId, plan, ['fenced', 'staged', 'committing'])) {
     throw Error('profile_import_plugin_stage_intent_invalid')
   }
   fence.assertOwnedPair(sourceProfileId, target.profileId, operationId)

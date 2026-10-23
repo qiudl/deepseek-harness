@@ -1,7 +1,6 @@
 /** REQ-20261022-0022: validate a complete plugin layer under the import fence without publishing it. */
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { lstat, mkdir, open, readlink, symlink } from 'node:fs/promises'
+import { lstat, mkdir, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { verifyCopiedBundledPlugin } from './bundled-plugin-recovery.ts'
 import { runPnpm } from './profile-import-plugin-isolated-install.ts'
@@ -9,6 +8,7 @@ import { inspectResolvedProfileImportTargetPluginsInIsolation,
   type ProfileImportTargetResolutionEvidence } from './profile-import-plugin-target-resolution.ts'
 import { readExtensionStateFile } from './posix-extension-files.ts'
 import { readOwnerPrivateFile } from './private-file-io.ts'
+import { writePrivate, syncDirectory } from './profile-import-plugin-private-dir.ts'
 
 type Evidence = ProfileImportTargetResolutionEvidence
 
@@ -17,16 +17,6 @@ function receiptBytes(input: Evidence, lockfileDigest: string): Buffer {
     planDigest: createHash('sha256').update(JSON.stringify(input.plan)).digest('hex'),
     nextManifestDigest: input.manifestPlan.nextManifestDigest, lockfileDigest,
     names: input.plan.plugins.map(plugin => plugin.name) })}\n`)
-}
-
-async function writePrivate(path: string, bytes: Buffer): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 async function verifyLayer(input: Evidence, root: string): Promise<void> {

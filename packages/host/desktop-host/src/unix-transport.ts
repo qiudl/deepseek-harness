@@ -1049,6 +1049,22 @@ class FrameChannel implements HostClientFrameTransport {
   }
 }
 
+type SlarkImportParams = ProfileImportPreviewRequest['params'] | ProfileImportStatusRequest['params']
+  | ProfileImportPrepareRequest['params'] | ProfileImportCommitRequest['params']
+  | ProfileImportAbortRequest['params']
+
+function slarkImportAuthority(p: SlarkImportParams, ownerId: string): Parameters<DesktopHost['authorizeSlarkImportPreview']>[0] {
+  return {
+    authorityEnvironmentId: p.authority_environment_id,
+    accountBindingHandle: p.account_binding_handle,
+    authorityBindingVersion: p.authority_binding_version,
+    ownerId, issuer: p.account_issuer, subject: p.account_subject,
+    sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
+    sourceKeyHandle: p.source_profile_key_handle,
+    sourceUnlockMaterial: p.source_unlock_material,
+  }
+}
+
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
@@ -1512,15 +1528,7 @@ export class HostControlAuthority {
           const list = this.options.listProfileImportStatus
           if (!list) throw new HostAuthorityError('upgrade_required')
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
+          const authority = slarkImportAuthority(p, ownerId)
           const selected = this.options.host.authorizeSlarkImportPreview(authority)
           const assertAuthority = async () => {
             context.signal.throwIfAborted()
@@ -1528,6 +1536,7 @@ export class HostControlAuthority {
             const stale = checked.sourceProfileId !== selected.sourceProfileId
               || checked.targetProfileId !== selected.targetProfileId
             if (stale) throw new HostAuthorityError('stale')
+            await Promise.resolve()
           }
           const status = await list({ ...selected, operationOffset: p.operation_offset, assertAuthority })
           await assertAuthority()
@@ -1539,21 +1548,14 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
           || frame.method === 'profile.import_abort') {
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
+          const authority = slarkImportAuthority(p, ownerId)
           const selected = this.options.host.authorizeSlarkImportPreview(authority)
           const assertAuthority = async () => {
             context.signal.throwIfAborted()
             const checked = this.options.host.authorizeSlarkImportPreview(authority)
             if (checked.sourceProfileId !== selected.sourceProfileId
               || checked.targetProfileId !== selected.targetProfileId) throw new HostAuthorityError('stale')
+            await Promise.resolve()
           }
           const base = { ...selected, operationId: p.operation_id, assertAuthority, signal: context.signal }
           try {
@@ -1597,15 +1599,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectProfileImport
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
+          const authority = slarkImportAuthority(p, ownerId)
           const selected = this.options.host.authorizeSlarkImportPreview(authority)
           let preview: ProfileImportPreview
           try { preview = await inspect(selected.sourceProfileId, selected.targetProfileId, context.signal) }
@@ -3418,10 +3412,7 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.accountBindingParams(input),
-        account_access_token: input.accountAccessToken,
-        account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
-        profile_unlock_material: input.unlockMaterial,
+        ...this.accountTokenParams(input),
         ...(input.authorityBindingScope === undefined ? {} : { authority_binding_scope: input.authorityBindingScope as never }),
       },
     }
@@ -3456,15 +3447,12 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.accountBindingParams(input),
-        account_access_token: input.accountAccessToken,
-        account_issuer: input.issuer, account_subject: input.subject,
-        profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
+        ...this.accountTokenParams(input),
         slark_expected: {
           slark_user_id: input.expected.slarkUserId,
-          environment_id: input.expected.environmentId as never,
-          person_profile_id: input.expected.profileId as never,
-          device_id: input.expected.deviceId as never,
+          environment_id: input.expected.environmentId,
+          person_profile_id: input.expected.profileId,
+          device_id: input.expected.deviceId,
           device_key_thumbprint: input.expected.deviceKeyThumbprint,
           login_epoch: input.expected.loginEpoch,
           binding_epoch: input.expected.bindingEpoch,
@@ -5434,6 +5422,20 @@ export class UnixHostClient {
       authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle as never,
       authority_binding_version: input.authorityBindingVersion,
+    }
+  }
+
+  private accountTokenParams(input: AccountBindingInput & Readonly<{
+    issuer: string
+    subject: string
+    accountAccessToken: string
+    keyHandle: string
+    unlockMaterial: string
+  }>) {
+    return {
+      ...this.accountBindingParams(input), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
     }
   }
 
