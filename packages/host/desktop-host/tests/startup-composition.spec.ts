@@ -6,7 +6,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
-import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
+import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config, StartDesktopHostApplicationDependencies } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
@@ -691,7 +691,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   const ledgerRoot = join(root, 'control', 'legacy-model-claims')
   mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
   writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
@@ -707,7 +709,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
   const { config, root, accountPrivateKey } = fixture()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   let workerStarts = 0
   const { startDesktopHostApplication } = await import('../src/startup.ts')

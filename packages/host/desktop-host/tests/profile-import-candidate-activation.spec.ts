@@ -26,8 +26,8 @@ function fixture() {
   const adoptImportCandidate = vi.fn(async () => undefined)
   const dispose = vi.fn(async () => { worker.abort(); await worker.done })
   const input = {
-    factory: { createImportCandidate } as unknown as Pick<DshWebProfileWorkerFactory, 'createImportCandidate'>,
-    workers: { adoptImportCandidate, dispose } as unknown as Pick<ProfileWorkerSupervisor, 'adoptImportCandidate' | 'dispose'>,
+    factory: { createImportCandidate } as Pick<DshWebProfileWorkerFactory, 'createImportCandidate'>,
+    workers: { adoptImportCandidate, dispose } as Pick<ProfileWorkerSupervisor, 'adoptImportCandidate' | 'dispose'>,
     profileId: 'target', profileRoot: '/tmp/test-import-target', credentialHandle: 'fixture',
     pluginRoots: ['/tmp/test-import-target/plugins'], selectedPluginNames: ['@deepseek-ai/dsh-tools'],
     dshEntrypointPath: '/tmp/dsh-cli.js', leaseFd: 3, assertFenced: vi.fn(),
