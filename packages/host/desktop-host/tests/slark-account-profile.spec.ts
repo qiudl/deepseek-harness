@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
 import { DesktopHost, ProfileRegistry } from '../src/index.ts'
+import { slarkPersonIndex } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 
 const environmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181'
@@ -41,6 +42,19 @@ function fixture() {
 }
 
 describe('Slark Account Profile admission', () => {
+  it('rejects malformed scoped indexes and a scope that differs from the verified binding', async () => {
+    expect(() => slarkPersonIndex(Buffer.alloc(31), { issuer, subject }, bindingScope))
+      .toThrow(/invalid_input/u)
+    expect(() => slarkPersonIndex(Buffer.alloc(32), { issuer, subject }, 'invalid'))
+      .toThrow(/invalid_input/u)
+    const { registry } = fixture()
+    await expect(registry.provisionAccount({ issuer, subject, keyHandle: input.keyHandle,
+      unlockMaterial, authorityEnvironmentId: environmentId,
+      accountBindingHandle: input.accountBindingHandle, authorityBindingVersion: 3,
+      authorityBindingScope: 'b'.repeat(64),
+    }, async () => {}, { requireScopedBinding: bindingScope })).rejects.toThrow(/profile_mismatch/u)
+  })
+
   it('opens a distinct new Profile only after scoped token and local key proof', async () => {
     const { host, registry, workerStarts } = fixture()
     const ready = await host.ensureSlarkAccountProfile(input)
