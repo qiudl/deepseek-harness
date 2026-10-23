@@ -8,6 +8,8 @@ const groupSchema = 'dsh-remote-collaboration/v2'
 const encoder = new TextEncoder()
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const version = /^(0|[1-9][0-9]{0,18})$/u
+const digest = /^[a-f0-9]{64}$/u
+const agentRef = /^slark-agent:[a-f0-9]{64}$/u
 
 function row(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -89,6 +91,47 @@ function groupResult(value: unknown): boolean {
   if (value.state === 'recorded') return exact(value, ['state', 'message_id', 'seq'])
     && typeof value.message_id === 'string' && uuid.test(value.message_id)
     && Number.isSafeInteger(value.seq) && Number(value.seq) > 0
+  if (value.state === 'recorded_source') {
+    const source = value.source
+    const originalMessage = row(source) ? source.original_message : undefined
+    if (!exact(value, ['state', 'group_id', 'request_id', 'payload_digest', 'message_seq', 'source'])
+      || typeof value.group_id !== 'string' || !uuid.test(value.group_id)
+      || typeof value.request_id !== 'string' || !uuid.test(value.request_id)
+      || typeof value.payload_digest !== 'string' || !digest.test(value.payload_digest)
+      || !Number.isSafeInteger(value.message_seq) || Number(value.message_seq) < 1
+      || !exact(source, ['workspace_id', 'session_id', 'source_message_id', 'source_revision',
+        'original_message', 'active_mentions']) || typeof source.workspace_id !== 'string'
+      || !uuid.test(source.workspace_id) || !text(source.session_id, 256)
+      || typeof source.source_message_id !== 'string' || !uuid.test(source.source_message_id)
+      || source.source_revision !== '1' || typeof originalMessage !== 'string'
+      || !originalMessage.trim() || encoder.encode(originalMessage).length > 32 * 1024
+      || !originalMessage.isWellFormed()
+      || !Array.isArray(source.active_mentions) || source.active_mentions.length < 1
+      || source.active_mentions.length > 10) return false
+    return source.active_mentions.every((mention) => {
+      if (!exact(mention, ['mention_id', 'source_span', 'display_snapshot', 'binding'])
+        || typeof mention.mention_id !== 'string' || !uuid.test(mention.mention_id)
+        || !exact(mention.source_span, ['source_message_id', 'source_revision', 'start', 'end'])
+        || mention.source_span.source_message_id !== source.source_message_id
+        || mention.source_span.source_revision !== '1'
+        || !Number.isSafeInteger(mention.source_span.start)
+        || !Number.isSafeInteger(mention.source_span.end)
+        || Number(mention.source_span.start) < 0
+        || Number(mention.source_span.end) > originalMessage.length
+        || Number(mention.source_span.end) <= Number(mention.source_span.start) + 1
+        || originalMessage[Number(mention.source_span.start)] !== '@'
+        || !exact(mention.display_snapshot, ['agent_name', 'project_name'])
+        || !text(mention.display_snapshot.agent_name, 512)
+        || !text(mention.display_snapshot.project_name, 512)
+        || !exact(mention.binding, ['kind', 'target', 'capability_snapshot'])
+        || mention.binding.kind !== 'resolved' || !exact(mention.binding.target, ['project_id', 'agent_id'])
+        || !text(mention.binding.target.project_id, 256) || !text(mention.binding.target.agent_id, 256)
+        || typeof mention.binding.capability_snapshot !== 'string'
+        || !digest.test(mention.binding.capability_snapshot)) return false
+      return originalMessage.slice(Number(mention.source_span.start), Number(mention.source_span.end))
+        === `@${mention.display_snapshot.agent_name} · ${mention.display_snapshot.project_name}`
+    })
+  }
   if (value.state !== 'page' || !exact(value, ['state', 'items', 'next_seq', 'has_more', 'last_seq'])
     || !Array.isArray(value.items) || value.items.length > 100
     || !Number.isSafeInteger(value.next_seq) || Number(value.next_seq) < 0
@@ -106,6 +149,32 @@ function groupResult(value: unknown): boolean {
     previous = Number(item.seq)
   }
   return !value.items.length || previous === value.next_seq
+}
+function groupMentionCommand(value: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(value, 'mention_refs') && !Object.hasOwn(value, 'mention_spans')) return true
+  const refs = value.mention_refs, spans = value.mention_spans
+  if (!Array.isArray(refs) || !Array.isArray(spans)
+    || refs.length < 1 || refs.length > 10
+    || spans.length !== refs.length
+    || new Set(refs).size !== refs.length
+    || refs.some(ref => typeof ref !== 'string' || !agentRef.test(ref))) return false
+  const used = new Set<string>()
+  let previousEnd = 0
+  return spans.every((span, index) => {
+    if (!exact(span, ['mention_id', 'actor_ref', 'start', 'end', 'agent_name', 'project_name', 'capability_snapshot'])
+      || typeof span.mention_id !== 'string' || !uuid.test(span.mention_id) || used.has(span.mention_id)
+      || span.actor_ref !== refs[index] || !Number.isSafeInteger(span.start)
+      || !Number.isSafeInteger(span.end) || Number(span.start) < previousEnd
+      || Number(span.end) <= Number(span.start) + 1 || typeof value.body !== 'string'
+      || Number(span.end) > value.body.length || !text(span.agent_name, 512)
+      || !text(span.project_name, 512) || typeof span.capability_snapshot !== 'string'
+      || !digest.test(span.capability_snapshot)
+      || value.body.slice(Number(span.start), Number(span.end)) !== `@${span.agent_name} · ${span.project_name}`)
+      return false
+    used.add(span.mention_id)
+    previousEnd = Number(span.end)
+    return true
+  })
 }
 function groupMemberInput(value: unknown): value is Record<string, unknown> {
   if (!row(value)) return false
@@ -384,12 +453,15 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
               throw Error('invalid group request')
             const fields = raw.operation === 'send' ? ['operation', 'request_id', 'workspace_id', 'session_id',
-              'expected_group_version', 'body'] : raw.operation === 'pending_claim'
+              'expected_group_version', 'body',
+              ...(Object.hasOwn(raw, 'mention_refs') ? ['mention_refs'] : []),
+              ...(Object.hasOwn(raw, 'mention_spans') ? ['mention_spans'] : [])] : raw.operation === 'pending_claim'
               ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest'] : raw.operation === 'pending_ack'
                 ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest', 'request_id'] : raw.operation === 'pending_status'
                   ? ['operation', 'workspace_id', 'session_id', 'group_id'] : raw.operation === 'receipt'
-                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
-                      ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
+                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'work-source'
+                      ? ['operation', 'message_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
+                        ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
             if (!exact(raw, fields) || !fields.length) throw Error('invalid group request')
             if (raw.operation === 'pending_claim' || raw.operation === 'pending_ack' || raw.operation === 'pending_status') {
               if (typeof raw.group_id !== 'string' || !uuid.test(raw.group_id) ||
@@ -401,14 +473,22 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               if (!Number.isSafeInteger(raw.after_seq) || Number(raw.after_seq) < 0 ||
                 !Number.isInteger(raw.limit) || Number(raw.limit) < 1 || Number(raw.limit) > 100)
                 throw Error('invalid group page')
+            } else if (raw.operation === 'work-source') {
+              if (typeof raw.message_id !== 'string' || !uuid.test(raw.message_id))
+                throw Error('invalid group message identity')
             } else if (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)) {
               throw Error('invalid group key')
             }
             if (raw.operation === 'send' && (raw.expected_group_version !== 2 ||
               typeof raw.body !== 'string' || raw.body.length < 1 || raw.body.length > 16_000 ||
-              encoder.encode(raw.body).length > 24_000)) throw Error('invalid group body')
+              encoder.encode(raw.body).length > 24_000 || !groupMentionCommand(raw))) throw Error('invalid group body')
+            if (encoder.encode(JSON.stringify(raw)).length > 24 * 1024) throw Error('group command too large')
             const result = await call('collaboration/groupMessages', raw, signal)
-            if (!groupResult(result)) throw Error('invalid group reply')
+            if (!groupResult(result) || raw.operation === 'work-source' && row(result) &&
+              result.state === 'recorded_source' &&
+              (!row(result.source) || result.source.workspace_id !== raw.workspace_id ||
+                result.source.session_id !== raw.session_id || result.source.source_message_id !== raw.message_id))
+              throw Error('invalid group reply')
             return result
           } catch { return { state: 'retry_required' as const } }
           finally { clearTimeout(timer) }

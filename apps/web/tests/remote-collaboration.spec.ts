@@ -336,6 +336,52 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: group Agent chips and recovered Source traverse the real remote carrier', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const messageId = '44444444-4444-4444-8444-444444444444'
+  const requestId = '33333333-3333-4333-8333-333333333333'
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  const label = '@Guide · Project'
+  const body = `${label}\nPlease review`
+  const ref = `slark-agent:${'a'.repeat(64)}`
+  const span = { mention_id: '55555555-5555-4555-8555-555555555555', actor_ref: ref,
+    start: 0, end: label.length, agent_name: 'Guide', project_name: 'Project',
+    capability_snapshot: 'b'.repeat(64) }
+  const send = { operation: 'send', workspace_id: workspace, session_id: 'session-1',
+    request_id: requestId, expected_group_version: 2, body,
+    mention_refs: [ref], mention_spans: [span] }
+  const work = { operation: 'work-source', workspace_id: workspace,
+    session_id: 'session-1', message_id: messageId }
+  const source = { workspace_id: workspace, session_id: 'session-1',
+    source_message_id: messageId, source_revision: '1', original_message: body,
+    active_mentions: [{ mention_id: span.mention_id,
+      source_span: { source_message_id: messageId, source_revision: '1', start: 0, end: label.length },
+      display_snapshot: { agent_name: 'Guide', project_name: 'Project' },
+      binding: { kind: 'resolved', target: { project_id: 'project-1', agent_id: 'agent-1' },
+        capability_snapshot: span.capability_snapshot } }] }
+  const requests: Rpc[] = []
+  let wrongSource = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, rpc.payload.args.request &&
+      (rpc.payload.args.request as { operation: string }).operation === 'send'
+      ? { state: 'recorded', message_id: messageId, seq: 1 }
+      : { state: 'recorded_source', group_id: groupId, request_id: requestId,
+        payload_digest: 'c'.repeat(64), message_seq: 1,
+        source: wrongSource ? { ...source, source_message_id: groupId } : source }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(send)).toMatchObject({ state: 'recorded', message_id: messageId })
+  expect(await bridge().collaborationGroupMessages?.(work)).toMatchObject({ state: 'recorded_source', source })
+  expect(requests.map(request => request.payload.args.request)).toEqual([send, work])
+  expect(await bridge().collaborationGroupMessages?.({ ...send, mention_spans: [{ ...span, end: 2 }] }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+  wrongSource = true
+  expect(await bridge().collaborationGroupMessages?.(work)).toEqual({ state: 'retry_required' })
+})
 it('REQ-20261020-0010: a member capability keeps the remote bridge installed and sends exact commands', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2',
     methods: ['workspace', 'groupMessages', 'groupMembers'] }
