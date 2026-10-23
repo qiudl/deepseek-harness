@@ -15,6 +15,7 @@ import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files
 import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
+import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -81,6 +82,14 @@ vi.mock('../src/offline-profile-recovery.ts', async (importOriginal) => {
 
 const NOW = 1_780_000_000_000
 
+it.skipIf(process.platform === 'win32')('rejects a partial Memory keyring configuration before opening control', async () => {
+  const { config, root } = fixture()
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  await expect(startDesktopHostApplication(Object.assign(config, { memoryKeyringSha256: undefined }),
+    { now: () => NOW }, { platform: 'darwin' })).rejects.toMatchObject({ code: 'invalid_input' })
+})
+
 function accountToken(key: KeyObject, subject: string): string {
   const issuedAt = Math.floor(NOW / 1_000)
   const header = Buffer.from(JSON.stringify({
@@ -118,6 +127,13 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }] }), { mode: 0o644 })
   writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
   writeFileSync(accountKeyringPath, keyring, { mode: 0o600 })
+  const memoryKeys = generateKeyPairSync('ed25519')
+  const memoryKeyringPath = join(root, 'memory-keyring.json')
+  const memoryKeyring = `${JSON.stringify({ version: 1, environmentId: 'prod',
+    issuer: 'https://slark.example', keys: [{ kid: 'dsh-assertion-test',
+      publicKeyPem: memoryKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      validFrom: 1, validUntil: NOW + 60_000 }] })}\n`
+  writeFileSync(memoryKeyringPath, memoryKeyring, { mode: 0o600 })
   writeFileSync(installationPrivateKeyPath,
     installation.privateKey.export({ format: 'pem', type: 'pkcs8' }), { mode: 0o600 })
   const installationPublicKey = (installation.publicKey.export({ format: 'der', type: 'spki' }) as Buffer)
@@ -135,6 +151,8 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
       deviceIndexKeyPath: deviceKey,
       accountKeyringPath,
       accountKeyringSha256: createHash('sha256').update(keyring).digest('hex'),
+      memoryKeyringPath,
+      memoryKeyringSha256: createHash('sha256').update(memoryKeyring).digest('hex'),
       installationPrivateKeyPath,
       installationPublicKey,
       installationId: randomUUID(),
@@ -226,6 +244,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
       generateText,
+      listMemorySessions: async () => ({ items: [], nextAfter: null }),
+      readMemorySession: async sessionId => ({ sessionId, revision: 'r1', text: '{}' }),
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
       inspectCollaborationSource, readCollaborationSourceSnapshot,
@@ -245,12 +265,18 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  expect(serverOptions.memoryDirectiveVerifier).toBeInstanceOf(MemoryDirectiveVerifier)
+  const verifier = serverOptions.memoryDirectiveVerifier
+  if (!verifier) throw Error('missing Memory verifier')
+  const future = { expiresAt: NOW + 1_000 } as Parameters<MemoryDirectiveVerifier['assertUnexpired']>[0]
+  expect(() => { verifier.assertUnexpired(future) }).not.toThrow()
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  expect(serverOptions.memoryProfileReader?.(profile.profileId)).toBeDefined()
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimRecovery?.pendingReceipts({

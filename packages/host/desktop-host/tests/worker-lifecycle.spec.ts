@@ -5,6 +5,91 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('pins one memory reader to a worker generation across inventory and Session reads', async () => {
+  const read = vi.fn(async (sessionId: string) => ({ sessionId, revision: 'r1', text: '{}' }))
+  const list = vi.fn(async () => ({ items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }))
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {},
+    done: Promise.resolve(), listMemorySessions: list, readMemorySession: read }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const signal = new AbortController().signal
+  try {
+    await workers.start(input)
+    const reader = workers.memoryProfileReader(input.profileId)
+    expect(workers.memoryProfileReader(input.profileId)).toBe(reader)
+    expect((await reader.list(null, signal)).items).toHaveLength(1)
+    expect((await reader.read('session-one', signal)).revision).toBe('r1')
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    expect(workers.memoryProfileReader(input.profileId)).not.toBe(reader)
+    await expect(reader.list(null, signal)).rejects.toMatchObject({ code: 'stale' })
+    await expect(reader.read('session-one', signal)).rejects.toMatchObject({ code: 'stale' })
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(read).toHaveBeenCalledTimes(1)
+  } finally { await workers.disposeAll() }
+})
+
+it('checks Memory read identity, cancellation and worker generation before returning results', async () => {
+  const read = vi.fn(async (sessionId: string) => ({ sessionId, revision: 'r1', text: '{}' }))
+  const list = vi.fn(async () => ({ items: [], nextAfter: null }))
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {},
+    done: Promise.resolve(), listMemorySessions: list, readMemorySession: read }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const signal = new AbortController().signal
+  try {
+    await expect(workers.readMemorySession(input.profileId, 'session-one', signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.listMemorySessions(input.profileId, null, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    expect(() => workers.memoryProfileReader(input.profileId)).toThrow()
+    await workers.start(input)
+    expect(await workers.readMemorySession(input.profileId, 'session-one', signal))
+      .toMatchObject({ sessionId: 'session-one' })
+    expect(await workers.listMemorySessions(input.profileId, null, signal)).toEqual({ items: [], nextAfter: null })
+    read.mockResolvedValueOnce({ sessionId: 'other', revision: 'r1', text: '{}' })
+    await expect(workers.readMemorySession(input.profileId, 'session-one', signal))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    const reader = workers.memoryProfileReader(input.profileId)
+    read.mockResolvedValueOnce({ sessionId: 'other', revision: 'r1', text: '{}' })
+    await expect(reader.read('session-one', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(reader.read('session-one', AbortSignal.abort())).rejects.toThrow()
+    await expect(reader.list(null, AbortSignal.abort())).rejects.toThrow()
+    let release!: (value: { sessionId: string; revision: string; text: string }) => void
+    read.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    const pending = reader.read('session-one', signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await workers.dispose(input.profileId)
+    release({ sessionId: 'session-one', revision: 'r1', text: '{}' })
+    await denied
+  } finally { await workers.disposeAll() }
+})
+
+it('discards a memory inventory page from a replaced Profile worker', async () => {
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve })
+  let generation = 0
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const current = ++generation
+    return { closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      listMemorySessions: async () => {
+        if (current === 1) await new Promise<void>((resolve) => { release = resolve; enter() })
+        return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+      },
+    }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  try {
+    await workers.start(input)
+    const pending = workers.listMemorySessions(input.profileId, null, new AbortController().signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'stale' })
+    await entered
+    await workers.dispose(input.profileId)
+    await workers.start(input)
+    release()
+    await denied
+    expect((await workers.listMemorySessions(input.profileId, null, new AbortController().signal)).items).toHaveLength(1)
+  } finally { release?.(); await workers.disposeAll() }
+})
+
 it('reads the exact original worker reference grant and refuses changed digests, cancellation and missing workers', async () => {
   const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
     session_id: 'session', source_message_id: 'message', source_revision: '1' })

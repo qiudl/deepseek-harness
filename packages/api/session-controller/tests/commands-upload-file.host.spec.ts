@@ -198,6 +198,30 @@ describe('Session file uploads', () => {
     ])
   })
 
+  it('refuses a staged image whose stored byte count exceeds the receipt limit', async () => {
+    const { controller, uploads, agent, saveFile } = await uploadHarness()
+    saveFile.mockResolvedValueOnce({ attachmentId: AttachmentId(`sha256:${'aa'.repeat(32)}`),
+      name: 'oversized.png', bytes: 20 * 1024 * 1024 + 1 })
+    const receipt = await uploads.upload(agent, { data: 'AAAA', name: 'oversized.png' }, new AbortController().signal)
+    await expect(controller.prompt(promptRequest([
+      { type: 'image', receiptId: receipt.receiptId, mediaType: 'image/png' },
+    ]))).rejects.toMatchObject({ code: 'session/attachment-invalid', details: { reason: 'IMAGE_TOO_LARGE' } })
+  })
+
+  it('refuses an image stream that grows or shrinks after its receipt was staged', async () => {
+    const { ctx, controller, uploads, agent } = await uploadHarness()
+    const receipt = await uploads.upload(agent, { data: 'AAAA', name: 'changed.png' }, new AbortController().signal)
+    const read = vi.spyOn(ctx.attachments, 'readFileStream')
+    read.mockImplementationOnce(async function* () { yield Uint8Array.of(1, 2) })
+    await expect(controller.prompt(promptRequest([
+      { type: 'image', receiptId: receipt.receiptId, mediaType: 'image/png' },
+    ]))).rejects.toMatchObject({ code: 'session/attachment-invalid', details: { reason: 'IMAGE_SIZE_MISMATCH' } })
+    read.mockImplementationOnce(async function* () { yield Buffer.alloc(20 * 1024 * 1024 + 1) })
+    await expect(controller.prompt(promptRequest([
+      { type: 'image', receiptId: receipt.receiptId, mediaType: 'image/png' },
+    ]))).rejects.toMatchObject({ code: 'session/attachment-invalid', details: { reason: 'IMAGE_TOO_LARGE' } })
+  })
+
   it('stages a bounded byte stream and forwards cancellation to storage', async () => {
     const { controller, uploads, followup, saveFileStream } = await uploadHarness()
     const abort = new AbortController()

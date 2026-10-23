@@ -24,6 +24,7 @@ import type {
   HostCollaborationDeliveryCapsule, HostCollaborationDeliveryReceipt, ProfileCollaborationDeliveryRequest,
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
   HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
+  ProfileMemoryQueryRequest, ProfileMemoryQueryResult,
   ProfileRemoteUiReadRequest, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimRecoveryInventoryRequest,
@@ -122,6 +123,9 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import type { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
+import { HostMemoryReadController } from './memory-read-controller.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
@@ -235,6 +239,10 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Present only when the embedding pins Slark's public memory signing keys. */
+  readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
+  /** Capture the current Account worker generation without exposing raw Sessions to Desktop. */
+  readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -497,6 +505,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'memoryDirectiveVerifier' | 'memoryProfileReader'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -950,6 +959,9 @@ export class HostControlAuthority {
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
+    let memorySlot: { key: string; controller: HostMemoryReadController } | undefined
+    let memoryBusy = false
+    signal.addEventListener('abort', () => { memorySlot?.controller.clear(); memorySlot = undefined }, { once: true })
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -1030,6 +1042,55 @@ export class HostControlAuthority {
       ),
       dispatchAuthorized: async (frame, context, respond) => {
         const channel = { send: respond }
+        if (frame.method === 'profile.memory_query') {
+          const verifier = this.options.memoryDirectiveVerifier
+          const readerFor = this.options.memoryProfileReader
+          if (!verifier || !readerFor) throw new HostAuthorityError('upgrade_required')
+          if (memoryBusy) throw new HostAuthorityError('busy')
+          memoryBusy = true
+          try {
+            const params: ProfileMemoryQueryRequest['params'] = frame.params
+            const key = JSON.stringify([params.authority_environment_id, params.account_binding_handle,
+              params.authority_binding_version, params.account_issuer, params.account_subject,
+              params.owner_user_id, params.computer_id])
+            if (memorySlot?.key !== key) {
+              memorySlot?.controller.clear()
+              const current = () => {
+                context.signal.throwIfAborted()
+                const account = { authorityEnvironmentId: params.authority_environment_id,
+                  accountBindingHandle: params.account_binding_handle,
+                  authorityBindingVersion: params.authority_binding_version, ownerId,
+                  issuer: params.account_issuer, subject: params.account_subject }
+                this.options.host.authorizeCollaborationRegistration(account)
+                const profileId = this.options.host.authorizeAccountModelText(account)
+                return { environmentId: params.authority_environment_id,
+                  ownerUserId: params.owner_user_id, computerId: params.computer_id,
+                  installationId: this.options.identity.installationId, profileId,
+                  hostInstanceId: this.options.identity.hostInstanceId,
+                  processNonce: this.options.identity.processNonce, reader: readerFor(profileId) }
+              }
+              memorySlot = { key, controller: new HostMemoryReadController(verifier, current) }
+            }
+            const controller = memorySlot.controller
+            let result: ProfileMemoryQueryResult['result']
+            if (params.command.action === 'warm') {
+              await controller.warm(context.signal)
+              result = { action: 'warm', state: 'ready' }
+            } else if (params.command.action === 'search') {
+              const found = await controller.search(params.command.directive, params.command.query,
+                params.command.limit, context.signal)
+              result = { action: 'search', generation: found.generation, items: found.items as never }
+            } else {
+              const chunk = await controller.evidenceChunk(params.command.directive,
+                params.command.source_ref, params.command.offset, context.signal)
+              result = chunk === null ? { action: 'evidence_chunk', state: 'missing' }
+                : { action: 'evidence_chunk', state: 'ready', chunk: chunk as never }
+            }
+            channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+              request_id: frame.request_id, method: frame.method, result })))
+          } finally { memoryBusy = false }
+          return
+        }
         const accountClaimView = (viewLeaseId: string, leaseGeneration: number, runtimeGeneration: number) => {
           context.signal.throwIfAborted()
           return this.options.host.authorizeAccountModelClaimView({
@@ -2135,7 +2196,11 @@ export class HostControlAuthority {
         }
       },
       errorResponse: (frame, error) => safeError(authorityCode(error), frame),
-      revokeOwner: (connectionOwnerId) => { this.options.host.revokeOwner(connectionOwnerId) },
+      revokeOwner: (connectionOwnerId) => {
+        memorySlot?.controller.clear()
+        memorySlot = undefined
+        this.options.host.revokeOwner(connectionOwnerId)
+      },
     })
     return session
   }
@@ -2166,6 +2231,8 @@ export class HostControlAuthority {
           ...capabilities,
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.memoryDirectiveVerifier && this.options.memoryProfileReader
+            ? ['profile.memory_query'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
           ...(this.options.inspectRootPlanningAttempt ? ['profile.root_planning_attempt_authority'] : []),
@@ -3637,6 +3704,32 @@ export class UnixHostClient {
     return this.remoteProfileValue(request, input.signal)
   }
 
+  /** Read only redacted Account memory through a capability-advertised Host.
+   * @param input - Current Account binding and signed memory command.
+   * @returns The Host's bounded memory result.
+   */
+  async memoryQuery(input: AccountBindingInput & {
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerUserId: string
+    readonly computerId: string
+    readonly command: ProfileMemoryQueryRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileMemoryQueryResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileMemoryQueryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',
+      params: { ...this.collaborationAccountRequestParams(input),
+        owner_user_id: input.ownerUserId, computer_id: input.computerId, command: input.command },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Execute one bounded read through the lease-selected Profile worker.
    * @param input - Live view lease, exact read endpoint, arguments, and cancellation.
@@ -4370,7 +4463,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
-      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileMemoryQueryRequest | ProfileRemoteUiReadRequest
       | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
