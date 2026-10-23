@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchesHostNativeRoomReply, parseHostNativeRoomCommand,
+import { matchesHostNativeRoomReply, nativeAgentResultChunkFields, parseHostNativeRoomCommand,
   parseHostNativeRoomReply } from '../src/native-room-operations.ts'
 import { parseHostNativeAgentResultInput } from '../src/native-agent-result.ts'
 import { decodeHostControlFrame, encodeHostControlFrame } from '../src/index.ts'
@@ -21,6 +21,47 @@ const chunk = { operation: 'agent-result-chunk', room_id: 'room_1', group_id: gr
   chunk_index: 0, chunk_count: 2, chunk_text: 'answer', chunk_digest: 'b'.repeat(64) } as const
 
 describe('native room private operations', () => {
+  it('rejects malformed command and reply envelopes before worker use', () => {
+    expect(() => parseHostNativeRoomCommand(null)).toThrow('native_room_operation_invalid')
+    expect(() => parseHostNativeRoomCommand({ operation: 'ack', room_id: 'room_1',
+      member_id: member, cycle: 1, through_seq: -1 })).toThrow('native_room_operation_invalid')
+    expect(() => parseHostNativeRoomReply(null)).toThrow('native_room_operation_invalid')
+    for (const state of ['joined', 'left', 'unverifiable_message',
+      'acknowledged', 'already_acknowledged'] as const) {
+      const key = state === 'joined' ? 'joined_room_seq' : state === 'left' ? 'left_room_seq' :
+        state === 'unverifiable_message' ? 'seq' : 'through_seq'
+      expect(() => parseHostNativeRoomReply({ state, [key]: -1 }))
+        .toThrow('native_room_operation_invalid')
+    }
+    for (const reply of [
+      { state: 'turns_acknowledged', turn_ids: [] },
+      { state: 'chunk_pending', turn_id: chunk.turn_id, chunk_index: 0, room_seq: 1 },
+      { state: 'recorded', turn_id: chunk.turn_id, chunk_index: 0, room_seq: null },
+      { state: 'turns', room_id: 'room_1', group_id: group, member_id: member,
+        cycle: 1, next_seq: 5, turns: Array(4).fill({ turn_id: chunk.turn_id,
+          trigger_room_seq: 1, turn_order: 1 }) },
+      { state: 'ok', room_id: 'room_1', next_seq: 3, last_seq: 2, messages: [] },
+      { state: 'ok', room_id: 'room_1', next_seq: 3, last_seq: 3, messages: [null] },
+    ]) expect(() => parseHostNativeRoomReply(reply)).toThrow('native_room_operation_invalid')
+  })
+
+  it('matches control replies to the exact operation', () => {
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'invalid' }), join)).toBe(true)
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'unverifiable_message',
+      seq: 1 }), messages)).toBe(true)
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'joined',
+      joined_room_seq: 1 }), join)).toBe(true)
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'left',
+      left_room_seq: 1 }), { operation: 'leave', room_id: 'room_1',
+      member_id: member, cycle: 1 })).toBe(true)
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'acknowledged',
+      through_seq: 5 }), { operation: 'ack', room_id: 'room_1', member_id: member,
+      cycle: 1, through_seq: 5 })).toBe(true)
+    expect(matchesHostNativeRoomReply(parseHostNativeRoomReply({ state: 'acknowledged',
+      through_seq: 4 }), { operation: 'ack', room_id: 'room_1', member_id: member,
+      cycle: 1, through_seq: 5 })).toBe(false)
+  })
+
   it('rejects unsigned or redirected native Agent result coordinates before ticket verification', () => {
     const input = { computer_id: 'desktop-1', slark_audience: 'https://slark.example.test',
       workspace_id: group, session_id: 'original', ticket: 'aaa.bbb.ccc', command: chunk }
@@ -66,6 +107,9 @@ describe('native room private operations', () => {
 
   it('accepts only bounded result chunks and matches their exact durable receipt', () => {
     expect(parseHostNativeRoomCommand(chunk)).toEqual(chunk)
+    expect(parseHostNativeRoomCommand({ ...chunk, status: 'failed' })).toMatchObject({ status: 'failed' })
+    expect(nativeAgentResultChunkFields(chunk)).toMatchObject({ groupId: group,
+      turnId: chunk.turn_id, chunkText: 'answer', status: 'completed', chunkCount: 2 })
     const pending = parseHostNativeRoomReply({ state: 'chunk_pending',
       turn_id: chunk.turn_id, chunk_index: 0, room_seq: null })
     expect(matchesHostNativeRoomReply(pending, chunk)).toBe(true)
