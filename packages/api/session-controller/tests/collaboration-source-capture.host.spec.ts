@@ -198,6 +198,27 @@ describe('Profile-owned collaboration Source capture', () => {
     } finally { await h.dispose() }
   })
 
+  it('REQ-20261020-0010 captures a group Root only in a fenced original Session', async () => {
+    const h = await harness(), signal = new AbortController().signal
+    const input = { namespace_id: 'n2_' + 'a'.repeat(64), source: h.source(),
+      continuation_policy: 'display_only' as const }
+    try {
+      await expect(h.controller.captureCollaborationGroupRoot(input, signal))
+        .rejects.toThrow('group_session_inactive')
+      await h.ctx.workspaceRegistry.installGroupInputFence({ workspaceId: h.workspace.id,
+        sessionId: h.sessionId, groupId: 'group-1', groupVersion: 0 })
+      await expect(h.controller.captureCollaborationRoot(input, signal))
+        .rejects.toThrow('group_session_active')
+      const captured = await h.controller.captureCollaborationGroupRoot(input, signal)
+      expect(captured.kind).toBe('captured')
+      expect(captured.snapshot.session_id).toBe(h.sessionId)
+      expect(captured.submission.source.source_message_id).toBe(input.source.source_message_id)
+      const replay = await h.controller.captureCollaborationGroupRoot(input, signal)
+      expect(replay.kind).toBe('recovered')
+      expect(replay.submission.command_id).toBe(captured.submission.command_id)
+    } finally { await h.dispose() }
+  })
+
   it('delegates collaboration classification when this controller has no storage domain', async () => {
     const h = await harness(undefined, undefined, true)
     try {

@@ -1998,6 +1998,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Original source and atomic source/root/outbox aggregate; recovered input has no executable call.',
       },
       {
+        signature: 'async captureCollaborationGroupRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>',
+        description: 'Capture an original Session group Source only after its local group input fence exists. Cloud group Root admission must independently verify the committed message and current Agent members.',
+        parameters: [{ name: 'value', description: 'Cloud-recorded group Source input and the current namespace/policy.' }, { name: 'signal', description: 'Cancellation combined with Profile disposal.' }],
+        returns: 'Original local Source and Root aggregate; recovery never recreates a model call.',
+      },
+      {
         signature: 'async prepareCollaborationRootPlanning(value: unknown, predecessor: CollaborationPlanningPredecessor, signal: AbortSignal): Promise<CollaborationRootPlanningPreparation>',
         description: 'Prepare a fresh one-shot analysis using an admitted root\'s original model and current credentials. The original Source remains immutable. Membership is rechecked after preparation and around input/grant persistence. This Host-only method has no Remote endpoint and grants no cloud authority.',
         parameters: [{ name: 'value', description: 'Original namespace, command and Source lookup; no model overrides.' }, { name: 'predecessor', description: 'Local journal reference selected by the private owner; cloud eligibility remains separate.' }, { name: 'signal', description: 'Operation cancellation retained through the prepared call.' }],

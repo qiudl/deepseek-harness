@@ -266,6 +266,7 @@ export class SessionController extends TypertRemoteService {
     this.acceptCollaborationRoot = this.acceptCollaborationRoot.bind(this)
     this.inspectCollaborationRoot = this.inspectCollaborationRoot.bind(this)
     this.captureCollaborationRoot = this.captureCollaborationRoot.bind(this)
+    this.captureCollaborationGroupRoot = this.captureCollaborationGroupRoot.bind(this)
     this.captureCollaborationSource = this.captureCollaborationSource.bind(this)
     this.readCollaborationSourceSnapshot = this.readCollaborationSourceSnapshot.bind(this)
     this.inspectCollaborationSource = this.inspectCollaborationSource.bind(this)
@@ -544,8 +545,10 @@ export class SessionController extends TypertRemoteService {
     return Object.freeze({ workspaceId, sessionId, prepared })
   }
 
-  private beginCollaborationInput(sessionId: SessionId): () => void {
-    if (this.ctx.workspaceRegistry.isGroupInputBlocked(sessionId)) throw Error('group_session_active')
+  private beginCollaborationInput(sessionId: SessionId, mode: 'legacy' | 'group' | 'existing' = 'legacy'): () => void {
+    const blocked = this.ctx.workspaceRegistry.isGroupInputBlocked(sessionId)
+    if (mode === 'legacy' && blocked) throw Error('group_session_active')
+    if (mode === 'group' && !blocked) throw Error('group_session_inactive')
     this.collaborationInputActivity.set(sessionId, (this.collaborationInputActivity.get(sessionId) ?? 0) + 1)
     return () => {
       const remaining = (this.collaborationInputActivity.get(sessionId) as number) - 1
@@ -578,12 +581,17 @@ export class SessionController extends TypertRemoteService {
         cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }>
     | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }>
   > {
+    return this.captureCollaborationSourceMode(input, signal, 'legacy')
+  }
+
+  private async captureCollaborationSourceMode(input: CollaborationSourceInput, signal: AbortSignal,
+    mode: 'legacy' | 'group'): ReturnType<SessionController['captureCollaborationSource']> {
     const captured = parseCollaborationSourceInput(input)
     const ownedSignal = AbortSignal.any([signal, this.collaborationLifetime.signal])
     ownedSignal.throwIfAborted()
     const waitForRead = <T>(read: Promise<T>) => waitForCollaborationSourceRead(read, ownedSignal)
     const sessionId = SessionId(captured.session_id), workspaceId = WorkspaceId(captured.workspace_id)
-    const release = this.beginCollaborationInput(sessionId)
+    const release = this.beginCollaborationInput(sessionId, mode)
     const operation = this.collaborationCaptureTail.then(async () => {
       ownedSignal.throwIfAborted()
       const workspace = this.ctx.workspaceRegistry.get(workspaceId)
@@ -627,7 +635,9 @@ export class SessionController extends TypertRemoteService {
       }
       await checkSelection()
       const inspected = await waitForRead(this.inspect(sessionId, ownedSignal))
-      const catalogue = createCollaborationReferenceCatalogue(inspected.events, captured.source_message_id)
+      // A group Source does not grant new members a reference to pre-join ordinary history.
+      const catalogue = createCollaborationReferenceCatalogue(mode === 'group' ? [] : inspected.events,
+        captured.source_message_id)
       await checkSelection()
       // Establish the archive guard before either journal can commit a Source.
       // A failed capture may leave a conservative marker, but an archived Source
@@ -650,7 +660,7 @@ export class SessionController extends TypertRemoteService {
       return Object.freeze({ kind: 'captured' as const, snapshot, prepared: prepared.prepared,
         analyze: async (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
           cancellation: AbortSignal) => {
-          const releaseAnalysis = this.beginCollaborationInput(sessionId)
+          const releaseAnalysis = this.beginCollaborationInput(sessionId, mode)
           try {
             const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
             await inspectCurrent()
@@ -666,7 +676,7 @@ export class SessionController extends TypertRemoteService {
         },
         analyzeClarification: async (input: CollaborationClarificationInput,
           persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => {
-          const releaseAnalysis = this.beginCollaborationInput(sessionId)
+          const releaseAnalysis = this.beginCollaborationInput(sessionId, mode)
           try {
             const clarification = parseCollaborationClarificationInput(input)
             const analysisSignal = AbortSignal.any([ownedSignal, cancellation])
@@ -718,11 +728,26 @@ export class SessionController extends TypertRemoteService {
    * @returns Original source and atomic source/root/outbox aggregate; recovered input has no executable call.
    */
   async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture> {
+    return this.captureCollaborationRootMode(value, signal, 'legacy')
+  }
+
+  /** Capture a cloud-recorded group message in the original fenced Session.
+   * The cloud group Root admission independently verifies the committed message and current members.
+   * @param value - Exact group Source input and Host-selected namespace/policy.
+   * @param signal - Parent cancellation combined with Profile disposal.
+   * @returns Original durable Root aggregate; recovery has no executable call.
+   */
+  async captureCollaborationGroupRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture> {
+    return this.captureCollaborationRootMode(value, signal, 'group')
+  }
+
+  private async captureCollaborationRootMode(value: CollaborationRootCaptureInput, signal: AbortSignal,
+    mode: 'legacy' | 'group'): Promise<CollaborationRootCapture> {
     const input = parseCollaborationRootCaptureInput(value)
     const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
-    const release = this.beginCollaborationInput(SessionId(input.source.session_id))
+    const release = this.beginCollaborationInput(SessionId(input.source.session_id), mode)
     try {
-      const captured = await this.captureCollaborationSource(input.source, owned)
+      const captured = await this.captureCollaborationSourceMode(input.source, owned, mode)
       const operation = this.collaborationCaptureTail.then(async () => {
         owned.throwIfAborted()
         const sessionId = SessionId(input.source.session_id), workspaceId = WorkspaceId(input.source.workspace_id)
@@ -767,7 +792,7 @@ export class SessionController extends TypertRemoteService {
     signal: AbortSignal): Promise<CollaborationRootPlanningPreparation> {
     const target = parseCollaborationRootTarget(value), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
     const root = await this.readCollaborationRoot(target, owned)
-    const releasePreparation = this.beginCollaborationInput(SessionId(root.source.session_id))
+    const releasePreparation = this.beginCollaborationInput(SessionId(root.source.session_id), 'existing')
     try {
       if (root.state !== 'admitted') throw Error('collaboration_root_not_admitted')
       const workspaceId = WorkspaceId(root.source.workspace_id), sessionId = SessionId(root.source.session_id)
@@ -787,7 +812,7 @@ export class SessionController extends TypertRemoteService {
       if (prepared.snapshot.provider !== model.provider || prepared.snapshot.model !== model.model
         || prepared.snapshot.reasoning_effort !== model.reasoning_effort) throw Error('collaboration_model_selection_changed')
       return Object.freeze({ root, analyze: async (persist, cancellation) => {
-        const releaseAnalysis = this.beginCollaborationInput(sessionId)
+        const releaseAnalysis = this.beginCollaborationInput(sessionId, 'existing')
         try {
           const active = AbortSignal.any([owned, cancellation])
           return await this.collaborationAnalysis.runRootAttempt(root, predecessor, prepared, async (manifest, running) => {
