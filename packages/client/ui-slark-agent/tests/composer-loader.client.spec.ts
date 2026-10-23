@@ -1566,6 +1566,49 @@ it('records a picked Agent chip as a project-qualified group target', async () =
   expect(f.submit).not.toHaveBeenCalled()
 })
 
+it('does not submit a group Agent chip without an actual work request', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: '22222222-2222-4222-8222-222222222222', workspace_id: f.workspace.id,
+    session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn()
+  host.collaborationGroupMessages = messages
+  await f.pick('', '')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  await expect(source.matchEnter?.(session, f.composer.snapshot.draft.trim(),
+    new AbortController().signal, { attachments: 0 })).rejects.toThrow('submit.question')
+  expect(messages).not.toHaveBeenCalled()
+})
+
+it('keeps an addressed group draft when the Agent work bridge is unavailable', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+    version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) =>
+    command.operation === 'pending_claim'
+      ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+      : command.operation === 'receipt' ? { state: 'missing' as const }
+        : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  host.collaborationGroupMessages = messages
+  Reflect.deleteProperty(host, 'collaborationGroupWork')
+  await f.pick('', ' 请检查登录问题')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }, body = f.composer.snapshot.draft
+  const outcome = await source.matchEnter?.(session, body,
+    new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+    throw Error('missing Agent group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: 'group.uncertain' })
+  expect(f.composer.snapshot.draft).toBe(body)
+  expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
+})
+
 it('keeps the addressed group draft when planning succeeded but execution needs reconciliation', async () => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
