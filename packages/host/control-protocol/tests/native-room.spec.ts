@@ -56,6 +56,8 @@ it('roundtrips Account-bound native room frames without private fields', () => {
     result: { binding: { ...assertion, binding: { ...binding,
       source: { ...binding.source, private_chat: 'secret' } } } } })}\n`)).toThrow()
   const parsed = parseHostNativeRoomAssertion(assertion)
+  expect(() => parseHostNativeRoomAssertion({ ...assertion, signature: 'bad' }))
+    .toThrow('native_room_assertion_invalid')
   expect(encodeHostNativeRoomAssertionPayload(parsed).toString('utf8')).toBe(
     'dsh-native-room-binding/v1\0' + JSON.stringify([1, 'room_1',
       '10000000-0000-4000-8000-000000000001', 'bridge_1', 'source_1', '1',

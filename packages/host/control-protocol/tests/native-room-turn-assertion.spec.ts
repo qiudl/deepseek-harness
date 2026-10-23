@@ -40,6 +40,8 @@ it('signs the exact native turn page and rejects changed coordinates', () => {
   expect(() => parseHostNativeRoomTurnAssertion({ ...assertion,
     selection: { ...assertion.selection, next_seq: 5 } }))
     .toThrow('native_room_turn_assertion_invalid')
+  expect(() => parseHostNativeRoomTurnAssertion({ ...assertion, after_seq: 6 }))
+    .toThrow('native_room_turn_assertion_invalid')
   expect(() => parseHostNativeRoomTurnAssertion({ ...assertion, private_context: 'secret' }))
     .toThrow('native_room_turn_assertion_invalid')
 })

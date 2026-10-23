@@ -67,6 +67,19 @@ it('discards a native room prepared after its Account grant is revoked', async (
   await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
 })
 
+it('discards a native room when its Account Profile changes during preparation', async () => {
+  const f = await fixture(); await f.grant()
+  const first = f.host.authorizeAccountModelText(f.proof)
+  let current = first
+  const authority = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { prepareNativeRoom: async () => {
+    current = `${first}-replaced` as typeof first
+    return null
+  } }
+  await expect(prepareAccountNativeRoom(authority, workers, f.proof,
+    'room_1', new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+})
+
 it('runs a native room cursor only under the current Account grant', async () => {
   const f = await fixture()
   const signal = new AbortController().signal
@@ -89,6 +102,27 @@ it('runs a native room cursor only under the current Account grant', async () =>
   f.host.revokeOwner(f.ownerId)
   release()
   await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('rejects a stale native room Profile and a worker reply for a different room', async () => {
+  const f = await fixture(); await f.grant()
+  const signal = new AbortController().signal
+  const command = { operation: 'messages' as const, room_id: 'room_1',
+    member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 2 }
+  const first = f.host.authorizeAccountModelText(f.proof)
+  let current = first
+  const authority = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const staleWorker = { operateNativeRoom: async () => {
+    current = `${first}-replaced` as typeof first
+    return { state: 'history_gap' as const }
+  } }
+  await expect(operateAccountNativeRoom(authority, staleWorker, f.proof, command, signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  current = first
+  const wrongWorker = { operateNativeRoom: async () => ({ state: 'ok' as const,
+    room_id: 'another-room', next_seq: 0, last_seq: 0, messages: [] }) }
+  await expect(operateAccountNativeRoom(authority, wrongWorker, f.proof, command, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
 })
 
 it('resolves only after this connection verifies the current Account binding', async () => {
