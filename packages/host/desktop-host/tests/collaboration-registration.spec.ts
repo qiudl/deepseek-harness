@@ -129,6 +129,15 @@ it('keeps native room messages on the Account-authorized Host control channel', 
   await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
   expect(f.operateNativeRoom).not.toHaveBeenCalled()
   await f.grant()
+  const forbidden = { operation: 'agent-result-chunk' as const,
+    room_id: f.nativeRoom.room_id, group_id: randomUUID(), member_id: command.member_id,
+    cycle: 1, turn_id: randomUUID(), turn_order: 1, trigger_room_seq: 1,
+    project_id: 'p', agent_id: 'guide', reply_message_id: 'reply-1',
+    status: 'completed' as const, result_digest: 'a'.repeat(64),
+    chunk_index: 0, chunk_count: 1, chunk_text: 'answer', chunk_digest: 'b'.repeat(64) }
+  await expect(f.client.operateNativeRoom({ ...input, command: forbidden }))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.operateNativeRoom).not.toHaveBeenCalled()
   expect(await f.client.operateNativeRoom(input)).toEqual({ state: 'ok',
     room_id: command.room_id, next_seq: 5, last_seq: 5, messages: [] })
   expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, command,
@@ -144,6 +153,75 @@ it('keeps native room messages on the Account-authorized Host control channel', 
     value => value !== 'profile.native_room_operation')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('delivers a native Agent chunk only with a signed live Slark ticket', async () => {
+  const f = await fixture(true, true)
+  const now = Date.now()
+  const command = { operation: 'agent-result-chunk' as const,
+    room_id: f.nativeRoom.room_id, group_id: randomUUID(), member_id: randomUUID(),
+    cycle: 1, turn_id: randomUUID(), turn_order: 1, trigger_room_seq: 1,
+    project_id: 'p', agent_id: 'guide', reply_message_id: 'reply-1',
+    status: 'completed' as const, result_digest: 'a'.repeat(64),
+    chunk_index: 0, chunk_count: 1, chunk_text: 'answer',
+    chunk_digest: 'b'.repeat(64) }
+  const signedCommand = { ...command, chunk_digest: createHash('sha256')
+    .update(JSON.stringify(['dsh-native-agent-chunk-v1', command.turn_id,
+      0, 1, command.chunk_text])).digest('hex') }
+  const workspaceId = randomUUID(), sessionId = 'original'
+  const registry = botGroupHostRegistryId({ ownerUserId: f.ownerId,
+    accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+    environmentId: f.account.authorityEnvironmentId,
+    installationId: f.identity.installationId,
+    accountBindingHandle: f.account.accountBindingHandle,
+    accountBindingEpoch: f.account.authorityBindingVersion })
+  const claims = { schema_version: 1, issuer: f.botGroupKeyring.issuer,
+    audience: 'urn:slark:dsh-native-agent-result:v1',
+    slark_audience: 'https://slark.example.test',
+    environment_id: f.account.authorityEnvironmentId, owner_user_id: f.ownerId,
+    computer_id: 'desktop-1', account_issuer: f.account.issuer,
+    account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: registry, group_id: command.group_id,
+    workspace_id: workspaceId, session_id: sessionId,
+    room_id: command.room_id, member_id: command.member_id,
+    member_cycle: 1, turn_id: command.turn_id, turn_order: 1,
+    trigger_room_seq: 1, project_id: command.project_id,
+    agent_id: command.agent_id, reply_message_id: command.reply_message_id,
+    status: command.status, result_digest: command.result_digest,
+    chunk_index: 0, chunk_count: 1, chunk_digest: signedCommand.chunk_digest,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA',
+    typ: 'SLARK-DSH-NATIVE-AGENT-RESULT', version: 1,
+    kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: 'https://slark.example.test',
+    workspaceId, sessionId, ticket, command: signedCommand }
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  f.operateNativeRoom.mockResolvedValue({ state: 'recorded',
+    turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    expect(url).toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/group-messages/native-result-confirm')
+    expect(init?.headers).toMatchObject({ authorization: `Bearer ${ticket}` })
+    return Response.json({ ok: true, value: { state: 'authorized',
+      turn_id: command.turn_id, chunk_index: 0, expires_at: claims.expires_at } })
+  })
+  try {
+    expect(await f.client.deliverNativeAgentResultChunk(input)).toEqual({ state: 'recorded',
+      turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
+    expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, signedCommand,
+      expect.any(AbortSignal))
+    await expect(f.client.deliverNativeAgentResultChunk({ ...input,
+      command: { ...signedCommand, chunk_text: 'tampered' } }))
+      .rejects.toThrow()
+    expect(f.operateNativeRoom).toHaveBeenCalledTimes(1)
+  } finally { fetchMock.mockRestore() }
 })
 
 it('signs a native Agent turn page for the current Account and rejects tampering', async () => {

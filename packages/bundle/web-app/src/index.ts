@@ -344,6 +344,7 @@ export function apply(ctx: Context, config: Config): void {
             roomTurns(input: Record<string, unknown>): Promise<unknown>
             acknowledgeTurns(input: Record<string, unknown>): Promise<unknown>
             acknowledgeMessages(input: Record<string, unknown>): Promise<unknown>
+            appendAgentResultChunk(input: Record<string, unknown>): Promise<unknown>
             leaveAgent(input: Record<string, unknown>): Promise<unknown>
           }
           if (!service) throw Error('native_room_unavailable')
@@ -360,9 +361,18 @@ export function apply(ctx: Context, config: Config): void {
                   limit: command.limit })
                 : command.operation === 'turn-ack'
                   ? await service.acknowledgeTurns({ ...base, turnIds: command.turn_ids })
-                  : command.operation === 'ack'
-                    ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
-                    : await service.leaveAgent(base)
+                  : command.operation === 'agent-result-chunk'
+                    ? await service.appendAgentResultChunk({ ...base,
+                      groupId: command.group_id, turnId: command.turn_id,
+                      turnOrder: command.turn_order, triggerRoomSeq: command.trigger_room_seq,
+                      projectId: command.project_id, agentId: command.agent_id,
+                      replyMessageId: command.reply_message_id, status: command.status,
+                      resultDigest: command.result_digest, chunkIndex: command.chunk_index,
+                      chunkCount: command.chunk_count, chunkText: command.chunk_text,
+                      chunkDigest: command.chunk_digest })
+                    : command.operation === 'ack'
+                      ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
+                      : await service.leaveAgent(base)
           signal.throwIfAborted()
           return result
         }),

@@ -5,6 +5,7 @@ import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
   encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
   matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeAgentResultInput, type ProfileNativeAgentResultRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTurnAssertion,
   encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage,
@@ -14,6 +15,7 @@ import type { HostBotIdentity, HostBotRosterPage,
 import type { HostNativeRoomTurnAssertion } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
+import { deliverAccountNativeAgentResultChunk } from './account-native-agent-result.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -2412,6 +2414,8 @@ export class HostControlAuthority {
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { binding: assertion } })
         } else if (frame.method === 'profile.native_room_operation') {
+          if (frame.params.command.operation === 'agent-result-chunk')
+            throw new HostAuthorityError('unauthorized')
           const operate = this.options.operateNativeRoom
           if (!operate) throw new HostAuthorityError('upgrade_required')
           const account = commandReadAccount(frame.params, ownerId)
@@ -2435,6 +2439,24 @@ export class HostControlAuthority {
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: turnAssertion ?
               { reply, turn_assertion: turnAssertion } : { reply } })
+        } else if (frame.method === 'profile.native_agent_result') {
+          const operate = this.options.operateNativeRoom
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            new URL(candidate.issuer).origin === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const reply = await deliverAccountNativeAgentResultChunk({
+            host: this.options.host, workers: { operateNativeRoom: operate }, account,
+            installationId: this.options.identity.installationId,
+            computerId: frame.params.computer_id,
+            slarkAudience: frame.params.slark_audience,
+            workspaceId: frame.params.workspace_id, sessionId: frame.params.session_id,
+            keyring, ticket: frame.params.ticket, command: frame.params.command,
+            signal: context.signal,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { reply } })
         } else if (frame.method === 'profile.bot_group_stop' ||
           frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
@@ -2629,6 +2651,8 @@ export class HostControlAuthority {
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
+          ...(this.options.operateNativeRoom && this.options.trustedBotGroupKeyrings?.length
+            ? ['profile.native_agent_result'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
               'profile.bot_group_result_ack', 'profile.bot_group_stop'] : []),
@@ -4464,6 +4488,7 @@ export class UnixHostClient {
     if (!this.inspection.capabilities.includes('profile.native_room_operation' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
     const command = parseHostNativeRoomCommand(input.command)
+    if (command.operation === 'agent-result-chunk') throw new HostAuthorityError('unauthorized')
     const request: ProfileNativeRoomOperationRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.native_room_operation',
       params: { ...this.collaborationAccountRequestParams(input), command },
@@ -4493,6 +4518,41 @@ export class UnixHostClient {
           Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
       return { ...reply, assertion }
     }
+    return reply
+  }
+
+  /** Submit one Slark-signed native Agent result chunk through the dedicated Host gate. */
+  async deliverNativeAgentResultChunk(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly workspaceId: string
+    readonly sessionId: string
+    readonly ticket: string
+    readonly command: Extract<HostNativeRoomCommand, { operation: 'agent-result-chunk' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostNativeRoomReply> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_agent_result' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostNativeAgentResultInput({ computer_id: input.computerId,
+      slark_audience: input.slarkAudience, workspace_id: input.workspaceId,
+      session_id: input.sessionId, ticket: input.ticket, command: input.command })
+    const request: ProfileNativeAgentResultRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.native_agent_result',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.native_agent_result')
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostNativeRoomReply(frame.result.reply)
+    if (!matchesHostNativeRoomReply(reply, target.command))
+      throw new HostAuthorityError('profile_mismatch')
     return reply
   }
 
@@ -5506,7 +5566,8 @@ export class UnixHostClient {
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
-      | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileBotGroupDeliverRequest
+      | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
+      | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest
       | ProfileBotGroupStopRequest

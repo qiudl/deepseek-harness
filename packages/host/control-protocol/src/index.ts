@@ -39,6 +39,7 @@ export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
+  ProfileNativeAgentResultRequest, ProfileNativeAgentResultResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupStopRequest, ProfileBotGroupStopResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
@@ -59,6 +60,8 @@ export type { HostNativeRoomTurnAssertion } from './native-room-turn-assertion.j
 export { parseHostNativeRoomCommand, parseHostNativeRoomReply,
   matchesHostNativeRoomReply } from './native-room-operations.js'
 export type { HostNativeRoomCommand, HostNativeRoomReply } from './native-room-operations.js'
+export { parseHostNativeAgentResultInput } from './native-agent-result.js'
+export type { HostNativeAgentResultInput } from './native-agent-result.js'
 export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'

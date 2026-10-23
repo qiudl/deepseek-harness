@@ -1,6 +1,7 @@
 /** Private Profile worker commands for a Slark Agent in a DS Bot native room. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
 const ROOM = /^[!-~]{1,256}$/u
+const DIGEST = /^[0-9a-f]{64}$/u
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value) &&
   Object.getPrototypeOf(value) === Object.prototype
@@ -47,6 +48,24 @@ export type HostNativeRoomCommand = Readonly<{
   cycle: number
   turn_ids: readonly string[]
 } | {
+  operation: 'agent-result-chunk'
+  room_id: string
+  group_id: string
+  member_id: string
+  cycle: number
+  turn_id: string
+  turn_order: number
+  trigger_room_seq: number
+  project_id: string
+  agent_id: string
+  reply_message_id: string
+  status: 'completed' | 'failed'
+  result_digest: string
+  chunk_index: number
+  chunk_count: number
+  chunk_text: string
+  chunk_digest: string
+} | {
   operation: 'leave'
   room_id: string
   member_id: string
@@ -89,6 +108,11 @@ export type HostNativeRoomReply = Readonly<{
   state: 'turns_acknowledged'
   turn_ids: readonly string[]
 } | {
+  state: 'chunk_pending' | 'recorded'
+  turn_id: string
+  chunk_index: number
+  room_seq: number | null
+} | {
   state: 'left'
   left_room_seq: number
 } | {
@@ -108,13 +132,18 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
     ? ['operation', 'room_id', 'group_id', 'member_id', 'cycle', 'project_id', 'agent_id', 'name']
     : value.operation === 'messages' || value.operation === 'turns'
       ? ['operation', 'room_id', 'member_id', 'cycle', 'after_seq', 'limit']
-      : value.operation === 'ack'
-        ? ['operation', 'room_id', 'member_id', 'cycle', 'through_seq']
-        : value.operation === 'turn-ack'
-          ? ['operation', 'room_id', 'member_id', 'cycle', 'turn_ids']
-          : ['operation', 'room_id', 'member_id', 'cycle']
+      : value.operation === 'agent-result-chunk'
+        ? ['operation', 'room_id', 'group_id', 'member_id', 'cycle', 'turn_id',
+          'turn_order', 'trigger_room_seq', 'project_id', 'agent_id',
+          'reply_message_id', 'status', 'result_digest', 'chunk_index',
+          'chunk_count', 'chunk_text', 'chunk_digest']
+        : value.operation === 'ack'
+          ? ['operation', 'room_id', 'member_id', 'cycle', 'through_seq']
+          : value.operation === 'turn-ack'
+            ? ['operation', 'room_id', 'member_id', 'cycle', 'turn_ids']
+            : ['operation', 'room_id', 'member_id', 'cycle']
   const row = exact(value, keys)
-  if (!['join', 'messages', 'turns', 'ack', 'turn-ack', 'leave'].includes(String(row.operation)) ||
+  if (!['join', 'messages', 'turns', 'ack', 'turn-ack', 'agent-result-chunk', 'leave'].includes(String(row.operation)) ||
     !room(row.room_id) || typeof row.member_id !== 'string' || !UUID.test(row.member_id) ||
     !cycle(row.cycle)) throw Error('native_room_operation_invalid')
   if (row.operation === 'join' &&
@@ -132,6 +161,19 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
       row.turn_ids.length < 1 || row.turn_ids.length > 3 ||
       row.turn_ids.some((id: unknown) => typeof id !== 'string' || !UUID.test(id)) ||
       new Set(row.turn_ids).size !== row.turn_ids.length))
+    throw Error('native_room_operation_invalid')
+  if (row.operation === 'agent-result-chunk' &&
+    (typeof row.group_id !== 'string' || !UUID.test(row.group_id) ||
+      typeof row.turn_id !== 'string' || !UUID.test(row.turn_id) ||
+      !cycle(row.turn_order) || !cycle(row.trigger_room_seq) ||
+      !coordinate(row.project_id) || !coordinate(row.agent_id) ||
+      !coordinate(row.reply_message_id) ||
+      (row.status !== 'completed' && row.status !== 'failed') ||
+      typeof row.result_digest !== 'string' || !DIGEST.test(row.result_digest) ||
+      !seq(row.chunk_index) || !cycle(row.chunk_count) || row.chunk_count > 100 ||
+      row.chunk_index >= row.chunk_count || typeof row.chunk_text !== 'string' ||
+      Buffer.byteLength(JSON.stringify(row.chunk_text), 'utf8') > 14_000 ||
+      typeof row.chunk_digest !== 'string' || !DIGEST.test(row.chunk_digest)))
     throw Error('native_room_operation_invalid')
   return row as HostNativeRoomCommand
 }
@@ -161,6 +203,13 @@ export function parseHostNativeRoomReply(value: unknown): HostNativeRoomReply {
       row.turn_ids.some((id: unknown) => typeof id !== 'string' || !UUID.test(id)) ||
       new Set(row.turn_ids).size !== row.turn_ids.length)
       throw Error('native_room_operation_invalid')
+    return row as HostNativeRoomReply
+  }
+  if (state === 'chunk_pending' || state === 'recorded') {
+    const row = exact(value, ['state', 'turn_id', 'chunk_index', 'room_seq'])
+    if (typeof row.turn_id !== 'string' || !UUID.test(row.turn_id) ||
+      !seq(row.chunk_index) || (state === 'chunk_pending' ? row.room_seq !== null :
+      !cycle(row.room_seq))) throw Error('native_room_operation_invalid')
     return row as HostNativeRoomReply
   }
   if (state === 'turns') {
@@ -220,6 +269,10 @@ export function matchesHostNativeRoomReply(reply: HostNativeRoomReply,
     reply.cycle === command.cycle && reply.next_seq >= command.after_seq &&
     reply.turns.length <= command.limit &&
     reply.turns.every(turn => turn.trigger_room_seq > command.after_seq)
+  if (command.operation === 'agent-result-chunk') return (
+    (reply.state === 'chunk_pending' || reply.state === 'recorded') &&
+    reply.turn_id === command.turn_id && reply.chunk_index === command.chunk_index
+  )
   if (command.operation === 'join') return reply.state === 'joined'
   if (command.operation === 'leave') return reply.state === 'left'
   if (command.operation === 'ack') return reply.state === 'acknowledged' &&

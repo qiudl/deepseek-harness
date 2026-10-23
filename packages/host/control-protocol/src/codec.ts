@@ -3,6 +3,7 @@ import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply } from './native-room-operations.ts'
+import { parseHostNativeAgentResultInput } from './native-agent-result.ts'
 import { parseHostNativeRoomTurnAssertion } from './native-room-turn-assertion.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput,
   parseHostBotGroupResponse } from './bot-group.ts'
@@ -111,6 +112,7 @@ import type {
   ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
+  ProfileNativeAgentResultRequest, ProfileNativeAgentResultResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupStopRequest, ProfileBotGroupStopResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
@@ -1821,6 +1823,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
+  | ProfileNativeAgentResultRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupStopRequest
   | ProfileBotGroupResultPageRequest
@@ -2536,6 +2539,17 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), command: parseHostNativeRoomCommand(params.command),
     } } satisfies ProfileNativeRoomOperationRequest
   }
+  if (frame.method === 'profile.native_agent_result') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'workspace_id', 'session_id', 'ticket', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      ...parseHostNativeAgentResultInput({ computer_id: params.computer_id,
+        slark_audience: params.slark_audience, workspace_id: params.workspace_id,
+        session_id: params.session_id, ticket: params.ticket, command: params.command }),
+    } } satisfies ProfileNativeAgentResultRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2622,6 +2636,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotRosterResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
+  | ProfileNativeAgentResultResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupStopResult
   | ProfileBotGroupResultPageResult
@@ -3059,6 +3074,14 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { reply },
     } satisfies ProfileNativeRoomOperationResult
+  }
+  if (frame.method === 'profile.native_agent_result') {
+    exactKeys(result, ['reply'])
+    const reply = parseHostNativeRoomReply(result.reply)
+    if (!['chunk_pending', 'recorded', 'invalid', 'unavailable', 'conflict'].includes(reply.state)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply },
+    } satisfies ProfileNativeAgentResultResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])

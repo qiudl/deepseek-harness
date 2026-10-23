@@ -13,6 +13,11 @@ const messages = { operation: 'messages', room_id: 'room_1', member_id: member,
 const turns = { ...messages, operation: 'turns' } as const
 const turnAck = { operation: 'turn-ack', room_id: 'room_1', member_id: member,
   cycle: 1, turn_ids: ['33333333-3333-5333-8333-333333333333'] } as const
+const chunk = { operation: 'agent-result-chunk', room_id: 'room_1', group_id: group,
+  member_id: member, cycle: 1, turn_id: turnAck.turn_ids[0], turn_order: 2,
+  trigger_room_seq: 6, project_id: 'project', agent_id: 'agent',
+  reply_message_id: 'reply-1', status: 'completed', result_digest: 'a'.repeat(64),
+  chunk_index: 0, chunk_count: 2, chunk_text: 'answer', chunk_digest: 'b'.repeat(64) } as const
 
 describe('native room private operations', () => {
   it('admits exact bounded commands and rejects added fields and invalid identities', () => {
@@ -43,6 +48,42 @@ describe('native room private operations', () => {
     expect(() => parseHostNativeRoomReply({ ...reply, turns: [
       { turn_id: 'not-uuid', trigger_room_seq: 6, turn_order: 2 },
     ] })).toThrow('native_room_operation_invalid')
+  })
+
+  it('accepts only bounded result chunks and matches their exact durable receipt', () => {
+    expect(parseHostNativeRoomCommand(chunk)).toEqual(chunk)
+    const pending = parseHostNativeRoomReply({ state: 'chunk_pending',
+      turn_id: chunk.turn_id, chunk_index: 0, room_seq: null })
+    expect(matchesHostNativeRoomReply(pending, chunk)).toBe(true)
+    const recorded = parseHostNativeRoomReply({ state: 'recorded',
+      turn_id: chunk.turn_id, chunk_index: 0, room_seq: 7 })
+    expect(matchesHostNativeRoomReply(recorded, chunk)).toBe(true)
+    expect(matchesHostNativeRoomReply(recorded, { ...chunk, chunk_index: 1 })).toBe(false)
+    for (const bad of [{ ...chunk, chunk_index: 2 }, { ...chunk, chunk_count: 101 },
+      { ...chunk, chunk_text: '中'.repeat(5000) }, { ...chunk, ticket: 'unsigned' }])
+      expect(() => parseHostNativeRoomCommand(bad)).toThrow('native_room_operation_invalid')
+  })
+
+  it('keeps signed result chunks on a separate Account-bound Host method', () => {
+    const request = { version: 1, type: 'request',
+      request_id: '10000000-0000-4000-8000-000000000001',
+      method: 'profile.native_agent_result', params: {
+        client_instance_id: '10000000-0000-4000-8000-000000000001',
+        host_instance_id: '20000000-0000-4000-8000-000000000002',
+        process_nonce: 'A'.repeat(43), jti: '30000000-0000-4000-8000-000000000003',
+        issued_at: 1000, expires_at: 2000,
+        authority_environment_id: '40000000-0000-4000-8000-000000000004',
+        account_binding_handle: 'binding:bot', authority_binding_version: 1,
+        account_issuer: 'https://accounts.example.test',
+        account_subject: '50000000-0000-4000-8000-000000000005',
+        computer_id: 'desktop-1', slark_audience: 'https://slark.example.test',
+        workspace_id: group, session_id: 'original', ticket: 'aaa.bbb.ccc', command: chunk,
+      } }
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(request)}\n`)))
+      .toBe(`${JSON.stringify(request)}\n`)
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
+      params: { ...request.params, command: { ...chunk, operation: 'messages' } } })}\n`))
+      .toThrow()
   })
 
   it('matches only the exact acknowledged turn IDs', () => {

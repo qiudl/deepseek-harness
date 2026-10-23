@@ -947,6 +947,24 @@ export interface ProfileNativeRoomOperationResult {
     readonly turn_assertion: import('./native-room-turn-assertion.ts').HostNativeRoomTurnAssertion }
 }
 
+/** Result chunks are separate from ordinary room operations and require Slark authority. */
+export interface ProfileNativeAgentResultRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> &
+    import('./native-agent-result.ts').HostNativeAgentResultInput
+}
+
+export interface ProfileNativeAgentResultResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2347,6 +2365,8 @@ export type HostControlFrame =
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest
   | ProfileNativeRoomOperationResult
+  | ProfileNativeAgentResultRequest
+  | ProfileNativeAgentResultResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupStopRequest

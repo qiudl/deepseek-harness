@@ -49,3 +49,21 @@ it('rejects a page from another room and strips plugin errors', async () => {
   const g = await fixture(async () => { throw Error('private details') })
   expect(await (await g.post(command)).json()).toEqual({ error: 'unavailable' })
 })
+
+it('accepts one bounded Agent result chunk only through the private worker token', async () => {
+  const chunk = { operation: 'agent-result-chunk', room_id: 'room_1',
+    group_id: '11111111-1111-4111-8111-111111111111', member_id: member,
+    cycle: 1, turn_id: '33333333-3333-5333-8333-333333333333',
+    turn_order: 2, trigger_room_seq: 6, project_id: 'project', agent_id: 'agent',
+    reply_message_id: 'reply-1', status: 'completed', result_digest: 'a'.repeat(64),
+    chunk_index: 0, chunk_count: 1, chunk_text: '中'.repeat(4500),
+    chunk_digest: 'b'.repeat(64) }
+  const result = { state: 'recorded', turn_id: chunk.turn_id,
+    chunk_index: 0, room_seq: 7 }
+  const run = vi.fn(async () => result)
+  const f = await fixture(run)
+  expect((await f.post(chunk, 'wrong')).status).toBe(403)
+  expect((await f.post(chunk)).status).toBe(200)
+  expect(run).toHaveBeenCalledWith(chunk, expect.any(AbortSignal))
+  expect((await f.post({ ...chunk, chunk_text: '中'.repeat(5000) })).status).toBe(400)
+})

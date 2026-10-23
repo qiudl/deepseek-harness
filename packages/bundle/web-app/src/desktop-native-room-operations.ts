@@ -16,5 +16,5 @@ export async function handleDesktopNativeRoomOperationRequest(
 ): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token, run,
     parseHostNativeRoomCommand, parseHostNativeRoomReply,
-    matchesHostNativeRoomReply, 2048, 30_000)
+    matchesHostNativeRoomReply, 32768, 30_000)
 }
