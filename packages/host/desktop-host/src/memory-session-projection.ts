@@ -10,8 +10,10 @@ const MAX_EVENTS = 100_000
 const MAX_MESSAGE_BYTES = 64 * 1024
 const MAX_PROJECTED_RECORDS = 20_000
 const CREDENTIAL_LABEL = String.raw`(?:password|passwd|passphrase|passcode|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization)`
-const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_LABEL})(\s*(?:[:：=]|\bis\b|是|为)\s*)(?:"[^"]*"|'[^']*'|[^\s,;，；、。]+)`, 'giu')
-const CN_ASSIGNMENT = /(密码|口令|密钥|令牌|凭据|凭证)(\s*(?:为|是|[:：=])\s*)(?:"[^"]*"|'[^']*'|[^\s,;，；、]+)/gu
+const QUOTED_CREDENTIAL_LABEL = new RegExp(String.raw`["'](?:${CREDENTIAL_LABEL}|密码|口令|密钥|令牌|凭据|凭证)["']`, 'iu')
+const QUOTED_ASSIGNMENT = new RegExp(String.raw`(?:\b${CREDENTIAL_LABEL}|密码|口令|密钥|令牌|凭据|凭证)\s*(?:[:：=]|\bis\b|是|为)\s*(["'])`, 'giu')
+const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_LABEL})(\s*(?:[:：=]|\bis\b|是|为)\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;，；、。]+)`, 'giu')
+const CN_ASSIGNMENT = /(密码|口令|密钥|令牌|凭据|凭证)(\s*(?:为|是|[:：=])\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;，；、]+)/gu
 const INCOMPLETE_ASSIGNMENT = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*(?:[:：=]|\bis\b|是|为)\s*(?:$|["']$)`, 'iu')
 const UNTERMINATED_QUOTE = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*(?:[:：=]|\bis\b|是|为)\s*["'][^"']*$`, 'iu')
 const CN_UNTERMINATED_QUOTE = /(密码|口令|密钥|令牌|凭据|凭证)\s*(?:为|是|[:：=])\s*["'][^"']*$/u
@@ -48,8 +50,32 @@ function suspiciousOpaqueToken(value: string): boolean {
   return classes >= 2 && entropy(value) >= 3.6
 }
 
+function malformedQuotedAssignment(input: string): boolean {
+  for (const match of input.matchAll(QUOTED_ASSIGNMENT)) {
+    const quote = match[1]
+    let index = (match.index ?? 0) + match[0].length
+    let closed = false
+    while (index < input.length) {
+      if (input[index] === '\\') {
+        index += 2
+        continue
+      }
+      if (input[index] === quote) {
+        index += 1
+        closed = true
+        break
+      }
+      index += 1
+    }
+    if (!closed || (index < input.length && !/[\s,;，；、。！？}\])]/u.test(input.slice(index, index + 1)))) return true
+  }
+  return false
+}
+
 function redactText(input: string): string {
   if (Buffer.byteLength(input, 'utf8') > MAX_MESSAGE_BYTES
+    || QUOTED_CREDENTIAL_LABEL.test(input)
+    || malformedQuotedAssignment(input)
     || /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(input)
     || (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/u.test(input)
       && !/-----END [A-Z0-9 ]*PRIVATE KEY-----/u.test(input))
@@ -57,6 +83,7 @@ function redactText(input: string): string {
     throw new HostAuthorityError('unavailable')
   const text = input
     .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu, '[REDACTED PRIVATE KEY]')
+    .replace(/\b(Authorization\s*[:：=]\s*)[^\r\n,;，；、。！？]+/giu, '$1[REDACTED]')
     .replace(/\b(Bearer\s+)[^\s,;，；、。！？：]+/giu, '$1[REDACTED]')
     .replace(/\b(?:aiproj_pk_[A-Za-z0-9_-]{32,}|gh[porsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|sk-[A-Za-z0-9_-]{20,})\b/gu, '[REDACTED]')
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')

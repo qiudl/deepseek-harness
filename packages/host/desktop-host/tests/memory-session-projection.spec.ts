@@ -70,6 +70,23 @@ describe('local memory Session projection', () => {
     expect(projected[0]?.text).not.toMatch(/short6|short7|short8/u)
   })
 
+  it('withholds quoted credential keys and masks escaped quoted assignment values', () => {
+    const withText = (value: string) => snapshot(oneTurn.map(event => event.seq === 1
+      ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' }, content: text(value) } } : event))
+    expect(() => projectMemorySession(withText('{"password":"short7","token":"short8"}'))).toThrow()
+    expect(projectMemorySession(withText(String.raw`password="ab\"cd"`))[0]?.text)
+      .toBe('password=[REDACTED]')
+    expect(() => projectMemorySession(withText(String.raw`password="ab\" cd`))).toThrow()
+  })
+
+  it('masks an entire Authorization header value including its scheme', () => {
+    const events = oneTurn.map(event => event.seq === 1
+      ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' },
+        content: text('Authorization: Basic short9; next step') } } : event)
+    expect(projectMemorySession(snapshot(events))[0]?.text)
+      .toBe('Authorization: [REDACTED]; next step')
+  })
+
   it('rejects incomplete private keys and invalid Unicode before indexing', () => {
     for (const input of ['-----BEGIN TEST PRIVATE KEY-----\nsecret', 'password=', 'token：',
       'password 是 "unterminated', 'bad\u0000text', '\uD800']) {
