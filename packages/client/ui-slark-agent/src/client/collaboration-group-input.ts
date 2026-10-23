@@ -64,6 +64,12 @@ export interface GroupMessageBridge {
     planning: 'recorded'
     root: Record<string, unknown>
     checkpoint: Record<string, unknown>
+    execution: { ok: true
+      status: 'recorded' | 'not_admitted'
+      rootTraceId: string
+      tasks: readonly string[] } | { ok: false
+        errorCode: string
+        reconciliationRequired: true }
   } | {
     ok: false
     errorCode: string

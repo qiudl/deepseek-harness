@@ -291,7 +291,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
                 catch { return { kind: 'error', text: t('group.uncertain') } }
                 signal.throwIfAborted()
                 if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
-                  !planned.ok)
+                  !planned.ok || !planned.execution.ok ||
+                  planned.execution.status !== 'recorded')
                   return { kind: 'error', text: t('group.uncertain') }
               }
               const inputState = ctx.conversation.input.for(actx).state
