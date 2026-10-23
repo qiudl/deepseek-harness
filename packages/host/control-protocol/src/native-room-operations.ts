@@ -41,6 +41,12 @@ export type HostNativeRoomCommand = Readonly<{
   cycle: number
   through_seq: number
 } | {
+  operation: 'turn-ack'
+  room_id: string
+  member_id: string
+  cycle: number
+  turn_ids: readonly string[]
+} | {
   operation: 'leave'
   room_id: string
   member_id: string
@@ -80,6 +86,9 @@ export type HostNativeRoomReply = Readonly<{
   state: 'acknowledged' | 'already_acknowledged'
   through_seq: number
 } | {
+  state: 'turns_acknowledged'
+  turn_ids: readonly string[]
+} | {
   state: 'left'
   left_room_seq: number
 } | {
@@ -101,9 +110,11 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
       ? ['operation', 'room_id', 'member_id', 'cycle', 'after_seq', 'limit']
       : value.operation === 'ack'
         ? ['operation', 'room_id', 'member_id', 'cycle', 'through_seq']
-        : ['operation', 'room_id', 'member_id', 'cycle']
+        : value.operation === 'turn-ack'
+          ? ['operation', 'room_id', 'member_id', 'cycle', 'turn_ids']
+          : ['operation', 'room_id', 'member_id', 'cycle']
   const row = exact(value, keys)
-  if (!['join', 'messages', 'turns', 'ack', 'leave'].includes(String(row.operation)) ||
+  if (!['join', 'messages', 'turns', 'ack', 'turn-ack', 'leave'].includes(String(row.operation)) ||
     !room(row.room_id) || typeof row.member_id !== 'string' || !UUID.test(row.member_id) ||
     !cycle(row.cycle)) throw Error('native_room_operation_invalid')
   if (row.operation === 'join' &&
@@ -116,6 +127,11 @@ export function parseHostNativeRoomCommand(value: unknown): HostNativeRoomComman
       Number(row.limit) < 1 || Number(row.limit) > 3))
     throw Error('native_room_operation_invalid')
   if (row.operation === 'ack' && !seq(row.through_seq))
+    throw Error('native_room_operation_invalid')
+  if (row.operation === 'turn-ack' && (!Array.isArray(row.turn_ids) ||
+      row.turn_ids.length < 1 || row.turn_ids.length > 3 ||
+      row.turn_ids.some((id: unknown) => typeof id !== 'string' || !UUID.test(id)) ||
+      new Set(row.turn_ids).size !== row.turn_ids.length))
     throw Error('native_room_operation_invalid')
   return row as HostNativeRoomCommand
 }
@@ -137,6 +153,14 @@ export function parseHostNativeRoomReply(value: unknown): HostNativeRoomReply {
       state === 'unverifiable_message' ? 'seq' : 'through_seq'
     const row = exact(value, ['state', key])
     if (!seq(row[key])) throw Error('native_room_operation_invalid')
+    return row as HostNativeRoomReply
+  }
+  if (state === 'turns_acknowledged') {
+    const row = exact(value, ['state', 'turn_ids'])
+    if (!Array.isArray(row.turn_ids) || row.turn_ids.length < 1 || row.turn_ids.length > 3 ||
+      row.turn_ids.some((id: unknown) => typeof id !== 'string' || !UUID.test(id)) ||
+      new Set(row.turn_ids).size !== row.turn_ids.length)
+      throw Error('native_room_operation_invalid')
     return row as HostNativeRoomReply
   }
   if (state === 'turns') {
@@ -200,6 +224,8 @@ export function matchesHostNativeRoomReply(reply: HostNativeRoomReply,
   if (command.operation === 'leave') return reply.state === 'left'
   if (command.operation === 'ack') return reply.state === 'acknowledged' &&
     reply.through_seq >= command.through_seq
+  if (command.operation === 'turn-ack') return reply.state === 'turns_acknowledged' &&
+    JSON.stringify(reply.turn_ids) === JSON.stringify(command.turn_ids)
   return (reply.state === 'already_acknowledged' && reply.through_seq > command.after_seq) ||
     (reply.state === 'ok' && reply.room_id === command.room_id &&
       reply.next_seq >= command.after_seq && reply.messages.length <= command.limit &&

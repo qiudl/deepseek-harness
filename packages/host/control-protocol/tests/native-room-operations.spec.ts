@@ -11,19 +11,23 @@ const join = { operation: 'join', room_id: 'room_1', group_id: group,
 const messages = { operation: 'messages', room_id: 'room_1', member_id: member,
   cycle: 1, after_seq: 5, limit: 2 } as const
 const turns = { ...messages, operation: 'turns' } as const
+const turnAck = { operation: 'turn-ack', room_id: 'room_1', member_id: member,
+  cycle: 1, turn_ids: ['33333333-3333-5333-8333-333333333333'] } as const
 
 describe('native room private operations', () => {
   it('admits exact bounded commands and rejects added fields and invalid identities', () => {
     expect(parseHostNativeRoomCommand(join)).toEqual(join)
     expect(parseHostNativeRoomCommand(messages)).toEqual(messages)
     expect(parseHostNativeRoomCommand(turns)).toEqual(turns)
+    expect(parseHostNativeRoomCommand(turnAck)).toEqual(turnAck)
     expect(parseHostNativeRoomCommand({ operation: 'ack', room_id: 'room_1',
       member_id: member, cycle: 1, through_seq: 5 }).operation).toBe('ack')
     expect(parseHostNativeRoomCommand({ operation: 'leave', room_id: 'room_1',
       member_id: member, cycle: 1 }).operation).toBe('leave')
     for (const invalid of [{ ...join, token: 'secret' }, { ...join, member_id: 'not-a-member' },
       { ...join, name: '@Helper' }, { ...messages, limit: 4 },
-      { ...messages, room_id: '../other' }]) {
+      { ...messages, room_id: '../other' },
+      { ...turnAck, turn_ids: [turnAck.turn_ids[0], turnAck.turn_ids[0]] }]) {
       expect(() => parseHostNativeRoomCommand(invalid)).toThrow('native_room_operation_invalid')
     }
   })
@@ -39,6 +43,14 @@ describe('native room private operations', () => {
     expect(() => parseHostNativeRoomReply({ ...reply, turns: [
       { turn_id: 'not-uuid', trigger_room_seq: 6, turn_order: 2 },
     ] })).toThrow('native_room_operation_invalid')
+  })
+
+  it('matches only the exact acknowledged turn IDs', () => {
+    const reply = parseHostNativeRoomReply({ state: 'turns_acknowledged',
+      turn_ids: [...turnAck.turn_ids] })
+    expect(matchesHostNativeRoomReply(reply, turnAck)).toBe(true)
+    expect(matchesHostNativeRoomReply(reply, { ...turnAck,
+      turn_ids: ['44444444-4444-5444-8444-444444444444'] })).toBe(false)
   })
 
   it('keeps one room and cursor across a bounded page of real user and Bot lines', () => {
