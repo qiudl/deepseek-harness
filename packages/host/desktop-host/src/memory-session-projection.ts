@@ -10,10 +10,10 @@ const MAX_EVENTS = 100_000
 const MAX_MESSAGE_BYTES = 64 * 1024
 const MAX_PROJECTED_RECORDS = 20_000
 const CREDENTIAL_LABEL = String.raw`(?:password|passwd|passphrase|passcode|token|secret|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization)`
-const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_LABEL})(\s*(?:[:=]|\bis\b)\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`, 'giu')
+const ASSIGNMENT = new RegExp(String.raw`\b(${CREDENTIAL_LABEL})(\s*(?:[:：=]|\bis\b|是|为)\s*)(?:"[^"]*"|'[^']*'|[^\s,;，；、。]+)`, 'giu')
 const CN_ASSIGNMENT = /(密码|口令|密钥|令牌|凭据|凭证)(\s*(?:为|是|[:：=])\s*)(?:"[^"]*"|'[^']*'|[^\s,;，；、]+)/gu
-const INCOMPLETE_ASSIGNMENT = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*(?:[:=]|\bis\b)\s*(?:$|["']$)`, 'iu')
-const UNTERMINATED_QUOTE = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*[:=]\s*["'][^"']*$`, 'iu')
+const INCOMPLETE_ASSIGNMENT = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*(?:[:：=]|\bis\b|是|为)\s*(?:$|["']$)`, 'iu')
+const UNTERMINATED_QUOTE = new RegExp(String.raw`\b${CREDENTIAL_LABEL}\s*(?:[:：=]|\bis\b|是|为)\s*["'][^"']*$`, 'iu')
 const CN_UNTERMINATED_QUOTE = /(密码|口令|密钥|令牌|凭据|凭证)\s*(?:为|是|[:：=])\s*["'][^"']*$/u
 
 export interface MemoryProjectedRecord {

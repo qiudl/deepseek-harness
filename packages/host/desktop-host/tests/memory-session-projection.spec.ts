@@ -43,6 +43,9 @@ describe('local memory Session projection', () => {
       ['Bearer abcdefghijklmnopqrstuvwxyz', 'Bearer [REDACTED]'],
       ['https://user:pass@example.test/path', 'https://[REDACTED]@example.test/path'],
       ['api_key="secret-value"', 'api_key=[REDACTED]'],
+      ['token：abc123', 'token：[REDACTED]'],
+      ['password 是 short7', 'password 是 [REDACTED]'],
+      ['apiKey为short8', 'apiKey为[REDACTED]'],
       ['密码为 secret-value', '密码为 [REDACTED]'],
       [`ghp_${'a'.repeat(36)}`, '[REDACTED]'],
       [`sk-${'a'.repeat(30)}`, '[REDACTED]'],
@@ -60,7 +63,8 @@ describe('local memory Session projection', () => {
   })
 
   it('rejects incomplete private keys and invalid Unicode before indexing', () => {
-    for (const input of ['-----BEGIN TEST PRIVATE KEY-----\nsecret', 'password=', 'bad\u0000text', '\uD800']) {
+    for (const input of ['-----BEGIN TEST PRIVATE KEY-----\nsecret', 'password=', 'token：',
+      'password 是 "unterminated', 'bad\u0000text', '\uD800']) {
       const events = oneTurn.map(event => event.seq === 1
         ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' }, content: text(input) } } : event)
       expect(() => projectMemorySession(snapshot(events))).toThrow()
