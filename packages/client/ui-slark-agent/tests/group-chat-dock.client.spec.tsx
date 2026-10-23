@@ -152,6 +152,57 @@ it('labels the public Agent task event without exposing a private answer', async
   expect(article?.textContent).not.toContain('slark-agent-result')
 })
 
+it('shows unresolved work and owner-only follow-ups at their original group positions', async () => {
+  const messages = Array.from({ length: 5 }, (_, index) => ({
+    id: `33333333-3333-4333-8333-33333333333${index}`, seq: index + 1,
+    actor_kind: 'human', actor_ref: 'owner', body: `request ${index}`, created_at: 1,
+  }))
+  const base = (index: number): CollaborationResultGroup => ({
+    original: { source: { workspace_id: workspaceId, session_id: sessionId,
+      source_message_id: messages[index]!.id, source_revision: '1' },
+    snapshot_digest: 'digest', original_message: `request ${index}`, timeline_position: null },
+    phase: 'ready', replies: [],
+  })
+  const task = (index: number, recorded: boolean): CollaborationResultGroup => ({
+    ...base(index), execution: { phase: 'ready', tasks: [{ taskId: `task-${index}`,
+      agentName: `Agent ${index}`, projectName: 'Project A', question: `request ${index}` }],
+    outcomes: recorded ? { [`task-${index}`]: 'recorded' } : {} },
+  })
+  const source = base(4).original.source
+  const groups: CollaborationResultGroup[] = [
+    { ...base(0), phase: 'error' }, base(1), task(2, true), task(3, false),
+    { ...base(4), pending: [{ pending_item_id: 'pending-1', revision: '1', reason: 'clarify',
+      question: 'Which repository?', mentions: [] }],
+    provisionalResponses: [{ source, sourceDigest: 'digest', invocationId: 'invocation-1',
+      taskId: 'unlisted-task', seq: '1', fence: 'fence', text: 'Checking repository',
+      textDigest: 'a'.repeat(64), agentName: 'Helper', projectName: 'Project A' }],
+    replies: [{ delivery_id: 'delivery-1', invocation_id: 'invocation-2', task_id: 'other-task',
+      delivery_state: 'delivered', delivery_state_version: '1', source_locator: source,
+      source_snapshot_digest: 'digest', execution_state: 'succeeded', answer: 'Private finding',
+      target_display_snapshot: { agent_name: 'Reviewer', project_name: 'Project A' } }] },
+  ]
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const,
+    last_seq: messages.length })),
+  collaborationGroupMessages: vi.fn(async () => ({ state: 'page' as const, items: messages,
+    next_seq: messages.length, has_more: false, last_seq: messages.length })) }
+  const results: CollaborationResultsSnapshot = { phase: 'ready', groups }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    resultsModel: { subscribe: () => () => {}, getSnapshot: () => results },
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  await screen.findByText('request 0')
+  const article = (index: number) => screen.getByText(`request ${index}`).closest('article')?.textContent
+  expect(article(0)).toContain(en['task.readUnavailable'])
+  expect(article(1)).toContain(en['task.awaitingResult'])
+  expect(article(2)).toContain(en['task.waiting'])
+  expect(article(3)).toContain(en['task.planned'])
+  expect(article(4)).toContain('Which repository?')
+  expect(article(4)).toContain('Helper: Checking repository')
+  expect(article(4)).toContain('Reviewer: Private finding')
+  expect(article(3)).not.toContain('Private finding')
+})
+
 it('shows preparing state without reading the group ledger', async () => {
   const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'preparing' as const,
     group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 1 as const })),

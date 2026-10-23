@@ -87,6 +87,89 @@ it('selects an authorized project Agent and removes that member from the origina
   })
 })
 
+it('rechecks project scope before adding an Agent selected from the roster', async () => {
+  let scopeReads = 0
+  const members = vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot([owner])
+    throw Error('Agent join must not be sent after project access is revoked')
+  })
+  const host = {
+    collaborationGroupMembers: members,
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) => {
+      if (request.operation.kind === 'get') {
+        scopeReads += 1
+        return { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: scopeReads === 1 ? ['project-a'] : [] } }
+      }
+      return { ok: true as const, value: { scope_version: '3', next_cursor: null,
+        items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+          agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+          reason_code: 'ready' }] } }
+    }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  const choice = await screen.findByRole('button', { name: 'Agent A · Project A' })
+  fireEvent.click(choice)
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(scopeReads).toBe(2)
+  expect(members.mock.calls.some(([command]) => command.operation === 'agent_join')).toBe(false)
+})
+
+it('pages only eligible project Agents without replacing earlier roster choices', async () => {
+  const host = {
+    collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string
+      query?: { cursor?: string } } }) => {
+      if (request.operation.kind === 'get') return { ok: true as const,
+        value: { workspace_id: workspaceId, version: '3', selected_project_ids: ['project-a'] } }
+      const later = request.operation.query?.cursor === 'next-page'
+      return { ok: true as const, value: { scope_version: '3',
+        next_cursor: later ? null : 'next-page', items: [
+          { project_id: 'project-a', project_name: 'Project A',
+            agent_id: later ? 'agent-b' : 'agent-a', agent_name: later ? 'Agent B' : 'Agent A',
+            available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+          { project_id: 'project-b', project_name: 'Project B', agent_id: 'foreign',
+            agent_name: 'Foreign Agent', available: true,
+            capability_snapshot: 'b'.repeat(64), reason_code: 'ready' },
+          { project_id: 'project-a', project_name: 'Project A', agent_id: 'offline',
+            agent_name: 'Offline Agent', available: false,
+            capability_snapshot: 'c'.repeat(64), reason_code: 'offline' },
+        ] } }
+    }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByRole('button', { name: 'Agent A · Project A' })
+  expect(screen.queryByRole('button', { name: 'Foreign Agent · Project B' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Offline Agent · Project A' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'More Agents' }))
+  await screen.findByRole('button', { name: 'Agent B · Project A' })
+  expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'More Agents' })).toBeNull()
+})
+
+it('rejects an Agent roster page from a different project scope version', async () => {
+  const host = {
+    collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : { ok: true as const, value: { scope_version: '4', next_cursor: null,
+          items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+            agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+            reason_code: 'ready' }] } }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+})
+
 it('shows current Bot members and retries an uncertain join with the same request key', async () => {
   const commands: unknown[] = []
   let joined = false, joinAttempts = 0
