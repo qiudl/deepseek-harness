@@ -58,14 +58,18 @@ it('binds the parent pending key to the selected Agent refs and preserves them o
   vi.stubGlobal('crypto', webcrypto)
   const { bridge, commands } = parent()
   const ref = `slark-agent:${'a'.repeat(64)}`
-  const input = { bridge, workspaceId, sessionId, groupId, body: 'please review', mentionRefs: [ref] }
+  const label = '@Guide · Project'
+  const span = { mention_id: requestId, actor_ref: ref, start: 0, end: label.length,
+    agent_name: 'Guide', project_name: 'Project', capability_snapshot: 'b'.repeat(64) }
+  const input = { bridge, workspaceId, sessionId, groupId,
+    body: `${label} please review`, mentionRefs: [ref], mentionSpans: [span] }
   expect((await sendGroupText(input)).state).toBe('retry_required')
-  expect(await sendGroupText({ ...input, mentionRefs: [] })).toEqual({ state: 'pending_other' })
+  expect(await sendGroupText({ ...input, mentionRefs: [], mentionSpans: [] })).toEqual({ state: 'pending_other' })
   expect((await sendGroupText(input)).state).toBe('recorded')
   const sends = commands.filter((command): command is Extract<GroupMessageCommand, { operation: 'send' }> =>
     command.operation === 'send')
   expect(sends).toHaveLength(2)
-  expect(sends[0]).toMatchObject({ request_id: requestId, mention_refs: [ref] })
+  expect(sends[0]).toMatchObject({ request_id: requestId, mention_refs: [ref], mention_spans: [span] })
   expect(sends[1]).toEqual(sends[0])
 })
 

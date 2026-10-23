@@ -235,12 +235,19 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               throw Error(t('submit.unavailable'))
             question += snapshot.draft.slice(previousEnd, mention.offset)
             previousEnd = end
-            return r
+            return { r, start: mention.offset, end }
           })
           if (mentions.length && !(question + snapshot.draft.slice(previousEnd)).trim())
             throw Error(t('submit.question'))
-          const mentionRefs = await Promise.all(mentions.map(groupAgentRef))
+          const mentionRefs = await Promise.all(mentions.map(({ r }) => groupAgentRef(r)))
           if (new Set(mentionRefs).size !== mentionRefs.length) throw Error(t('submit.unavailable'))
+          const mentionSpans = mentions.map(({ r, start, end }, index) => {
+            const actorRef = mentionRefs[index]
+            if (!r.source_id || !actorRef) throw Error(t('submit.unavailable'))
+            return { mention_id: r.source_id, actor_ref: actorRef, start, end,
+              agent_name: r.agent_name, project_name: r.project_name,
+              capability_snapshot: r.capability_snapshot }
+          })
           const body = snapshot.draft, groupId = mapping.group_id
           return { claim: { name: 'slark-agent', token: line, retainOnFailure: false,
             async submit(args, actx) {
@@ -256,7 +263,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
                 }) || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
                 window.__DSH_DESKTOP_HOST__ !== host) return { kind: 'error', text: t('submit.changed') }
               const result = await sendGroupText({ bridge: host,
-                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body, mentionRefs })
+                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body,
+                mentionRefs, mentionSpans })
               signal.throwIfAborted()
               if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace)
                 return { kind: 'error', text: t('group.uncertain') }

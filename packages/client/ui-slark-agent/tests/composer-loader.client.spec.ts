@@ -1546,7 +1546,9 @@ it('records a picked Agent chip as a project-qualified group target', async () =
     'slark_group_agent_v1', 'project-1', 'agent-1',
   ])).digest('hex')}`
   expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
-    mention_refs: [actorRef], body }))
+    mention_refs: [actorRef], mention_spans: [expect.objectContaining({
+      actor_ref: actorRef, agent_name: 'Guide', project_name: '项目空间',
+    })], body }))
   expect(f.submit).not.toHaveBeenCalled()
 })
 
