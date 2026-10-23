@@ -1,6 +1,7 @@
 /** Installation-signed selection of Slark Agent turns from one native DS Bot room. */
 import { parseHostNativeRoomReply } from './native-room-operations.js'
 
+/** Signed Host selection for one native room turn page and Account binding. */
 export interface HostNativeRoomTurnAssertion {
   readonly schema_version: 1
   readonly after_seq: number
@@ -25,7 +26,11 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const id = (value: unknown): value is string => typeof value === 'string' &&
   /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
 
-/** Strictly parse the signed page before checking the installation signature. */
+/**
+ * Strictly parse the signed page before checking the installation signature.
+ * @param value - untrusted turn assertion.
+ * @returns the exact assertion and selected turn page.
+ */
 export function parseHostNativeRoomTurnAssertion(value: unknown): HostNativeRoomTurnAssertion {
   const keys = ['schema_version', 'after_seq', 'selection', 'authority_environment_id',
     'account_binding_handle', 'authority_binding_version', 'account_issuer',
@@ -67,7 +72,11 @@ export function parseHostNativeRoomTurnAssertion(value: unknown): HostNativeRoom
     signature: value.signature }
 }
 
-/** Stable Ed25519 payload; signature bytes themselves are excluded. */
+/**
+ * Encode the stable Ed25519 payload without the signature bytes.
+ * @param value - validated turn assertion.
+ * @returns bytes to sign or verify.
+ */
 export function encodeHostNativeRoomTurnAssertionPayload(value: HostNativeRoomTurnAssertion): Buffer {
   const a = parseHostNativeRoomTurnAssertion(value), s = a.selection
   return Buffer.from(`dsh-native-room-turns/v1\0${JSON.stringify([

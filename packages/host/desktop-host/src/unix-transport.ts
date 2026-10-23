@@ -4521,7 +4521,11 @@ export class UnixHostClient {
     return reply
   }
 
-  /** Submit one Slark-signed native Agent result chunk through the dedicated Host gate. */
+  /**
+   * Submit one Slark-signed native Agent result chunk through the dedicated Host gate.
+   * @param input - current Account binding, exact room coordinates, ticket, and chunk.
+   * @returns the matched Profile receipt after Host authorization.
+   */
   async deliverNativeAgentResultChunk(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

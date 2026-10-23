@@ -2,6 +2,7 @@
 import { parseHostNativeRoomCommand, type HostNativeRoomCommand } from './native-room-operations.ts'
 
 type ChunkCommand = Extract<HostNativeRoomCommand, { operation: 'agent-result-chunk' }>
+/** The exact Account-bound Host input for one signed native Agent result chunk. */
 export interface HostNativeAgentResultInput {
   readonly computer_id: string
   readonly slark_audience: string
@@ -14,6 +15,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const coordinate = (value: unknown): value is string => typeof value === 'string' &&
   /^[\x21-\x7e]{1,256}$/u.test(value) && !/[/\\]/u.test(value) &&
   value !== '.' && value !== '..'
+/**
+ * Check all coordinates and reject extra fields before the Host verifies the ticket.
+ * @param value - untrusted control-frame parameters.
+ * @returns the exact native Agent result input.
+ */
 export function parseHostNativeAgentResultInput(value: unknown): HostNativeAgentResultInput {
   if (value === null || typeof value !== 'object' || Array.isArray(value) ||
       Object.getPrototypeOf(value) !== Object.prototype) throw Error('native_agent_result_invalid')

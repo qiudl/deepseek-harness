@@ -957,6 +957,7 @@ export interface ProfileNativeAgentResultRequest {
     import('./native-agent-result.ts').HostNativeAgentResultInput
 }
 
+/** Profile receipt for one Account-verified native Agent result chunk. */
 export interface ProfileNativeAgentResultResult {
   readonly version: 1
   readonly type: 'result'
