@@ -51,7 +51,9 @@ import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
 import { handleDesktopNativeRoomOperationRequest } from './desktop-native-room-operations.ts'
 import { handleDesktopBotTeamReadRequest } from './desktop-bot-team-read.ts'
+import { handleDesktopBotMemoryReadRequest } from './desktop-bot-memory-read.ts'
 import type { HostBotTeamReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotMemoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -373,6 +375,19 @@ export function apply(ctx: Context, config: Config): void {
           signal.throwIfAborted()
           return result
         }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-memory-read',
+      handler: (req, res) => handleDesktopBotMemoryReadRequest(req, res, sourceToken, async (request, signal) => {
+        signal.throwIfAborted()
+        const service = ctx.get('dsBotSlarkRemoteRead') as undefined | {
+          read(input: HostBotMemoryReadRequest, signal: AbortSignal): Promise<unknown>
+        }
+        if (!service) throw Error('bot_memory_unavailable')
+        const page = await service.read(request, signal)
+        signal.throwIfAborted()
+        return page
+      }),
     }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-team-read',

@@ -37,6 +37,8 @@ export { parseHostBotIdentity, parseHostBotIdentityTarget,
 export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
 export { parseHostBotTeamReadRequest, parseHostBotTeamPage } from './bot-team-read.js'
 export type { HostBotTeamReadRequest, HostBotTeamPage, HostBotTeamItem } from './bot-team-read.js'
+export { parseHostBotMemoryReadRequest, parseHostBotMemoryPage } from './bot-memory-read.js'
+export type { HostBotMemoryReadRequest, HostBotMemoryPage } from './bot-memory-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
