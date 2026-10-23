@@ -1999,9 +1999,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
       },
       {
         signature: 'async captureCollaborationGroupRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>',
-        description: 'Capture an original Session group Source only after its local group input fence exists. Cloud group Root admission must independently verify the committed message and current Agent members.',
-        parameters: [{ name: 'value', description: 'Cloud-recorded group Source input and the current namespace/policy.' }, { name: 'signal', description: 'Cancellation combined with Profile disposal.' }],
-        returns: 'Original local Source and Root aggregate; recovery never recreates a model call.',
+        description: 'Capture a cloud-recorded group message in the original fenced Session. The cloud group Root admission independently verifies the committed message and current members.',
+        parameters: [{ name: 'value', description: 'Exact group Source input and Host-selected namespace/policy.' }, { name: 'signal', description: 'Parent cancellation combined with Profile disposal.' }],
+        returns: 'Original durable Root aggregate; recovery has no executable call.',
       },
       {
         signature: 'async prepareCollaborationRootPlanning(value: unknown, predecessor: CollaborationPlanningPredecessor, signal: AbortSignal): Promise<CollaborationRootPlanningPreparation>',
