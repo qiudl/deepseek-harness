@@ -1493,6 +1493,9 @@ it('cancels the remaining question read of a committed passive reply without con
 it('routes plain text from the original active Session to one durable group command', async () => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
+  const recorded = vi.fn((event: Event) => event)
+  window.addEventListener('dsh-slark-group-message-recorded', recorded)
+  onTestFinished(() => { window.removeEventListener('dsh-slark-group-message-recorded', recorded) })
   onTestFinished(() => { localStorage.clear() })
   const groupId = '22222222-2222-4222-8222-222222222222'
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const, group_id: groupId,
@@ -1511,6 +1514,10 @@ it('routes plain text from the original active Session to one durable group comm
   const scoped = f.ctx.sessions.scope(session.sessionId)
   if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
   expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
+  const recordedEvent = recorded.mock.calls[0]?.[0]
+  if (!(recordedEvent instanceof CustomEvent)) throw Error('missing group message event')
+  expect(recordedEvent.detail).toMatchObject({ group_id: groupId,
+    message_id: '33333333-3333-4333-8333-333333333333', seq: 1 })
   expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
     workspace_id: f.workspace.id, session_id: 'session-1', body: 'hello group' }))
   expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
@@ -1518,6 +1525,104 @@ it('routes plain text from the original active Session to one durable group comm
   await vi.waitFor(() => { expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' })) })
   expect(f.submit).not.toHaveBeenCalled()
   expect(f.sink).not.toHaveBeenCalled()
+})
+
+it('records a picked Agent chip as a project-qualified group target', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+    version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  host.collaborationGroupMessages = messages
+  await f.pick('', ' 请检查登录问题')
+  const work = vi.fn(async () => ({ ok: true as const, planning: 'recorded' as const,
+    root: {}, checkpoint: {}, execution: { ok: true as const, status: 'recorded' as const,
+      rootTraceId: 'a'.repeat(32), tasks: ['task-1'] } }))
+  host.collaborationGroupWork = work
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  const body = f.composer.snapshot.draft
+  const outcome = await source.matchEnter?.(session, body,
+    new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+    throw Error('missing Agent group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
+  const actorRef = `slark-agent:${createHash('sha256').update(JSON.stringify([
+    'slark_group_agent_v1', 'project-1', 'agent-1',
+  ])).digest('hex')}`
+  expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
+    mention_refs: [actorRef], mention_spans: [expect.objectContaining({
+      actor_ref: actorRef, agent_name: 'Guide', project_name: '项目空间',
+    })], body }))
+  expect(work).toHaveBeenCalledOnce()
+  expect(work).toHaveBeenCalledWith({ workspace_id: f.workspace.id,
+    session_id: 'session-1', message_id: groupId })
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
+it('keeps the addressed group draft when planning succeeded but execution needs reconciliation', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+    version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  host.collaborationGroupMessages = messages
+  host.collaborationGroupWork = vi.fn(async () => ({ ok: true as const,
+    planning: 'recorded' as const, root: {}, checkpoint: {},
+    execution: { ok: false as const, errorCode: 'collaboration_group_execution_retry_required',
+      reconciliationRequired: true as const } }))
+  await f.pick('', ' 请检查登录问题')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }, body = f.composer.snapshot.draft
+  const outcome = await source.matchEnter?.(session, body,
+    new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+    throw Error('missing Agent group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error' })
+  expect(f.composer.snapshot.draft).toBe(body)
+  expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
+})
+
+it('keeps an addressed group draft for same-message retry when Root planning is uncertain', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+    version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  host.collaborationGroupMessages = messages
+  const work = vi.fn(async () => ({ ok: false as const,
+    errorCode: 'collaboration_group_work_retry_required', reconciliationRequired: true }))
+  host.collaborationGroupWork = work
+  await f.pick('', ' 请检查登录问题')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }, body = f.composer.snapshot.draft
+  const outcome = await source.matchEnter?.(session, body,
+    new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+    throw Error('missing Agent group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error' })
+  expect(f.composer.snapshot.draft).toBe(body)
+  expect(work).toHaveBeenCalledWith({ workspace_id: f.workspace.id,
+    session_id: 'session-1', message_id: groupId })
+  expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
 })
 
 it('registers the group ledger dock only for a verified group bridge', async () => {

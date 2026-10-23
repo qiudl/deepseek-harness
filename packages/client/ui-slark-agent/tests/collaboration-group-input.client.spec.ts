@@ -46,12 +46,32 @@ it('retains the parent request ID across an uncertain send and missing receipt',
   const { bridge, commands } = parent()
   const input = { bridge, workspaceId, sessionId, groupId, body: 'hello' }
   expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
-  expect(await sendGroupText(input)).toMatchObject({ state: 'recorded', requestId })
+  expect(await sendGroupText(input)).toMatchObject({ state: 'recorded', requestId,
+    messageId: groupId, seq: 1 })
   expect(commands.map(command => command.operation)).toEqual([
     'pending_claim', 'receipt', 'send', 'pending_claim', 'receipt', 'send'])
   const sends = commands.filter((command): command is Extract<GroupMessageCommand, { operation: 'send' }> =>
     command.operation === 'send')
   expect(sends[0]?.request_id).toBe(sends[1]?.request_id)
+})
+
+it('binds the parent pending key to the selected Agent refs and preserves them on retry', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands } = parent()
+  const ref = `slark-agent:${'a'.repeat(64)}`
+  const label = '@Guide · Project'
+  const span = { mention_id: requestId, actor_ref: ref, start: 0, end: label.length,
+    agent_name: 'Guide', project_name: 'Project', capability_snapshot: 'b'.repeat(64) }
+  const input = { bridge, workspaceId, sessionId, groupId,
+    body: `${label} please review`, mentionRefs: [ref], mentionSpans: [span] }
+  expect((await sendGroupText(input)).state).toBe('retry_required')
+  expect(await sendGroupText({ ...input, mentionRefs: [], mentionSpans: [] })).toEqual({ state: 'pending_other' })
+  expect((await sendGroupText(input)).state).toBe('recorded')
+  const sends = commands.filter((command): command is Extract<GroupMessageCommand, { operation: 'send' }> =>
+    command.operation === 'send')
+  expect(sends).toHaveLength(2)
+  expect(sends[0]).toMatchObject({ request_id: requestId, mention_refs: [ref], mention_spans: [span] })
+  expect(sends[1]).toEqual(sends[0])
 })
 
 it('holds a recorded tombstone until the composer confirms its draft cleared', async () => {
@@ -62,7 +82,7 @@ it('holds a recorded tombstone until the composer confirms its draft cleared', a
   expect(await sendGroupText({ ...input, body: 'different' })).toEqual({ state: 'pending_other' })
   setReceipt('recorded')
   const recorded = await sendGroupText(input)
-  expect(recorded).toMatchObject({ state: 'recorded', requestId })
+  expect(recorded).toMatchObject({ state: 'recorded', requestId, messageId: groupId, seq: 1 })
   expect(commands.filter(command => command.operation === 'send')).toHaveLength(1)
   if (recorded.state !== 'recorded') throw Error('test setup')
   expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
@@ -134,6 +154,19 @@ it('retains the draft when receipt is uncertain or the parent call throws', asyn
   expect(commands.map(command => command.operation)).toEqual(['pending_claim', 'receipt'])
   bridge.collaborationGroupMessages.mockRejectedValueOnce(Error('disconnected'))
   expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+})
+
+it('does not accept a malformed committed message identity', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands, setReceipt } = parent()
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'hello' }
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+  setReceipt('recorded')
+  const original = bridge.collaborationGroupMessages
+  bridge.collaborationGroupMessages = vi.fn(async (command: GroupMessageCommand) =>
+    command.operation === 'receipt' ? { state: 'recorded' as const, message_id: 'invalid', seq: 1 } : original(command))
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+  expect(commands.filter(command => command.operation === 'send')).toHaveLength(1)
 })
 
 it('keeps the pending key when acknowledgment fails', async () => {

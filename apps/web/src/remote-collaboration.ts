@@ -8,6 +8,8 @@ const groupSchema = 'dsh-remote-collaboration/v2'
 const encoder = new TextEncoder()
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const version = /^(0|[1-9][0-9]{0,18})$/u
+const digest = /^[a-f0-9]{64}$/u
+const agentRef = /^slark-agent:[a-f0-9]{64}$/u
 
 function row(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -89,6 +91,47 @@ function groupResult(value: unknown): boolean {
   if (value.state === 'recorded') return exact(value, ['state', 'message_id', 'seq'])
     && typeof value.message_id === 'string' && uuid.test(value.message_id)
     && Number.isSafeInteger(value.seq) && Number(value.seq) > 0
+  if (value.state === 'recorded_source') {
+    const source = value.source
+    const originalMessage = row(source) ? source.original_message : undefined
+    if (!exact(value, ['state', 'group_id', 'request_id', 'payload_digest', 'message_seq', 'source'])
+      || typeof value.group_id !== 'string' || !uuid.test(value.group_id)
+      || typeof value.request_id !== 'string' || !uuid.test(value.request_id)
+      || typeof value.payload_digest !== 'string' || !digest.test(value.payload_digest)
+      || !Number.isSafeInteger(value.message_seq) || Number(value.message_seq) < 1
+      || !exact(source, ['workspace_id', 'session_id', 'source_message_id', 'source_revision',
+        'original_message', 'active_mentions']) || typeof source.workspace_id !== 'string'
+      || !uuid.test(source.workspace_id) || !text(source.session_id, 256)
+      || typeof source.source_message_id !== 'string' || !uuid.test(source.source_message_id)
+      || source.source_revision !== '1' || typeof originalMessage !== 'string'
+      || !originalMessage.trim() || encoder.encode(originalMessage).length > 32 * 1024
+      || !originalMessage.isWellFormed()
+      || !Array.isArray(source.active_mentions) || source.active_mentions.length < 1
+      || source.active_mentions.length > 10) return false
+    return source.active_mentions.every((mention) => {
+      if (!exact(mention, ['mention_id', 'source_span', 'display_snapshot', 'binding'])
+        || typeof mention.mention_id !== 'string' || !uuid.test(mention.mention_id)
+        || !exact(mention.source_span, ['source_message_id', 'source_revision', 'start', 'end'])
+        || mention.source_span.source_message_id !== source.source_message_id
+        || mention.source_span.source_revision !== '1'
+        || !Number.isSafeInteger(mention.source_span.start)
+        || !Number.isSafeInteger(mention.source_span.end)
+        || Number(mention.source_span.start) < 0
+        || Number(mention.source_span.end) > originalMessage.length
+        || Number(mention.source_span.end) <= Number(mention.source_span.start) + 1
+        || originalMessage[Number(mention.source_span.start)] !== '@'
+        || !exact(mention.display_snapshot, ['agent_name', 'project_name'])
+        || !text(mention.display_snapshot.agent_name, 512)
+        || !text(mention.display_snapshot.project_name, 512)
+        || !exact(mention.binding, ['kind', 'target', 'capability_snapshot'])
+        || mention.binding.kind !== 'resolved' || !exact(mention.binding.target, ['project_id', 'agent_id'])
+        || !text(mention.binding.target.project_id, 256) || !text(mention.binding.target.agent_id, 256)
+        || typeof mention.binding.capability_snapshot !== 'string'
+        || !digest.test(mention.binding.capability_snapshot)) return false
+      return originalMessage.slice(Number(mention.source_span.start), Number(mention.source_span.end))
+        === `@${mention.display_snapshot.agent_name} · ${mention.display_snapshot.project_name}`
+    })
+  }
   if (value.state !== 'page' || !exact(value, ['state', 'items', 'next_seq', 'has_more', 'last_seq'])
     || !Array.isArray(value.items) || value.items.length > 100
     || !Number.isSafeInteger(value.next_seq) || Number(value.next_seq) < 0
@@ -107,6 +150,44 @@ function groupResult(value: unknown): boolean {
   }
   return !value.items.length || previous === value.next_seq
 }
+function groupWorkResult(value: unknown, input: Record<string, unknown>): boolean {
+  if (!row(value)) return false
+  if (value.ok === false) return Object.keys(value).every(key =>
+    ['ok', 'errorCode', 'reconciliationRequired', 'root'].includes(key)) &&
+    text(value.errorCode, 128) && typeof value.reconciliationRequired === 'boolean'
+  if (!exact(value, ['ok', 'planning', 'root', 'checkpoint']) || value.ok !== true ||
+    value.planning !== 'recorded' || !row(value.root) || !row(value.checkpoint)) return false
+  const source = value.root.source_descriptor
+  return row(source) && source.workspace_id === input.workspace_id &&
+    source.session_id === input.session_id && source.source_message_id === input.message_id &&
+    typeof value.root.root_task_id === 'string' && typeof value.root.root_trace_id === 'string'
+}
+function groupMentionCommand(value: Record<string, unknown>): boolean {
+  if (!Object.hasOwn(value, 'mention_refs') && !Object.hasOwn(value, 'mention_spans')) return true
+  const refs = value.mention_refs, spans = value.mention_spans
+  if (!Array.isArray(refs) || !Array.isArray(spans)
+    || refs.length < 1 || refs.length > 10
+    || spans.length !== refs.length
+    || new Set(refs).size !== refs.length
+    || refs.some(ref => typeof ref !== 'string' || !agentRef.test(ref))) return false
+  const used = new Set<string>()
+  let previousEnd = 0
+  return spans.every((span, index) => {
+    if (!exact(span, ['mention_id', 'actor_ref', 'start', 'end', 'agent_name', 'project_name', 'capability_snapshot'])
+      || typeof span.mention_id !== 'string' || !uuid.test(span.mention_id) || used.has(span.mention_id)
+      || span.actor_ref !== refs[index] || !Number.isSafeInteger(span.start)
+      || !Number.isSafeInteger(span.end) || Number(span.start) < previousEnd
+      || Number(span.end) <= Number(span.start) + 1 || typeof value.body !== 'string'
+      || Number(span.end) > value.body.length || !text(span.agent_name, 512)
+      || !text(span.project_name, 512) || typeof span.capability_snapshot !== 'string'
+      || !digest.test(span.capability_snapshot)
+      || value.body.slice(Number(span.start), Number(span.end)) !== `@${span.agent_name} · ${span.project_name}`)
+      return false
+    used.add(span.mention_id)
+    previousEnd = Number(span.end)
+    return true
+  })
+}
 function groupMemberInput(value: unknown): value is Record<string, unknown> {
   if (!row(value)) return false
   const fields = value.operation === 'status' ? ['operation', 'workspace_id', 'session_id']
@@ -114,15 +195,21 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
       : value.operation === 'inflight' ? ['operation', 'workspace_id', 'session_id',
         'member_id', 'after_delivery_id', 'limit']
         : value.operation === 'proxy_status' ? ['operation', 'workspace_id', 'session_id']
-          : value.operation === 'proxy_select' ? ['operation', 'workspace_id', 'session_id',
-            'request_id', 'expected_binding_epoch', 'bot_id']
-            : value.operation === 'proxy_attach' ? ['operation', 'workspace_id', 'session_id',
-              'request_id', 'expected_membership_version', 'bot_id', 'binding_id', 'binding_epoch']
-              : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
-                : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-                  'expected_membership_version', 'bot_id']
-                  : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-                    'expected_membership_version', 'member_id'] : []
+          : value.operation === 'proxy_select' || value.operation === 'proxy_replace'
+            ? ['operation', 'workspace_id', 'session_id',
+              'request_id', 'expected_binding_epoch', 'bot_id']
+            : value.operation === 'proxy_unbind' ? ['operation', 'workspace_id', 'session_id',
+              'request_id', 'expected_binding_epoch']
+              : ['proxy_handoff_seal', 'proxy_handoff_revoke', 'proxy_handoff_attach',
+                'proxy_handoff_complete'].includes(String(value.operation))
+                ? ['operation', 'workspace_id', 'session_id', 'binding_id', 'target_epoch']
+                : value.operation === 'proxy_attach' ? ['operation', 'workspace_id', 'session_id',
+                  'request_id', 'expected_membership_version', 'bot_id', 'binding_id', 'binding_epoch']
+                  : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
+                    : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                      'expected_membership_version', 'bot_id']
+                      : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                        'expected_membership_version', 'member_id'] : []
   if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
     || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
     || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
@@ -136,11 +223,19 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
     && uuid.test(value.member_id) && typeof value.after_delivery_id === 'string'
     && (value.after_delivery_id === '' || uuid.test(value.after_delivery_id))
     && Number.isSafeInteger(value.limit) && Number(value.limit) >= 1 && Number(value.limit) <= 100
+  if (['proxy_handoff_seal', 'proxy_handoff_revoke', 'proxy_handoff_attach',
+    'proxy_handoff_complete'].includes(String(value.operation)))
+    return typeof value.binding_id === 'string' && uuid.test(value.binding_id)
+      && Number.isSafeInteger(value.target_epoch) && Number(value.target_epoch) >= 1
   if (typeof value.request_id !== 'string' || !uuid.test(value.request_id)) return false
   if (value.operation === 'receipt') return true
-  if (value.operation === 'proxy_select') return Number.isSafeInteger(value.expected_binding_epoch)
-    && Number(value.expected_binding_epoch) >= 0 && typeof value.bot_id === 'string'
+  if (value.operation === 'proxy_select' || value.operation === 'proxy_replace')
+    return Number.isSafeInteger(value.expected_binding_epoch)
+    && Number(value.expected_binding_epoch) >= (value.operation === 'proxy_replace' ? 1 : 0)
+    && typeof value.bot_id === 'string'
     && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
+  if (value.operation === 'proxy_unbind') return Number.isSafeInteger(value.expected_binding_epoch)
+    && Number(value.expected_binding_epoch) >= 1
   if (value.operation === 'proxy_attach') return Number.isSafeInteger(value.expected_membership_version)
     && Number(value.expected_membership_version) >= 1 && typeof value.bot_id === 'string'
     && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
@@ -203,6 +298,22 @@ function groupMemberResult(value: unknown): boolean {
     && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 1
     && typeof value.bot_ref === 'string'
     && /^deepseek-bot:[A-Za-z0-9_-]{1,200}$/u.test(value.bot_ref)
+  if (value.state === 'proxy_changed') return exact(value,
+    ['state', 'operation', 'binding_id', 'binding_epoch', 'bot_ref', 'binding_state'])
+    && typeof value.binding_id === 'string' && uuid.test(value.binding_id)
+    && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 1
+    && (value.operation === 'replace' && value.binding_state === 'transferring'
+      && typeof value.bot_ref === 'string' && /^deepseek-bot:[A-Za-z0-9_-]{1,200}$/u.test(value.bot_ref)
+      || value.operation === 'unbind' && value.binding_state === 'unbound' && value.bot_ref === null)
+  if (value.state === 'handoff_sealed') return exact(value,
+    ['state', 'handoff_id', 'namespace_count', 'item_count'])
+    && typeof value.handoff_id === 'string' && uuid.test(value.handoff_id)
+    && Number.isSafeInteger(value.namespace_count) && Number(value.namespace_count) >= 1
+    && Number.isSafeInteger(value.item_count) && Number(value.item_count) >= 0
+  if (value.state === 'handoff_step') return exact(value, ['state', 'operation', 'result'])
+    && (value.operation === 'complete' && ['active', 'complete'].includes(String(value.result))
+      || (value.operation === 'revoke' || value.operation === 'attach')
+        && ['recorded', 'idle', 'blocked'].includes(String(value.result)))
   if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
     'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
     && typeof value.member_id === 'string' && uuid.test(value.member_id)
@@ -299,17 +410,20 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
     const groupMessages = expectedSchema === groupSchema && methods.includes('groupMessages')
+    const groupWork = expectedSchema === groupSchema && methods.includes('groupWork')
     const groupMembers = expectedSchema === groupSchema && methods.includes('groupMembers')
     const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
     const groupActivation = expectedSchema === groupSchema && methods.includes('groupActivation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      + (groupMessages ? 1 : 0) + (groupMembers ? 1 : 0)
+      + (groupMessages ? 1 : 0) + (groupWork ? 1 : 0) + (groupMembers ? 1 : 0)
       + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0)
       || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
-        'groupMessages', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
+        'groupMessages', 'groupWork', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
+    const collaborationReady = execution || conversations || archive || groupMessages ||
+      groupWork || groupMembers || groupPreparation || groupActivation
     const bridge = {
       async accountIdentity(): Promise<{ name: string; avatarUrl: string | null } | null> {
         const controller = new AbortController()
@@ -327,7 +441,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive || groupMessages || groupMembers || groupPreparation || groupActivation) ? (() => {
+      ...(collaborationReady ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -354,12 +468,15 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               || /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..')
               throw Error('invalid group request')
             const fields = raw.operation === 'send' ? ['operation', 'request_id', 'workspace_id', 'session_id',
-              'expected_group_version', 'body'] : raw.operation === 'pending_claim'
+              'expected_group_version', 'body',
+              ...(Object.hasOwn(raw, 'mention_refs') ? ['mention_refs'] : []),
+              ...(Object.hasOwn(raw, 'mention_spans') ? ['mention_spans'] : [])] : raw.operation === 'pending_claim'
               ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest'] : raw.operation === 'pending_ack'
                 ? ['operation', 'workspace_id', 'session_id', 'group_id', 'digest', 'request_id'] : raw.operation === 'pending_status'
                   ? ['operation', 'workspace_id', 'session_id', 'group_id'] : raw.operation === 'receipt'
-                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
-                      ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
+                    ? ['operation', 'request_id', 'workspace_id', 'session_id'] : raw.operation === 'work-source'
+                      ? ['operation', 'message_id', 'workspace_id', 'session_id'] : raw.operation === 'page'
+                        ? ['operation', 'workspace_id', 'session_id', 'after_seq', 'limit'] : []
             if (!exact(raw, fields) || !fields.length) throw Error('invalid group request')
             if (raw.operation === 'pending_claim' || raw.operation === 'pending_ack' || raw.operation === 'pending_status') {
               if (typeof raw.group_id !== 'string' || !uuid.test(raw.group_id) ||
@@ -371,16 +488,42 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               if (!Number.isSafeInteger(raw.after_seq) || Number(raw.after_seq) < 0 ||
                 !Number.isInteger(raw.limit) || Number(raw.limit) < 1 || Number(raw.limit) > 100)
                 throw Error('invalid group page')
+            } else if (raw.operation === 'work-source') {
+              if (typeof raw.message_id !== 'string' || !uuid.test(raw.message_id))
+                throw Error('invalid group message identity')
             } else if (typeof raw.request_id !== 'string' || !uuid.test(raw.request_id)) {
               throw Error('invalid group key')
             }
             if (raw.operation === 'send' && (raw.expected_group_version !== 2 ||
               typeof raw.body !== 'string' || raw.body.length < 1 || raw.body.length > 16_000 ||
-              encoder.encode(raw.body).length > 24_000)) throw Error('invalid group body')
+              encoder.encode(raw.body).length > 24_000 || !groupMentionCommand(raw))) throw Error('invalid group body')
+            if (encoder.encode(JSON.stringify(raw)).length > 24 * 1024) throw Error('group command too large')
             const result = await call('collaboration/groupMessages', raw, signal)
-            if (!groupResult(result)) throw Error('invalid group reply')
+            if (!groupResult(result) || raw.operation === 'work-source' && row(result) &&
+              result.state === 'recorded_source' &&
+              (!row(result.source) || result.source.workspace_id !== raw.workspace_id ||
+                result.source.session_id !== raw.session_id || result.source.source_message_id !== raw.message_id))
+              throw Error('invalid group reply')
             return result
           } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupWork ? { collaborationGroupWork: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 75_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['workspace_id', 'session_id', 'message_id']) ||
+              typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id) ||
+              typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id) ||
+              /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..' ||
+              typeof raw.message_id !== 'string' || !uuid.test(raw.message_id))
+              throw Error('invalid group work')
+            const result = await call('collaboration/groupWork', raw, signal)
+            if (!groupWorkResult(result, raw)) throw Error('invalid group work reply')
+            return result
+          } catch { return { ok: false, errorCode: 'collaboration_group_work_retry_required',
+            reconciliationRequired: true } }
           finally { clearTimeout(timer) }
         } } : {}),
         ...(groupMembers ? { collaborationGroupMembers: async (raw: unknown) => {

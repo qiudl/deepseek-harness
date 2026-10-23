@@ -38,13 +38,15 @@ export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupStopRequest, ProfileBotGroupStopResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
 export { parseHostBotGroupCommand, parseHostBotGroupResponse,
   matchesHostBotGroupResponse, parseHostBotGroupPublicKeyring,
-  parseHostBotGroupDeliveryInput } from './bot-group.js'
+  parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput } from './bot-group.js'
 export type { HostBotGroupCommand, HostBotGroupResponse,
-  HostBotGroupPublicKeyring, HostBotGroupDeliveryInput } from './bot-group.js'
+  HostBotGroupPublicKeyring, HostBotGroupDeliveryInput,
+  HostBotGroupStopInput } from './bot-group.js'
 export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
 export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'

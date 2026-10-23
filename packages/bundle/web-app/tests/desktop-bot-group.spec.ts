@@ -98,3 +98,21 @@ it('requires a positive revocation version and forwards the in-flight decision',
   expect(run).toHaveBeenCalledWith(command, expect.any(AbortSignal))
   expect((await f.post({ ...command, version: 0 })).status).toBe(400)
 })
+
+it('forwards only one scoped stop request and validates its exact reply', async () => {
+  const command = { operation: 'stop_delivery', groupId: delivery.groupId,
+    botId: delivery.botId, memberCycle: delivery.memberCycle,
+    deliveryId: delivery.deliveryId,
+    requestId: '30000000-0000-4000-8000-000000000003' } as const
+  const run = vi.fn(async () => ({ state: 'requested', deliveryId: delivery.deliveryId,
+    requestId: command.requestId }))
+  const f = await fixture(run)
+  expect(await (await f.post(command)).json()).toEqual({ state: 'requested',
+    deliveryId: delivery.deliveryId, requestId: command.requestId })
+  expect(run).toHaveBeenCalledWith(command, expect.any(AbortSignal))
+  expect((await f.post({ ...command, requestId: 'bad' })).status).toBe(400)
+  const wrong = await fixture(vi.fn(async () => ({ state: 'terminal', deliveryId: delivery.deliveryId,
+    requestId: '40000000-0000-4000-8000-000000000004', status: 'stopped',
+    resultId: `${delivery.deliveryId}:final` })))
+  expect((await wrong.post(command)).status).toBe(422)
+})

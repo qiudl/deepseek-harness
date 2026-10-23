@@ -100,6 +100,34 @@ function parse(value: string): Reference | undefined {
   } catch { return undefined }
 }
 const label = (r: Reference) => `${r.agent_name} · ${r.project_name}`
+type ScopedOccurrence = { source: string
+  ref: string
+  offset: number
+  length: number
+  clipboardText?: string }
+function checkedScopedMention(mention: ScopedOccurrence, draft: string, previousEnd: number,
+  workspaceId: string | undefined, sessionId: string, unavailable: string) {
+  const r = parse(mention.ref), end = mention.offset + mention.length, mentionId = r?.source_id
+  if (!r || !mentionId || r.workspace_id !== workspaceId || r.session_id !== sessionId ||
+    mention.source !== 'slark-agent' || !Number.isSafeInteger(mention.offset) ||
+    !Number.isSafeInteger(mention.length) || mention.offset < previousEnd ||
+    mention.length < 2 || end > draft.length || mention.clipboardText !== `@${label(r)}` ||
+    draft.slice(mention.offset, end) !== mention.clipboardText) throw Error(unavailable)
+  return { r, mentionId, end }
+}
+function sameOccurrences(current: readonly ScopedOccurrence[], captured: readonly ScopedOccurrence[]): boolean {
+  return current.length === captured.length && current.every((item, index) => {
+    const prior = captured[index]
+    return !!prior && item.source === prior.source && item.ref === prior.ref &&
+      item.offset === prior.offset && item.length === prior.length &&
+      item.clipboardText === prior.clipboardText
+  })
+}
+async function groupAgentRef(r: Reference): Promise<string> {
+  const payload = new TextEncoder().encode(JSON.stringify(['slark_group_agent_v1', r.project_id, r.agent_id]))
+  const digest = await crypto.subtle.digest('SHA-256', payload)
+  return `slark-agent:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
 /**
  * Preserve the full scoped display label during chip clipboard export.
  * @param ref - the original scoped chip metadata.
@@ -216,24 +244,57 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
         if (mapping.state === 'preparing') throw Error(t('group.preparing'))
         if (mapping.state === 'group_active') {
           if (!host.collaborationGroupMessages) throw Error(t('group.uncertain'))
-          if (snapshot.occurrences.length || envelope.attachments > 0 || snapshot.draft.trim() !== line)
+          if (envelope.attachments > 0 || snapshot.draft.trim() !== line || snapshot.occurrences.length > 10)
             throw Error(t('group.textOnly'))
+          let previousEnd = 0, question = ''
+          const mentions = [...snapshot.occurrences].sort((a, b) => a.offset - b.offset).map((mention) => {
+            const { r, mentionId, end } = checkedScopedMention(mention, snapshot.draft,
+              previousEnd, groupWorkspace, session.sessionId, t('submit.unavailable'))
+            question += snapshot.draft.slice(previousEnd, mention.offset)
+            previousEnd = end
+            return { r, mentionId, start: mention.offset, end }
+          })
+          if (mentions.length && !(question + snapshot.draft.slice(previousEnd)).trim())
+            throw Error(t('submit.question'))
+          const mentionRefs = await Promise.all(mentions.map(({ r }) => groupAgentRef(r)))
+          if (new Set(mentionRefs).size !== mentionRefs.length) throw Error(t('submit.unavailable'))
+          const mentionSpans = mentions.map(({ r, mentionId, start, end }, index) => {
+            const actorRef = mentionRefs[index]
+            if (!actorRef) throw Error(t('submit.unavailable'))
+            return { mention_id: mentionId, actor_ref: actorRef, start, end,
+              agent_name: r.agent_name, project_name: r.project_name,
+              capability_snapshot: r.capability_snapshot }
+          })
           const body = snapshot.draft, groupId = mapping.group_id
           return { claim: { name: 'slark-agent', token: line, retainOnFailure: false,
             async submit(args, actx) {
               signal.throwIfAborted()
               const latest = ctx.conversation.input.for(actx).state.getSnapshot()
               if (args.trim() || ctx.sessions.scopeOf(actx) !== session.sessionId || latest.draft !== body ||
-                latest.occurrences.length || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
+                !sameOccurrences(latest.occurrences, snapshot.occurrences) ||
+                workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
                 window.__DSH_DESKTOP_HOST__ !== host) return { kind: 'error', text: t('submit.changed') }
               const result = await sendGroupText({ bridge: host,
-                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body })
+                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body,
+                mentionRefs, mentionSpans })
               signal.throwIfAborted()
               if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace)
                 return { kind: 'error', text: t('group.uncertain') }
               if (result.state !== 'recorded') return { kind: 'error',
                 text: t(result.state === 'pending_other' ? 'group.pendingOther' : 'group.uncertain') }
               const recorded = result
+              if (mentionRefs.length) {
+                if (!host.collaborationGroupWork) return { kind: 'error', text: t('group.uncertain') }
+                let planned: Awaited<ReturnType<NonNullable<typeof host.collaborationGroupWork>>>
+                try { planned = await host.collaborationGroupWork({ workspace_id: groupWorkspace,
+                  session_id: session.sessionId, message_id: recorded.messageId }) }
+                catch { return { kind: 'error', text: t('group.uncertain') } }
+                signal.throwIfAborted()
+                if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
+                  !planned.ok || !planned.execution.ok ||
+                  planned.execution.status !== 'recorded')
+                  return { kind: 'error', text: t('group.uncertain') }
+              }
               const inputState = ctx.conversation.input.for(actx).state
               let acknowledged = false
               const acknowledgeWhenCleared = () => {
@@ -247,7 +308,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               const unsubscribe = inputState.subscribe(acknowledgeWhenCleared)
               acknowledgeWhenCleared()
               window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
-                detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId },
+                detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId,
+                  message_id: recorded.messageId, seq: recorded.seq },
               }))
               return { kind: 'success', text: t('group.recorded') }
             },
@@ -262,11 +324,9 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
       let sourceId: string | undefined
       let previousEnd = 0, question = ''
       const selected = [...snapshot.occurrences].sort((a, b) => a.offset - b.offset).map((mention) => {
-        const r = parse(mention.ref), end = mention.offset + mention.length, mentionId = r?.source_id
-        if (!r || !mentionId || mentionIds.has(mentionId) || r.session_id !== session.sessionId || workspace !== r.workspace_id ||
-          mention.source !== 'slark-agent' || !Number.isSafeInteger(mention.offset) || !Number.isSafeInteger(mention.length) ||
-          mention.offset < previousEnd || mention.length < 2 || end > snapshot.draft.length ||
-          mention.clipboardText !== `@${label(r)}` || snapshot.draft.slice(mention.offset, end) !== mention.clipboardText) throw Error(t('submit.unavailable'))
+        const { r, mentionId, end } = checkedScopedMention(mention, snapshot.draft,
+          previousEnd, workspace, session.sessionId, t('submit.unavailable'))
+        if (mentionIds.has(mentionId)) throw Error(t('submit.unavailable'))
         const originalId = r.original_source_id ?? mentionId
         if (sourceId === undefined) sourceId = originalId
         else if (sourceId !== originalId) throw Error(t('submit.unavailable'))
@@ -300,11 +360,7 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
           signal.throwIfAborted()
           const latest = ctx.conversation.input.for(actx).state.getSnapshot()
           if (ctx.sessions.scopeOf(actx) !== session.sessionId || latest.draft !== snapshot.draft ||
-            latest.occurrences.length !== snapshot.occurrences.length || latest.occurrences.some((current, index) => {
-            const captured = snapshot.occurrences[index]
-            return !captured || current.source !== captured.source || current.ref !== captured.ref || current.offset !== captured.offset ||
-                current.length !== captured.length || current.clipboardText !== captured.clipboardText
-          }) || args.trim() !== '' ||
+            !sameOccurrences(latest.occurrences, snapshot.occurrences) || args.trim() !== '' ||
             workspaceOf(ctx, session.sessionId) !== first.r.workspace_id || window.__DSH_DESKTOP_HOST__ !== host ||
             !available()) return { kind: 'error', text: t('submit.changed') }
           let result: CollaborationSubmissionResponse

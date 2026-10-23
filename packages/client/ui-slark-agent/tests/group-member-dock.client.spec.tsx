@@ -5,6 +5,8 @@ import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GroupMemberDock } from '../src/client/GroupMemberDock.tsx'
 import type { GroupMemberCommand, GroupMemberReply } from '../src/client/GroupMemberDock.tsx'
+import { writeProxyIntent } from '../src/client/proxy-intent-store.ts'
+import { readLeaveDecisionIntent, writeLeaveDecisionIntent } from '../src/client/leave-decision-intent-store.ts'
 import { en } from '../src/client/locales.ts'
 
 const workspaceId = '11111111-1111-4111-8111-111111111111'
@@ -12,10 +14,10 @@ const groupId = '22222222-2222-4222-8222-222222222222'
 const memberId = '33333333-3333-4333-8333-333333333333'
 const sessionId = SessionId('original-session')
 const owner = { member_id: memberId, actor_kind: 'human' as const, actor_ref: 'owner',
-  role: 'owner' as const, cycle: 1, joined_seq: 0, sources: [] }
+  role: 'owner' as const, cycle: 1, joined_seq: 0, sources: [], agent: null }
 const manualBot = { member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot' as const,
   actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
-  sources: ['manual' as const] }
+  sources: ['manual' as const], agent: null }
 type SnapshotReply = Extract<GroupMemberReply, { state: 'snapshot' }>
 const snapshot = (members: SnapshotReply['members'] = [owner, manualBot]): SnapshotReply => ({ state: 'snapshot',
   group_id: groupId, membership_version: 2, last_seq: 1, members })
@@ -26,7 +28,64 @@ const show = (host: { collaborationGroupMembers?: (command: GroupMemberCommand) 
   return render(<GroupMemberDock host={host} groupId={groupId} workspaceId={workspaceId}
     sessionId={sessionId} t={makeTranslate(en)} />)
 }
-afterEach(() => { cleanup(); vi.restoreAllMocks(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); sessionStorage.clear(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
+
+it('selects an authorized project Agent and removes that member from the original group', async () => {
+  const agentMemberId = '66666666-6666-4666-8666-666666666666'
+  const sent: GroupMemberCommand[] = []
+  let joined = false
+  const host = {
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : { ok: true as const, value: { scope_version: '3', next_cursor: null, items: [
+          { project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+            agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+            reason_code: 'ready' },
+          { project_id: 'project-b', project_name: 'Project B', agent_id: 'agent-b',
+            agent_name: 'Agent B', available: true, capability_snapshot: 'b'.repeat(64),
+            reason_code: 'ready' },
+        ] } }),
+    collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+      sent.push(command)
+      if (command.operation === 'status') return { state: 'snapshot', group_id: groupId,
+        membership_version: joined ? 2 : 1, last_seq: joined ? 1 : 0,
+        members: joined ? [owner, { member_id: agentMemberId, actor_kind: 'slark_agent',
+          actor_ref: 'slark-agent:' + 'b'.repeat(64), role: 'member', cycle: 1,
+          joined_seq: 1, sources: [], agent: { project_id: 'project-a', agent_id: 'agent-a' } }] : [owner] }
+      if (command.operation === 'agent_join') {
+        joined = true
+        return { state: 'recorded', operation: 'agent_join', member_id: agentMemberId,
+          membership_version: 2, seq: 1 }
+      }
+      if (command.operation === 'leave') {
+        joined = false
+        return { state: 'recorded', operation: 'leave', member_id: agentMemberId,
+          membership_version: 3, seq: 2 }
+      }
+      throw Error('unexpected command')
+    }),
+  }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy() })
+  expect(screen.queryByRole('button', { name: 'Agent B · Project B' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Agent A · Project A' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Remove Agent' })).toBeTruthy() })
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+  expect(screen.getByText('Agent A · Project A')).toBeTruthy()
+  expect(sent.find(command => command.operation === 'agent_join')).toMatchObject({
+    project_id: 'project-a', agent_id: 'agent-a', expected_membership_version: 1,
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Agent' }))
+  await waitFor(() => { expect(screen.queryByRole('button', { name: 'Remove Agent' })).toBeNull() })
+  expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy()
+  expect(sent.find(command => command.operation === 'leave')).toMatchObject({
+    member_id: agentMemberId, expected_membership_version: 2,
+  })
+})
 
 it('shows current Bot members and retries an uncertain join with the same request key', async () => {
   const commands: unknown[] = []
@@ -36,10 +95,10 @@ it('shows current Bot members and retries an uncertain join with the same reques
     if (command.operation === 'status') return { state: 'snapshot' as const,
       group_id: groupId, membership_version: joined ? 2 : 1, last_seq: joined ? 1 : 0,
       members: [{ member_id: memberId, actor_kind: 'human', actor_ref: 'owner', role: 'owner',
-        cycle: 1, joined_seq: 0, sources: [] },
+        cycle: 1, joined_seq: 0, sources: [], agent: null },
       ...(joined ? [{ member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot' as const,
         actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
-        sources: ['manual' as const] }] : [])] }
+        sources: ['manual' as const], agent: null }] : [])] }
     if (command.operation === 'join') {
       joinAttempts++
       if (joinAttempts === 1) return { state: 'retry_required' as const }
@@ -72,13 +131,13 @@ it('only offers manual Bot removal while showing a personal proxy as a member', 
       group_id: groupId, membership_version: 3, last_seq: 2,
       members: [
         { member_id: memberId, actor_kind: 'human', actor_ref: 'owner', role: 'owner',
-          cycle: 1, joined_seq: 0, sources: [] },
+          cycle: 1, joined_seq: 0, sources: [], agent: null },
         { member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot',
           actor_ref: 'deepseek-bot:manual', role: 'member', cycle: 1, joined_seq: 1,
-          sources: ['manual'] },
+          sources: ['manual'], agent: null },
         { member_id: '55555555-5555-4555-8555-555555555555', actor_kind: 'bot',
           actor_ref: 'deepseek-bot:proxy', role: 'member', cycle: 1, joined_seq: 2,
-          sources: ['personal_proxy'] },
+          sources: ['personal_proxy'], agent: null },
       ] }
     if (command.operation === 'inflight') return noInFlight(command.member_id)
     return { state: 'retry_required' as const }
@@ -103,7 +162,7 @@ it('holds a Bot in the group while its delivery lacks a verified result', async 
     if (command.operation === 'status') return snapshot()
     if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
       member_cycle: 1, deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
-        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation' }],
+        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
       next_cursor: null }
     throw Error('leave must wait for owner decisions')
   }) }
@@ -111,7 +170,319 @@ it('holds a Bot in the group while its delivery lacks a verified result', async 
   await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
   await waitFor(() => { expect(screen.getByText(/work awaiting reconciliation/u)).toBeTruthy() })
-  expect(commands.map(command => command.operation)).toEqual(['status', 'inflight'])
+  expect(commands.map(command => command.operation)).toEqual(['status', 'proxy_status', 'inflight'])
+})
+
+it('records continue per delivery and removes only after all inventory pages agree', async () => {
+  const first = '55555555-5555-4555-8555-555555555555'
+  const second = '66666666-6666-4666-8666-666666666666'
+  const choices = new Map<string, 'continue' | 'request_stop'>()
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') {
+      const id = command.after_delivery_id ? second : first
+      return { state: 'inflight', member_id: command.member_id, member_cycle: 1,
+        deliveries: [{ delivery_id: id, message_seq: id === first ? 2 : 3,
+          payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: choices.get(id) ?? null }],
+        next_cursor: id === first ? first : null }
+    }
+    if (command.operation === 'decide') {
+      choices.set(command.delivery_id, command.decision)
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id,
+        decision: command.decision }
+    }
+    if (command.operation === 'leave') return { state: 'recorded', operation: 'leave',
+      member_id: command.member_id, membership_version: 3, seq: 2 }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByText('Group message #2')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group message #3')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(commands.some(command => command.operation === 'leave')).toBe(true) })
+  expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(5)
+})
+
+it('keeps request stop pending while permitting immediate leave after the decision', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  const saved = { request_id: '77777777-7777-4777-8777-777777777777',
+    member_id: manualBot.member_id, member_cycle: 1, delivery_id: deliveryId,
+    decision: 'request_stop' as const }
+  expect(writeLeaveDecisionIntent(workspaceId, sessionId, groupId, saved)).toBe(true)
+  const commands: GroupMemberCommand[] = []
+  let decision: 'request_stop' | null = null
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision }], next_cursor: null }
+    if (command.operation === 'decide') {
+      decision = 'request_stop'
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id, decision: command.decision }
+    }
+    if (command.operation === 'leave') return { state: 'recorded', operation: 'leave',
+      member_id: command.member_id, membership_version: 3, seq: 2 }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByText('Group message #2')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Request stop' }))
+  await waitFor(() => { expect(screen.getByText('Stop requested; awaiting executor confirmation')).toBeTruthy() })
+  expect(commands.find(command => command.operation === 'decide')).toMatchObject(saved)
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(2) })
+  await waitFor(() => { expect(commands.some(command => command.operation === 'leave')).toBe(true) })
+})
+
+it('holds a decision unsent when browser storage fails', async () => {
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
+        message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: null }
+    throw Error('decision must remain unsent')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('denied') })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'decide')).toBe(false)
+})
+
+it('replays an uncertain decision key and rejects a conflicting choice', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  const commands: GroupMemberCommand[] = []
+  let attempts = 0
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }], next_cursor: null }
+    if (command.operation === 'decide') {
+      attempts++
+      if (attempts === 1) throw Error('receipt lost')
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle, delivery_id: command.delivery_id, decision: command.decision }
+    }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  const saved = readLeaveDecisionIntent(workspaceId, sessionId, groupId)
+  expect(saved?.decision).toBe('continue')
+  fireEvent.click(screen.getByRole('button', { name: 'Request stop' }))
+  expect(commands.filter(command => command.operation === 'decide')).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'decide')).toHaveLength(2) })
+  const sent = commands.filter((command): command is Extract<GroupMemberCommand, { operation: 'decide' }> =>
+    command.operation === 'decide')
+  expect(sent[0]?.request_id).toBe(saved?.request_id)
+  expect(sent[1]?.request_id).toBe(saved?.request_id)
+  expect(readLeaveDecisionIntent(workspaceId, sessionId, groupId)).toBeNull()
+})
+
+it('rejects an invalid later page and lets the owner retry a failed page request', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let laterReads = 0
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId }
+    laterReads++
+    if (laterReads === 2) return { state: 'retry_required' }
+    if (laterReads === 3) throw Error('offline')
+    return { state: 'inflight', member_id: command.member_id, member_cycle: 1,
+      deliveries: [{ delivery_id: '66666666-6666-4666-8666-666666666666', message_seq: 3,
+        payload_digest: 'b'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: null }
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(laterReads).toBe(3) })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(screen.getByText('Group message #3')).toBeTruthy() })
+})
+
+it('keeps a mismatched decision receipt unresolved until the exact request is retried', async () => {
+  const deliveryId = '55555555-5555-4555-8555-555555555555'
+  let replies = 0
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: deliveryId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }], next_cursor: null }
+    if (command.operation === 'decide') {
+      replies++
+      return { state: 'decision_recorded', member_id: command.member_id,
+        member_cycle: command.member_cycle,
+        delivery_id: replies === 1 ? '66666666-6666-4666-8666-666666666666' : deliveryId,
+        decision: command.decision }
+    }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Decision status is uncertain. Retry the original decision.'))
+    .toBeTruthy() })
+  const requestId = readLeaveDecisionIntent(workspaceId, sessionId, groupId)?.request_id
+  fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(commands.filter(command => command.operation === 'decide')).toHaveLength(2)
+  expect(commands.filter((command): command is Extract<GroupMemberCommand, { operation: 'decide' }> =>
+    command.operation === 'decide')[1]?.request_id).toBe(requestId)
+})
+
+it('ignores a later inventory page after the Host changes', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let reads = 0
+  let resolvePage: ((reply: GroupMemberReply) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return Promise.resolve(snapshot())
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId })
+    reads++
+    if (reads === 1) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [], next_cursor: null })
+    return new Promise<GroupMemberReply>((resolve) => { resolvePage = resolve })
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(resolvePage).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { resolvePage?.({ state: 'retry_required' }) })
+  expect(screen.queryByText('Group member status is uncertain. Try again.')).toBeNull()
+  expect(screen.getByText('Group message #2')).toBeTruthy()
+})
+
+it('ignores a later inventory failure after the Host changes', async () => {
+  const firstId = '55555555-5555-4555-8555-555555555555'
+  let reads = 0
+  let rejectPage: ((error: Error) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return Promise.resolve(snapshot())
+    if (command.operation !== 'inflight') throw Error('unexpected command')
+    if (!command.after_delivery_id) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [{ delivery_id: firstId, message_seq: 2,
+        payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+      next_cursor: firstId })
+    reads++
+    if (reads === 1) return Promise.resolve({ state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: [], next_cursor: null })
+    return new Promise<GroupMemberReply>((_resolve, reject) => { rejectPage = reject })
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'More work in progress' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'More work in progress' }))
+  await waitFor(() => { expect(rejectPage).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { rejectPage?.(Error('offline')) })
+  expect(screen.queryByText('Group member status is uncertain. Try again.')).toBeNull()
+})
+
+it('updates only the delivery chosen by the owner', async () => {
+  const ids = ['55555555-5555-4555-8555-555555555555',
+    '66666666-6666-4666-8666-666666666666']
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot()
+    if (command.operation === 'inflight') return { state: 'inflight', member_id: command.member_id,
+      member_cycle: 1, deliveries: ids.map((delivery_id, index) => ({ delivery_id,
+        message_seq: index + 2, payload_digest: 'a'.repeat(64),
+        state: 'pending_reconciliation' as const, decision: null })), next_cursor: null }
+    if (command.operation === 'decide') return { state: 'decision_recorded',
+      member_id: command.member_id, member_cycle: command.member_cycle,
+      delivery_id: command.delivery_id, decision: command.decision }
+    throw Error('unexpected command')
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+  await waitFor(() => { expect(screen.getAllByRole('button', { name: 'Continue work' })).toHaveLength(2) })
+  fireEvent.click(screen.getAllByRole('button', { name: 'Continue work' })[0]!)
+  await waitFor(() => { expect(screen.getByText('Continue recorded')).toBeTruthy() })
+  expect(screen.getAllByRole('button', { name: 'Continue work' })).toHaveLength(1)
+  expect(screen.getByText('Group message #3')).toBeTruthy()
+})
+
+it('ignores a decision reply or failure after the Host changes', async () => {
+  for (const rejectAfterReplace of [false, true]) {
+    let resolveDecision: ((reply: GroupMemberReply) => void) | undefined
+    let rejectDecision: ((error: Error) => void) | undefined
+    const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand): Promise<GroupMemberReply> => {
+      if (command.operation === 'status') return Promise.resolve(snapshot())
+      if (command.operation === 'inflight') return Promise.resolve({ state: 'inflight',
+        member_id: command.member_id, member_cycle: 1,
+        deliveries: [{ delivery_id: '55555555-5555-4555-8555-555555555555',
+          message_seq: 2, payload_digest: 'a'.repeat(64), state: 'pending_reconciliation', decision: null }],
+        next_cursor: null })
+      if (command.operation === 'decide') return new Promise<GroupMemberReply>((resolve, reject) => {
+        resolveDecision = resolve; rejectDecision = reject
+      })
+      throw Error('unexpected command')
+    }) }
+    const view = show(host)
+    await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => { expect(screen.getByRole('button', { name: 'Continue work' })).toBeTruthy() })
+    fireEvent.click(screen.getByRole('button', { name: 'Continue work' }))
+    await waitFor(() => { expect(resolveDecision).toBeDefined() })
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+    await act(async () => {
+      if (rejectAfterReplace) rejectDecision?.(Error('offline'))
+      else resolveDecision?.({ state: 'retry_required' })
+    })
+    expect(screen.queryByText('Continue recorded')).toBeNull()
+    expect(screen.queryByText('Decision status is uncertain. Retry the original decision.')).toBeNull()
+    view.unmount()
+    sessionStorage.clear()
+  }
 })
 
 it('keeps removal closed when the in-flight inventory is unavailable or incomplete', async () => {
@@ -128,7 +499,8 @@ it('keeps removal closed when the in-flight inventory is unavailable or incomple
   reply = { state: 'inflight', member_id: manualBot.member_id, member_cycle: 1,
     deliveries: [], next_cursor: '55555555-5555-4555-8555-555555555555' }
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-  await waitFor(() => { expect(screen.getByText(/work awaiting reconciliation/u)).toBeTruthy() })
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'inflight')).toHaveLength(3) })
+  expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy()
   expect(commands.some(command => command.operation === 'leave')).toBe(false)
 })
 
@@ -141,7 +513,8 @@ it('keeps removal closed when the inventory request fails', async () => {
   await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
   await waitFor(() => { expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy() })
-  expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(2)
+  expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation !== 'proxy_status'))
+    .toHaveLength(2)
 })
 
 it('drops an inventory failure after Host replacement', async () => {
@@ -155,7 +528,8 @@ it('drops an inventory failure after Host replacement', async () => {
   await waitFor(() => { expect(rejectInventory).toBeDefined() })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
   await act(async () => { rejectInventory?.(Error('inventory offline')) })
-  expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(2)
+  expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation !== 'proxy_status'))
+    .toHaveLength(2)
   expect(screen.queryByText('Group member status is uncertain. Try again.')).toBeNull()
 })
 
@@ -170,7 +544,8 @@ it('drops an inventory reply after Host replacement', async () => {
   await waitFor(() => { expect(resolveInventory).toBeDefined() })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
   await act(async () => { resolveInventory?.(noInFlight(manualBot.member_id)) })
-  expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(2)
+  expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation !== 'proxy_status'))
+    .toHaveLength(2)
 })
 
 it('rechecks the current member after inventory returns', async () => {
@@ -194,7 +569,8 @@ it('rechecks the current member after inventory returns', async () => {
   await waitFor(() => { expect(screen.queryByText('deepseek-bot:helper')).toBeNull() })
   await act(async () => { resolveInventory?.(noInFlight(manualBot.member_id)) })
   expect(screen.getByText('Group member status is uncertain. Try again.')).toBeTruthy()
-  expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(3)
+  expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation !== 'proxy_status'))
+    .toHaveLength(3)
 })
 
 it('refreshes membership and reports missing, foreign, and failed status replies', async () => {
@@ -208,7 +584,9 @@ it('refreshes membership and reports missing, foreign, and failed status replies
     { state: 'missing' }, snapshot(),
     { ...snapshot(), group_id: 'another-group' }, snapshot(), Error('offline'), snapshot(),
   ]
-  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => {
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' }
     const reply = replies.shift()
     if (reply instanceof Error) throw reply
     if (!reply) throw Error('unexpected status request')
@@ -218,7 +596,8 @@ it('refreshes membership and reports missing, foreign, and failed status replies
   await waitFor(() => { expect(screen.getByRole('status').textContent).toBe('Group member status is uncertain. Try again.') })
   for (let index = 0; index < 5; index++) {
     await act(async () => { refresh?.() })
-    expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(index + 2)
+    expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation === 'status'))
+      .toHaveLength(index + 2)
     expect(screen.queryByRole('status') !== null).toBe(index % 2 === 1)
   }
   expect(screen.getByText('deepseek-bot:helper')).toBeTruthy()
@@ -257,13 +636,16 @@ it('refreshes after a conflict and clears a pending leave', async () => {
   const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
     if (command.operation === 'status') return { ...snapshot(), membership_version: version }
     if (command.operation === 'inflight') return noInFlight(command.member_id)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' }
     version = 3
     return { state: 'conflict' }
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-  await waitFor(() => { expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(4) })
+  await waitFor(() => { expect(host.collaborationGroupMembers.mock.calls.filter(([command]) =>
+    command.operation !== 'proxy_status')).toHaveLength(4) })
   expect(screen.queryByRole('status')).toBeNull()
   expect(screen.queryByRole('button', { name: 'Retry member change' })).toBeNull()
   expect(screen.getByRole('button', { name: 'Remove' }).hasAttribute('disabled')).toBe(false)
@@ -276,6 +658,8 @@ it('keeps a failed leave pending and retries it with the same request key', asyn
     commands.push(command)
     if (command.operation === 'status') return attempts > 1 ? snapshot([owner]) : snapshot()
     if (command.operation === 'inflight') return noInFlight(command.member_id)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' }
     attempts++
     if (attempts === 1) throw Error('offline')
     return { state: 'recorded', operation: 'leave', member_id: manualBot.member_id,
@@ -359,12 +743,13 @@ it('ignores status and member request failures after unmount', async () => {
 })
 
 it('ignores member actions after the active desktop host changes', async () => {
-  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot()) }
+  const host = { collaborationGroupMembers: vi.fn(async (_command: GroupMemberCommand): Promise<GroupMemberReply> => snapshot()) }
   show(host)
   await waitFor(() => { expect(screen.getByText('deepseek-bot:helper')).toBeTruthy() })
   Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
   fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-  expect(host.collaborationGroupMembers).toHaveBeenCalledTimes(1)
+  expect(host.collaborationGroupMembers.mock.calls.filter(([command]) => command.operation === 'status'))
+    .toHaveLength(1)
 })
 
 it('chooses an existing Bot from bounded Host pages before joining the group', async () => {
@@ -413,7 +798,7 @@ it('binds an existing Bot as owner proxy and attaches it to the current group', 
         membership_version: 3, seq: 2 }
     }
     return snapshot(attached ? [owner, { ...manualBot, actor_ref: 'deepseek-bot:my_bot',
-      sources: ['personal_proxy' as const] }] : [owner])
+      sources: ['personal_proxy' as const], agent: null }] : [owner])
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
@@ -425,6 +810,236 @@ it('binds an existing Bot as owner proxy and attaches it to the current group', 
     expected_binding_epoch: 0, bot_id: 'my_bot' })
   expect(commands.find(command => command.operation === 'proxy_attach')).toMatchObject({
     binding_id: bindingId, binding_epoch: 1, bot_id: 'my_bot' })
+})
+
+it('replaces the active proxy without attaching it before the Host handoff completes', async () => {
+  const commands: GroupMemberCommand[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 2, bot_ref: 'deepseek-bot:old',
+      binding_state: 'active' }
+    if (command.operation === 'proxy_replace') return { state: 'proxy_changed',
+      operation: 'replace', binding_id: bindingId, binding_epoch: 3,
+      bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  expect(commands.find(command => command.operation === 'proxy_replace')).toMatchObject({
+    expected_binding_epoch: 2, bot_id: 'new' })
+  expect(commands.some(command => command.operation === 'proxy_attach')).toBe(false)
+})
+
+it('loads the current proxy on entry and refreshes handoff and reselection state', async () => {
+  let refresh: (() => void) | undefined
+  const nativeSetInterval = globalThis.setInterval.bind(globalThis)
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, delay) => {
+    if (typeof callback === 'function' && delay === 20_000) refresh = callback
+    return nativeSetInterval(callback, delay)
+  })
+  let bindingState: 'active' | 'transferring' | 'needs_reselection' = 'active'
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> =>
+    command.operation === 'proxy_status' ? { state: 'proxy_binding',
+      binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 2,
+      bot_ref: 'deepseek-bot:old', binding_state: bindingState } : snapshot([owner])) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('Personal proxy: deepseek-bot:old')).toBeTruthy() })
+  bindingState = 'transferring'
+  await act(async () => { refresh?.() })
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  bindingState = 'needs_reselection'
+  await act(async () => { refresh?.() })
+  await waitFor(() => { expect(screen.getByText('Your current proxy is unavailable. Choose another Bot.')).toBeTruthy() })
+  expect(screen.queryByText(/Proxy handoff is in progress/u)).toBeNull()
+})
+
+it('lets the owner choose a new Bot after the unavailable proxy handoff', async () => {
+  const commands: GroupMemberCommand[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 7, bot_ref: 'deepseek-bot:gone',
+      binding_state: 'needs_reselection' }
+    if (command.operation === 'proxy_replace') return { state: 'proxy_changed',
+      operation: 'replace', binding_id: bindingId, binding_epoch: 8,
+      bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  expect(commands.find(command => command.operation === 'proxy_replace')).toMatchObject({
+    expected_binding_epoch: 7, bot_id: 'new' })
+})
+
+it('retries an uncertain unbind with the same request key and keeps pending handoff visible', async () => {
+  const commands: GroupMemberCommand[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let attempts = 0
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 2, bot_ref: 'deepseek-bot:old',
+      binding_state: 'active' }
+    if (command.operation === 'proxy_unbind') {
+      attempts++
+      return attempts === 1 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'unbind', binding_id: bindingId, binding_epoch: 3,
+        bot_ref: null, binding_state: 'unbound' }
+    }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  const unbinds = commands.filter((command): command is Extract<GroupMemberCommand,
+    { operation: 'proxy_unbind' }> => command.operation === 'proxy_unbind')
+  expect(unbinds).toHaveLength(2)
+  expect(unbinds[0]?.request_id).toBe(unbinds[1]?.request_id)
+})
+
+it('retries an uncertain replacement and waits while another handoff owns the binding', async () => {
+  const commands: GroupMemberCommand[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let replyCount = 0, transferring = false
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: transferring ? 3 : 2,
+      bot_ref: transferring ? 'deepseek-bot:new' : 'deepseek-bot:old',
+      binding_state: transferring ? 'transferring' : 'active' }
+    if (command.operation === 'proxy_replace') {
+      replyCount++
+      return replyCount === 1 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'replace', binding_id: bindingId, binding_epoch: 3,
+        bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  const replacements = commands.filter((command): command is Extract<GroupMemberCommand,
+    { operation: 'proxy_replace' }> => command.operation === 'proxy_replace')
+  expect(replacements[0]?.request_id).toBe(replacements[1]?.request_id)
+  transferring = true
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  expect(commands.filter(command => command.operation === 'proxy_replace')).toHaveLength(2)
+})
+
+it('rechecks binding state before unbind and handles unbound, blocked, and failed status', async () => {
+  let status: GroupMemberReply = { state: 'proxy_binding', binding_id: null, binding_epoch: 0,
+    bot_ref: null, binding_state: 'unbound' }
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    if (command.operation === 'proxy_status') {
+      if (status.state === 'missing') throw Error('offline')
+      return status
+    }
+    return snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'proxy_status')).toHaveLength(2) })
+  expect(screen.queryByText('Personal proxy status is uncertain. Try again.')).toBeNull()
+  status = { state: 'proxy_binding', binding_id: '55555555-5555-4555-8555-555555555555',
+    binding_epoch: 2, bot_ref: 'deepseek-bot:old', binding_state: 'transferring' }
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  status = { state: 'retry_required' }
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'proxy_status')).toHaveLength(4) })
+  status = { state: 'missing' }
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(commands.filter(command => command.operation === 'proxy_status')).toHaveLength(5) })
+  expect(commands.some(command => command.operation === 'proxy_unbind')).toBe(false)
+})
+
+it('discards unbind status and receipts when the current Host changes', async () => {
+  let resolveStatus: ((reply: GroupMemberReply) => void) | undefined
+  let resolveUnbind: ((reply: GroupMemberReply) => void) | undefined
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) => {
+    if (command.operation === 'status') return Promise.resolve(snapshot([owner]))
+    if (command.operation === 'proxy_status')
+      return new Promise<GroupMemberReply>((resolve) => { resolveStatus = resolve })
+    return new Promise<GroupMemberReply>((resolve) => { resolveUnbind = resolve })
+  }) }
+  const firstView = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(resolveStatus).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { resolveStatus?.({ state: 'proxy_binding', binding_id: bindingId,
+    binding_epoch: 2, bot_ref: 'deepseek-bot:old', binding_state: 'active' }) })
+  expect(resolveUnbind).toBeUndefined()
+  firstView.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await act(async () => { resolveStatus?.({ state: 'proxy_binding', binding_id: bindingId,
+    binding_epoch: 2, bot_ref: 'deepseek-bot:old', binding_state: 'active' }) })
+  await waitFor(() => { expect(resolveUnbind).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { resolveUnbind?.({ state: 'proxy_changed', operation: 'unbind',
+    binding_id: bindingId, binding_epoch: 3, bot_ref: null, binding_state: 'unbound' }) })
+  expect(screen.queryByText(/Proxy handoff is in progress/u)).toBeNull()
+})
+
+it('ignores failed proxy responses that arrive after Host replacement', async () => {
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let resolveReplace: ((reply: GroupMemberReply) => void) | undefined
+  const replaceHost = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) => {
+    if (command.operation === 'status') return Promise.resolve(snapshot([owner]))
+    if (command.operation === 'proxy_status') return Promise.resolve({ state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 2, bot_ref: 'deepseek-bot:old',
+      binding_state: 'active' } as const)
+    return new Promise<GroupMemberReply>((resolve) => { resolveReplace = resolve })
+  }) }
+  const firstView = show(replaceHost)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(resolveReplace).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { resolveReplace?.({ state: 'retry_required' }) })
+  expect(screen.queryByText('Personal proxy status is uncertain. Try again.')).toBeNull()
+  firstView.unmount()
+  sessionStorage.clear()
+
+  let rejectUnbind: ((error: Error) => void) | undefined
+  const unbindHost = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) => {
+    if (command.operation === 'status') return Promise.resolve(snapshot([owner]))
+    if (command.operation === 'proxy_status') return Promise.resolve({ state: 'proxy_binding',
+      binding_id: bindingId, binding_epoch: 2, bot_ref: 'deepseek-bot:old',
+      binding_state: 'active' } as const)
+    return new Promise<GroupMemberReply>((_resolve, reject) => { rejectUnbind = reject })
+  }) }
+  show(unbindHost)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(rejectUnbind).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { rejectUnbind?.(Error('offline')) })
+  expect(screen.queryByText('Personal proxy status is uncertain. Try again.')).toBeNull()
 })
 
 it('shows a retryable Bot picker error without accepting a malformed page', async () => {
@@ -467,7 +1082,7 @@ it('reuses an active personal Bot binding and avoids duplicate group attachment'
         member_id: manualBot.member_id, membership_version: 3, seq: 2 }
     }
     return snapshot(attached ? [owner, { ...manualBot, actor_ref: 'deepseek-bot:my_bot',
-      sources: ['personal_proxy' as const] }] : [owner])
+      sources: ['personal_proxy' as const], agent: null }] : [owner])
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
@@ -476,7 +1091,7 @@ it('reuses an active personal Bot binding and avoids duplicate group attachment'
   await waitFor(() => { expect(calls.some(command => command.operation === 'proxy_attach')).toBe(true) })
   await waitFor(() => { expect(screen.getByText('Personal proxy: deepseek-bot:my_bot')).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
-  await waitFor(() => { expect(calls.filter(command => command.operation === 'proxy_status')).toHaveLength(2) })
+  await waitFor(() => { expect(calls.filter(command => command.operation === 'proxy_status')).toHaveLength(4) })
   expect(calls.filter(command => command.operation === 'proxy_attach')).toHaveLength(1)
 })
 
@@ -505,6 +1120,162 @@ it('keeps the same personal Bot selection request key after an uncertain reply',
   fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
   await waitFor(() => { expect(keys).toHaveLength(2) })
   expect(keys[0]).toBe(keys[1])
+})
+
+it('recovers the original Bot selection receipt after remount without a second binding', async () => {
+  const keys: string[] = []
+  let accepted = false
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding', binding_id: null,
+      binding_epoch: accepted ? 1 : 0, bot_ref: accepted ? 'deepseek-bot:my_bot' : null,
+      binding_state: accepted ? 'active' : 'unbound' }
+    if (command.operation === 'proxy_select') {
+      keys.push(command.request_id); accepted = true
+      return keys.length < 3 ? { state: 'retry_required' } : { state: 'proxy_bound',
+        binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 1,
+        bot_ref: 'deepseek-bot:my_bot' }
+    }
+    if (command.operation === 'proxy_attach') return { state: 'recorded', operation: 'proxy_attach',
+      member_id: manualBot.member_id, membership_version: 3, seq: 2 }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'my_bot' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByLabelText('Bot ID').getAttribute('value')).toBe('my_bot') })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  expect(keys[1]).toBe(keys[0])
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(3) })
+  expect(keys[2]).toBe(keys[0])
+  await waitFor(() => { expect(host.collaborationGroupMembers.mock.calls.some(([command]) =>
+    command.operation === 'proxy_attach')).toBe(true) })
+})
+
+it('keeps an uncertain replacement fenced across remount and refuses a different Bot', async () => {
+  const keys: string[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 2,
+      bot_ref: 'deepseek-bot:old', binding_state: 'active' }
+    if (command.operation === 'proxy_replace') {
+      keys.push(command.request_id)
+      return keys.length < 3 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'replace', binding_id: '55555555-5555-4555-8555-555555555555',
+        binding_epoch: 3, bot_ref: 'deepseek-bot:new', binding_state: 'transferring' }
+    }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByLabelText('Bot ID').getAttribute('value')).toBe('new') })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'other' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  expect(keys).toHaveLength(1)
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'new' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(keys).toHaveLength(3) })
+  expect(new Set(keys).size).toBe(1)
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'proxy_attach')).toBe(false)
+})
+
+it('holds a new proxy request when session storage cannot preserve its receipt key', async () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw Error('storage denied') })
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    return command.operation === 'proxy_status' ? { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' } : snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.change(screen.getByLabelText('Bot ID'), { target: { value: 'my_bot' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  expect(commands.some(command => command.operation === 'proxy_select')).toBe(false)
+})
+
+it('recovers an uncertain unbind after remount even when status already advanced', async () => {
+  const keys: string[] = []
+  let accepted = false
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'proxy_status') return { state: 'proxy_binding',
+      binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: accepted ? 3 : 2,
+      bot_ref: accepted ? null : 'deepseek-bot:old', binding_state: accepted ? 'unbound' : 'active' }
+    if (command.operation === 'proxy_unbind') {
+      keys.push(command.request_id); accepted = true
+      return keys.length === 1 ? { state: 'retry_required' } : { state: 'proxy_changed',
+        operation: 'unbind', binding_id: '55555555-5555-4555-8555-555555555555',
+        binding_epoch: 3, bot_ref: null, binding_state: 'unbound' }
+    }
+    return snapshot([owner])
+  }) }
+  const first = show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(keys).toHaveLength(1) })
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  first.unmount()
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(keys).toHaveLength(2) })
+  expect(keys[1]).toBe(keys[0])
+  await waitFor(() => { expect(screen.getByText(/Proxy handoff is in progress/u)).toBeTruthy() })
+})
+
+it('holds unbind while a prior selection receipt remains unresolved', async () => {
+  expect(writeProxyIntent(workspaceId, sessionId, groupId, { operation: 'proxy_select',
+    request_id: '11111111-1111-4111-8111-111111111111', expected_binding_epoch: 0,
+    bot_id: 'my_bot' })).toBe(true)
+  const commands: GroupMemberCommand[] = []
+  const host = { collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    commands.push(command)
+    return command.operation === 'proxy_status' ? { state: 'proxy_binding', binding_id: null,
+      binding_epoch: 0, bot_ref: null, binding_state: 'unbound' } : snapshot([owner])
+  }) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Unbind my proxy' }))
+  await waitFor(() => { expect(screen.getByText('Personal proxy status is uncertain. Try again.')).toBeTruthy() })
+  expect(commands.some(command => command.operation === 'proxy_unbind')).toBe(false)
+})
+
+it('drops a recovered selection receipt after its Host is replaced', async () => {
+  expect(writeProxyIntent(workspaceId, sessionId, groupId, { operation: 'proxy_select',
+    request_id: '11111111-1111-4111-8111-111111111111', expected_binding_epoch: 0,
+    bot_id: 'my_bot' })).toBe(true)
+  let answer: ((reply: GroupMemberReply) => void) | undefined
+  const host = { collaborationGroupMembers: vi.fn((command: GroupMemberCommand) =>
+    command.operation === 'proxy_select' ? new Promise<GroupMemberReply>((resolve) => { answer = resolve }) :
+      Promise.resolve(command.operation === 'proxy_status' ? { state: 'proxy_binding' as const,
+        binding_id: null, binding_epoch: 0, bot_ref: null, binding_state: 'unbound' as const } : snapshot([owner]))) }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Set as my proxy and join' }))
+  await waitFor(() => { expect(answer).toBeDefined() })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', {})
+  await act(async () => { answer?.({ state: 'proxy_bound',
+    binding_id: '55555555-5555-4555-8555-555555555555', binding_epoch: 1,
+    bot_ref: 'deepseek-bot:my_bot' }) })
+  expect(screen.queryByText('Personal proxy: deepseek-bot:my_bot')).toBeNull()
+  expect(host.collaborationGroupMembers.mock.calls.some(([command]) => command.operation === 'proxy_attach')).toBe(false)
 })
 
 it('rejects a Bot picker request that fails while the Host remains current', async () => {

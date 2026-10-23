@@ -214,11 +214,24 @@ it('delivers through the Host only after signed Slark and current membership con
   const data = `${header}.${payload}`
   const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
     f.botGroupSigner.privateKey).toString('base64url')}`
-  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true,
-    value: { state: 'active', delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
+  const resultHeader = Buffer.from(JSON.stringify({ alg: 'EdDSA',
+    typ: 'SLARK-DSH-BOT-GROUP-RESULT', version: 1,
+    kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const resultPayload = Buffer.from(JSON.stringify({ ...claims,
+    audience: 'urn:slark:dsh-bot-group-result:v1', decision_request_id: null }))
+    .toString('base64url')
+  const resultData = `${resultHeader}.${resultPayload}`
+  const resultTicket = `${resultData}.${sign(null, Buffer.from(resultData, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => Response.json({ ok: true,
+    value: { state: (request instanceof Request ? request.url :
+      request instanceof URL ? request.href : request).includes('/result-')
+      ? 'authorized' : 'active',
+    delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
   onTestFinished(() => { fetchMock.mockRestore() })
   const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
     computerId: 'desktop-1', slarkAudience: origin, ticket, command }
+  const resultInput = { ...input, ticket: resultTicket }
   const result = await f.client.deliverBotGroup(input)
   expect(result).toMatchObject({ state: 'accepted', deliveryId: command.deliveryId,
     payloadDigest: command.payloadDigest })
@@ -231,7 +244,7 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 1, status: 'completed', text: 'done',
   }], next: 1 })
-  const page = await f.client.readBotGroupResultPage({ ...input, after: 0 })
+  const page = await f.client.readBotGroupResultPage({ ...resultInput, after: 0 })
   expect(page.reply).toMatchObject({ state: 'ok', next: 1, results: [{ text: 'done' }] })
   expect(page.proof).not.toBeNull()
   const signedProof = page.proof
@@ -240,7 +253,7 @@ it('delivers through the Host only after signed Slark and current membership con
   expect(verify(null, encodeHostBotGroupResultProofPayload(unsigned), f.keys.publicKey,
     Buffer.from(signature, 'base64url'))).toBe(true)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
-  expect(await f.client.acknowledgeBotGroupResult({ ...input,
+  expect(await f.client.acknowledgeBotGroupResult({ ...resultInput,
     resultId: `${command.deliveryId}:final` })).toEqual({ state: 'acknowledged' })
   expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
     { operation: 'ack_result', groupId: command.groupId, botId: command.botId,
@@ -254,7 +267,7 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 1, status: 'completed', text: 'done',
   }], next: 1 })
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(undefined)
   expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
@@ -265,10 +278,10 @@ it('delivers through the Host only after signed Slark and current membership con
   expect(f.operateBotGroup).toHaveBeenCalledTimes(4)
 
   f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
-  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  expect(await f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .toMatchObject({ reply: { state: 'ok', results: [], next: 0 }, proof: null })
   f.operateBotGroup.mockResolvedValueOnce({ state: 'invalid' })
-  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  expect(await f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .toMatchObject({ reply: { state: 'invalid' }, proof: null })
 
   const otherDeliveryId = randomUUID()
@@ -282,18 +295,18 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 3, status: 'completed', text: 'this result',
   }], next: 3 })
-  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  expect(await f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .toMatchObject({ reply: { state: 'ok', next: 3,
       results: [{ deliveryId: command.deliveryId }] } })
   expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
     expect.objectContaining({ operation: 'result_page', after: 2 }), expect.any(AbortSignal))
 
-  await expect(f.client.readBotGroupResultPage({ ...input, after: -1 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: -1 }))
     .rejects.toMatchObject({ code: 'invalid_input' })
-  await expect(f.client.acknowledgeBotGroupResult({ ...input, resultId: 'wrong' }))
+  await expect(f.client.acknowledgeBotGroupResult({ ...resultInput, resultId: 'wrong' }))
     .rejects.toMatchObject({ code: 'invalid_input' })
   f.operateBotGroup.mockResolvedValueOnce({ state: 'conflict' })
-  await expect(f.client.acknowledgeBotGroupResult({ ...input,
+  await expect(f.client.acknowledgeBotGroupResult({ ...resultInput,
     resultId: `${command.deliveryId}:final` }))
     .rejects.toMatchObject({ code: 'stale' })
   f.operateBotGroup.mockResolvedValueOnce({ state: 'accepted', deliveryId: randomUUID(),
@@ -304,7 +317,7 @@ it('delivers through the Host only after signed Slark and current membership con
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
     ? { ...frame, method: 'profile.bot_group_deliver' } : frame)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'unavailable' })
   f.alter(undefined)
 
@@ -316,8 +329,8 @@ it('delivers through the Host only after signed Slark and current membership con
     const call = capability === 'profile.bot_group_deliver'
       ? f.client.deliverBotGroup(input)
       : capability === 'profile.bot_group_result_page'
-        ? f.client.readBotGroupResultPage({ ...input, after: 0 })
-        : f.client.acknowledgeBotGroupResult({ ...input, resultId: `${command.deliveryId}:final` })
+        ? f.client.readBotGroupResultPage({ ...resultInput, after: 0 })
+        : f.client.acknowledgeBotGroupResult({ ...resultInput, resultId: `${command.deliveryId}:final` })
     await expect(call).rejects.toMatchObject({ code: capability === 'profile.bot_group_result_ack'
       ? 'invalid_input' : 'upgrade_required' })
   }
@@ -335,7 +348,7 @@ it('delivers through the Host only after signed Slark and current membership con
       groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
       payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' } } } : frame)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
-  await expect(f.client.acknowledgeBotGroupResult({ ...input,
+  await expect(f.client.acknowledgeBotGroupResult({ ...resultInput,
     resultId: `${command.deliveryId}:final` })).rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
     ? { ...frame, result: { reply: { state: 'ok', results: [{
@@ -344,7 +357,7 @@ it('delivers through the Host only after signed Slark and current membership con
       seq: 1, status: 'completed', text: 'done',
     }], next: 1 }, proof: null } } : frame)
   f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(undefined)
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
@@ -354,7 +367,7 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 4, status: 'completed', text: 'done',
   }], next: 4 })
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
     ? { ...frame, result: { ...frame.result, proof: { ...signedProof,
@@ -364,7 +377,7 @@ it('delivers through the Host only after signed Slark and current membership con
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     seq: 1, status: 'completed', text: 'done',
   }], next: 1 })
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'profile_mismatch' })
   f.alter(undefined)
 
@@ -377,7 +390,7 @@ it('delivers through the Host only after signed Slark and current membership con
       seq, status: 'completed', text: 'unrelated' }], next: seq }
   })
   const beforeScan = f.operateBotGroup.mock.calls.length
-  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+  await expect(f.client.readBotGroupResultPage({ ...resultInput, after: 0 }))
     .rejects.toMatchObject({ code: 'unavailable' })
   expect(f.operateBotGroup.mock.calls.length - beforeScan).toBe(1000)
 }, 30_000)
@@ -404,6 +417,67 @@ it('does not advertise Bot delivery without startup-pinned Slark keys', async ()
       groupId: randomUUID(), botId: 'bot_1', memberCycle: 1, messageSeq: 1,
       payloadDigest: 'a'.repeat(64), text: 'hello' },
   })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('routes one signed owner stop decision to the exact Bot delivery', async () => {
+  const f = await fixture(true, true); await f.grant()
+  const now = Date.now(), origin = 'https://slark.example.test'
+  const command = { operation: 'stop_delivery' as const, deliveryId: randomUUID(),
+    groupId: randomUUID(), botId: 'bot_1', memberCycle: 2, requestId: randomUUID() }
+  const messageSeq = 7, payloadDigest = 'a'.repeat(64)
+  const claims = { schema_version: 1, issuer: origin,
+    audience: 'urn:slark:dsh-bot-group-stop:v1', slark_audience: origin,
+    environment_id: f.account.authorityEnvironmentId,
+    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    account_issuer: f.account.issuer, account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+      accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+      environmentId: f.account.authorityEnvironmentId,
+      installationId: f.identity.installationId,
+      accountBindingHandle: f.account.accountBindingHandle,
+      accountBindingEpoch: f.account.authorityBindingVersion }),
+    group_id: command.groupId, workspace_id: randomUUID(), session_id: 'original',
+    delivery_id: command.deliveryId, message_id: randomUUID(), message_seq: messageSeq,
+    bot_id: command.botId, member_cycle: command.memberCycle,
+    payload_digest: payloadDigest, decision_request_id: command.requestId,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP-STOP',
+    version: 1, kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true,
+    value: { state: 'authorized', delivery_id: command.deliveryId,
+      decision_request_id: command.requestId, expires_at: claims.expires_at } }))
+  onTestFinished(() => { fetchMock.mockRestore() })
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: origin, ticket,
+    messageSeq, payloadDigest, command }
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'requested',
+    deliveryId: command.deliveryId, requestId: command.requestId })
+  expect(await f.client.stopBotGroupDelivery(input)).toEqual({ state: 'requested',
+    deliveryId: command.deliveryId, requestId: command.requestId })
+  expect(fetchMock).toHaveBeenCalledWith(origin +
+    '/api/v1/dsh/collaboration-v2/group-messages/stop-confirm',
+  expect.objectContaining({ method: 'POST', redirect: 'error' }))
+  expect(f.operateBotGroup).toHaveBeenCalledWith(expect.any(String), command,
+    expect.any(AbortSignal))
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'requested',
+    deliveryId: command.deliveryId, requestId: command.requestId })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_stop'
+    ? { ...frame, result: { reply: { state: 'requested',
+      deliveryId: randomUUID(), requestId: command.requestId } } } : frame)
+  await expect(f.client.stopBotGroupDelivery(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  const used = f.operateBotGroup.mock.calls.length
+  await expect(f.client.stopBotGroupDelivery({ ...input,
+    command: { ...command, requestId: randomUUID() } })).rejects.toThrow()
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(used)
+  const caps = f.client.inspection.capabilities.filter(value => value !== 'profile.bot_group_stop')
+  expect(Reflect.set(f.client.inspection, 'capabilities', caps)).toBe(true)
+  await expect(f.client.stopBotGroupDelivery(input)).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {

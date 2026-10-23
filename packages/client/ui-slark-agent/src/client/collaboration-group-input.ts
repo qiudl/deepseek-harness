@@ -1,5 +1,16 @@
 /** Parent-owned request identity for one original Session group message. */
+import type { DesktopCollaborationSourceInput } from './collaboration-source.ts'
 
+/** Exact Agent chip snapshot retained with a committed group message. */
+export type GroupAgentMentionSpan = {
+  mention_id: string
+  actor_ref: string
+  start: number
+  end: number
+  agent_name: string
+  project_name: string
+  capability_snapshot: string
+}
 /** Bounded group ledger commands and parent-owned pending key operations. */
 export type GroupMessageCommand =
   | {
@@ -9,8 +20,11 @@ export type GroupMessageCommand =
     request_id: string
     expected_group_version: 2
     body: string
+    mention_refs?: string[]
+    mention_spans?: GroupAgentMentionSpan[]
   }
   | { operation: 'receipt'; workspace_id: string; session_id: string; request_id: string }
+  | { operation: 'work-source'; workspace_id: string; session_id: string; message_id: string }
   | { operation: 'page'; workspace_id: string; session_id: string; after_seq: number; limit: number }
   | { operation: 'pending_claim'; workspace_id: string; session_id: string; group_id: string; digest: string }
   | { operation: 'pending_ack'; workspace_id: string; session_id: string; group_id: string; digest: string; request_id: string }
@@ -19,6 +33,12 @@ export type GroupMessageCommand =
 /** Exact group ledger or parent pending-key reply. */
 export type GroupMessageReply =
   | { state: 'recorded'; message_id: string; seq: number }
+  | { state: 'recorded_source'
+    group_id: string
+    request_id: string
+    payload_digest: string
+    message_seq: number
+    source: DesktopCollaborationSourceInput }
   | { state: 'missing' | 'conflict' | 'retry_required' }
   | { state: 'pending'; request_id: string }
   | { state: 'pending_status'; request_id: string; digest: string }
@@ -35,12 +55,36 @@ export type GroupMessageReply =
 /** The verified Slark parent owns this bridge in bundled remote mode. */
 export interface GroupMessageBridge {
   collaborationGroupMessages?(command: GroupMessageCommand): Promise<GroupMessageReply>
+  collaborationGroupWork?(command: {
+    workspace_id: string
+    session_id: string
+    message_id: string
+  }): Promise<{
+    ok: true
+    planning: 'recorded'
+    root: Record<string, unknown>
+    checkpoint: Record<string, unknown>
+    execution: { ok: true
+      status: 'recorded' | 'not_admitted'
+      rootTraceId: string
+      tasks: readonly string[] } | { ok: false
+        errorCode: string
+        reconciliationRequired: true }
+  } | {
+    ok: false
+    errorCode: string
+    reconciliationRequired: boolean
+  }>
 }
 
 const recordedState = 'recorded' as const
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
-async function digest(body: string): Promise<string> {
-  const bytes = new TextEncoder().encode(body)
+const validRecorded = (reply: GroupMessageReply): reply is Extract<GroupMessageReply, { state: 'recorded' }> =>
+  reply.state === recordedState && uuid.test(reply.message_id) &&
+  Number.isSafeInteger(reply.seq) && reply.seq > 0
+async function digest(body: string, refs: readonly string[], spans: readonly GroupAgentMentionSpan[]): Promise<string> {
+  const bytes = new TextEncoder().encode(refs.length
+    ? JSON.stringify(['group_text_with_agent_mentions_v2', body, refs, spans]) : body)
   const value = await crypto.subtle.digest('SHA-256', bytes)
   return Array.from(new Uint8Array(value), byte => byte.toString(16).padStart(2, '0')).join('')
 }
@@ -55,26 +99,40 @@ export async function sendGroupText(input: {
   sessionId: string
   groupId: string
   body: string
-}): Promise<{ state: 'recorded'; requestId: string; digest: string } | { state: 'retry_required' | 'pending_other' }> {
+  mentionRefs?: string[]
+  mentionSpans?: GroupAgentMentionSpan[]
+}): Promise<{ state: 'recorded'; requestId: string; digest: string; messageId: string; seq: number } |
+  { state: 'retry_required' | 'pending_other' }> {
   const { bridge, workspaceId, sessionId, groupId, body } = input
+  const refs = input.mentionRefs ?? [], spans = input.mentionSpans ?? []
   if (!bridge.collaborationGroupMessages || !uuid.test(groupId) || !uuid.test(workspaceId) ||
-    !sessionId || body.length < 1 || body.length > 16_000 || new TextEncoder().encode(body).length > 24_000)
+    !sessionId || body.length < 1 || body.length > 16_000 || new TextEncoder().encode(body).length > 24_000 ||
+    !Array.isArray(refs) || refs.length > 10 || new Set(refs).size !== refs.length ||
+    refs.some(ref => !/^slark-agent:[0-9a-f]{64}$/u.test(ref)) || spans.length !== refs.length)
+    return { state: 'retry_required' }
+  const commandBody = { operation: 'send', workspace_id: workspaceId, session_id: sessionId,
+    request_id: '00000000-0000-4000-8000-000000000000', expected_group_version: 2, body,
+    ...(refs.length ? { mention_refs: refs, mention_spans: spans } : {}) }
+  if (new TextEncoder().encode(JSON.stringify(commandBody)).byteLength > 24 * 1024)
     return { state: 'retry_required' }
   try {
-    const bodyDigest = await digest(body)
+    const bodyDigest = await digest(body, refs, spans)
     const pending = await bridge.collaborationGroupMessages({ operation: 'pending_claim',
       workspace_id: workspaceId, session_id: sessionId, group_id: groupId, digest: bodyDigest })
     if (pending.state === 'pending_other') return { state: 'pending_other' }
     if (pending.state !== 'pending' || !uuid.test(pending.request_id)) return { state: 'retry_required' }
     const receipt = await bridge.collaborationGroupMessages({ operation: 'receipt',
       workspace_id: workspaceId, session_id: sessionId, request_id: pending.request_id })
-    if (receipt.state === recordedState) return { state: recordedState, requestId: pending.request_id, digest: bodyDigest }
+    if (validRecorded(receipt)) return { state: recordedState, requestId: pending.request_id,
+      digest: bodyDigest, messageId: receipt.message_id, seq: receipt.seq }
     if (receipt.state !== 'missing') return { state: 'retry_required' }
     const result = await bridge.collaborationGroupMessages({ operation: 'send',
       workspace_id: workspaceId, session_id: sessionId, request_id: pending.request_id,
-      expected_group_version: 2, body })
-    if (result.state !== recordedState) return { state: 'retry_required' }
-    return { state: recordedState, requestId: pending.request_id, digest: bodyDigest }
+      expected_group_version: 2, body,
+      ...(refs.length ? { mention_refs: refs, mention_spans: spans } : {}) })
+    if (!validRecorded(result)) return { state: 'retry_required' }
+    return { state: recordedState, requestId: pending.request_id, digest: bodyDigest,
+      messageId: result.message_id, seq: result.seq }
   } catch { return { state: 'retry_required' } }
 }
 

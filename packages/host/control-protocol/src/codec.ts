@@ -1,7 +1,8 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
-import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
+import { parseHostBotGroupDeliveryInput, parseHostBotGroupStopInput,
+  parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
 import { parseWorkbenchSettingsWrite } from './workbench-settings.js'
@@ -89,6 +90,7 @@ import type {
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupStopRequest, ProfileBotGroupStopResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
   ProfileModelTextRequest,
@@ -474,6 +476,12 @@ function extensionKind(value: unknown): HostExtensionKind {
 function botGroupDeliveryParams(params: Record<string, unknown>) {
   return parseHostBotGroupDeliveryInput({ computer_id: params.computer_id,
     slark_audience: params.slark_audience, ticket: params.ticket, command: params.command })
+}
+function botGroupStopParams(params: Record<string, unknown>) {
+  return parseHostBotGroupStopInput({ computer_id: params.computer_id,
+    slark_audience: params.slark_audience, ticket: params.ticket,
+    message_seq: params.message_seq, payload_digest: params.payload_digest,
+    command: params.command })
 }
 
 function collaborationAccountParams(params: Record<string, unknown>) {
@@ -1684,6 +1692,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
   | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
   | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupStopRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest
@@ -2281,6 +2290,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...botGroupDeliveryParams(params),
     } } satisfies ProfileBotGroupDeliverRequest
   }
+  if (frame.method === 'profile.bot_group_stop') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
+      'slark_audience', 'ticket', 'message_seq', 'payload_digest', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...botGroupStopParams(params),
+    } } satisfies ProfileBotGroupStopRequest
+  }
   if (frame.method === 'profile.bot_group_result_page') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2343,6 +2360,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotRosterResult
   | ProfileBotGroupDeliverResult
+  | ProfileBotGroupStopResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityResult
@@ -2677,6 +2695,13 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['reply'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { reply: parseHostBotGroupResponse(result.reply) } } satisfies ProfileBotGroupDeliverResult
+  }
+  if (frame.method === 'profile.bot_group_stop') {
+    exactKeys(result, ['reply'])
+    const reply = parseHostBotGroupResponse(result.reply)
+    if (!['requested', 'terminal', 'missing', 'invalid', 'unavailable', 'conflict'].includes(reply.state)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { reply } } satisfies ProfileBotGroupStopResult
   }
   if (frame.method === 'profile.bot_group_result_page') {
     exactKeys(result, ['reply', 'proof'])

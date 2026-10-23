@@ -1,7 +1,11 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { expect, it } from 'vitest'
-import { botGroupHostRegistryId, confirmBotGroupTicket, verifyBotGroupTicket,
-  type BotGroupPublicKeyring, type BotGroupTicketExpected } from '../src/bot-group-ticket.ts'
+import { botGroupHostRegistryId, confirmBotGroupTicket, confirmBotGroupResultTicket,
+  confirmBotGroupResultAckTicket,
+  confirmBotGroupStopTicket, verifyBotGroupTicket, verifyBotGroupResultTicket,
+  verifyBotGroupStopTicket,
+  type BotGroupPublicKeyring, type BotGroupTicketExpected,
+  type BotGroupStopTicketExpected } from '../src/bot-group-ticket.ts'
 
 const now = 1_900_000_000_000
 const pair = generateKeyPairSync('ed25519')
@@ -47,6 +51,107 @@ function ticket(change: Record<string, unknown> = {}): string {
   const data = `${header}.${payload}`
   return `${data}.${sign(null, Buffer.from(data, 'ascii'), pair.privateKey).toString('base64url')}`
 }
+
+const stopExpected: BotGroupStopTicketExpected = {
+  ...expected, payloadDigest: createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',
+    ids.message, expected.groupId, `deepseek-bot:${expected.botId}`,
+    expected.memberCycle, expected.messageSeq, expected.text])).digest('hex'),
+  requestId: randomUUID(),
+}
+function stopTicket(change: Record<string, unknown> = {}): string {
+  const [, encoded] = ticket().split('.')
+  const claims = { ...JSON.parse(Buffer.from(encoded!, 'base64url').toString('utf8')) as Record<string, unknown>,
+    audience: 'urn:slark:dsh-bot-group-stop:v1',
+    decision_request_id: stopExpected.requestId, ...change }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP-STOP',
+    version: 1, kid: keyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  return `${data}.${sign(null, Buffer.from(data, 'ascii'), pair.privateKey).toString('base64url')}`
+}
+function resultTicket(change: Record<string, unknown> = {}): string {
+  const [, encoded] = ticket().split('.')
+  const claims = { ...JSON.parse(Buffer.from(encoded!, 'base64url').toString('utf8')) as Record<string, unknown>,
+    audience: 'urn:slark:dsh-bot-group-result:v1',
+    decision_request_id: stopExpected.requestId, ...change }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP-RESULT',
+    version: 1, kid: keyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  return `${data}.${sign(null, Buffer.from(data, 'ascii'), pair.privateKey).toString('base64url')}`
+}
+
+it('uses disjoint result authority and confirms the original delivery online', async () => {
+  const signed = resultTicket()
+  expect(verifyBotGroupResultTicket(signed, keyring, expected, now).payloadDigest)
+    .toBe(stopExpected.payloadDigest)
+  expect(() => verifyBotGroupTicket(signed, keyring, expected, now))
+    .toThrow('bot_group_ticket_invalid')
+  expect(() => verifyBotGroupStopTicket(signed, keyring, stopExpected, now))
+    .toThrow('bot_group_ticket_invalid')
+  expect(() => verifyBotGroupResultTicket(resultTicket({ decision_request_id: 'bad' }),
+    keyring, expected, now)).toThrow('bot_group_ticket_invalid')
+  expect(verifyBotGroupResultTicket(resultTicket({ decision_request_id: null }),
+    keyring, expected, now).messageId).toBe(ids.message)
+  const check = (value: unknown) => confirmBotGroupResultTicket(signed, keyring,
+    expected, new AbortController().signal, async (url) => {
+      expect(url instanceof Request ? url.url : url instanceof URL ? url.href : url)
+        .toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
+        'group-messages/result-confirm')
+      return new Response(JSON.stringify({ ok: true, value }), { status: 200 })
+    }, () => now)
+  await expect(check({ state: 'authorized', delivery_id: expected.deliveryId,
+    expires_at: now + 60_000 })).resolves.toMatchObject({ expiresAt: now + 60_000 })
+  await expect(check({ state: 'active', delivery_id: expected.deliveryId,
+    expires_at: now + 60_000 })).rejects.toThrow('bot_group_ticket_invalid')
+  const ack = () => confirmBotGroupResultAckTicket(signed, keyring,
+    expected, new AbortController().signal, async (url) => {
+      expect(url instanceof Request ? url.url : url instanceof URL ? url.href : url)
+        .toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
+        'group-messages/result-ack-confirm')
+      return new Response(JSON.stringify({ ok: true, value: {
+        state: 'authorized', delivery_id: expected.deliveryId,
+        expires_at: now + 60_000 } }), { status: 200 })
+    }, () => now)
+  await expect(ack()).resolves.toMatchObject({ expiresAt: now + 60_000 })
+})
+
+it('accepts only a signed stop ticket for the exact delivery and owner decision', () => {
+  const signed = stopTicket()
+  expect(verifyBotGroupStopTicket(signed, keyring, stopExpected, now).payloadDigest)
+    .toBe(stopExpected.payloadDigest)
+  expect(() => verifyBotGroupTicket(signed, keyring, expected, now))
+    .toThrow('bot_group_ticket_invalid')
+  expect(() => verifyBotGroupStopTicket(ticket(), keyring, stopExpected, now))
+    .toThrow('bot_group_ticket_invalid')
+  for (const change of [{ requestId: randomUUID() }, { deliveryId: randomUUID() },
+    { payloadDigest: 'a'.repeat(64) }, { accountBindingEpoch: 4 }]) {
+    expect(() => verifyBotGroupStopTicket(signed, keyring, { ...stopExpected, ...change }, now))
+      .toThrow('bot_group_ticket_invalid')
+  }
+  expect(() => verifyBotGroupStopTicket(stopTicket({ decision_request_id: 'bad' }),
+    keyring, stopExpected, now)).toThrow('bot_group_ticket_invalid')
+})
+
+it('requires online Slark confirmation of the same owner stop request', async () => {
+  const signed = stopTicket()
+  const check = (value: unknown) => confirmBotGroupStopTicket(signed, keyring,
+    stopExpected, new AbortController().signal, async (url, init) => {
+      expect(typeof url === 'string' ? url : url instanceof URL ? url.href : url.url)
+        .toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
+        'group-messages/stop-confirm')
+      expect(init?.headers).toEqual({ authorization: `Bearer ${signed}`,
+        'cache-control': 'no-store' })
+      return new Response(JSON.stringify({ ok: true, value }), { status: 200 })
+    }, () => now)
+  const valid = { state: 'authorized', delivery_id: stopExpected.deliveryId,
+    decision_request_id: stopExpected.requestId, expires_at: now + 60_000 }
+  await expect(check(valid)).resolves.toMatchObject({ expiresAt: now + 60_000 })
+  await expect(check({ ...valid, decision_request_id: randomUUID() }))
+    .rejects.toThrow('bot_group_ticket_invalid')
+  await expect(check({ ...valid, state: 'requested' }))
+    .rejects.toThrow('bot_group_ticket_invalid')
+})
 
 it('accepts one pinned Slark signature for the current Account and exact message', () => {
   const result = verifyBotGroupTicket(ticket(), keyring, expected, now + 1_000)
@@ -106,6 +211,8 @@ it('refuses a revoked, mismatched, expired or oversized confirmation', async () 
     expected, new AbortController().signal,
     async () => Response.json(body, { status }), () => now + 1_000)
   await expect(check({ ok: false, error: { code: 'delivery_revoked' } }, 409))
+    .rejects.toThrow('bot_group_ticket_invalid')
+  await expect(check({ ok: false, value: null }))
     .rejects.toThrow('bot_group_ticket_invalid')
   await expect(check({ ok: true, value: { state: 'active', delivery_id: randomUUID(),
     expires_at: now + 60_000 } })).rejects.toThrow('bot_group_ticket_invalid')

@@ -7,11 +7,15 @@ const DIGEST = /^[0-9a-f]{64}$/u
 const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const REGISTRY = /^h2_[0-9a-f]{64}$/u
 const AUDIENCE = 'urn:slark:dsh-bot-group-delivery:v1'
+const STOP_AUDIENCE = 'urn:slark:dsh-bot-group-stop:v1'
+const RESULT_AUDIENCE = 'urn:slark:dsh-bot-group-result:v1'
 const CLAIMS = ['schema_version', 'issuer', 'audience', 'slark_audience', 'environment_id',
   'owner_user_id', 'computer_id', 'account_issuer', 'account_subject', 'account_binding_epoch',
   'host_registry_id', 'group_id', 'workspace_id', 'session_id', 'delivery_id',
   'message_id', 'message_seq', 'bot_id', 'member_cycle', 'payload_digest',
   'token_id', 'issued_at', 'expires_at'] as const
+const STOP_CLAIMS = [...CLAIMS, 'decision_request_id'] as const
+const RESULT_CLAIMS = [...CLAIMS, 'decision_request_id'] as const
 
 interface BotGroupPublicKey {
   readonly kid: string
@@ -47,6 +51,11 @@ export interface BotGroupTicketExpected {
   readonly messageSeq: number
   readonly text: string
 }
+export interface BotGroupStopTicketExpected extends Omit<BotGroupTicketExpected, 'text'> {
+  readonly payloadDigest: string
+  readonly requestId: string
+}
+export type BotGroupResultTicketExpected = BotGroupTicketExpected
 export interface BotGroupTicket {
   readonly workspaceId: string
   readonly sessionId: string
@@ -107,8 +116,9 @@ export function botGroupHostRegistryId(input: Pick<BotGroupTicketExpected,
 }
 
 /** Only a pinned Slark environment key and current Account tuple authorize the payload. */
-export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
-  expected: BotGroupTicketExpected, now = Date.now()): BotGroupTicket {
+function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupTicketExpected | BotGroupStopTicketExpected,
+  kind: 'delivery' | 'stop' | 'result', now: number): BotGroupTicket {
   if (typeof token !== 'string' || Buffer.byteLength(token) > 8192) fail()
   const pieces = token.split('.')
   if (pieces.length !== 3) fail()
@@ -117,15 +127,20 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
     const headerValue = decoded(headerPart)
     const claimsValue = decoded(claimsPart)
     if (!exact(headerValue, ['alg', 'typ', 'version', 'kid']) ||
-        !exact(claimsValue, CLAIMS)) fail()
+        !exact(claimsValue, kind === 'stop' ? STOP_CLAIMS :
+          kind === 'result' ? RESULT_CLAIMS : CLAIMS)) fail()
     const header = headerValue as Record<string, unknown>
     const claims = claimsValue as Record<string, unknown>
     if (header.alg !== 'EdDSA' ||
-        header.typ !== 'SLARK-DSH-BOT-GROUP' || header.version !== 1 ||
+        header.typ !== (kind === 'stop' ? 'SLARK-DSH-BOT-GROUP-STOP' :
+          kind === 'result' ? 'SLARK-DSH-BOT-GROUP-RESULT' :
+            'SLARK-DSH-BOT-GROUP') || header.version !== 1 ||
         typeof header.kid !== 'string' ||
         claims.schema_version !== 1 || claims.issuer !== keyring.issuer ||
         issuerOrigin(keyring.issuer) !== expected.slarkAudience ||
-        claims.audience !== AUDIENCE || claims.slark_audience !== expected.slarkAudience ||
+        claims.audience !== (kind === 'stop' ? STOP_AUDIENCE :
+          kind === 'result' ? RESULT_AUDIENCE : AUDIENCE) ||
+        claims.slark_audience !== expected.slarkAudience ||
         claims.environment_id !== expected.environmentId ||
         claims.environment_id !== keyring.environmentId ||
         claims.owner_user_id !== expected.ownerUserId ||
@@ -150,10 +165,24 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
         typeof claims.slark_audience !== 'string' || !UUID.test(expected.groupId) ||
         !UUID.test(expected.deliveryId) || !BOT.test(expected.botId) ||
         !positive(expected.memberCycle) || !positive(expected.messageSeq)) fail()
-    const digest = createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',
-      claims.message_id, claims.group_id, `deepseek-bot:${expected.botId}`,
-      expected.memberCycle, expected.messageSeq, expected.text])).digest('hex')
-    if (claims.payload_digest !== digest) fail()
+    if (kind === 'stop') {
+      const stop = expected as BotGroupStopTicketExpected
+      if (typeof stop.requestId !== 'string' || !UUID.test(stop.requestId) ||
+          claims.decision_request_id !== stop.requestId ||
+          typeof stop.payloadDigest !== 'string' || !DIGEST.test(stop.payloadDigest) ||
+          claims.payload_digest !== stop.payloadDigest) fail()
+    } else {
+      const delivery = expected as BotGroupTicketExpected
+      const digest = createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',
+        claims.message_id, claims.group_id, `deepseek-bot:${expected.botId}`,
+        expected.memberCycle, expected.messageSeq, delivery.text])).digest('hex')
+      if (claims.payload_digest !== digest) fail()
+      if (kind === 'result') {
+        if (claims.decision_request_id !== null &&
+            (typeof claims.decision_request_id !== 'string' ||
+              !UUID.test(claims.decision_request_id))) fail()
+      }
+    }
     const accepted: AcceptedClaims = {
       issued_at: claims.issued_at as number, expires_at: claims.expires_at as number,
       workspace_id: claims.workspace_id as string, session_id: claims.session_id as string,
@@ -170,16 +199,89 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
   } catch { return fail() }
 }
 
+export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupTicketExpected, now = Date.now()): BotGroupTicket {
+  return verifySignedBotGroupTicket(token, keyring, expected, 'delivery', now)
+}
+
+/** Stop authority is separate from delivery authority and bound to one owner decision. */
+export function verifyBotGroupStopTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupStopTicketExpected, now = Date.now()): BotGroupTicket {
+  return verifySignedBotGroupTicket(token, keyring, expected, 'stop', now)
+}
+
+/** A result ticket permits observation and acknowledgement, never a new delivery. */
+export function verifyBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, now = Date.now()): BotGroupTicket {
+  return verifySignedBotGroupTicket(token, keyring, expected, 'result', now)
+}
+
 /** Recheck live Slark membership at the pinned origin before the worker accepts a delivery. */
 export async function confirmBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
   expected: BotGroupTicketExpected, signal: AbortSignal,
   fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
   const ticket = verifyBotGroupTicket(token, keyring, expected, clock())
+  const { value, bounded } = await onlineConfirmation(token, expected.slarkAudience,
+    'delivery-confirm', signal, fetchFn)
+  if (!exact(value, ['state', 'delivery_id', 'expires_at']) ||
+      value.state !== 'active' || value.delivery_id !== expected.deliveryId ||
+      value.expires_at !== ticket.expiresAt || bounded.aborted ||
+      clock() >= ticket.expiresAt) fail()
+  return ticket
+}
+
+/** A stop reaches the worker only while Slark still recognizes the exact owner decision. */
+export async function confirmBotGroupStopTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupStopTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  const ticket = verifyBotGroupStopTicket(token, keyring, expected, clock())
+  const { value, bounded } = await onlineConfirmation(token, expected.slarkAudience,
+    'stop-confirm', signal, fetchFn)
+  if (!exact(value, ['state', 'delivery_id', 'decision_request_id', 'expires_at']) ||
+      value.state !== 'authorized' || value.delivery_id !== expected.deliveryId ||
+      value.decision_request_id !== expected.requestId ||
+      value.expires_at !== ticket.expiresAt || bounded.aborted ||
+      clock() >= ticket.expiresAt) fail()
+  return ticket
+}
+
+async function confirmResultTicketFor(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  operation: 'result-confirm' | 'result-ack-confirm',
+  fetchFn: typeof fetch, clock: () => number): Promise<BotGroupTicket> {
+  const ticket = verifyBotGroupResultTicket(token, keyring, expected, clock())
+  const { value, bounded } = await onlineConfirmation(token, expected.slarkAudience,
+    operation, signal, fetchFn)
+  if (!exact(value, ['state', 'delivery_id', 'expires_at']) ||
+      value.state !== 'authorized' || value.delivery_id !== expected.deliveryId ||
+      value.expires_at !== ticket.expiresAt || bounded.aborted ||
+      clock() >= ticket.expiresAt) fail()
+  return ticket
+}
+
+/** Result observation remains bound to the current Slark owner and original delivery. */
+export async function confirmBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  return confirmResultTicketFor(token, keyring, expected, signal, 'result-confirm', fetchFn, clock)
+}
+
+/** Result acknowledgement additionally requires Slark to have recorded the exact result. */
+export async function confirmBotGroupResultAckTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  return confirmResultTicketFor(token, keyring, expected, signal, 'result-ack-confirm', fetchFn, clock)
+}
+
+async function onlineConfirmation(token: string, slarkAudience: string,
+  operation: 'delivery-confirm' | 'stop-confirm' | 'result-confirm' |
+    'result-ack-confirm', signal: AbortSignal,
+  fetchFn: typeof fetch): Promise<{ value: unknown; bounded: AbortSignal }> {
   if (signal.aborted) fail()
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)])
   try {
-    const response = await fetchFn(expected.slarkAudience +
-      '/api/v1/dsh/collaboration-v2/group-messages/delivery-confirm', {
+    const response = await fetchFn(slarkAudience +
+      '/api/v1/dsh/collaboration-v2/group-messages/' + operation, {
       method: 'POST', redirect: 'error', credentials: 'omit', cache: 'no-store',
       headers: { authorization: `Bearer ${token}`, 'cache-control': 'no-store' }, signal: bounded,
     })
@@ -197,11 +299,7 @@ export async function confirmBotGroupTicket(token: string, keyring: BotGroupPubl
     }
     const body: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true })
       .decode(Buffer.concat(chunks)))
-    if (!exact(body, ['ok', 'value']) || body.ok !== true ||
-        !exact(body.value, ['state', 'delivery_id', 'expires_at']) ||
-        body.value.state !== 'active' || body.value.delivery_id !== expected.deliveryId ||
-        body.value.expires_at !== ticket.expiresAt ||
-        bounded.aborted || clock() >= ticket.expiresAt) fail()
-    return ticket
+    if (!exact(body, ['ok', 'value']) || body.ok !== true) fail()
+    return { value: (body as Record<string, unknown>).value, bounded }
   } catch { return fail() }
 }

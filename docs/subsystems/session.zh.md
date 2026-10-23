@@ -893,6 +893,14 @@ async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortS
  */
 async captureCollaborationRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>
 
+/** Capture a cloud-recorded group message in the original fenced Session.
+ * The cloud group Root admission independently verifies the committed message and current members.
+ * @param value - Exact group Source input and Host-selected namespace/policy.
+ * @param signal - Parent cancellation combined with Profile disposal.
+ * @returns Original durable Root aggregate; recovery has no executable call.
+ */
+async captureCollaborationGroupRoot(value: CollaborationRootCaptureInput, signal: AbortSignal): Promise<CollaborationRootCapture>
+
 /** Prepare a fresh one-shot analysis using an admitted root's original model and current credentials.
  * The original Source remains immutable. Membership is rechecked after preparation and around input/grant persistence.
  * This Host-only method has no Remote endpoint and grants no cloud authority.

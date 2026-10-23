@@ -58,6 +58,7 @@ function bridge(): {
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
   collaborationGroupMessages?(value: unknown): Promise<unknown>
+  collaborationGroupWork?(value: unknown): Promise<unknown>
   collaborationGroupMembers?(value: unknown): Promise<unknown>
   collaborationGroupPreparation?(value: unknown): Promise<unknown>
   collaborationGroupActivation?(value: unknown): Promise<unknown>
@@ -336,6 +337,75 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261020-0010: Root planning receives only committed group message coordinates', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupWork'] }
+  const command = { workspace_id: workspace, session_id: 'session-1',
+    message_id: '44444444-4444-4444-8444-444444444444' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { ok: true, planning: 'recorded',
+      root: { root_task_id: 'root', root_trace_id: 'trace', source_descriptor: {
+        workspace_id: workspace, session_id: 'session-1', source_message_id: command.message_id } },
+      checkpoint: {} }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupWork?.(command)).toMatchObject({ ok: true, planning: 'recorded' })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe('collaboration/groupWork')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupWork?.({ ...command, body: '@Guide do it' }))
+    .toMatchObject({ ok: false, reconciliationRequired: true })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: group Agent chips and recovered Source traverse the real remote carrier', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
+  const messageId = '44444444-4444-4444-8444-444444444444'
+  const requestId = '33333333-3333-4333-8333-333333333333'
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  const label = '@Guide · Project'
+  const body = `${label}\nPlease review`
+  const ref = `slark-agent:${'a'.repeat(64)}`
+  const span = { mention_id: '55555555-5555-4555-8555-555555555555', actor_ref: ref,
+    start: 0, end: label.length, agent_name: 'Guide', project_name: 'Project',
+    capability_snapshot: 'b'.repeat(64) }
+  const send = { operation: 'send', workspace_id: workspace, session_id: 'session-1',
+    request_id: requestId, expected_group_version: 2, body,
+    mention_refs: [ref], mention_spans: [span] }
+  const work = { operation: 'work-source', workspace_id: workspace,
+    session_id: 'session-1', message_id: messageId }
+  const source = { workspace_id: workspace, session_id: 'session-1',
+    source_message_id: messageId, source_revision: '1', original_message: body,
+    active_mentions: [{ mention_id: span.mention_id,
+      source_span: { source_message_id: messageId, source_revision: '1', start: 0, end: label.length },
+      display_snapshot: { agent_name: 'Guide', project_name: 'Project' },
+      binding: { kind: 'resolved', target: { project_id: 'project-1', agent_id: 'agent-1' },
+        capability_snapshot: span.capability_snapshot } }] }
+  const requests: Rpc[] = []
+  let wrongSource = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, rpc.payload.args.request &&
+      (rpc.payload.args.request as { operation: string }).operation === 'send'
+      ? { state: 'recorded', message_id: messageId, seq: 1 }
+      : { state: 'recorded_source', group_id: groupId, request_id: requestId,
+        payload_digest: 'c'.repeat(64), message_seq: 1,
+        source: wrongSource ? { ...source, source_message_id: groupId } : source }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMessages?.(send)).toMatchObject({ state: 'recorded', message_id: messageId })
+  expect(await bridge().collaborationGroupMessages?.(work)).toMatchObject({ state: 'recorded_source', source })
+  expect(requests.map(request => request.payload.args.request)).toEqual([send, work])
+  expect(await bridge().collaborationGroupMessages?.({ ...send, mention_spans: [{ ...span, end: 2 }] }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(2)
+  wrongSource = true
+  expect(await bridge().collaborationGroupMessages?.(work)).toEqual({ state: 'retry_required' })
+})
 it('REQ-20261020-0010: a member capability keeps the remote bridge installed and sends exact commands', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2',
     methods: ['workspace', 'groupMessages', 'groupMembers'] }
@@ -436,6 +506,74 @@ it('REQ-20261020-0010: personal proxy commands carry only binding facts', async 
     expected_binding_epoch: 0, bot_id: '../other' })).toEqual({ state: 'retry_required' })
   expect(commands).toHaveLength(2)
 })
+it('REQ-20261020-0010: proxy replacement and unbind require exact fenced replies', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let forged = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation: string }
+    const replace = requested.operation === 'proxy_replace'
+    return { status: 200, value: envelope(rpc, { state: 'proxy_changed',
+      operation: replace ? 'replace' : 'unbind', binding_id: bindingId, binding_epoch: 2,
+      binding_state: replace ? 'transferring' : 'unbound',
+      bot_ref: forged ? 'deepseek-bot:forged' : replace ? 'deepseek-bot:next_bot' : null }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  const base = { workspace_id: workspace, session_id: 'session-1',
+    request_id: '66666666-6666-4666-8666-666666666666', expected_binding_epoch: 1 }
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_replace', ...base,
+    bot_id: 'next_bot' })).toMatchObject({ state: 'proxy_changed', operation: 'replace' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base }))
+    .toMatchObject({ state: 'proxy_changed', operation: 'unbind' })
+  expect(commands).toHaveLength(2)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_replace', ...base,
+    bot_id: '../other' })).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base,
+    expected_binding_epoch: 0 })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(2)
+  forged = true
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_unbind', ...base }))
+    .toEqual({ state: 'retry_required' })
+})
+
+it('REQ-20261020-0010: current Host handoff steps accept only scoped metadata', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMembers'] }
+  const commands: Rpc[] = []
+  const bindingId = '55555555-5555-4555-8555-555555555555'
+  let forged = false
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    commands.push(rpc)
+    const requested = rpc.payload.args.request as { operation: string }
+    const operation = requested.operation.slice('proxy_handoff_'.length)
+    return { status: 200, value: envelope(rpc, operation === 'seal'
+      ? { state: 'handoff_sealed', handoff_id: bindingId, namespace_count: 2, item_count: 3,
+        ...(forged ? { task_body: 'private' } : {}) }
+      : { state: 'handoff_step', operation,
+        result: operation === 'complete' ? 'active' : 'recorded' }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  const base = { workspace_id: workspace, session_id: 'session-1',
+    binding_id: bindingId, target_epoch: 2 }
+  for (const operation of ['seal', 'revoke', 'attach', 'complete'] as const)
+    expect(await bridge().collaborationGroupMembers?.({ operation: `proxy_handoff_${operation}`, ...base }))
+      .toMatchObject({ state: operation === 'seal' ? 'handoff_sealed' : 'handoff_step' })
+  expect(commands).toHaveLength(4)
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_revoke', ...base,
+    target_epoch: 0 })).toEqual({ state: 'retry_required' })
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_attach', ...base,
+    task_body: 'private' })).toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(4)
+  forged = true
+  expect(await bridge().collaborationGroupMembers?.({ operation: 'proxy_handoff_seal', ...base }))
+    .toEqual({ state: 'retry_required' })
+})
+
 it('REQ-20261020-0010: group pending commands stay exact and use the verified parent bridge', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMessages'] }
   const command = { operation: 'pending_claim', workspace_id: workspace, session_id: 'session-1',

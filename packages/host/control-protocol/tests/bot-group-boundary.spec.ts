@@ -13,6 +13,7 @@ const receipt = { operation: 'receipt', deliveryId, ...common }
 const page = { operation: 'result_page', ...common, after: 0, limit: 1 }
 const ack = { operation: 'ack_result', ...common, deliveryId, resultId: `${deliveryId}:final` }
 const revoke = { operation: 'revoke_cycle', ...common, version: 3, stopInFlight: true }
+const stop = { operation: 'stop_delivery', ...common, deliveryId, requestId: randomUUID() }
 const deliveryReply = { state: 'accepted', deliveryId, ...common,
   payloadDigest: deliver.payloadDigest, sessionId: 'bot-session' }
 const result = { id: `${deliveryId}:final`, deliveryId, ...common,
@@ -24,8 +25,8 @@ const ring = { version: 1, environmentId: randomUUID(),
 const input = { computer_id: 'desktop-1', slark_audience: ring.issuer,
   ticket: 'aaa.bbb.ccc', command: deliver }
 
-it('accepts exactly the five private Bot commands and bounded worker replies', () => {
-  for (const command of [deliver, receipt, page, ack, revoke])
+it('accepts exact private Bot commands and bounded worker replies', () => {
+  for (const command of [deliver, receipt, page, ack, revoke, stop])
     expect(parseHostBotGroupCommand(command)).toEqual(command)
   for (const state of ['missing', 'invalid', 'unavailable', 'busy',
     'bot_missing', 'revoked', 'conflict', 'acknowledged'])
@@ -38,6 +39,11 @@ it('accepts exactly the five private Bot commands and bounded worker replies', (
     .toEqual({ state: 'ok', results: [result], next: 1 })
   expect(parseHostBotGroupResponse({ state: 'ok', results: [], next: 0 }))
     .toEqual({ state: 'ok', results: [], next: 0 })
+  expect(parseHostBotGroupResponse({ state: 'requested', deliveryId, requestId: stop.requestId }))
+    .toEqual({ state: 'requested', deliveryId, requestId: stop.requestId })
+  expect(parseHostBotGroupResponse({ state: 'terminal', deliveryId, requestId: stop.requestId,
+    status: 'stopped', resultId: `${deliveryId}:final` })).toEqual({ state: 'terminal',
+    deliveryId, requestId: stop.requestId, status: 'stopped', resultId: `${deliveryId}:final` })
   expect(parseHostBotGroupPublicKeyring(ring)).toEqual(ring)
   expect(parseHostBotGroupDeliveryInput(input)).toEqual(input)
 })
@@ -88,7 +94,8 @@ it('rejects invalid command identities, sequence bounds and operation fields', (
     { ...deliver, extra: true }, { ...receipt, deliveryId: 'bad' },
     { ...page, after: 1.5 }, { ...page, after: -1 }, { ...page, limit: 2 },
     { ...ack, resultId: 'bad' }, { ...revoke, version: 1.5 },
-    { ...revoke, version: 0 }, { ...revoke, stopInFlight: 'yes' }]) {
+    { ...revoke, version: 0 }, { ...revoke, stopInFlight: 'yes' },
+    { ...stop, deliveryId: 'bad' }, { ...stop, requestId: 'bad' }, { ...stop, extra: true }]) {
     expect(() => parseHostBotGroupCommand(bad)).toThrow('invalid_bot_group')
   }
 })
@@ -125,13 +132,19 @@ it('rejects malformed, mismatched, oversized and forged worker replies', () => {
     { ...deliveryReply, extra: true },
     { ...deliveryReply, state: 'result_recorded' },
     { ...deliveryReply, state: 'result_recorded', resultId: 'bad' },
+    { state: 'requested', deliveryId: 'bad', requestId: stop.requestId },
+    { state: 'requested', deliveryId, requestId: 'bad' },
+    { state: 'terminal', deliveryId, requestId: stop.requestId,
+      status: 'claimed', resultId: `${deliveryId}:final` },
+    { state: 'terminal', deliveryId, requestId: stop.requestId,
+      status: 'stopped', resultId: 'bad' },
   ]
   for (const bad of variants)
     expect(() => parseHostBotGroupResponse(bad)).toThrow('invalid_bot_group')
 })
 
 it('matches replies only to their exact Bot, delivery and member cycle', () => {
-  const commands = [deliver, receipt, page, ack, revoke].map(parseHostBotGroupCommand)
+  const commands = [deliver, receipt, page, ack, revoke, stop].map(parseHostBotGroupCommand)
   const accepted = parseHostBotGroupResponse(deliveryReply)
   const missing = parseHostBotGroupResponse({ state: 'missing' })
   const invalid = parseHostBotGroupResponse({ state: 'invalid' })
@@ -155,6 +168,17 @@ it('matches replies only to their exact Bot, delivery and member cycle', () => {
     expect(matchesHostBotGroupResponse(parseHostBotGroupResponse({ state }), commands[3]!)).toBe(true)
   for (const state of ['revoked', 'missing', 'conflict', 'invalid', 'unavailable'])
     expect(matchesHostBotGroupResponse(parseHostBotGroupResponse({ state }), commands[4]!)).toBe(true)
+  for (const state of ['missing', 'conflict', 'invalid', 'unavailable'])
+    expect(matchesHostBotGroupResponse(parseHostBotGroupResponse({ state }), commands[5]!)).toBe(true)
+  const requested = parseHostBotGroupResponse({ state: 'requested', deliveryId, requestId: stop.requestId })
+  const terminal = parseHostBotGroupResponse({ state: 'terminal', deliveryId,
+    requestId: stop.requestId, status: 'unknown', resultId: `${deliveryId}:final` })
+  if (requested.state !== 'requested' || terminal.state !== 'terminal') throw Error('unexpected stop reply')
+  expect(matchesHostBotGroupResponse(requested, commands[5]!)).toBe(true)
+  expect(matchesHostBotGroupResponse(terminal, commands[5]!)).toBe(true)
+  expect(matchesHostBotGroupResponse(requested, commands[0]!)).toBe(false)
+  expect(matchesHostBotGroupResponse({ ...requested, deliveryId: randomUUID() }, commands[5]!)).toBe(false)
+  expect(matchesHostBotGroupResponse({ ...terminal, requestId: randomUUID() }, commands[5]!)).toBe(false)
   expect(matchesHostBotGroupResponse(parseHostBotGroupResponse({ state: 'ok',
     results: [], next: 0 }), commands[0]!)).toBe(false)
   for (const bad of [{ ...accepted, deliveryId: randomUUID() },

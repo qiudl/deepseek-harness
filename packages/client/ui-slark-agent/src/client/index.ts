@@ -341,7 +341,9 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.slots.inject('conversation.input.dock', () => {
     const host = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
-    if (!host?.collaborationGroupPreparation || !host.collaborationGroupMessages) return () => {}
+    if (!host?.collaborationGroupPreparation || !host.collaborationGroupMessages ||
+      host.collaborationScopeAvailable &&
+      (host.collaborationExecutionAvailable || host.collaborationPlanningAvailable)) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-group-chat', order: 30, locale: NS,
       inject: sessionId => ({ sessionId, host, workspaceId: () => workspaceOf(ctx, sessionId),
         subscribeWorkspace: (listener: () => void) => ctx.workspaces.list.subscribe(listener) }),
@@ -452,6 +454,15 @@ export function apply(ctx: ClientContext): void {
       }
       return entry
     }
+    resultsCtx.slots.inject('conversation.input.dock', () => {
+      const host = window.__DSH_DESKTOP_HOST__
+      if (!host?.collaborationGroupPreparation || !host.collaborationGroupMessages) return () => {}
+      return resultsCtx.slots.register({ name: 'conversation.input.dock', id: 'slark-group-chat', order: 30, locale: NS,
+        inject: sessionId => ({ sessionId, host, workspaceId: () => workspaceOf(resultsCtx, sessionId),
+          subscribeWorkspace: (listener: () => void) => resultsCtx.workspaces.list.subscribe(listener),
+          resultsModel: entryFor(sessionId).timelineModel }),
+      }, GroupChatDock)
+    })
     focusPending = async (row) => {
       const sessionId = SessionId(row.session_id)
       const reference = ctx.sessions.retain(sessionId, { source: 'collaborationLocator' })

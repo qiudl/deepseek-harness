@@ -86,6 +86,8 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     receipt: vi.fn(async () => ({ state: 'missing' })),
     resultPage: vi.fn(async () => ({ state: 'ok', results: [], next: 0 })),
     acknowledgeResult: vi.fn(async () => ({ state: 'acknowledged' })),
+    requestStopDelivery: vi.fn(async ({ deliveryId, requestId }: { deliveryId: string; requestId: string }) =>
+      ({ state: 'requested', deliveryId, requestId })),
     revokeCycle: vi.fn(async () => ({ state: 'revoked' })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, {
@@ -189,6 +191,11 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     resultId: `${deliveryId}:final` })).status).toBe(200)
   expect(groupOperations.acknowledgeResult).toHaveBeenCalledWith({ deliveryId, ...baseGroup,
     resultId: `${deliveryId}:final` })
+  const stopRequestId = '30000000-0000-4000-8000-000000000003'
+  expect((await postGroup({ operation: 'stop_delivery', deliveryId, ...baseGroup,
+    requestId: stopRequestId })).status).toBe(200)
+  expect(groupOperations.requestStopDelivery).toHaveBeenCalledWith({ deliveryId,
+    ...baseGroup, requestId: stopRequestId })
   expect((await postGroup({ operation: 'revoke_cycle', ...baseGroup,
     version: 3, stopInFlight: true })).status).toBe(200)
   expect(groupOperations.revokeCycle).toHaveBeenCalledWith({ ...baseGroup,

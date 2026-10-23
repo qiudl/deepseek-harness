@@ -640,6 +640,29 @@ export interface ProfileBotGroupDeliverResult {
   readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
 }
 
+/** Separate owner stop capability bound to one Bot delivery and decision request. */
+export interface ProfileBotGroupStopRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_stop'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupStopInput
+}
+/** Bounded worker receipt for the owner-authorized stop request. */
+export interface ProfileBotGroupStopResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_stop'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Read a Bot result only while the original Slark delivery remains authorized. */
 export interface ProfileBotGroupResultPageRequest {
   readonly version: 1
@@ -1977,6 +2000,8 @@ export type HostControlFrame =
   | ProfileBotRosterResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
+  | ProfileBotGroupStopRequest
+  | ProfileBotGroupStopResult
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckRequest

@@ -91,6 +91,7 @@ export class DesktopCollaborationAnalysis {
     private readonly feedback?: SessionController['collaborationRootFeedback'],
     private readonly consumption?: SessionController['collaborationRootConsumption'],
     private readonly readSource?: SessionController['readCollaborationSourceSnapshot'],
+    private readonly captureGroupRoot?: SessionController['captureCollaborationGroupRoot'],
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
@@ -202,15 +203,18 @@ export class DesktopCollaborationAnalysis {
    * @param value - Main's original namespace, policy, Source coordinates and classified mentions.
    * @param binding - Current Account/Host connection digest; retained calls never change owners here.
    * @param signal - Capture cancellation, detached after acknowledgement.
+   * @param mode - The trusted Host route selected by Slark Main.
    * @returns Original descriptor without an attempt; recovered roots contain no executable handle.
    */
-  async captureRootOnly(value: unknown, binding: string, signal: AbortSignal): Promise<
+  async captureRootOnly(value: unknown, binding: string, signal: AbortSignal,
+    mode: 'legacy' | 'group' = 'legacy'): Promise<
     Readonly<{ kind: 'captured' | 'recovered'; descriptor: ReturnType<typeof describeCollaborationSource>; root: HostRootSubmissionDescriptor }>
   > {
     const input = parseHostRootAnalysisInput(value), source = parseCollaborationSourceInput(input.source),
       active = AbortSignal.any([signal, this.lifetime])
     active.throwIfAborted()
-    if (this.closing || !this.captureRoot) throw Error('collaboration_root_capture_unavailable')
+    const captureRoot = mode === 'group' ? this.captureGroupRoot : this.captureRoot
+    if (this.closing || !captureRoot) throw Error('collaboration_root_capture_unavailable')
     const existing = [...this.pending].find(p => p.capturedRoot && p.root?.namespace_id === input.namespace_id
       && p.root.source_descriptor.workspace_id === source.workspace_id
       && p.root.source_descriptor.session_id === source.session_id
@@ -227,7 +231,7 @@ export class DesktopCollaborationAnalysis {
     const cancel = () => { p.controller.abort(signal.reason) }
     signal.addEventListener('abort', cancel, { once: true })
     try {
-      const captured = await this.captureRoot({ ...input, source },
+      const captured = await captureRoot({ ...input, source },
         AbortSignal.any([this.lifetime, p.controller.signal]))
       owned.throwIfAborted()
       const descriptor = describeCollaborationSource(captured.snapshot)
@@ -716,7 +720,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
         (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
           : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
             : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
-              : (row.action === 'capture_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
+              : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
                 ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
                   ((row.action === 'prepare' || row.action === 'prepare_root') && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
                 : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
@@ -743,7 +747,9 @@ export async function handleDesktopCollaborationAnalysisRequest(
         if (!owner.rootPlanning) throw Error('collaboration_root_planning_unavailable')
         return owner.rootPlanning
       }
-      const value = row.action === 'capture_root' ? await owner.captureRootOnly(row.input, row.binding_key, controller.signal)
+      const value = row.action === 'capture_root' || row.action === 'capture_group_root'
+        ? await owner.captureRootOnly(row.input, row.binding_key, controller.signal,
+          row.action === 'capture_group_root' ? 'group' : 'legacy')
         : row.action === 'start_captured_root' ? await owner.startCapturedRootAnalysis(row.input, row.binding_key, controller.signal)
           : row.action === 'release_captured_root' ? await owner.releaseCapturedRoot(row.input, row.binding_key, controller.signal)
             : row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
