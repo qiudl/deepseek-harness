@@ -10231,7 +10231,7 @@ importers:
         specifier: workspace:*
         version: link:../../session/session-persistence-jsonl
       '@deepseek-ai/node-addon-system':
-        specifier: workspace:*
+        specifier: workspace:~
         version: link:../../../native/system/packages/entry
       '@deepseek-ai/schemastery':
         specifier: link:../../../vendor/schemastery
