@@ -116,6 +116,16 @@ export function personIndex(deviceIndexKey: Uint8Array, identity: AccountIdentit
     .digest('hex')
 }
 
+/** A Slark Profile belongs to one verified binding scope, even when accounts share a subject. */
+export function slarkPersonIndex(deviceIndexKey: Uint8Array, identity: AccountIdentity, scope: string): string {
+  if (deviceIndexKey.byteLength !== 32 || !SHA256.test(scope)) throw new HostAuthorityError('invalid_input')
+  const normalized = account(identity)
+  return createHmac('sha256', deviceIndexKey)
+    .update('dsh-slark-person-profile-index/v1\0')
+    .update(normalized.issuer).update('\0').update(normalized.subject).update('\0').update(scope)
+    .digest('hex')
+}
+
 function unlockMaterial(value: string): Buffer {
   if (!/^[A-Za-z0-9_-]{43}$/u.test(value)) throw new HostAuthorityError('invalid_input')
   const decoded = Buffer.from(value, 'base64url')
@@ -165,16 +175,18 @@ export class ProfileRegistry {
    * Register an account and restore its exact prior row if worker preparation fails.
    * @param input - Account identity, binding authority, and local unlock material.
    * @param prepare - Worker readiness operation; must reject when readiness fails.
+   * @param options - Optional required scoped binding for a newly admitted Profile.
    * @returns The prepared Profile; rejects stale rather than undoing a concurrent registry change.
    */
   async provisionAccount(
     input: Parameters<ProfileRegistry['registerAccount']>[0],
     prepare: (profile: PersonProfileRecord) => Promise<void>,
+    options: { readonly requireScopedBinding?: string } = {},
   ): Promise<PersonProfileRecord> {
     // Capture and mutate without yielding: the prior owner may have a different identity index.
     const before = this.profiles
     const beforeSnapshot = this.snapshot
-    const profile = this.registerAccountRecord(input)
+    const profile = this.registerAccountRecord(input, options)
     const preparedSnapshot = this.snapshot
     const previous = before.find(candidate => candidate.profileId === profile.profileId)
     try {
@@ -196,10 +208,26 @@ export class ProfileRegistry {
     return profile
   }
 
-  private registerAccountRecord(input: Parameters<ProfileRegistry['registerAccount']>[0]): PersonProfileRecord {
-    const index = personIndex(this.options.deviceIndexKey, input)
+  private registerAccountRecord(
+    input: Parameters<ProfileRegistry['registerAccount']>[0],
+    options: { readonly requireScopedBinding?: string } = {},
+  ): PersonProfileRecord {
+    const index = options.requireScopedBinding === undefined
+      ? personIndex(this.options.deviceIndexKey, input)
+      : slarkPersonIndex(this.options.deviceIndexKey, input, options.requireScopedBinding)
     const material = unlockMaterial(input.unlockMaterial)
     const existing = this.profiles.find(profile => profile.personIndex === index)
+    if (options.requireScopedBinding !== undefined) {
+      const bindings = existing?.accountBindings
+      if (input.authorityBindingScope !== options.requireScopedBinding
+        || input.authorityEnvironmentId === undefined || input.accountBindingHandle === undefined
+        || (existing && (bindings?.length !== 1
+          || bindings[0]?.authorityEnvironmentId !== input.authorityEnvironmentId
+          || bindings[0]?.handle !== input.accountBindingHandle
+          || bindings[0]?.authorityBindingScope !== options.requireScopedBinding))) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+    }
     if (input.authorityBindingScope !== undefined
       && (!SHA256.test(input.authorityBindingScope) || input.accountBindingHandle === undefined)) {
       throw new HostAuthorityError('invalid_input')
@@ -328,6 +356,8 @@ export class ProfileRegistry {
       this.profiles = next
       return updated
     }
+    if (options.requireScopedBinding !== undefined && this.profiles.some(profile =>
+      profile.keyHandle === input.keyHandle)) throw new HostAuthorityError('profile_mismatch')
     const profileId = randomUUID() as PersonProfileId
     const keyHandle = handle(input.keyHandle)
     const profile: PersonProfileRecord = {
@@ -416,7 +446,10 @@ export class ProfileRegistry {
    * @returns Whether the stored Profile belongs to that Account.
    */
   matchesAccountIdentity(profile: PersonProfileRecord, identity: AccountIdentity): boolean {
-    return profile.kind === 'account' && profile.personIndex === personIndex(this.options.deviceIndexKey, identity)
+    return profile.kind === 'account' && (profile.personIndex === personIndex(this.options.deviceIndexKey, identity)
+      || (profile.accountBindings ?? []).some(binding => binding.authorityBindingScope !== undefined
+        && profile.personIndex === slarkPersonIndex(this.options.deviceIndexKey, identity,
+          binding.authorityBindingScope)))
   }
 
   /**

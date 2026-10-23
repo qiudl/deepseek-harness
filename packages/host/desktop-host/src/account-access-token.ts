@@ -1,4 +1,4 @@
-import { createPublicKey, verify, type JsonWebKey, type KeyObject } from 'node:crypto'
+import { createHash, createPublicKey, verify, type JsonWebKey, type KeyObject } from 'node:crypto'
 
 const ACCOUNT_ISSUERS = [
   'https://accounts.dsh.colorbuyai.com',
@@ -11,6 +11,8 @@ const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const MAX_TOKEN_BYTES = 8_192
 const MAX_LIFETIME_SECONDS = 600
 const CLOCK_SKEW_SECONDS = 5
+const SLARK_USER_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,127}$/u
+const SHA256_HEX = /^[a-f0-9]{64}$/u
 
 interface PublicP256Jwk extends JsonWebKey {
   readonly kty: 'EC'
@@ -37,6 +39,24 @@ export interface DshAccountAccessIdentity {
   readonly tokenId: string
   readonly expiresAt: number
 }
+
+/** Verified facts for one Slark-bound account Profile lease. */
+export interface DshSlarkAccessIdentity extends DshAccountAccessIdentity {
+  readonly slarkUserId: string
+  readonly environmentId: string
+  readonly profileId: string
+  readonly bindingScope: string
+  readonly deviceId: string
+  readonly deviceKeyThumbprint: string
+  readonly loginEpoch: number
+  readonly bindingEpoch: number
+  readonly operationId: string
+}
+
+/** Current Slark authority facts that a federated access token must match. */
+export type DshSlarkAccessExpected = Pick<DshSlarkAccessIdentity,
+  'slarkUserId' | 'environmentId' | 'profileId' | 'deviceId' |
+  'deviceKeyThumbprint' | 'loginEpoch' | 'bindingEpoch'>
 
 /** Stable local verification failure; raw parser and crypto errors remain private. */
 export class DshAccountAccessTokenError extends Error {
@@ -72,6 +92,11 @@ function coordinate(value: unknown): string {
 
 function positiveInteger(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) <= 0) fail()
+  return value as number
+}
+
+function nonnegativeInteger(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) fail()
   return value as number
 }
 
@@ -182,6 +207,89 @@ export class DshAccountAccessTokenVerifier {
         keyGeneration: positiveInteger(claims.kg),
         tokenId: claims.jti,
         expiresAt: expiresAt * 1_000,
+      })
+    } catch (error) {
+      if (error instanceof DshAccountAccessTokenError) throw error
+      throw new DshAccountAccessTokenError()
+    }
+  }
+
+  /**
+   * Verify a Slark-scoped token without admitting it to legacy Profile callers.
+   * @param token - Signed Identity access token.
+   * @param expected - Current Slark binding and device facts.
+   * @returns Verified Slark identity claims.
+   */
+  verifySlarkFederated(token: string, expected: DshSlarkAccessExpected): DshSlarkAccessIdentity {
+    try {
+      if (typeof token !== 'string' || Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES) fail()
+      const segments = token.split('.')
+      if (segments.length !== 3) fail()
+      const [encodedHeader, encodedPayload, encodedSignature] = segments as [string, string, string]
+      const header = exactRecord(decodeJson(encodedHeader), ['alg', 'kid', 'typ'])
+      if (header.alg !== 'ES256' || header.typ !== 'dsh-slark-access+jwt'
+        || typeof header.kid !== 'string' || !KID.test(header.kid)) fail()
+      const key = this.keys.get(header.kid)
+      if (!key) fail()
+      const claims = exactRecord(decodeJson(encodedPayload), [
+        'ag', 'aud', 'exp', 'iat', 'iss', 'jti', 'kg', 'nbf', 'sg', 'sid', 'sub', 'typ',
+        'slark_user_id', 'environment_id', 'profile_id', 'binding_scope', 'device_id',
+        'device_key_thumbprint', 'login_epoch', 'binding_epoch', 'operation_id',
+      ])
+      const issuedAt = positiveInteger(claims.iat)
+      const notBefore = positiveInteger(claims.nbf)
+      const expiresAt = positiveInteger(claims.exp)
+      const now = Math.floor(this.now() / 1_000)
+      if (claims.iss !== this.issuer || claims.aud !== 'dsh-host'
+        || claims.typ !== 'dsh-slark-access+jwt' || notBefore !== issuedAt
+        || issuedAt > now + CLOCK_SKEW_SECONDS || notBefore > now + CLOCK_SKEW_SECONDS
+        || expiresAt <= issuedAt || expiresAt <= now - CLOCK_SKEW_SECONDS
+        || expiresAt - issuedAt > MAX_LIFETIME_SECONDS
+        || typeof claims.sub !== 'string' || !UUID.test(claims.sub)
+        || typeof claims.sid !== 'string' || !UUID.test(claims.sid)
+        || typeof claims.jti !== 'string' || !UUID.test(claims.jti)
+        || typeof claims.slark_user_id !== 'string' || !SLARK_USER_ID.test(claims.slark_user_id)
+        || typeof claims.environment_id !== 'string' || !UUID.test(claims.environment_id)
+        || typeof claims.profile_id !== 'string' || !UUID.test(claims.profile_id)
+        || typeof claims.device_id !== 'string' || !UUID.test(claims.device_id)
+        || typeof claims.operation_id !== 'string' || !UUID.test(claims.operation_id)
+        || typeof claims.binding_scope !== 'string' || !SHA256_HEX.test(claims.binding_scope)
+        || typeof claims.device_key_thumbprint !== 'string' || !SEGMENT.test(claims.device_key_thumbprint)
+        || Buffer.from(claims.device_key_thumbprint, 'base64url').length !== 32
+        || Buffer.from(claims.device_key_thumbprint, 'base64url').toString('base64url') !== claims.device_key_thumbprint
+        || claims.slark_user_id !== expected.slarkUserId
+        || claims.environment_id !== expected.environmentId
+        || claims.profile_id !== expected.profileId
+        || claims.device_id !== expected.deviceId
+        || claims.device_key_thumbprint !== expected.deviceKeyThumbprint
+        || claims.login_epoch !== nonnegativeInteger(expected.loginEpoch)
+        || claims.binding_epoch !== positiveInteger(expected.bindingEpoch)
+        || claims.binding_scope !== createHash('sha256').update(JSON.stringify([
+          'slark-dsh-binding-scope-v1', claims.environment_id, claims.slark_user_id,
+        ])).digest('hex')) fail()
+      const signature = Buffer.from(encodedSignature, 'base64url')
+      if (signature.length !== 64 || signature.toString('base64url') !== encodedSignature
+        || !verify('sha256', Buffer.from(`${encodedHeader}.${encodedPayload}`, 'ascii'), {
+          key, dsaEncoding: 'ieee-p1363',
+        }, signature)) fail()
+      return Object.freeze({
+        issuer: this.issuer,
+        subject: claims.sub,
+        sessionId: claims.sid,
+        accountGeneration: positiveInteger(claims.ag),
+        sessionGeneration: positiveInteger(claims.sg),
+        keyGeneration: positiveInteger(claims.kg),
+        tokenId: claims.jti,
+        expiresAt: expiresAt * 1_000,
+        slarkUserId: claims.slark_user_id,
+        environmentId: claims.environment_id,
+        profileId: claims.profile_id,
+        bindingScope: claims.binding_scope,
+        deviceId: claims.device_id,
+        deviceKeyThumbprint: claims.device_key_thumbprint,
+        loginEpoch: nonnegativeInteger(claims.login_epoch),
+        bindingEpoch: positiveInteger(claims.binding_epoch),
+        operationId: claims.operation_id,
       })
     } catch (error) {
       if (error instanceof DshAccountAccessTokenError) throw error

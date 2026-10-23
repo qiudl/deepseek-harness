@@ -24,6 +24,7 @@ import {
 import {
   FileJsonlMigrationExportSource,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
+import { inspectProfileImportInventory, compareProfileImportInventory } from './profile-import-preview.ts'
 import { FileExtensionReceipts, ProfileExtensionOperations } from './extension-operations.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
 import { ProfileSkillExecutor } from './profile-skill-executor.ts'
@@ -44,6 +45,16 @@ import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService, inspectLegacyModelClaimSource, readLegacyModelClaimDocuments } from './legacy-migration-source.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from './legacy-claim-marker.ts'
 import { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
+import { FileProfileImportFenceFiles, ProfileImportWorkerFence } from './profile-import-worker-fence.ts'
+import { ProfileImportActivity } from './profile-import-activity.ts'
+import { FileProfileImportOperationJournal } from './profile-import-operation-journal.ts'
+import { ProfileImportSessionCoordinator } from './profile-import-session-coordinator.ts'
+import { FileProfileImportCandidateLease } from './profile-import-candidate-lease.ts'
+import { activateProfileImportCandidate } from './profile-import-candidate-activation.ts'
+import { FileProfileImportRuntimePatch } from './profile-import-runtime-patch.ts'
+import { FileProfileImportPluginPublishJournal } from './profile-import-plugin-publish-journal.ts'
+import { inspectPreparedProfileImportPlugins,
+  prepareSelectedProfileImportPlugins } from './profile-import-plugin-preparation.ts'
 import { LegacyClaimCoordinator } from './legacy-claim-coordinator.ts'
 import { LegacyClaimLedger } from './legacy-claim-ledger.ts'
 import { FileLegacyClaimEventStore } from './legacy-claim-store.ts'
@@ -450,7 +461,19 @@ export async function startDesktopHostApplication(
     ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })
   /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
-  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))
+  const importWorkerFence = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(join(root, 'profiles'), uid))
+  const importActivity = new ProfileImportActivity((profileId) => {
+    // A newly provisioned Profile has no marker path yet; ensureWorker checks again after creating its root.
+    try { lstatSync(join(root, 'profiles', profileId)) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    importWorkerFence.assertOpen(profileId)
+  })
+  const workers = new ProfileWorkerSupervisor(
+    dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)),
+    profileId => importWorkerFence.assertOpen(profileId),
+  )
   try {
     ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
     const registry = new ProfileRegistry({
@@ -476,40 +499,46 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
-      const profilesRoot = join(root, 'profiles')
-      ownerDirectory(profilesRoot, uid)
-      const profileRoot = join(profilesRoot, profile.profileId)
-      ownerDirectory(profileRoot, uid)
-      if (claimRestart) {
-        /* v8 ignore next -- the coordinator clears the marker synchronously before its restart callback. */
-        if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
-      } else claimWorkerGate.assertOpen(profile.profileId)
-      const target = targetFor(profile.profileId)
-      const persistence = await target.activePersistenceConfig()
-      let ownerState: MigrationOwnerStateBundle
-      try {
-        ownerState = await target.activeOwnerState()
-      } catch (error) {
-        /* v8 ignore next -- non-ENOENT persistence faults are injected and verified by the generation target's owning tests. */
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    const ensureWorker = (profile: PersonProfileRecord, claimRestart = false): Promise<void> =>
+      importActivity.run(profile.profileId, async () => {
+        const profilesRoot = join(root, 'profiles')
+        ownerDirectory(profilesRoot, uid)
+        const profileRoot = join(profilesRoot, profile.profileId)
+        ownerDirectory(profileRoot, uid)
+        importWorkerFence.assertOpen(profile.profileId)
+        if (claimRestart) {
+          /* v8 ignore next -- the coordinator clears the marker synchronously before its restart callback. */
+          if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
+        } else claimWorkerGate.assertOpen(profile.profileId)
+        const target = targetFor(profile.profileId)
+        const persistence = await target.activePersistenceConfig()
+        importWorkerFence.assertOpen(profile.profileId)
+        let ownerState: MigrationOwnerStateBundle
         try {
-          await target.importOwnerState(persistence.generation, EMPTY_OWNER_STATE)
-        } catch (publishError) {
-          /* v8 ignore next -- only a concurrent first-owner publication can enter this EEXIST recovery race. */
-          if ((publishError as NodeJS.ErrnoException).code !== 'EEXIST') throw publishError
+          ownerState = await target.activeOwnerState()
+        } catch (error) {
+          /* v8 ignore next -- non-ENOENT persistence faults are injected and verified by the generation target's owning tests. */
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+          importWorkerFence.assertOpen(profile.profileId)
+          try {
+            await target.importOwnerState(persistence.generation, EMPTY_OWNER_STATE)
+          } catch (publishError) {
+            /* v8 ignore next -- only a concurrent first-owner publication can enter this EEXIST recovery race. */
+            if ((publishError as NodeJS.ErrnoException).code !== 'EEXIST') throw publishError
+          }
+          ownerState = await target.activeOwnerState()
         }
-        ownerState = await target.activeOwnerState()
-      }
-      const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
-      replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
-        profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
-        pluginRoots: [join(profileRoot, 'plugins')],
-      }),
-      /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
-      () => workers.dispose(profile.profileId), claimRestart)
-    }
+        importWorkerFence.assertOpen(profile.profileId)
+        const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
+        importWorkerFence.assertOpen(profile.profileId)
+        replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
+        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+          profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
+          pluginRoots: [join(profileRoot, 'plugins')],
+        }),
+        /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
+        () => workers.dispose(profile.profileId), claimRestart)
+      })
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -525,12 +554,14 @@ export async function startDesktopHostApplication(
       profile: PersonProfileRecord,
       expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
     ) => recoveryInspector.inspect(profile, expected)
-    const ensureRecoveredProfileWorker = async (
+    const ensureRecoveredProfileWorker = (
       profile: PersonProfileRecord,
       preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
-    ): Promise<void> => {
+    ): Promise<void> => importActivity.run(profile.profileId, async () => {
+      importWorkerFence.assertOpen(profile.profileId)
       claimWorkerGate.assertOpen(profile.profileId)
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)
+      importWorkerFence.assertOpen(profile.profileId)
       try {
         await claimWorkerGate.start(profile.profileId, () => workers.ensure({
           profileId: profile.profileId,
@@ -547,15 +578,17 @@ export async function startDesktopHostApplication(
           runtimeGeneration: config.runtimeGeneration,
           schemaGeneration: config.schemaGeneration,
         })
+        importWorkerFence.assertOpen(profile.profileId)
         await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
       } catch (error) {
         await workers.dispose(profile.profileId).catch(() => undefined)
         throw error
       }
-    }
+    })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
+      verifySlarkAccountAccessToken: (token, expected) => accountAccessVerifier.verifySlarkFederated(token, expected),
       activateProfileView: async (profileId) => {
         claimWorkerGate.assertOpen(profileId)
         const view = await workers.activate(profileId)
@@ -688,7 +721,19 @@ export async function startDesktopHostApplication(
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
+      profileId => importWorkerFence.assertOpen(profileId),
     )
+    ownerDirectory(join(root, 'control'), uid)
+    const profileImportJournal = new FileProfileImportOperationJournal(
+      join(root, 'control', 'profile-import-operations'), uid)
+    const profileImport = new ProfileImportSessionCoordinator(
+      profileImportJournal,
+      importWorkerFence, {
+        revoke: profileId => host.revokeProfile(profileId as never),
+        stop: profileId => workers.dispose(profileId),
+        settleExtensions: profileId => extensionOperations.settledProfile(profileId),
+        settleHostOperations: profileId => importActivity.settled(profileId),
+      })
     const socketPath = join(root, 'host.sock')
     let modelClaimCoordinator: LegacyClaimCoordinator | undefined
     const claims = (): LegacyClaimCoordinator => {
@@ -719,6 +764,73 @@ export async function startDesktopHostApplication(
       })
       return modelClaimCoordinator
     }
+    const importProfiles = (sourceProfileId: string, targetProfileId: string) => ({
+      source: { profileId: requiredProfile(registry, sourceProfileId).profileId,
+        profileRoot: join(root, 'profiles', sourceProfileId), target: targetFor(sourceProfileId) },
+      target: { profileId: requiredProfile(registry, targetProfileId).profileId,
+        profileRoot: join(root, 'profiles', targetProfileId), target: targetFor(targetProfileId) },
+    })
+    const importQuiescent = async (sourceProfileId: string, targetProfileId: string): Promise<void> => {
+      await Promise.all([sourceProfileId, targetProfileId].flatMap(profileId => [
+        workers.dispose(profileId), extensionOperations.settledProfile(profileId),
+        importActivity.settled(profileId),
+      ]))
+    }
+    const importComposedEntries = (targetProfileRoot: string): ReadonlySet<string> => {
+      const loaded = loadProfileDirectory('dsh', join(targetProfileRoot, 'profiles/web'),
+        config.dshEntrypointPath)
+      const homePatch = join(targetProfileRoot, 'cordis.patch.yml')
+      return composedEntryIds(loaded.layers, [...loaded.patches,
+        ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])])
+    }
+    const importPluginContext = (source: ReturnType<typeof importProfiles>['source'],
+      target: ReturnType<typeof importProfiles>['target'], operationId: string,
+      selectedPluginNames: readonly string[], expectedPreviewDigest: string,
+      signal?: AbortSignal) => {
+      if (!bundledCatalog || !config.pnpmEntrypointPath) throw new HostAuthorityError('upgrade_required')
+      const publishJournal = new FileProfileImportPluginPublishJournal(
+        join(target.profileRoot, 'profile-import-plugin-publish'), uid)
+      return { source, target, uid, operationId, selectedPluginNames, expectedPreviewDigest,
+        journal: profileImportJournal, publishJournal, fence: importWorkerFence,
+        catalog: bundledCatalog, nodeExecutablePath: config.nodeExecutablePath,
+        pnpmEntrypointPath: config.pnpmEntrypointPath, installAnchor: config.dshEntrypointPath,
+        composedEntryIds: () => importComposedEntries(target.profileRoot),
+        assertQuiescent: () => importQuiescent(source.profileId, target.profileId),
+        ...(signal ? { signal } : {}) }
+    }
+    const importCommand = async (input: Readonly<{ sourceProfileId: string
+      targetProfileId: string
+      operationId: string
+      assertAuthority(): Promise<void>
+      signal?: AbortSignal }>) => {
+      await input.assertAuthority()
+      const profiles = importProfiles(input.sourceProfileId, input.targetProfileId)
+      const operation = await profileImportJournal.load(input.operationId)
+      if (!operation || operation.sourceProfileId !== profiles.source.profileId
+        || operation.targetProfileId !== profiles.target.profileId) {
+        throw Error('profile_import_operation_not_found')
+      }
+      await input.assertAuthority()
+      const base = { ...input, ...profiles, uid }
+      if (operation.selectedPluginNames.length === 0) return { operation, base }
+      const publishJournal = new FileProfileImportPluginPublishJournal(
+        join(profiles.target.profileRoot, 'profile-import-plugin-publish'), uid)
+      if (!ownership) throw new HostAuthorityError('unavailable')
+      const pluginPublisher = { journal: publishJournal, fence: importWorkerFence,
+        hostLock: ownership, profileRoot: profiles.target.profileRoot, operationId: operation.operationId,
+        sourceProfileId: profiles.source.profileId, targetProfileId: profiles.target.profileId, uid,
+        assertAuthority: input.assertAuthority,
+        assertQuiescent: () => importQuiescent(profiles.source.profileId, profiles.target.profileId),
+        assertPreparedCandidate: () => inspectPreparedProfileImportPlugins(importPluginContext(
+          profiles.source, profiles.target, operation.operationId,
+          operation.selectedPluginNames, operation.previewDigest, input.signal)),
+        assertSessionPointerOld: async () => {
+          if ((await profiles.target.target.inspectExistingPersistence()).generation !== operation.targetGeneration) {
+            throw Error('profile_import_generation_changed')
+          }
+        }, ...(input.signal ? { signal: input.signal } : {}) }
+      return { operation, base, pluginJournal: publishJournal, pluginPublisher }
+    }
     const serverOptions: UnixHostServerOptions = {
       socketPath, ownership, expectedUid: uid,
       allowedDesktopExecutableDigests: new Set(config.desktopExecutableDigests),
@@ -732,6 +844,87 @@ export async function startDesktopHostApplication(
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      inspectProfileImport: async (sourceProfileId, targetProfileId, signal) => {
+        const [source, target] = await Promise.all([
+          inspectProfileImportInventory({ profileRoot: join(root, 'profiles', sourceProfileId),
+            target: targetFor(sourceProfileId), uid, signal }),
+          inspectProfileImportInventory({ profileRoot: join(root, 'profiles', targetProfileId),
+            target: targetFor(targetProfileId), uid, signal }),
+        ])
+        return compareProfileImportInventory(source, target)
+      },
+      listProfileImportStatus: input => profileImport.listStatus(input),
+      prepareProfileImport: async (input) => {
+        await input.assertAuthority()
+        const { source, target } = importProfiles(input.sourceProfileId, input.targetProfileId)
+        const base = { ...input, source, target, uid }
+        if (input.selectedPluginNames.length === 0) {
+          const staged = await profileImport.prepare(base)
+          if (staged.phase !== 'staged') throw Error('profile_import_stage_mismatch')
+          return { operationId: staged.operationId, phase: staged.phase }
+        }
+        const plugin = importPluginContext(source, target, input.operationId,
+          input.selectedPluginNames, input.expectedPreviewDigest, input.signal)
+        const staged = await profileImport.prepareWithPlugins(base, { journal: plugin.publishJournal,
+          prepare: async () => prepareSelectedProfileImportPlugins(plugin) })
+        if (staged.phase !== 'staged') throw Error('profile_import_stage_mismatch')
+        return { operationId: staged.operationId, phase: staged.phase }
+      },
+      commitProfileImport: async (input) => {
+        const context = await importCommand(input)
+        if (context.pluginJournal && dependencies.profileWorkerFactory !== undefined) {
+          throw new HostAuthorityError('upgrade_required')
+        }
+        const committed = context.pluginJournal && context.pluginPublisher
+          ? await profileImport.commitWithPlugins({ ...context.base,
+            pluginJournal: context.pluginJournal, pluginPublisher: context.pluginPublisher,
+            candidateLease: new FileProfileImportCandidateLease(context.base.target.profileRoot,
+              input.operationId, uid),
+            runtimePatch: new FileProfileImportRuntimePatch(context.base.target.profileRoot,
+              input.operationId, context.base.target.target, ownerStateApplicator, uid),
+            activateCandidate: async (leaseFd) => {
+              await input.assertAuthority()
+              const profile = requiredProfile(registry, context.base.target.profileId)
+              await activateProfileImportCandidate({ factory: workerFactory, workers,
+                profileId: profile.profileId, profileRoot: context.base.target.profileRoot,
+                credentialHandle: profile.keyHandle,
+                pluginRoots: [join(context.base.target.profileRoot, 'plugins')],
+                selectedPluginNames: context.operation.selectedPluginNames,
+                dshEntrypointPath: config.dshEntrypointPath, leaseFd,
+                assertFenced: () => {
+                  importWorkerFence.assertOwnedPair(context.base.source.profileId,
+                    context.base.target.profileId, input.operationId)
+                  claimWorkerGate.assertOpen(context.base.target.profileId)
+                }, ...(input.signal ? { signal: input.signal } : {}) })
+              await input.assertAuthority()
+            } })
+          : await profileImport.commit(context.base)
+        if (committed.phase !== 'committed') throw Error('profile_import_commit_mismatch')
+        return { operationId: committed.operationId, phase: committed.phase }
+      },
+      abortProfileImport: async (input) => {
+        const context = await importCommand(input)
+        const joint = context.pluginJournal && context.pluginPublisher
+          && !['prepared', 'fenced'].includes(context.operation.phase)
+          ? { ...context.base, pluginJournal: context.pluginJournal,
+            pluginPublisher: context.pluginPublisher,
+            candidateLease: new FileProfileImportCandidateLease(context.base.target.profileRoot,
+              input.operationId, uid),
+            runtimePatch: new FileProfileImportRuntimePatch(context.base.target.profileRoot,
+              input.operationId, context.base.target.target, ownerStateApplicator, uid) }
+          : undefined
+        const recovery = joint && context.operation.phase === 'committing'
+          ? await profileImport.inspectCommittingWithPlugins(joint) : undefined
+        const aborted = joint && recovery?.pointer === 'staged'
+          ? await profileImport.recoverFailedActivationWithPlugins({ ...joint,
+            nodeExecutablePath: config.nodeExecutablePath,
+            dshEntrypointPath: config.dshEntrypointPath })
+          : joint ? await profileImport.abortWithPlugins(joint)
+            : await profileImport.abort({ operationId: input.operationId,
+              target: context.base.target, assertAuthority: input.assertAuthority })
+        if (aborted.phase !== 'aborted') throw Error('profile_import_abort_mismatch')
+        return { operationId: aborted.operationId, phase: aborted.phase }
+      },
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),
@@ -797,10 +990,12 @@ export async function startDesktopHostApplication(
       createMigrationExport: (_ownerId, profileId) => {
         const profile = requiredProfile(registry, profileId)
         const currentExporter = async (): Promise<JsonlMigrationExportService> => {
+          importWorkerFence.assertOpen(profileId)
           const target = targetFor(profileId)
           const active = await target.activePersistenceConfig()
           const profileRoot = join(root, 'profiles', profileId)
           ownerDirectory(profileRoot, uid)
+          importWorkerFence.assertOpen(profileId)
           const ownerPaths = await ownerStateApplicator.apply(
             profileRoot, active.generation, await target.activeOwnerState(),
           )
@@ -819,11 +1014,11 @@ export async function startDesktopHostApplication(
             },
           })
         }
-        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> => {
+        const quiesced = <T>(operation: () => Promise<T>): Promise<T> => importActivity.run(profileId, async () => {
           host.revokeProfile(profile.profileId)
           await workers.dispose(profileId)
           try { return await operation() } finally { await ensureWorker(profile) }
-        }
+        })
         return new CurrentMigrationExportService(currentExporter, quiesced)
       },
       createMigrationImport: (_ownerId, profileId) => {
@@ -843,21 +1038,29 @@ export async function startDesktopHostApplication(
           imports.set(profileId, migrationImport)
         }
         return {
-          stage: input => migrationImport.stage({
-            transferId: input.transferId, transferDigest: input.transferDigest,
-            sourceInstallationId: input.sourceInstallationId,
-            sourceInventoryDigest: input.sourceInventoryDigest,
-            targetProfileSelectorHash: input.targetProfileSelectorHash,
-            sourceGeneration: input.sourceGeneration, sourceSchemaVersion: input.sourceSchemaVersion,
-            targetGeneration: input.targetGeneration, recordCount: input.recordCount,
-            semanticDigest: input.semanticDigest,
-          }),
+          stage: (input) => {
+            return importActivity.run(profileId, () => migrationImport.stage({
+              transferId: input.transferId, transferDigest: input.transferDigest,
+              sourceInstallationId: input.sourceInstallationId,
+              sourceInventoryDigest: input.sourceInventoryDigest,
+              targetProfileSelectorHash: input.targetProfileSelectorHash,
+              sourceGeneration: input.sourceGeneration, sourceSchemaVersion: input.sourceSchemaVersion,
+              targetGeneration: input.targetGeneration, recordCount: input.recordCount,
+              semanticDigest: input.semanticDigest,
+            }))
+          },
           status: input => migrationImport.status(input),
-          verify: (importId, expectedVersion) => migrationImport.verify(importId, expectedVersion),
-          commit: (importId, expectedVersion, expectedCurrentGeneration) => migrationImport.commit(
-            importId, expectedVersion, expectedCurrentGeneration,
-          ),
-          abort: (importId, expectedVersion) => migrationImport.abort(importId, expectedVersion),
+          verify: (importId, expectedVersion) => {
+            return importActivity.run(profileId, () => migrationImport.verify(importId, expectedVersion))
+          },
+          commit: (importId, expectedVersion, expectedCurrentGeneration) => {
+            return importActivity.run(profileId, () => migrationImport.commit(
+              importId, expectedVersion, expectedCurrentGeneration,
+            ))
+          },
+          abort: (importId, expectedVersion) => {
+            return importActivity.run(profileId, () => migrationImport.abort(importId, expectedVersion))
+          },
         }
       },
     }

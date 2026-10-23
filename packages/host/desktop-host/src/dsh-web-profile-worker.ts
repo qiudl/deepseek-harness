@@ -155,6 +155,21 @@ export class DshWebProfileWorkerFactory {
    * @returns lifecycle plus a Host-verified token-free loopback origin.
    */
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
+    return this.createInternal(spec)
+  }
+
+  /**
+   * Start an import candidate with a kernel lease inherited as fd 3.
+   * @param spec - Target Profile runtime configuration.
+   * @param leaseFd - Caller-owned open lease descriptor.
+   * @returns Candidate worker handle; caller must adopt or dispose it.
+   */
+  async createImportCandidate(spec: ProfileWorkerSpec, leaseFd: number): Promise<ProfileWorkerHandle> {
+    if (!Number.isSafeInteger(leaseFd) || leaseFd < 0) throw new HostAuthorityError('invalid_input')
+    return this.createInternal(spec, leaseFd)
+  }
+
+  private async createInternal(spec: ProfileWorkerSpec, candidateLeaseFd?: number): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
@@ -189,7 +204,8 @@ export class DshWebProfileWorkerFactory {
           ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: candidateLeaseFd === undefined ? ['ignore', 'pipe', 'pipe']
+        : ['ignore', 'pipe', 'pipe', candidateLeaseFd],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1

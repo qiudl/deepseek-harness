@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   DshAccountAccessTokenVerifier,
@@ -70,6 +70,47 @@ describe('DSH Account Host access token', () => {
       { nbf: Math.floor(NOW / 1_000) + 30 },
       { sub: 'not-an-account-id' },
     ]) expect(() => verifier.verify(token(overrides))).toThrow(/Account access token/u)
+  })
+
+  it('verifies a Slark scoped credential only against the expected environment, profile and device', () => {
+    const verifier = new DshAccountAccessTokenVerifier(rawKeyring, { now: () => NOW })
+    const expected = {
+      slarkUserId: '-slark-user',
+      environmentId: '10000000-0000-4000-8000-000000000001',
+      profileId: '20000000-0000-4000-8000-000000000002',
+      deviceId: '60000000-0000-4000-8000-000000000006',
+      deviceKeyThumbprint: createHash('sha256').update('device').digest('base64url'),
+      loginEpoch: 0,
+      bindingEpoch: 3,
+    }
+    const bindingScope = createHash('sha256').update(JSON.stringify([
+      'slark-dsh-binding-scope-v1', expected.environmentId, expected.slarkUserId,
+    ])).digest('hex')
+    const federatedClaims = {
+      typ: 'dsh-slark-access+jwt', slark_user_id: expected.slarkUserId,
+      environment_id: expected.environmentId, profile_id: expected.profileId,
+      device_id: expected.deviceId, device_key_thumbprint: expected.deviceKeyThumbprint,
+      binding_scope: bindingScope, login_epoch: expected.loginEpoch,
+      binding_epoch: expected.bindingEpoch,
+      operation_id: '70000000-0000-4000-8000-000000000007',
+    }
+    const federated = token(federatedClaims, { typ: 'dsh-slark-access+jwt' })
+    expect(() => verifier.verify(federated)).toThrow(/Account access token/u)
+    expect(verifier.verifySlarkFederated(federated, expected).bindingScope).toBe(bindingScope)
+    for (const changed of [
+      { deviceId: SESSION },
+      { slarkUserId: '_other' },
+      { environmentId: '90000000-0000-4000-8000-000000000009' },
+      { profileId: '90000000-0000-4000-8000-000000000009' },
+      { deviceKeyThumbprint: createHash('sha256').update('other').digest('base64url') },
+      { loginEpoch: 8 },
+      { bindingEpoch: 4 },
+    ]) expect(() => verifier.verifySlarkFederated(federated, { ...expected, ...changed }))
+      .toThrow(/Account access token/u)
+    expect(() => verifier.verifySlarkFederated(token(), expected)).toThrow(/Account access token/u)
+    expect(() => verifier.verifySlarkFederated(token({
+      ...federatedClaims, binding_scope: '0'.repeat(64),
+    }, { typ: 'dsh-slark-access+jwt' }), expected)).toThrow(/Account access token/u)
   })
 
   it('rejects private, non-P-256, duplicate, and non-canonical keyring material', () => {
