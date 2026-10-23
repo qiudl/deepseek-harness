@@ -201,6 +201,26 @@ describe('Main-only Profile operations', () => {
     const oversized = JSON.parse(result) as { result: { sessions: unknown[] } }
     oversized.result.sessions = Array(33).fill(oversized.result.sessions[0])
     expect(() => decodeHostControlFrame(wire(oversized))).toThrow(HostControlProtocolError)
+    const continuedRequest = JSON.parse(request) as { params: Record<string, unknown> }
+    continuedRequest.params.expected_preview_digest = 'c'.repeat(64)
+    expect(decodeHostControlFrame(wire(continuedRequest))).toMatchObject(continuedRequest)
+    const continued = JSON.parse(result) as { result: {
+      next_session_offset: number | null
+      next_plugin_offset: number | null
+      sessions: Array<Record<string, unknown>>
+      plugins: Array<Record<string, unknown>>
+    } }
+    continued.result.next_session_offset = 32
+    continued.result.next_plugin_offset = 32
+    const session = continued.result.sessions[0]!
+    continued.result.sessions[0] = { id: session.id, created_at: session.created_at,
+      parent_session: 'parent-session', event_count: session.event_count,
+      source_digest: session.source_digest, state: session.state, target_digest: session.target_digest }
+    continued.result.plugins[0]!.target_version = null
+    continued.result.plugins[0]!.target_digest = 'e'.repeat(64)
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
+    continued.result.plugins[0]!.version = null
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
   })
 
   it('round-trips durable import status with the same identity proof and no secret result fields', () => {
@@ -224,6 +244,8 @@ describe('Main-only Profile operations', () => {
     for (const frame of [request, result]) {
       expect(encodeHostControlFrame(decodeHostControlFrame(wire(frame)))).toBe(wire(frame))
     }
+    const nextPage = { ...result, result: { ...result.result, next_operation_offset: 64 } }
+    expect(decodeHostControlFrame(wire(nextPage))).toMatchObject(nextPage)
     expectMutationsRejected(wire(request), ['params', 'source_unlock_material'], [null, 'guess'])
     expectMutationsRejected(wire(result), ['result', 'operations'], [null, [{ ...result.result.operations[0],
       source_profile_id: 'secret' }]])

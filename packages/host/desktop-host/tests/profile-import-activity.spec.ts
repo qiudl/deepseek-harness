@@ -18,3 +18,20 @@ it('drains work admitted before a fence and rejects work admitted after it', asy
   expect(settled).toBe(true)
   await expect(activity.settled('profile-a')).resolves.toBeUndefined()
 })
+
+it('waits for every task already running under the same Profile', async () => {
+  const activity = new ProfileImportActivity(() => {})
+  let finishFirst!: () => void
+  let finishSecond!: () => void
+  const first = activity.run('profile-a', () => new Promise<void>((resolve) => { finishFirst = resolve }))
+  const second = activity.run('profile-a', () => new Promise<void>((resolve) => { finishSecond = resolve }))
+  let settled = false
+  const drain = activity.settled('profile-a').then(() => { settled = true })
+  finishFirst()
+  await first
+  await Promise.resolve()
+  expect(settled).toBe(false)
+  finishSecond()
+  await Promise.all([second, drain])
+  expect(settled).toBe(true)
+})
