@@ -77,6 +77,7 @@ describe('local memory Session projection', () => {
     expect(projectMemorySession(withText(String.raw`password="ab\"cd"`))[0]?.text)
       .toBe('password=[REDACTED]')
     expect(() => projectMemorySession(withText(String.raw`password="ab\" cd`))).toThrow()
+    expect(() => projectMemorySession(withText('password="short7"suffix'))).toThrow()
   })
 
   it('masks an entire Authorization header value including its scheme', () => {
