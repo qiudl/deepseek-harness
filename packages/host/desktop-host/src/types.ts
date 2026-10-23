@@ -111,6 +111,11 @@ export interface ProfileWorkerHandle {
   /** Prepare a native room's bridge Source in the selected Profile writer. */
   readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>
+  /** Run one native room member or message operation in the selected Profile writer. */
+  readonly operateNativeRoom?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomReply>
   /** Send or reconcile one Bot group event through the private Profile service. */
   readonly operateBotGroup?: (
     command: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupCommand,

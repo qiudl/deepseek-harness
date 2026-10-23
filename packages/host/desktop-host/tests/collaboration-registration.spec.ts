@@ -7,6 +7,7 @@ import { encodeHostCollaborationRegistrationSignaturePayload,
   encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -49,6 +50,10 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       botId: command.botId, memberCycle: command.memberCycle,
       payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
   })
+  const operateNativeRoom = vi.fn(async (_profileId: string, command: HostNativeRoomCommand,
+    _signal: AbortSignal): Promise<HostNativeRoomReply> => command.operation === 'messages'
+    ? { state: 'ok', room_id: command.room_id, next_seq: command.after_seq,
+      last_seq: command.after_seq, messages: [] } : { state: 'unavailable' })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
@@ -56,6 +61,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
         if (profileId !== profile.profileId || roomId !== nativeRoom.room_id) return null
         return nativeRoom
       },
+      operateNativeRoom,
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
       listBotRoster: async (profileId: string, afterBotId: string, limit: number, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -81,7 +87,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
-    bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup,
+    bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup, operateNativeRoom,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -108,6 +114,31 @@ it('prepares a native room through the Account-authorized Host transport', async
   const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.native_room')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('keeps native room messages on the Account-authorized Host control channel', async () => {
+  const f = await fixture()
+  const command = { operation: 'messages' as const, room_id: f.nativeRoom.room_id,
+    member_id: randomUUID(), cycle: 1, after_seq: 5, limit: 2 }
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, command }
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.operateNativeRoom).not.toHaveBeenCalled()
+  await f.grant()
+  expect(await f.client.operateNativeRoom(input)).toEqual({ state: 'ok',
+    room_id: command.room_id, next_seq: 5, last_seq: 5, messages: [] })
+  expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, command,
+    expect.any(AbortSignal))
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_operation'
+    ? { ...frame, result: { reply: { state: 'ok', room_id: 'other',
+      next_seq: 5, last_seq: 5, messages: [] } } } : frame)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  await expect(f.client.operateNativeRoom({ ...input, issuer: 'https://other.example.test' }))
+    .rejects.toThrow()
+  const capabilities = f.client.inspection.capabilities.filter(
+    value => value !== 'profile.native_room_operation')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {

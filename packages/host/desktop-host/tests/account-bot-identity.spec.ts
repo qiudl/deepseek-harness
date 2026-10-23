@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { resolveAccountBotIdentity, listAccountBotRoster,
-  prepareAccountNativeRoom } from '../src/account-bot-identity.ts'
+  prepareAccountNativeRoom, operateAccountNativeRoom } from '../src/account-bot-identity.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
@@ -61,6 +61,30 @@ it('discards a native room prepared after its Account grant is revoked', async (
   })) }
   const pending = prepareAccountNativeRoom(f.host, workers, f.proof,
     'room_1', new AbortController().signal)
+  await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
+  f.host.revokeOwner(f.ownerId)
+  release()
+  await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('runs a native room cursor only under the current Account grant', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  const command = { operation: 'messages' as const, room_id: 'room_1',
+    member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 2 }
+  const operateNativeRoom = vi.fn(async () => ({ state: 'history_gap' as const }))
+  const workers = { operateNativeRoom }
+  await expect(operateAccountNativeRoom(f.host, workers, f.proof, command, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(operateNativeRoom).not.toHaveBeenCalled()
+  await f.grant()
+  expect(await operateAccountNativeRoom(f.host, workers, f.proof, command, signal))
+    .toEqual({ state: 'history_gap' })
+  let release!: () => void
+  operateNativeRoom.mockImplementationOnce(() => new Promise((resolve) => {
+    release = () => { resolve({ state: 'history_gap' }) }
+  }))
+  const pending = operateAccountNativeRoom(f.host, workers, f.proof, command, signal)
   await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
   f.host.revokeOwner(f.ownerId)
   release()

@@ -48,6 +48,7 @@ import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
+import { handleDesktopNativeRoomOperationRequest } from './desktop-native-room-operations.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -328,6 +329,33 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service) throw Error('native_room_unavailable')
           const result = await service.prepare({ roomId })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-operations',
+      handler: (req, res) => handleDesktopNativeRoomOperationRequest(req, res, sourceToken,
+        async (command, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            joinAgent(input: Record<string, unknown>): Promise<unknown>
+            roomMessages(input: Record<string, unknown>): Promise<unknown>
+            acknowledgeMessages(input: Record<string, unknown>): Promise<unknown>
+            leaveAgent(input: Record<string, unknown>): Promise<unknown>
+          }
+          if (!service) throw Error('native_room_unavailable')
+          const base = { roomId: command.room_id, memberId: command.member_id,
+            cycle: command.cycle }
+          const result = command.operation === 'join'
+            ? await service.joinAgent({ ...base, groupId: command.group_id,
+              projectId: command.project_id, agentId: command.agent_id, name: command.name })
+            : command.operation === 'messages'
+              ? await service.roomMessages({ ...base, afterSeq: command.after_seq,
+                limit: command.limit })
+              : command.operation === 'ack'
+                ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
+                : await service.leaveAgent(base)
           signal.throwIfAborted()
           return result
         }),

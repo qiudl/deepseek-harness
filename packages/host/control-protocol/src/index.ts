@@ -38,6 +38,7 @@ export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
+  ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupStopRequest, ProfileBotGroupStopResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
@@ -52,6 +53,9 @@ export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } fr
 export { parseHostNativeRoomTarget, parseHostNativeRoomSource,
   parseHostNativeRoomAssertion, encodeHostNativeRoomAssertionPayload } from './native-room.js'
 export type { HostNativeRoomSource, HostNativeRoomAssertion } from './native-room.js'
+export { parseHostNativeRoomCommand, parseHostNativeRoomReply,
+  matchesHostNativeRoomReply } from './native-room-operations.js'
+export type { HostNativeRoomCommand, HostNativeRoomReply } from './native-room-operations.js'
 export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'

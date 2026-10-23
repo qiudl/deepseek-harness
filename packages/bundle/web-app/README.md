@@ -102,6 +102,8 @@ Each browser session selects a shipped preset (`standard` by default). The Agent
 
 `/internal/desktop-native-room` accepts one room ID under the same worker token and asks the optional Profile-local `dsBotSlarkNativeRoom` service to prepare its Slark bridge Source. The response contains only the room ID and Source coordinates. It rejects a Source in the room Session or with extra fields. Browser cookies cannot call this route.
 
+`/internal/desktop-native-room-operations` uses the same private worker token to call that service's bounded join, message page, acknowledgement, and leave operations. It checks exact command and response fields and returns at most three message lines per page. Browser cookies cannot authorize this route.
+
 `DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN` enables a separate parent-only `/internal/desktop-collaboration-archive-transition` POST. It accepts an exact Account/environment/workspace/Session/token tuple and one bounded phase action, then uses the Workspace Registry's serialized durable write. A repeated `stage` returns the token's actual phase. The endpoint does not contact Slark or authorize a browser archive request; the Main or Daemon coordinator must reconcile uncertain writes against the same token.
 
 The same parent-only token protects `/internal/desktop-group-input-fence`. Its exact Slark group challenge is checked before a serialized Workspace Registry write; the response echoes only the persisted Workspace, Session, group ID and version. Mismatched results fail closed. Browser cookies cannot invoke this route, and the route does not activate a cloud group.
