@@ -62,6 +62,14 @@ describe('local memory Session projection', () => {
     }
   })
 
+  it('does not swallow later credential labels after Bearer and Chinese punctuation', () => {
+    const events = oneTurn.map(event => event.seq === 1
+      ? { ...event, data: { id: 'u', role: 'user', source: { kind: 'user' },
+        content: text('Bearer abc=short6。密码是short7；token is short8') } } : event)
+    const projected = projectMemorySession(snapshot(events))
+    expect(projected[0]?.text).not.toMatch(/short6|short7|short8/u)
+  })
+
   it('rejects incomplete private keys and invalid Unicode before indexing', () => {
     for (const input of ['-----BEGIN TEST PRIVATE KEY-----\nsecret', 'password=', 'token：',
       'password 是 "unterminated', 'bad\u0000text', '\uD800']) {

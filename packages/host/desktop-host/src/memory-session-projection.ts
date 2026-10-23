@@ -57,7 +57,7 @@ function redactText(input: string): string {
     throw new HostAuthorityError('unavailable')
   const text = input
     .replace(/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/gu, '[REDACTED PRIVATE KEY]')
-    .replace(/\b(Bearer\s+)[^\s,;]+/giu, '$1[REDACTED]')
+    .replace(/\b(Bearer\s+)[^\s,;，；、。！？：]+/giu, '$1[REDACTED]')
     .replace(/\b(?:aiproj_pk_[A-Za-z0-9_-]{32,}|gh[porsu]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}|(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|sk-[A-Za-z0-9_-]{20,})\b/gu, '[REDACTED]')
     .replace(/(https?:\/\/)[^\s/@:]+:[^\s/@]+@/giu, '$1[REDACTED]@')
     .replace(ASSIGNMENT, (_full, label: string, separator: string) => `${label}${separator}[REDACTED]`)
