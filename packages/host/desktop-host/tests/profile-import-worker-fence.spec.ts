@@ -25,7 +25,7 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
   it('reserves both Profiles and reopens them only after matching cleanup', async () => {
     const { files, gate } = await fixture()
     gate.clearPair(sourceId, targetId, operationId)
-    expect(() => gate.reservePair(sourceId, sourceId, operationId)).toThrow(/invalid_input/u)
+    expect(() => { gate.reservePair(sourceId, sourceId, operationId) }).toThrow(/invalid_input/u)
     gate.reservePair(sourceId, targetId, operationId)
     gate.reservePair(sourceId, targetId, operationId)
     const restarted = new ProfileImportWorkerFence(files)
@@ -65,7 +65,7 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     await writeFile(join(root, sourceId, 'profile-import-fence.v1.json'), JSON.stringify({
       version: 1, profileId: sourceId, operationId, state: 'unknown',
     }), { mode: 0o600 })
-    expect(() => restarted.assertOpen(sourceId)).toThrow(/unavailable/u)
+    expect(() => { restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
   })
 
   it('waits for both worker exits and retains markers if either stop fails', async () => {
