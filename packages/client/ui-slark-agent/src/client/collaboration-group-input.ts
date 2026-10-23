@@ -1,7 +1,7 @@
 /** Parent-owned request identity for one original Session group message. */
 import type { DesktopCollaborationSourceInput } from './collaboration-source.ts'
 
-/** Bounded group ledger commands and parent-owned pending key operations. */
+/** Exact Agent chip snapshot retained with a committed group message. */
 export type GroupAgentMentionSpan = {
   mention_id: string
   actor_ref: string
@@ -11,6 +11,7 @@ export type GroupAgentMentionSpan = {
   project_name: string
   capability_snapshot: string
 }
+/** Bounded group ledger commands and parent-owned pending key operations. */
 export type GroupMessageCommand =
   | {
     operation: 'send'
