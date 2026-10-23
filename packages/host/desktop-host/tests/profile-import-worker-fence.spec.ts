@@ -24,14 +24,19 @@ async function fixture() {
 describe.skipIf(process.platform === 'win32')('durable Profile import worker fence', () => {
   it('reserves both Profiles and reopens them only after matching cleanup', async () => {
     const { files, gate } = await fixture()
+    gate.clearPair(sourceId, targetId, operationId)
+    expect(() => gate.reservePair(sourceId, sourceId, operationId)).toThrow(/invalid_input/u)
     gate.reservePair(sourceId, targetId, operationId)
     gate.reservePair(sourceId, targetId, operationId)
     const restarted = new ProfileImportWorkerFence(files)
     expect(() =>{  restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
     expect(() =>{  restarted.assertOpen(targetId) }).toThrow(/unavailable/u)
+    expect(restarted.hasPendingPair(sourceId, targetId, operationId)).toBe(true)
     expect(() =>{  restarted.reservePair(sourceId, targetId, otherId) }).toThrow(/conflict/u)
+    expect(() => restarted.hasPendingPair(sourceId, targetId, otherId)).toThrow(/conflict/u)
     expect(() =>{  restarted.clearPair(sourceId, targetId, otherId) }).toThrow(/conflict/u)
     restarted.clearPair(sourceId, targetId, operationId)
+    expect(restarted.hasPendingPair(sourceId, targetId, operationId)).toBe(false)
     restarted.assertOpen(sourceId)
     restarted.assertOpen(targetId)
   })
@@ -57,6 +62,10 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     restarted.assertOwnedPair(sourceId, targetId, operationId)
     await writeFile(join(root, sourceId, 'profile-import-fence.v1.json'), '{bad', { mode: 0o600 })
     expect(() =>{  restarted.assertOpen(sourceId) }).toThrow(/unavailable/u)
+    await writeFile(join(root, sourceId, 'profile-import-fence.v1.json'), JSON.stringify({
+      version: 1, profileId: sourceId, operationId, state: 'unknown',
+    }), { mode: 0o600 })
+    expect(() => restarted.assertOpen(sourceId)).toThrow(/unavailable/u)
   })
 
   it('waits for both worker exits and retains markers if either stop fails', async () => {
@@ -69,6 +78,16 @@ describe.skipIf(process.platform === 'win32')('durable Profile import worker fen
     expect(order).toEqual([`revoke:${sourceId}`, `revoke:${targetId}`, `stop:${sourceId}`, `stop:${targetId}`])
     expect(() =>{  gate.assertOpen(sourceId) }).toThrow(/unavailable/u)
     expect(() =>{  gate.assertOpen(targetId) }).toThrow(/unavailable/u)
+  })
+
+  it('keeps both markers owned after both workers stop', async () => {
+    const { gate } = await fixture()
+    const stopped: string[] = []
+    await gate.quiescePair({ sourceProfileId: sourceId, targetProfileId: targetId, operationId,
+      revoke: () => {}, stop: async (id) => { stopped.push(id) },
+    })
+    expect(stopped).toEqual([sourceId, targetId])
+    gate.assertOwnedPair(sourceId, targetId, operationId)
   })
 
   it('rejects a linked marker and closes a worker started while its fence is written', async () => {
