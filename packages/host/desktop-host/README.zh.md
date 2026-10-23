@@ -81,7 +81,7 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
-Profile worker supervisor 可从选定的运行中 worker 读取一页有界的 `dsBotSlarkRemoteRead` 团队目录，并在返回前拒绝已替换的 worker。私有令牌留在 Host 内部。目前没有 Unix 控制方法或设备端能力对外提供此页。
+`profile.bot_team_read` 从选定的运行中 worker 读取一页有界的 `dsBotSlarkRemoteRead` 团队目录。Host 在读取前后核验当前连接的 Account 绑定，并拒绝已替换的 worker。私有令牌留在 Host 内部。Slark 转发到远程设备前仍须执行自身的受信设备授权。
 
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 

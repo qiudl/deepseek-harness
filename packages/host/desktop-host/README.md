@@ -79,7 +79,7 @@ The separate `profile.skillhub_clock_v2` capability issues Host-owned anchors wi
 
 `profile.bot_identity` checks the caller connection's current Account binding and issuer/subject before and after reading the selected Profile worker. The worker's private token reaches only the Profile-local `dsBotSlarkExternalGroup` service; an absent plugin, missing Bot or non-writer plugin returns absence. A replaced worker or revoked Account rejects the read. The result contains no chat content and does not authorize a Slark group action.
 
-The Profile worker supervisor can read one bounded `dsBotSlarkRemoteRead` team page from the selected live worker and rejects a replaced worker before returning it. The worker token remains inside the Host. No Unix control method or device-facing capability exposes this page yet.
+`profile.bot_team_read` reads one bounded `dsBotSlarkRemoteRead` team page from the selected live worker. The Host checks the caller connection's current Account binding before and after the read and rejects a replaced worker. The worker token remains inside the Host. Slark still needs its own trusted-device authorization before forwarding this page remotely.
 
 The private Bot group worker bridge supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. `profile.bot_group_result_page` exposes one result after revalidating the original Slark delivery ticket against the current Account and group membership. `profile.bot_group_result_ack` clears that result after Slark records its receipt, under the same live ticket. Member-cycle revocation has no public control method.
 

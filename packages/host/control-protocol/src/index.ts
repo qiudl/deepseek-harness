@@ -37,6 +37,7 @@ export type { HostBotIdentity } from './bot-identity.js'
 export { parseHostBotTeamReadRequest, parseHostBotTeamPage } from './bot-team-read.js'
 export type { HostBotTeamReadRequest, HostBotTeamPage, HostBotTeamItem } from './bot-team-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

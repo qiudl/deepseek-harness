@@ -1,7 +1,8 @@
 /** Exact, bounded roster page exchanged with the current Profile's DS Bot plugin. */
 const ID = /^(?:bot|room):[A-Za-z0-9][A-Za-z0-9._-]{0,122}$/u
 const CURSOR = /^[A-Za-z0-9_-]{1,512}$/u
-const MAX_BYTES = 128 * 1024
+// Leave space for the authenticated Host control envelope (64 KiB per frame).
+const MAX_BYTES = 60 * 1024
 
 /** Exact team selector accepted by the private Profile worker. */
 export interface HostBotTeamReadRequest {

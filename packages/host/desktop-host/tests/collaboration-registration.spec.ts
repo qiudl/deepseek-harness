@@ -40,6 +40,11 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       publicKeyPem: botGroupSigner.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
       validFrom: botGroupNow - 1000, validUntil: botGroupNow + 120_000 }] }
   let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
+  const teamPage = { team_revision: 1, next_cursor: null, items: [
+    { kind: 'bot' as const, logical_id: 'bot:bot_1', name: 'My Bot', role: 'Main', main: true },
+  ], source: 'authority' as const, last_confirmed_at: '2026-10-23T17:00:00.000Z' }
+  const readBotTeam = vi.fn(async (_profileId: string, _request: { schema_version: 'dsh-remote-bot-read/v1'; kind: 'team'; limit: number },
+    _signal: AbortSignal) => teamPage)
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -48,6 +53,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
   })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
+    readBotTeam,
     ...(supportBot ? {
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
     } : {}),
@@ -68,10 +74,26 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
-    bot, botGroupSigner, botGroupKeyring, operateBotGroup,
+    bot, botGroupSigner, botGroupKeyring, operateBotGroup, readBotTeam, teamPage,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('reads a team page only for the current Account and rejects revocation after worker reply', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    request: { schema_version: 'dsh-remote-bot-read/v1' as const, kind: 'team' as const, limit: 2 } }
+  await expect(f.client.readBotTeam(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.readBotTeam(input)).toEqual(f.teamPage)
+  expect(f.readBotTeam).toHaveBeenCalledWith(f.profile.profileId, input.request, expect.any(AbortSignal))
+  for (const change of [{ issuer: 'https://other.example.test' }, { subject: randomUUID() },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.readBotTeam({ ...input, ...change })).rejects.toThrow()
+  }
+  f.readBotTeam.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.teamPage })
+  await expect(f.client.readBotTeam(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {
   const f = await fixture()
