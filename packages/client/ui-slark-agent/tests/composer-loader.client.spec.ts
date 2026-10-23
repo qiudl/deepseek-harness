@@ -1493,6 +1493,9 @@ it('cancels the remaining question read of a committed passive reply without con
 it('routes plain text from the original active Session to one durable group command', async () => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
+  const recorded = vi.fn()
+  window.addEventListener('dsh-slark-group-message-recorded', recorded)
+  onTestFinished(() => { window.removeEventListener('dsh-slark-group-message-recorded', recorded) })
   onTestFinished(() => { localStorage.clear() })
   const groupId = '22222222-2222-4222-8222-222222222222'
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const, group_id: groupId,
@@ -1511,6 +1514,9 @@ it('routes plain text from the original active Session to one durable group comm
   const scoped = f.ctx.sessions.scope(session.sessionId)
   if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped) throw Error('missing group claim')
   expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
+  expect(recorded).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.objectContaining({
+    group_id: groupId, message_id: '33333333-3333-4333-8333-333333333333', seq: 1,
+  }) }))
   expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
     workspace_id: f.workspace.id, session_id: 'session-1', body: 'hello group' }))
   expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))

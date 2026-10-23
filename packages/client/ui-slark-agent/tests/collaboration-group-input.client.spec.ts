@@ -46,7 +46,8 @@ it('retains the parent request ID across an uncertain send and missing receipt',
   const { bridge, commands } = parent()
   const input = { bridge, workspaceId, sessionId, groupId, body: 'hello' }
   expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
-  expect(await sendGroupText(input)).toMatchObject({ state: 'recorded', requestId })
+  expect(await sendGroupText(input)).toMatchObject({ state: 'recorded', requestId,
+    messageId: groupId, seq: 1 })
   expect(commands.map(command => command.operation)).toEqual([
     'pending_claim', 'receipt', 'send', 'pending_claim', 'receipt', 'send'])
   const sends = commands.filter((command): command is Extract<GroupMessageCommand, { operation: 'send' }> =>
@@ -81,7 +82,7 @@ it('holds a recorded tombstone until the composer confirms its draft cleared', a
   expect(await sendGroupText({ ...input, body: 'different' })).toEqual({ state: 'pending_other' })
   setReceipt('recorded')
   const recorded = await sendGroupText(input)
-  expect(recorded).toMatchObject({ state: 'recorded', requestId })
+  expect(recorded).toMatchObject({ state: 'recorded', requestId, messageId: groupId, seq: 1 })
   expect(commands.filter(command => command.operation === 'send')).toHaveLength(1)
   if (recorded.state !== 'recorded') throw Error('test setup')
   expect(await acknowledgeGroupText({ bridge, workspaceId, sessionId, groupId,
@@ -153,6 +154,19 @@ it('retains the draft when receipt is uncertain or the parent call throws', asyn
   expect(commands.map(command => command.operation)).toEqual(['pending_claim', 'receipt'])
   bridge.collaborationGroupMessages.mockRejectedValueOnce(Error('disconnected'))
   expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+})
+
+it('does not accept a malformed committed message identity', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands, setReceipt } = parent()
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'hello' }
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+  setReceipt('recorded')
+  const original = bridge.collaborationGroupMessages
+  bridge.collaborationGroupMessages = vi.fn(async (command: GroupMessageCommand) =>
+    command.operation === 'receipt' ? { state: 'recorded' as const, message_id: 'invalid', seq: 1 } : original(command))
+  expect(await sendGroupText(input)).toEqual({ state: 'retry_required' })
+  expect(commands.filter(command => command.operation === 'send')).toHaveLength(1)
 })
 
 it('keeps the pending key when acknowledgment fails', async () => {

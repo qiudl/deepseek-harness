@@ -296,7 +296,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               const unsubscribe = inputState.subscribe(acknowledgeWhenCleared)
               acknowledgeWhenCleared()
               window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
-                detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId },
+                detail: { workspace_id: groupWorkspace, session_id: session.sessionId, group_id: groupId,
+                  message_id: recorded.messageId, seq: recorded.seq },
               }))
               return { kind: 'success', text: t('group.recorded') }
             },
