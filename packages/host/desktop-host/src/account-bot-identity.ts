@@ -1,5 +1,6 @@
-import { parseHostBotIdentityTarget, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentityTarget, parseHostBotRosterTarget,
+  parseHostNativeRoomTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, HostBotRosterPage, HostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 import { HostAuthorityError } from './types.ts'
@@ -47,4 +48,22 @@ export async function listAccountBotRoster(
   host.authorizeCollaborationRegistration(account)
   if (host.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('stale')
   return page
+}
+
+/** Prepare a native room Source and recheck the same Account Profile after the write. */
+export async function prepareAccountNativeRoom(
+  host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>,
+  workers: Pick<ProfileWorkerSupervisor, 'prepareNativeRoom'>,
+  account: BotIdentityAccount, roomId: string, signal: AbortSignal,
+): Promise<HostNativeRoomSource | null> {
+  const target = parseHostNativeRoomTarget({ room_id: roomId })
+  signal.throwIfAborted()
+  host.authorizeCollaborationRegistration(account)
+  const profileId = host.authorizeAccountModelText(account)
+  const binding = await workers.prepareNativeRoom(profileId, target.room_id, signal)
+  signal.throwIfAborted()
+  host.authorizeCollaborationRegistration(account)
+  if (host.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('stale')
+  if (binding !== null && binding.room_id !== target.room_id) throw new HostAuthorityError('profile_mismatch')
+  return binding
 }

@@ -69,6 +69,25 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Prepare one native room only in the current Account Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param roomId - Existing native room Session ID.
+   * @param signal - Caller cancellation.
+   * @returns Separate bridge Source or absence.
+   */
+  async prepareNativeRoom(profileId: string, roomId: string, signal: AbortSignal):
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.prepareNativeRoom) throw new HostAuthorityError('unavailable')
+    const binding = await worker.prepareNativeRoom(roomId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
+    return binding
+  }
+
+  /**
    * Use only the current Account Profile worker for an authorized Bot group command.
    * @param profileId - Selected Account Profile.
    * @param command - Host-validated group operation.

@@ -1,9 +1,12 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomTarget, parseHostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage,
-  ProfileBotIdentityRequest, ProfileBotRosterRequest } from '@deepseek-ai/dsh-host-control-protocol'
-import { resolveAccountBotIdentity, listAccountBotRoster } from './account-bot-identity.ts'
+  HostNativeRoomSource, ProfileBotIdentityRequest, ProfileBotRosterRequest,
+  ProfileNativeRoomRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { resolveAccountBotIdentity, listAccountBotRoster,
+  prepareAccountNativeRoom } from './account-bot-identity.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -282,6 +285,9 @@ export interface UnixHostServerOptions {
   /** Page public Bot identities from the current Account Profile. */
   readonly listBotRoster?: (profileId: string, afterBotId: string, limit: number,
     signal: AbortSignal) => Promise<HostBotRosterPage | null>
+  /** Prepare a native room Source in the current Account Profile. */
+  readonly prepareNativeRoom?: (profileId: string, roomId: string,
+    signal: AbortSignal) => Promise<HostNativeRoomSource | null>
   /** Private worker command after signed Slark and current Account authorization. */
   readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
     signal: AbortSignal) => Promise<HostBotGroupResponse>
@@ -552,6 +558,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'prepareNativeRoom'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2373,6 +2380,14 @@ export class HostControlAuthority {
             frame.params.after_bot_id, frame.params.limit, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.native_room') {
+          const prepare = this.options.prepareNativeRoom
+          if (!prepare) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const binding = await prepareAccountNativeRoom(this.options.host,
+            { prepareNativeRoom: prepare }, account, frame.params.room_id, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { binding } })
         } else if (frame.method === 'profile.bot_group_stop' ||
           frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
@@ -2565,6 +2580,7 @@ export class HostControlAuthority {
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
+          ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
               'profile.bot_group_result_ack', 'profile.bot_group_stop'] : []),
@@ -4336,6 +4352,37 @@ export class UnixHostClient {
     return page
   }
 
+  /**
+   * Prepare one native room's bridge Source in the current Account Profile.
+   * @param input - Current Account binding and existing room ID.
+   * @returns Separate bridge Source or absence.
+   */
+  async prepareNativeRoom(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly roomId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostNativeRoomSource | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_room' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostNativeRoomTarget({ room_id: input.roomId })
+    const request: ProfileNativeRoomRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.native_room',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.native_room')
+      throw new HostAuthorityError('unavailable')
+    const binding = frame.result.binding === null ? null : parseHostNativeRoomSource(frame.result.binding)
+    if (binding && binding.room_id !== target.room_id) throw new HostAuthorityError('profile_mismatch')
+    return binding
+  }
+
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest |
   ProfileBotGroupResultAckRequest | ProfileBotGroupStopRequest,
@@ -5345,7 +5392,8 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest | ProfileBotGroupDeliverRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
+      | ProfileNativeRoomRequest | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest
       | ProfileBotGroupStopRequest

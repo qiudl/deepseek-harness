@@ -33,6 +33,8 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const identity = { hostInstanceId: randomUUID(), installationId: randomUUID(), installationPublicKey: publicKey,
     installationPrivateKey: keys.privateKey, processNonce: 'A'.repeat(43), executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
   const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const nativeRoom = { room_id: 'room_1', source: { workspace_id: randomUUID(),
+    session_id: 'bridge_1', source_message_id: 'source_1', source_revision: '1' as const } }
   const botGroupSigner = generateKeyPairSync('ed25519')
   const botGroupNow = Date.now()
   const botGroupKeyring = { version: 1 as const, environmentId: binding.authorityEnvironmentId,
@@ -49,6 +51,11 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
+      prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
+        signal.throwIfAborted()
+        if (profileId !== profile.profileId || roomId !== nativeRoom.room_id) return null
+        return nativeRoom
+      },
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
       listBotRoster: async (profileId: string, afterBotId: string, limit: number, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -74,10 +81,28 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
-    bot, botGroupSigner, botGroupKeyring, operateBotGroup,
+    bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('prepares a native room through the Account-authorized Host transport', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.prepareNativeRoom(input)).toEqual(f.nativeRoom)
+  expect(await f.client.prepareNativeRoom({ ...input, roomId: 'missing' })).toBeNull()
+  await expect(f.client.prepareNativeRoom({ ...input, issuer: 'https://other.example.test' })).rejects.toThrow()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
+    ? { ...frame, result: { binding: { ...f.nativeRoom, room_id: 'other' } } } : frame)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.native_room')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {
   const f = await fixture()

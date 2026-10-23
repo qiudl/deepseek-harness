@@ -899,6 +899,31 @@ export interface ProfileBotRosterResult {
   readonly result: { readonly page: import('./bot-identity.ts').HostBotRosterPage | null }
 }
 
+/** Current Account Profile prepares a Slark Source for one existing native room. */
+export interface ProfileNativeRoomRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly room_id: string
+  }
+}
+
+/** Exact room-to-bridge Source coordinates or absence from the Profile writer. */
+export interface ProfileNativeRoomResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomSource | null }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2295,6 +2320,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileNativeRoomRequest
+  | ProfileNativeRoomResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupStopRequest

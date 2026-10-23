@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { resolveAccountBotIdentity, listAccountBotRoster } from '../src/account-bot-identity.ts'
+import { resolveAccountBotIdentity, listAccountBotRoster,
+  prepareAccountNativeRoom } from '../src/account-bot-identity.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
@@ -30,6 +31,41 @@ async function fixture() {
   const grant = () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid-token' })
   return { host, workers, ownerId, proof, bot, grant }
 }
+
+it('prepares a native room only for the current Account Profile and requested room', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  const binding = { room_id: 'room_1', source: {
+    workspace_id: randomUUID(), session_id: 'bridge_1',
+    source_message_id: 'source_1', source_revision: '1' as const,
+  } }
+  const prepareNativeRoom = vi.fn(async () => binding)
+  const workers = { prepareNativeRoom }
+  await expect(prepareAccountNativeRoom(f.host, workers, f.proof, 'room_1', signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(prepareNativeRoom).not.toHaveBeenCalled()
+  await f.grant()
+  expect(await prepareAccountNativeRoom(f.host, workers, f.proof, 'room_1', signal)).toEqual(binding)
+  expect(prepareNativeRoom).toHaveBeenCalledWith(expect.any(String), 'room_1', signal)
+  await expect(prepareAccountNativeRoom(f.host, workers, f.proof, '../other', signal)).rejects.toThrow()
+  prepareNativeRoom.mockResolvedValueOnce({ ...binding, room_id: 'other' })
+  await expect(prepareAccountNativeRoom(f.host, workers, f.proof, 'room_1', signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+
+it('discards a native room prepared after its Account grant is revoked', async () => {
+  const f = await fixture(); await f.grant()
+  let release!: () => void
+  const workers = { prepareNativeRoom: vi.fn(async () => new Promise<null>((resolve) => {
+    release = () => { resolve(null) }
+  })) }
+  const pending = prepareAccountNativeRoom(f.host, workers, f.proof,
+    'room_1', new AbortController().signal)
+  await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
+  f.host.revokeOwner(f.ownerId)
+  release()
+  await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+})
 
 it('resolves only after this connection verifies the current Account binding', async () => {
   const f = await fixture()
