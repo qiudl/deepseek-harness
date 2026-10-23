@@ -21,14 +21,16 @@ function fixture() {
     messageId: randomUUID(), payloadDigest: digest, expiresAt: Date.now() + 60_000 }
   const confirm = vi.fn(async () => claim)
   const resultConfirm = vi.fn(async () => claim)
+  const resultAckConfirm = vi.fn(async () => claim)
   const input = { host: host as never, workers: workers as never, account,
     installationId: randomUUID(), computerId: 'desktop-1',
     slarkAudience: 'https://slark.example.test',
     keyring: { version: 1 as const, environmentId: account.authorityEnvironmentId,
       issuer: 'https://slark.example.test/dsh-environment', keys: [] },
     ticket: 'signed-ticket', command, signal: new AbortController().signal,
-    confirm: confirm as never, resultConfirm: resultConfirm as never }
-  return { input, host, workers, confirm, resultConfirm, command, result }
+    confirm: confirm as never, resultConfirm: resultConfirm as never,
+    resultAckConfirm: resultAckConfirm as never }
+  return { input, host, workers, confirm, resultConfirm, resultAckConfirm, command, result }
 }
 
 function stopFixture() {
@@ -152,6 +154,7 @@ it('reads Bot results only under result authority and a live Account', async () 
   f.workers.operateBotGroup.mockResolvedValueOnce(result as never)
   expect(await readAccountBotGroupResultPage({ ...f.input, after: 0 })).toEqual(result)
   expect(f.resultConfirm).toHaveBeenCalledTimes(1)
+  expect(f.resultAckConfirm).not.toHaveBeenCalled()
   expect(f.confirm).not.toHaveBeenCalled()
   expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', {
     operation: 'result_page', groupId: f.command.groupId,
@@ -170,7 +173,8 @@ it('acknowledges only the exact result under result authority', async () => {
   f.workers.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' } as never)
   expect(await acknowledgeAccountBotGroupResult({ ...f.input,
     resultId: `${f.command.deliveryId}:final` })).toEqual({ state: 'acknowledged' })
-  expect(f.resultConfirm).toHaveBeenCalledTimes(1)
+  expect(f.resultAckConfirm).toHaveBeenCalledTimes(1)
+  expect(f.resultConfirm).not.toHaveBeenCalled()
   expect(f.confirm).not.toHaveBeenCalled()
   expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', {
     operation: 'ack_result', groupId: f.command.groupId, botId: f.command.botId,
@@ -180,6 +184,11 @@ it('acknowledges only the exact result under result authority', async () => {
   await expect(acknowledgeAccountBotGroupResult({ ...f.input, resultId: 'wrong' }))
     .rejects.toThrow('invalid_input')
   expect(f.workers.operateBotGroup).toHaveBeenCalledTimes(1)
+  const missing = fixture()
+  missing.resultAckConfirm.mockRejectedValueOnce(Error('result not recorded'))
+  await expect(acknowledgeAccountBotGroupResult({ ...missing.input,
+    resultId: `${missing.command.deliveryId}:final` })).rejects.toThrow('result not recorded')
+  expect(missing.workers.operateBotGroup).not.toHaveBeenCalled()
 })
 
 it('rejects a non-delivery command and a replaced Profile before worker access', async () => {

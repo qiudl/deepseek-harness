@@ -245,13 +245,13 @@ export async function confirmBotGroupStopTicket(token: string, keyring: BotGroup
   return ticket
 }
 
-/** Result observation remains bound to the current Slark owner and original delivery. */
-export async function confirmBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+async function confirmResultTicketFor(token: string, keyring: BotGroupPublicKeyring,
   expected: BotGroupResultTicketExpected, signal: AbortSignal,
-  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  operation: 'result-confirm' | 'result-ack-confirm',
+  fetchFn: typeof fetch, clock: () => number): Promise<BotGroupTicket> {
   const ticket = verifyBotGroupResultTicket(token, keyring, expected, clock())
   const { value, bounded } = await onlineConfirmation(token, expected.slarkAudience,
-    'result-confirm', signal, fetchFn)
+    operation, signal, fetchFn)
   if (!exact(value, ['state', 'delivery_id', 'expires_at']) ||
       value.state !== 'authorized' || value.delivery_id !== expected.deliveryId ||
       value.expires_at !== ticket.expiresAt || bounded.aborted ||
@@ -259,8 +259,23 @@ export async function confirmBotGroupResultTicket(token: string, keyring: BotGro
   return ticket
 }
 
+/** Result observation remains bound to the current Slark owner and original delivery. */
+export async function confirmBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  return confirmResultTicketFor(token, keyring, expected, signal, 'result-confirm', fetchFn, clock)
+}
+
+/** Result acknowledgement additionally requires Slark to have recorded the exact result. */
+export async function confirmBotGroupResultAckTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  return confirmResultTicketFor(token, keyring, expected, signal, 'result-ack-confirm', fetchFn, clock)
+}
+
 async function onlineConfirmation(token: string, slarkAudience: string,
-  operation: 'delivery-confirm' | 'stop-confirm' | 'result-confirm', signal: AbortSignal,
+  operation: 'delivery-confirm' | 'stop-confirm' | 'result-confirm' |
+    'result-ack-confirm', signal: AbortSignal,
   fetchFn: typeof fetch): Promise<{ value: unknown; bounded: AbortSignal }> {
   if (signal.aborted) fail()
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)])

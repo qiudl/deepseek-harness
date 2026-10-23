@@ -1,6 +1,7 @@
 import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { botGroupHostRegistryId, confirmBotGroupTicket, confirmBotGroupResultTicket,
+  confirmBotGroupResultAckTicket,
   confirmBotGroupStopTicket, verifyBotGroupTicket, verifyBotGroupResultTicket,
   verifyBotGroupStopTicket,
   type BotGroupPublicKeyring, type BotGroupTicketExpected,
@@ -103,6 +104,16 @@ it('uses disjoint result authority and confirms the original delivery online', a
     expires_at: now + 60_000 })).resolves.toMatchObject({ expiresAt: now + 60_000 })
   await expect(check({ state: 'active', delivery_id: expected.deliveryId,
     expires_at: now + 60_000 })).rejects.toThrow('bot_group_ticket_invalid')
+  const ack = () => confirmBotGroupResultAckTicket(signed, keyring,
+    expected, new AbortController().signal, async (url) => {
+      expect(url instanceof Request ? url.url : url instanceof URL ? url.href : url)
+        .toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/' +
+        'group-messages/result-ack-confirm')
+      return new Response(JSON.stringify({ ok: true, value: {
+        state: 'authorized', delivery_id: expected.deliveryId,
+        expires_at: now + 60_000 } }), { status: 200 })
+    }, () => now)
+  await expect(ack()).resolves.toMatchObject({ expiresAt: now + 60_000 })
 })
 
 it('accepts only a signed stop ticket for the exact delivery and owner decision', () => {

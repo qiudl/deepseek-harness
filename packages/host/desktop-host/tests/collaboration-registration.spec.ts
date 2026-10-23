@@ -225,7 +225,7 @@ it('delivers through the Host only after signed Slark and current membership con
     f.botGroupSigner.privateKey).toString('base64url')}`
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async request => Response.json({ ok: true,
     value: { state: (request instanceof Request ? request.url :
-      request instanceof URL ? request.href : request).endsWith('/result-confirm')
+      request instanceof URL ? request.href : request).includes('/result-')
       ? 'authorized' : 'active',
     delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
   onTestFinished(() => { fetchMock.mockRestore() })
