@@ -1,4 +1,16 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, ProfileBotIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { resolveAccountBotIdentity } from './account-bot-identity.ts'
+import { deliverAccountBotGroup, readAccountBotGroupResultPage,
+  acknowledgeAccountBotGroupResult } from './account-bot-group-delivery.ts'
+import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
+  parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
+  type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
+  type ProfileBotGroupResultPageRequest, type HostBotGroupResultProof,
+  type ProfileBotGroupResultAckRequest,
+  encodeHostBotGroupResultProofPayload,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
   parseRecoveryDescribeInput, parseRecoveryValidateInput,
@@ -7,6 +19,9 @@ import {
   type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
+  SKILLHUB_EXECUTION_RECEIPT_DOMAIN, encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
@@ -52,11 +67,25 @@ import type {
   ProfileBootstrapLocalRequest,
   ProfileRestoreLocalRequest,
   ProfileOpenRequest,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
+  ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageSnapshotRequest,
+  HostSkillHubPackageSnapshotTarget,
+  HostSkillHubPackageSignedReceipt,
+  HostSkillHubExecutionReceipt,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
+  HostSkillHubClockWitnessCommand, HostSkillHubClockWitnessValue, HostSkillHubClockAnchorId,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result,
+  HostSkillHubClockV2Command, HostProfileId,
   ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
   HostCollaborationArchiveStateTarget, ProfileCollaborationArchiveStateRequest,
+  HostGroupInputFenceChallenge, HostGroupInputFenceAssertion, ProfileGroupInputFenceRequest,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   ProfileCollaborationArchiveIntentRequest,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
@@ -108,6 +137,7 @@ import {
   encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
   encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateChallenge,
   parseHostCollaborationArchiveStateAssertion,
+  encodeHostGroupInputFencePayload, parseHostGroupInputFenceChallenge, parseHostGroupInputFenceAssertion,
   parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
   parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
@@ -140,6 +170,10 @@ import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
 import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
+import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from './skillhub-package-snapshot-reads.ts'
+import { SkillHubClockWitnesses, SkillHubClockWitnessTickets } from './skillhub-clock-witness.ts'
+import type { createSkillHubPackageInstallationStore, SkillHubPackageSnapshot } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
@@ -289,6 +323,16 @@ export interface UnixHostServerOptions {
     assertAuthority(): Promise<void>
     signal?: AbortSignal
   }>) => Promise<{ readonly phase: 'aborted'; readonly operationId: string }>
+  /** The owning Host creates a private package root for the selected Profile. */
+  readonly createSkillHubPackageStore?: (profileId: string, bindingGeneration: string,
+    hostKeyId: string) => ReturnType<typeof createSkillHubPackageInstallationStore>
+  /** Read public Bot identity only in the selected Account Profile's exclusive writer. */
+  readonly resolveBotIdentity?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
+  /** Private worker command after signed Slark and current Account authorization. */
+  readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal) => Promise<HostBotGroupResponse>
+  /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
+  readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -301,6 +345,10 @@ export interface UnixHostServerOptions {
     target: HostCollaborationArchiveStateTarget,
     signal: AbortSignal,
   ) => Promise<Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' }>>
+  /** Install the local group fence before signing cloud activation proof. */
+  readonly installGroupInputFence?: (
+    profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
+  ) => Promise<Readonly<{ workspace_id: string; session_id: string; group_id: string; group_version: number }>>
   /** Recover the original token from the current Account Profile only. */
   readonly inspectCollaborationArchiveIntent?: (
     profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
@@ -548,9 +596,9 @@ async function recheckReferenceSource(
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectProfileImport' | 'listProfileImportStatus' | 'prepareProfileImport'
-    | 'commitProfileImport' | 'abortProfileImport' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
+    | 'commitProfileImport' | 'abortProfileImport' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -581,6 +629,9 @@ const capabilities = [
   'profile.bootstrap_local',
   'profile.open',
   'profile.open_local',
+  'profile.skillhub_binding',
+  'profile.skillhub_clock_witness',
+  'profile.skillhub_clock_v2',
   'profile.restore',
   'profile.restore_local',
   'profile.status',
@@ -1000,12 +1051,46 @@ class FrameChannel implements HostClientFrameTransport {
 
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
+  private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
+  private readonly packageUploads = new SkillHubPackageUploads()
+  private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
+  private readonly clockWitnesses = new SkillHubClockWitnesses()
+  private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
   constructor(private readonly options: HostControlAuthorityOptions) {}
+
+  private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
+    const selector = verifyProfileSelector(this.options.identity, profileSelector)
+    const profileId = selector.profile_id, generation = String(selector.binding_generation)
+    const hostKeyId = createHash('sha256').update(Buffer.from(
+      this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+    const authorize = () => {
+      signal.throwIfAborted()
+      this.options.host.authorizeMigrationProfileSelector({
+        profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
+      })
+    }
+    return { profileId, generation, hostKeyId, authorize }
+  }
+
+  private skillHubClockGrant(params: {
+    profile_selector: string
+    profile_id: string
+    binding_generation: string
+    host_key_id: string
+  }, ownerId: string, signal: AbortSignal) {
+    const { profileId, generation, hostKeyId, authorize } =
+      this.skillHubPackageGrant(params.profile_selector, ownerId, signal)
+    authorize()
+    if (params.profile_id !== profileId || params.binding_generation !== generation
+      || params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
+    return { scope: JSON.stringify([profileId, generation, hostKeyId]), authorize }
+  }
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
+    const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -1031,6 +1116,7 @@ export class HostControlAuthority {
       readonly runtimeGeneration: number
     }>()
     signal.addEventListener('abort', () => {
+      packageTransferSnapshot.clear()
       for (const entry of remoteUiStreams.values()) void entry.cursor.close()
       remoteUiStreams.clear()
     }, { once: true })
@@ -1641,6 +1727,184 @@ export class HostControlAuthority {
               ? { state: 'ready', profile_id: status.profileId as never, persistence_generation: persistenceGeneration as number }
               : { state: status.state },
           })
+        } else if (frame.method === 'profile.skillhub_binding') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profileId = this.options.host.authorizeMigrationProfileSelector({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          const payload = {
+            version: 1 as const,
+            actorUserId: frame.params.actor_user_id,
+            computerId: frame.params.computer_id,
+            installationId: this.options.identity.installationId,
+            profileId,
+            bindingGeneration: String(selector.binding_generation),
+            challengeId: frame.params.challenge_id,
+          }
+          const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_PROFILE_BINDING_DOMAIN + encodeSkillHubProfileBindingPayload(payload),
+          ))
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...payload, signature },
+          })
+        } else if (frame.method === 'profile.skillhub_package_chunk') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize: assertGrant } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const authorize = () => {
+            assertGrant()
+            if (frame.params.plan.profileId !== profileId || frame.params.plan.bindingGeneration !== generation
+              || frame.params.plan.hostKeyId !== hostKeyId) throw new HostAuthorityError('profile_mismatch')
+          }
+          const result = await this.packageUploads.accept({
+            ownerId, bindingKey: JSON.stringify([ownerId, profileId, generation, hostKeyId]),
+            plan: frame.params.plan, totalBytes: frame.params.total_bytes,
+            offset: frame.params.offset, bytes: Buffer.from(frame.params.chunk_base64url, 'base64url'),
+            signal: context.signal, authorize,
+            capture: () => ({ assertCurrent: authorize, prepare: async (plan, archive) => {
+              const store = await createStore(profileId, generation, hostKeyId)
+              authorize()
+              await store.prepare(plan, archive)
+            } }),
+          })
+          context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { next_offset: result.nextOffset, prepared: result.prepared } })
+        } else if (frame.method === 'profile.skillhub_package') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          authorize()
+          if (frame.params.action === 'activate' && frame.params.binding_generation !== generation)
+            throw new HostAuthorityError('profile_mismatch')
+          const store = await createStore(profileId, generation, hostKeyId)
+          authorize()
+          let receipt
+          try {
+            receipt = frame.params.action === 'activate'
+              ? await store.activate(frame.params.operation_id, generation, frame.params.expected_revision, authorize)
+              : await store.current(frame.params.package_id)
+          } catch { throw new HostAuthorityError('unavailable') }
+          authorize()
+          const signed = receipt && (() => {
+            const unsigned = { version: 1 as const, installationId: this.options.identity.installationId,
+              challengeId: frame.params.challenge_id,
+              ...receipt }
+            const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+              SKILLHUB_PACKAGE_RECEIPT_DOMAIN + encodeSkillHubPackageReceiptPayload(unsigned)))
+            return { ...unsigned, signature }
+          })()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: signed || null } })
+        } else if (frame.method === 'profile.skillhub_package_snapshot') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsigned } = frame.params.receipt
+          if (unsigned.installationId !== this.options.identity.installationId
+            || unsigned.profileId !== profileId || unsigned.hostKeyId !== hostKeyId
+            || unsigned.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsigned)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsigned
+          authorize()
+          let read
+          try {
+            read = await this.packageSnapshotReads.read({ ownerId,
+              bindingKey: JSON.stringify([profileId, generation, hostKeyId, unsigned.operationId,
+                unsigned.manifestSha256, frame.params.target]),
+              offset: frame.params.offset, signal: context.signal, authorize,
+              capture: async () => {
+                const store = await createStore(profileId, generation, hostKeyId)
+                authorize()
+                const snapshot = await packageTransferSnapshot.get(
+                  JSON.stringify([profileId, generation, hostKeyId, fixedReceipt]),
+                  () => store.snapshotFixed(fixedReceipt), frame.params.target.kind === 'manifest')
+                return frame.params.target.kind === 'manifest'
+                  ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
+                    [file.path, file.mode, file.size, file.sha256])]))
+                  : snapshot.readFile(frame.params.target.path)
+              } })
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { operation_id: unsigned.operationId,
+              manifest_sha256: unsigned.manifestSha256 as HostControlSha256,
+              target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
+              chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
+        } else if (frame.method === 'profile.skillhub_clock_witness') {
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
+          const result = this.clockWitnesses.apply(scope, frame.params.anchor_id, frame.params.command)
+          authorize()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { anchor_id: frame.params.anchor_id, ...result } })
+        } else if (frame.method === 'profile.skillhub_clock_v2') {
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
+          const command = frame.params.command
+          const result: ProfileSkillHubClockV2Result['result'] = command.kind === 'epoch'
+            ? { kind: 'epoch', epoch: this.clockWitnessTickets.currentEpoch() as HostControlNonce }
+            : command.kind === 'issue'
+              ? (() => { const issued = this.clockWitnessTickets.issue(scope, command.purpose,
+                command.active_asset_anchor_id ?? undefined)
+              return { kind: 'issued' as const, anchor_id: issued.anchorId as HostSkillHubClockAnchorId,
+                epoch: issued.epoch as HostControlNonce, ticket: issued.ticket as HostControlNonce } })()
+              : { kind: 'witness', anchor_id: command.anchor_id, epoch: command.epoch,
+                ...this.clockWitnessTickets.apply(scope, command.anchor_id, command.epoch,
+                  command.command, command.ticket ?? undefined) }
+          authorize()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result })
+        } else if (frame.method === 'profile.skillhub_execution_receipt') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsignedPackage } = frame.params.package_receipt
+          if (unsignedPackage.installationId !== this.options.identity.installationId
+            || unsignedPackage.profileId !== profileId || unsignedPackage.hostKeyId !== hostKeyId
+            || unsignedPackage.bindingGeneration !== generation
+            || frame.params.execution.profileId !== profileId
+            || frame.params.execution.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsignedPackage)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsignedPackage
+          authorize()
+          try {
+            const store = await createStore(profileId, generation, hostKeyId)
+            authorize()
+            await store.snapshotFixed(fixedReceipt)
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          const unsignedExecution = {
+            schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+            receiptId: randomUUID(), ...frame.params.execution,
+            hostInstallationId: this.options.identity.installationId, hostKeyId,
+            packageOperationId: unsignedPackage.operationId, packageId: unsignedPackage.packageId,
+            versionId: unsignedPackage.versionId, archiveSha256: unsignedPackage.archiveSha256,
+            manifestSha256: unsignedPackage.manifestSha256,
+            publicKey: this.options.identity.installationPublicKey,
+          }
+          const executionSignature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+              + encodeSkillHubExecutionReceiptPayload(unsignedExecution)))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: { ...unsignedExecution, signature: executionSignature } } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -1855,6 +2119,24 @@ export class HostControlAuthority {
             signature: 'A'.repeat(86) as HostControlSignature,
           }
           const signature = signAuthorityPayload(identity, encodeHostCollaborationArchiveStatePayload(unsigned))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.group_input_fence') {
+          const install = this.options.installGroupInputFence
+          if (!install) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const installed = await install(profileId, c, context.signal)
+          if (authorize() !== profileId || installed.workspace_id !== c.workspace_id
+            || installed.session_id !== c.session_id || installed.group_id !== c.group_id
+            || installed.group_version !== c.group_version) throw new HostAuthorityError('profile_mismatch')
+          const identity = this.options.identity
+          const unsigned: HostGroupInputFenceAssertion = {
+            schema_version: 1, challenge: c, ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostGroupInputFencePayload(unsigned))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { ...unsigned, signature } })
         } else if (frame.method === 'profile.collaboration_archive_intent') {
@@ -2282,6 +2564,83 @@ export class HostControlAuthority {
             privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.bot_identity') {
+          const resolve = this.options.resolveBotIdentity
+          if (!resolve) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const identity = parseHostBotIdentity(await resolveAccountBotIdentity(
+            this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.bot_group_deliver' ||
+          frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
+          const operate = this.options.operateBotGroup
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            candidate.issuer === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const groupInput = {
+            host: this.options.host, workers: { operateBotGroup: operate }, account,
+            installationId: this.options.identity.installationId,
+            computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
+            keyring, ticket: frame.params.ticket, command: frame.params.command,
+            signal: context.signal,
+          }
+          if (frame.method === 'profile.bot_group_deliver') {
+            const reply = await deliverAccountBotGroup(groupInput)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result: { reply } })
+          } else if (frame.method === 'profile.bot_group_result_page') {
+          // Earlier results for this Bot cycle may still be awaiting acknowledgement.
+          // Scan a bounded page window; only the original delivery's result may cross this boundary.
+            let after = frame.params.after
+            let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+            for (let scan = 0; scan < 1000; scan++) {
+              const page = await readAccountBotGroupResultPage({ ...groupInput, after })
+              if (page.state !== 'ok' || page.results.length === 0) {
+                reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                break
+              }
+              // The worker parser bounds an `ok` page to one valid result, and
+              // the empty page returned above; this entry is present here.
+              const result = page.results[0] as (typeof page.results)[number]
+              if (result.deliveryId === frame.params.command.deliveryId) {
+                reply = { state: 'ok', results: [result], next: result.seq }
+                break
+              }
+              after = result.seq
+              if (scan === 999) throw new HostAuthorityError('unavailable')
+            }
+            const item = reply.state === 'ok' ? reply.results[0] : undefined
+            let proof: HostBotGroupResultProof | null = null
+            if (item) {
+              const unsigned = {
+                schema_version: 1 as const,
+                authority_environment_id: account.authorityEnvironmentId,
+                account_binding_handle: account.accountBindingHandle,
+                authority_binding_version: account.authorityBindingVersion,
+                account_issuer: account.issuer, account_subject: account.subject,
+                owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                slark_audience: frame.params.slark_audience,
+                installation_id: this.options.identity.installationId,
+                installation_public_key: this.options.identity.installationPublicKey,
+                host_instance_id: this.options.identity.hostInstanceId,
+                process_nonce: this.options.identity.processNonce,
+                result: item, issued_at: clock(),
+              }
+              proof = { ...unsigned, signature: sign(null,
+                encodeHostBotGroupResultProofPayload(unsigned),
+                privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') }
+            }
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result: { reply, proof } })
+          } else {
+            const reply = await acknowledgeAccountBotGroupResult({ ...groupInput,
+              resultId: frame.params.result_id })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result: { reply } })
+          }
         } else if (frame.method === 'profile.workspace_model_selection') {
           const inspect = this.options.inspectWorkspaceModelSelection
           if (!inspect) throw new HostAuthorityError('upgrade_required')
@@ -2382,9 +2741,17 @@ export class HostControlAuthority {
         runtime_generation: identity.runtimeGeneration,
         schema_generation: identity.schemaGeneration,
         process_nonce: identity.processNonce as HostControlNonce,
+        boot_nonce: this.bootNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.createSkillHubPackageStore
+            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
+              'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
+          ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
+          ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
+            ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
+              'profile.bot_group_result_ack'] : []),
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
@@ -2411,6 +2778,7 @@ export class HostControlAuthority {
           ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
           ...(this.options.inspectCollaborationArchiveState ? ['profile.collaboration_archive_state'] : []),
+          ...(this.options.installGroupInputFence ? ['profile.group_input_fence'] : []),
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
@@ -2558,6 +2926,15 @@ interface HandshakeState {
   readonly clientInstanceId: HostControlClientInstanceId
   readonly hostInstanceId: HostInstanceId
   readonly processNonce: HostControlNonce
+}
+
+/** Validate a Bot delivery before Main sends it to the Host. */
+function botGroupClientDelivery(input: { readonly computerId: string
+  readonly slarkAudience: string
+  readonly ticket: string
+  readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }> }) {
+  return parseHostBotGroupDeliveryInput({ computer_id: input.computerId,
+    slark_audience: input.slarkAudience, ticket: input.ticket, command: input.command })
 }
 
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
@@ -3193,6 +3570,265 @@ export class UnixHostClient {
   }
 
   /**
+   * Sign one Slark challenge after the current connection's Profile grant is rechecked.
+   * @param input - Host selector and exact Slark actor, Computer, and challenge coordinates.
+   * @returns Installation-signed local Profile identity; Slark authenticates the remote coordinates separately.
+   */
+  async signSkillHubProfileBinding(input: {
+    readonly profileSelector: string
+    readonly actorUserId: string
+    readonly computerId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubBindingResult['result']> {
+    const request: ProfileSkillHubBindingRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_binding',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        actor_user_id: input.actorUserId, computer_id: input.computerId, challenge_id: input.challengeId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /** Send one complete fixed ZIP through bounded Host frames without activating it.
+   * @param input - current Profile selector, fixed package plan, archive, and cancellation.
+   * @returns when the Host has verified and prepared all package files.
+   */
+  async prepareSkillHubPackage(input: {
+    readonly profileSelector: string
+    readonly plan: ProfileSkillHubPackageChunkRequest['params']['plan']
+    readonly archive: Buffer
+    readonly signal?: AbortSignal
+  }): Promise<void> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_chunk' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const archive = Buffer.from(input.archive)
+    if (!archive.length || archive.length > 110 * 1024 * 1024
+      || createHash('sha256').update(archive).digest('hex') !== input.plan.archiveSha256)
+      throw new HostAuthorityError('unavailable')
+    let offset = 0
+    while (offset < archive.length) {
+      const bytes = archive.subarray(offset, Math.min(offset + 32768, archive.length))
+      const request: ProfileSkillHubPackageChunkRequest = {
+        version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_chunk',
+        params: { ...this.auth(), profile_selector: input.profileSelector, plan: input.plan,
+          total_bytes: archive.length, offset, chunk_base64url: bytes.toString('base64url') },
+      }
+      const frame = await this.call(request, input.signal)
+      if (frame.type !== 'result' || frame.method !== request.method
+        || frame.result.next_offset !== offset + bytes.length
+        || frame.result.prepared !== (offset + bytes.length === archive.length))
+        throw new HostAuthorityError('unavailable')
+      offset = frame.result.next_offset
+    }
+  }
+
+  private async skillHubPackageCommand(params: ProfileSkillHubPackageRequest['params'],
+    signal?: AbortSignal): Promise<HostSkillHubPackageSignedReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package', params,
+    }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (frame.result.receipt && frame.result.receipt.challengeId !== params.challenge_id))
+      throw new HostAuthorityError('unavailable')
+    return frame.result.receipt
+  }
+
+  /** Atomically activate a prepared package under the current Profile grant.
+   * @param input - Authorized selector, fixed CAS coordinates, caller challenge and cancellation.
+   * @returns Host-signed storage activation receipt; it does not attest runtime loading.
+   */
+  async activateSkillHubPackage(input: { readonly profileSelector: string
+    readonly operationId: string
+    readonly bindingGeneration: string
+    readonly expectedRevision: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'activate', operation_id: input.operationId,
+      binding_generation: input.bindingGeneration, expected_revision: input.expectedRevision }, input.signal)
+    if (!receipt || receipt.operationId !== input.operationId
+      || receipt.bindingGeneration !== input.bindingGeneration)
+      throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read the current signed Host activation fact from this authorized Profile.
+   * @param input - Authorized selector, package identity, caller challenge and cancellation.
+   * @returns A fresh signed receipt, or null when the package has no active version.
+   */
+  async currentSkillHubPackage(input: { readonly profileSelector: string
+    readonly packageId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt | null> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'current', package_id: input.packageId }, input.signal)
+    if (receipt && receipt.packageId !== input.packageId) throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read one bounded immutable package object chunk under the current Profile grant.
+   * @param input - Signed activation receipt, exact object target, byte offset, and cancellation.
+   * @returns Exact-operation bytes and continuity fields checked against the request.
+   */
+  async readSkillHubPackageSnapshotChunk(input: {
+    readonly profileSelector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly signal?: AbortSignal
+  }): Promise<Readonly<{
+    operationId: string
+    manifestSha256: string
+    target: HostSkillHubPackageSnapshotTarget
+    offset: number
+    totalBytes: number
+    bytes: Buffer
+    complete: boolean
+  }>> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageSnapshotRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_snapshot',
+      params: { ...this.auth(), profile_selector: input.profileSelector, receipt: input.receipt,
+        target: input.target, offset: input.offset },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = frame.result
+    if (result.operation_id !== input.receipt.operationId
+      || result.manifest_sha256 !== input.receipt.manifestSha256
+      || JSON.stringify(result.target) !== JSON.stringify(input.target)
+      || result.offset !== input.offset) throw new HostAuthorityError('unavailable')
+    return { operationId: result.operation_id, manifestSha256: result.manifest_sha256,
+      target: result.target, offset: result.offset, totalBytes: result.total_bytes,
+      bytes: Buffer.from(result.chunk_base64url, 'base64url'), complete: result.complete }
+  }
+
+  /** Read or advance an independent witness through the current Profile grant.
+   * @param input - Exact Profile/key/generation, anchor, command and cancellation.
+   * @returns Current witness value and a checked compare-and-set verdict.
+   */
+  async skillHubClockWitness(input: {
+    readonly profileSelector: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly hostKeyId: string
+    readonly anchorId: string
+    readonly command: HostSkillHubClockWitnessCommand
+    readonly signal?: AbortSignal
+  }): Promise<{
+    anchorId: string
+    value: HostSkillHubClockWitnessValue | null
+    applied: boolean | null
+  }> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_clock_witness' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const selected = structuredClone({ ...input, signal: undefined })
+    const request: ProfileSkillHubClockWitnessRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_clock_witness',
+      params: { ...this.auth(), profile_selector: selected.profileSelector,
+        profile_id: selected.profileId as HostProfileId,
+        binding_generation: selected.bindingGeneration, host_key_id: selected.hostKeyId as HostControlSha256,
+        anchor_id: selected.anchorId as HostSkillHubClockAnchorId,
+        command: selected.command },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || frame.result.anchor_id !== selected.anchorId
+      || (selected.command.kind === 'read' ? frame.result.applied !== null
+        : typeof frame.result.applied !== 'boolean'
+          || (frame.result.applied && (frame.result.value?.revision !== selected.command.next.revision
+            || frame.result.value.digest !== selected.command.next.digest))))
+      throw new HostAuthorityError('unavailable')
+    return { anchorId: frame.result.anchor_id, value: frame.result.value, applied: frame.result.applied }
+  }
+
+  /** Use Host-issued clock anchors and epoch-bound one-time initialization tickets.
+   * @param input - Current Profile grant, V2 command and optional cancellation.
+   * @returns Current epoch, issued anchor or checked witness verdict.
+   */
+  async skillHubClockV2(input: {
+    readonly profileSelector: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly hostKeyId: string
+    readonly command: HostSkillHubClockV2Command
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubClockV2Result['result']> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_clock_v2' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const selected = structuredClone(input.command)
+    const request: ProfileSkillHubClockV2Request = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_clock_v2',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        profile_id: input.profileId as HostProfileId,
+        binding_generation: input.bindingGeneration, host_key_id: input.hostKeyId as HostControlSha256,
+        command: selected },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (selected.kind === 'epoch' && frame.result.kind !== 'epoch')
+      || (selected.kind === 'issue' && frame.result.kind !== 'issued')
+      || (selected.kind === 'witness' && (frame.result.kind !== 'witness'
+        || frame.result.anchor_id !== selected.anchor_id || frame.result.epoch !== selected.epoch
+        || (selected.command.kind === 'read' ? frame.result.applied !== null
+          : typeof frame.result.applied !== 'boolean'
+            || (frame.result.applied && (frame.result.value?.revision !== selected.command.next.revision
+              || frame.result.value.digest !== selected.command.next.digest))))))
+      throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /** Sign a completed sandbox report through the current Profile grant.
+   * @param input - Fixed Host package receipt, exact daemon report, selector, and cancellation.
+   * @returns Installation-signed execution receipt after package and Profile revalidation.
+   */
+  async signSkillHubExecutionReceipt(input: {
+    readonly profileSelector: string
+    readonly packageReceipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+    readonly signal?: AbortSignal
+  }): Promise<HostSkillHubExecutionReceipt> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_execution_receipt' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubExecutionReceiptRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_execution_receipt',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        package_receipt: input.packageReceipt, execution: input.execution },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const receipt = frame.result.receipt
+    const { signature, ...unsigned } = receipt
+    const expected = {
+      schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+      receiptId: receipt.receiptId, ...input.execution,
+      hostInstallationId: input.packageReceipt.installationId,
+      hostKeyId: input.packageReceipt.hostKeyId,
+      packageOperationId: input.packageReceipt.operationId,
+      packageId: input.packageReceipt.packageId, versionId: input.packageReceipt.versionId,
+      archiveSha256: input.packageReceipt.archiveSha256,
+      manifestSha256: input.packageReceipt.manifestSha256,
+      publicKey: this.inspection.installation_public_key,
+    }
+    if (encodeSkillHubExecutionReceiptPayload(unsigned)
+      !== encodeSkillHubExecutionReceiptPayload(expected)
+      || !verify(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+        + encodeSkillHubExecutionReceiptPayload(unsigned)),
+      publicKeyObject(this.inspection.installation_public_key), Buffer.from(signature, 'base64url')))
+      throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /**
    * Consume one connection-bound activation and obtain its Host-verified loopback origin.
    * @param input - Profile, lease, activation capability, generation fences, and optional cancellation.
    * @returns exact loopback origin plus activation generation and expiry.
@@ -3356,6 +3992,40 @@ export class UnixHostClient {
     if (!this.matchesChallengeIdentity(result, challenge)
       || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
       || !verify(null, encodeHostCollaborationArchiveStatePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Install the exact local group fence, then verify the Host installation signature.
+   * @param input - Bound Account grant, server challenge and optional cancellation.
+   * @returns Installation-signed proof of the durable local fence.
+   */
+  async attestGroupInputFence(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostGroupInputFenceChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostGroupInputFenceAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostGroupInputFenceChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.group_input_fence' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileGroupInputFenceRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.group_input_fence',
+      params: { ...this.challengeRequestParams(input, challenge) },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostGroupInputFenceAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
+      || !verify(null, encodeHostGroupInputFencePayload(result),
         publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
       throw new HostAuthorityError('unauthorized')
     }
@@ -3923,6 +4593,178 @@ export class UnixHostClient {
       descriptor,
       snapshot_json: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts, offset)),
     })
+  }
+
+  /**
+   * Resolve one exact Bot through the current Account Profile without a view lease.
+   * @param input - Verified Account binding, Bot ID and cancellation.
+   * @returns Public Bot identity or absence; no chat content.
+   */
+  async resolveBotIdentity(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly botId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostBotIdentity | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_identity' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotIdentityTarget({ bot_id: input.botId })
+    const request: ProfileBotIdentityRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const identity = parseHostBotIdentity(frame.result.identity)
+    if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
+    return identity
+  }
+
+  /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
+  private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest | ProfileBotGroupResultAckRequest,
+    signal?: AbortSignal): Promise<HostBotGroupResponse> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    return parseHostBotGroupResponse(frame.result.reply)
+  }
+
+  /**
+   * Send a Slark-authorized Bot group message to the current Account worker.
+   * @param input - Account binding, live delivery ticket and exact command.
+   * @returns Worker delivery reply.
+   */
+  async deliverBotGroup(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_deliver' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupDeliverRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_deliver',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, delivery.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /**
+   * Read one durable Bot result under a fresh, live Slark delivery claim.
+   * @param input - Account binding, ticket and result cursor.
+   * @returns Validated worker reply and signed result proof.
+   */
+  async readBotGroupResultPage(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly after: number
+    readonly signal?: AbortSignal
+  }): Promise<{ reply: HostBotGroupResponse; proof: HostBotGroupResultProof | null }> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_result_page' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (!Number.isSafeInteger(input.after) || input.after < 0)
+      throw new HostAuthorityError('invalid_input')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupResultPageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_result_page',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery, after: input.after },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostBotGroupResponse(frame.result.reply)
+    const proof = frame.result.proof
+    const query: HostBotGroupCommand = { operation: 'result_page',
+      groupId: delivery.command.groupId, botId: delivery.command.botId,
+      memberCycle: delivery.command.memberCycle, after: input.after, limit: 1 }
+    if (!matchesHostBotGroupResponse(reply, query))
+      throw new HostAuthorityError('profile_mismatch')
+    if ((reply.state === 'ok' && reply.results.length === 1) !== Boolean(proof) ||
+        (reply.state === 'ok' && proof && JSON.stringify(reply.results[0]) !== JSON.stringify(proof.result)))
+      throw new HostAuthorityError('profile_mismatch')
+    if (proof) {
+      const { signature, ...unsigned } = proof
+      if (proof.authority_environment_id !== input.authorityEnvironmentId ||
+          proof.account_binding_handle !== input.accountBindingHandle ||
+          proof.authority_binding_version !== input.authorityBindingVersion ||
+          proof.account_issuer !== input.issuer || proof.account_subject !== input.subject ||
+          proof.computer_id !== input.computerId || proof.slark_audience !== input.slarkAudience ||
+          proof.installation_id !== this.inspection.installation_id ||
+          proof.installation_public_key !== this.inspection.installation_public_key ||
+          proof.host_instance_id !== this.inspection.host_instance_id ||
+          proof.process_nonce !== this.inspection.process_nonce ||
+          proof.result.groupId !== delivery.command.groupId ||
+          proof.result.deliveryId !== delivery.command.deliveryId ||
+          proof.result.botId !== delivery.command.botId ||
+          proof.result.memberCycle !== delivery.command.memberCycle ||
+          proof.issued_at > this.now() + 5000 || proof.issued_at < this.now() - 60_000 ||
+          !verify(null, encodeHostBotGroupResultProofPayload(unsigned),
+            publicKeyObject(proof.installation_public_key), Buffer.from(signature, 'base64url')))
+        throw new HostAuthorityError('profile_mismatch')
+    }
+    return { reply, proof }
+  }
+
+  /**
+   * Release one durable Bot result after Slark records its exact receipt.
+   * @param input - Account binding, ticket and acknowledged result ID.
+   * @returns Worker acknowledgment reply.
+   */
+  async acknowledgeBotGroupResult(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly resultId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_result_ack' as HostControlCapability) ||
+        input.resultId !== `${input.command.deliveryId}:final`)
+      throw new HostAuthorityError('invalid_input')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupResultAckRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_result_ack',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery,
+        result_id: input.resultId },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, { operation: 'ack_result',
+      groupId: input.command.groupId, botId: input.command.botId,
+      memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
+      resultId: input.resultId })) throw new HostAuthorityError('profile_mismatch')
+    return reply
   }
 
   /**
@@ -4750,14 +5592,22 @@ export class UnixHostClient {
       | ProfileModelClaimRetryRequest
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
-      | ProfileOpenRequest | ProfileOpenLocalRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
+      | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
+      | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
+      | ProfileSkillHubClockWitnessRequest
+      | ProfileSkillHubClockV2Request
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest | ProfileImportPreviewRequest
       | ProfileImportStatusRequest
       | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
+      | ProfileBotIdentityRequest | ProfileBotGroupDeliverRequest
+      | ProfileBotGroupResultPageRequest
+      | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest
   | ProfileCollaborationArchiveStateRequest
+  | ProfileGroupInputFenceRequest
   | ProfileCollaborationArchiveIntentRequest
   | ProfileCollaborationArchiveTransitionRequest
   | ProfileSourceAuthorityRequest

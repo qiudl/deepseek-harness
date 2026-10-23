@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarget,
+  parseHostGroupInputFenceChallenge,
   parseHostRemoteSessionJson,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -19,6 +20,13 @@ const archiveTarget = { workspace_id: target.workspace_id, session_id: target.se
   environment_id: '20000000-0000-4000-8000-000000000002',
   account_issuer: 'https://accounts.example.test',
   account_subject: '30000000-0000-4000-8000-000000000003' }
+const groupChallenge = parseHostGroupInputFenceChallenge({ request_id: '10000000-0000-4000-8000-000000000001',
+  challenge_nonce: 'A'.repeat(43), expires_at: 2000, audience: 'https://slark.example.test',
+  environment_id: archiveTarget.environment_id, account_issuer: archiveTarget.account_issuer,
+  account_subject: archiveTarget.account_subject, workspace_id: target.workspace_id,
+  session_id: target.session_id, group_id: '70000000-0000-4000-8000-000000000007', group_version: 1 })
+const groupValue = { workspace_id: groupChallenge.workspace_id, session_id: groupChallenge.session_id,
+  group_id: groupChallenge.group_id, group_version: groupChallenge.group_version }
 const descriptor = { ...target, snapshot_digest: 'a'.repeat(64) }
 const rootTarget = parseHostRootSubmissionTarget({ ...target, namespace_id: 'n2_' + 'b'.repeat(64), command_id: '10000000-0000-4000-8000-000000000001' })
 const rootDescriptor = { namespace_id: rootTarget.namespace_id, command_id: rootTarget.command_id,
@@ -48,7 +56,9 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
   delivery_state: 'pending', delivery_state_version: '1',
 } })
 
-async function harness(selectionRedirect?: string, archiveStagePhase = 'staged') {
+async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
+  fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
+  botGroupReply: unknown = { state: 'missing' }) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -68,7 +78,10 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
       '/internal/desktop-collaboration-archive-state': 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN',
       '/internal/desktop-collaboration-archive-intent': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-archive-transition': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
+      '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
       '/internal/desktop-collaboration-reference-content': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -105,11 +118,14 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
           : input.action === 'inspect_root_attempt' ? { value: ${JSON.stringify(planning)} }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
+          : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
+          : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
           : url.pathname.endsWith('archive-intent') ? { archive_phase: 'prepared', archive_token: ${JSON.stringify(archiveTarget.archive_token)} }
           : url.pathname.endsWith('archive-transition') ? { archive_phase: ({ stage: ${JSON.stringify(archiveStagePhase)}, prepared: 'prepared',
               archive: 'archived', restore: 'restored', finish_release: 'released' })[input.action] }
+          : url.pathname.endsWith('group-input-fence') ? ${JSON.stringify(fenceValue)}
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
@@ -137,17 +153,64 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged')
   const { inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
-    inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive } = worker
+    inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
+    installGroupInputFence, resolveBotIdentity, operateBotGroup } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
-    || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive)
+    || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
+    || !installGroupInputFence || !resolveBotIdentity || !operateBotGroup)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
-    transitionCollaborationArchive }
+    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, operateBotGroup }
 }
+
+it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {
+  const command = { operation: 'receipt' as const,
+    deliveryId: '10000000-0000-4000-8000-000000000001',
+    groupId: '20000000-0000-4000-8000-000000000002',
+    botId: 'writer', memberCycle: 2 }
+  const signal = new AbortController().signal
+  const h = await harness()
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-group`, {
+    method: 'POST', body: JSON.stringify(command) })).status).toBe(403)
+  expect(await h.operateBotGroup(command, signal)).toEqual({ state: 'missing' })
+  h.worker.abort()
+  await expect(h.operateBotGroup(command, signal)).rejects.toMatchObject({ code: 'unavailable' })
+
+  const mismatch = await harness(undefined, 'staged', groupValue, null, {
+    state: 'accepted', deliveryId: command.deliveryId, groupId: '30000000-0000-4000-8000-000000000003',
+    botId: command.botId, memberCycle: command.memberCycle, payloadDigest: 'a'.repeat(64),
+    sessionId: 'bot-session' })
+  await expect(mismatch.operateBotGroup(command, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+
+  const paged = await harness(undefined, 'staged', groupValue, null,
+    { state: 'ok', results: [], next: 0 })
+  expect(await paged.operateBotGroup({ operation: 'result_page',
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    after: 0, limit: 1 }, signal)).toEqual({ state: 'ok', results: [], next: 0 })
+})
+
+it('reads Bot identity through the parent-only source token and checks the requested Bot', async () => {
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const h = await harness(undefined, 'staged', groupValue, bot)
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-identity`, {
+    method: 'POST', body: JSON.stringify({ bot_id: bot.bot_id }),
+  })).status).toBe(403)
+  expect(await h.resolveBotIdentity(bot.bot_id, signal)).toEqual(bot)
+  await expect(h.resolveBotIdentity('bot_2', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  h.worker.abort()
+  await expect(h.resolveBotIdentity(bot.bot_id, signal)).rejects.toThrow('unavailable')
+})
+
+it('accepts an absent Bot identity from the Profile worker', async () => {
+  const h = await harness()
+  expect(await h.resolveBotIdentity('bot_1', new AbortController().signal)).toBeNull()
+})
 
 it('routes account-bound archive inspection and every transition through separate worker tokens', async () => {
   const h = await harness(), signal = new AbortController().signal
@@ -171,6 +234,23 @@ it('routes account-bound archive inspection and every transition through separat
   await expect(h.inspectCollaborationArchiveState(archiveTarget, signal)).rejects.toThrow('unavailable')
   await expect(h.inspectCollaborationArchiveIntent(intent, signal)).rejects.toThrow('unavailable')
   await expect(h.transitionCollaborationArchive({ ...archiveTarget, action: 'stage' }, signal)).rejects.toThrow('unavailable')
+})
+
+it('uses the parent-only token for an exact group fence acknowledgement', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-group-input-fence`, {
+    method: 'POST', body: JSON.stringify(groupChallenge),
+  })).status).toBe(403)
+  await expect(h.installGroupInputFence(groupChallenge, signal)).resolves.toEqual(groupValue)
+  h.worker.abort()
+  await expect(h.installGroupInputFence(groupChallenge, signal)).rejects.toThrow('unavailable')
+})
+
+it('rejects a group fence acknowledgement for another group', async () => {
+  const h = await harness(undefined, 'staged', { ...groupValue,
+    group_id: '80000000-0000-4000-8000-000000000008' })
+  await expect(h.installGroupInputFence(groupChallenge, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
 })
 
 it('rejects a released stage and accepts an existing staged archive', async () => {
@@ -201,7 +281,8 @@ it('authenticates each original-Profile route and refuses private operations aft
   const selection = { workspace_id: target.workspace_id, session_id: target.session_id }
   expect(await h.inspectWorkspaceModelSelection(selection, signal)).toEqual({ ...selection, provider: 'deepseek', model: 'chat' })
   h.worker.abort()
-  for (const run of [() => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
+  for (const run of [() => h.resolveBotIdentity('bot_1', signal),
+    () => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
     () => h.collaborationAnalysis(command, signal), () => h.receiveCollaborationDelivery(capsule, signal),
     () => h.readCollaborationReferenceGrant(target, digest, signal),
     () => h.captureCollaborationReferenceSelection(command, signal),

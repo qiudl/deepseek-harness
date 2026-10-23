@@ -3993,6 +3993,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the complete committed workspace order.',
       },
       {
+        signature: 'isGroupInputBlocked(sessionId: SessionId): boolean',
+        description: 'Synchronous admission check, including writes waiting on durable storage.',
+        parameters: [{ name: 'sessionId', description: 'Original Session to inspect.' }],
+        returns: 'Whether its old input route is closed.',
+      },
+      {
+        signature: 'installGroupInputFence(raw: GroupInputFence): Promise<GroupInputFence>',
+        description: 'Install an irreversible local fence before the cloud group activation CAS.',
+        parameters: [{ name: 'raw', description: 'Bound original Session and preparing group identity.' }],
+        returns: 'The persisted fence, or the same fence from an exact retry.',
+      },
+      {
         signature: 'findCollaborationArchiveIntent(raw: Omit<CollaborationArchiveIntent, \'token\' | \'phase\'>): Promise< Readonly<{ token: string; phase: \'staged\' | \'prepared\' | \'archived\' | \'restored\' }> | null >',
         description: 'Find the original retry token under the Registry queue after Main or Host restarts.',
         parameters: [{ name: 'raw', description: 'Current Account and Workspace membership without a caller token.' }],
@@ -4163,6 +4175,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'One message entered the live inbox.',
     description: 'One message entered the live inbox.',
     parameters: [{ name: 'payload', description: '.message - the inserted message. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
+  },
+  {
+    name: 'agent/pre-inbox',
+    mode: 'bail',
+    signature: '\'agent/pre-inbox\'(this: Scoped<Agent>, payload: { agent: Agent; message: UserMessage; target: InboxTarget }): void',
+    summary: 'Admit one direct Agent input before its durable inbox splice.',
+    description: 'Admit one direct Agent input before its durable inbox splice. A listener may throw synchronously to refuse it; no inbox event or wake occurs then. This event does not run for driver-owned runtime context insertion. Listeners must finish synchronously and derive any state from a local committed view; asynchronous authorization cannot protect this splice.',
+    parameters: [{ name: 'payload', description: '.target - the resolved next-turn or next-step queue. Scope-filtered dispatch (`@deepseek-ai/dsh-scope`): agent-scoped listeners receive only that agent.' }],
   },
   {
     name: 'agent/pre-step',
@@ -5805,6 +5825,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GrantRecord {\n    readonly kind: \'grant\';\n    readonly payload: unknown;\n}',
   },
   {
+    name: 'GroupInputFence',
+    declaration: 'export type GroupInputFence = z.infer<typeof groupInputFence>;',
+  },
+  {
     name: 'HookBudget',
     declaration: 'export interface HookBudget {\n    readonly ms: number;\n    readonly remainingMs: number;\n}',
   },
@@ -5859,6 +5883,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ImageVariantId',
     declaration: 'export type ImageVariantId = Branded<\'ImageVariantId\'>;',
+  },
+  {
+    name: 'InboxTarget',
+    declaration: 'export type InboxTarget = \'next-turn\' | \'next-step\';',
   },
   {
     name: 'IncompatiblePlugin',

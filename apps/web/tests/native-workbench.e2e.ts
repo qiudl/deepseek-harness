@@ -12,7 +12,7 @@ import { readFile, writeFile, mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { promisify, stripVTControlCharacters } from 'node:util'
 import { join } from 'node:path'
 import { chromium, type Browser, type Page } from 'playwright'
 import { afterAll, beforeAll, expect, it, onTestFailed } from 'vitest'
@@ -228,11 +228,18 @@ it('operates a real Host shell with controlled input, streamed output and attach
   const state = control.acquire(sessionId, owner, { takeover: false })
   if (!('claim' in state)) throw new Error('missing terminal control')
   const proof = { controller_id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
+  const credential = { kind: owner.kind, id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const terminalStreams = new DesktopRemoteTerminalStreams(control)
   const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
   const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
+  const renewal = setInterval(() => {
+    if (control.renew(sessionId, credential).outcome !== 'controlled') {
+      controller.abort(new Error('terminal control renewal failed'))
+    }
+  }, 5000)
+  renewal.unref()
   const terminalId = randomUUID(), attachmentId = randomUUID()
   const invoke = (method: WorkbenchTerminalRequest['method'], args: WorkbenchTerminalRequest['args']) => actions.execute({
     operation: 'terminal.apply', command_id: randomUUID() as never, session_id: sessionId, control: proof,
@@ -252,7 +259,7 @@ it('operates a real Host shell with controlled input, streamed output and attach
     await expect(invoke('rename', { agentId: sessionId, id: terminalId, title: 'iPhone shell' })).resolves.toEqual({ ok: true })
     await expect(invoke('write', { agentId: sessionId, id: terminalId, attachmentId, data: 'echo REQ6049_NATIVE_TERMINAL\n' })).resolves.toEqual({ ok: true })
     let output = ''
-    while (!/\r?\nREQ6049_NATIVE_TERMINAL\r?\n/u.test(output)) {
+    while (!stripVTControlCharacters(output).replaceAll('\r', '').split('\n').includes('REQ6049_NATIVE_TERMINAL')) {
       const next = await iterator.next()
       if (next.done) throw new Error('terminal closed before echo')
       const value = next.value as { type: string; data?: string }
@@ -272,6 +279,7 @@ it('operates a real Host shell with controlled input, streamed output and attach
         && item.id === terminalId && !Object.hasOwn(item, 'controllerId'))
     }).toBe(true)
   } finally {
+    clearInterval(renewal)
     controller.abort()
     await iterator?.return?.()
     await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, signal: new AbortController().signal })

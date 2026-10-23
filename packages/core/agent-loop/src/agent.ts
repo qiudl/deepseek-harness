@@ -156,6 +156,7 @@ export class ReactLoopAgent implements Agent {
     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
     const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
+    this.dispatch.bail('agent/pre-inbox', { message, target: resolvedTarget })
     this.inbox.splice(resolvedTarget, Infinity, 0, [message])
     if (wakeup) this.wakeDriver(wakingAfterAbort)
   }

@@ -25,12 +25,26 @@ export {
   parseHostCollaborationArchiveStateChallenge, parseHostCollaborationArchiveStateAssertion,
   encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateTarget,
   parseHostCollaborationArchiveStateValue,
+  parseHostGroupInputFenceChallenge, parseHostGroupInputFenceValue, parseHostGroupInputFenceAssertion, encodeHostGroupInputFencePayload,
   parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
   parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
   parseHostCollaborationRegistrationChallenge, parseHostCollaborationRegistrationAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
+export type { HostBotIdentity } from './bot-identity.js'
+export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
+export { parseHostBotGroupCommand, parseHostBotGroupResponse,
+  matchesHostBotGroupResponse, parseHostBotGroupPublicKeyring,
+  parseHostBotGroupDeliveryInput } from './bot-group.js'
+export type { HostBotGroupCommand, HostBotGroupResponse,
+  HostBotGroupPublicKeyring, HostBotGroupDeliveryInput } from './bot-group.js'
+export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
+export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {
@@ -43,6 +57,12 @@ export type {
   HostCollaborationDeliveryReceipt, HostCollaborationDeliveryResult,
 } from './collaboration-delivery.js'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
+export { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
+export { SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.js'
+export { SKILLHUB_EXECUTION_RECEIPT_DOMAIN, parseSkillHubExecutionReceipt,
+  encodeSkillHubExecutionReceiptPayload } from './skillhub-execution-receipt.js'
+export type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.js'
+export type { SkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
 export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
@@ -93,6 +113,23 @@ export type {
   HostInspectRequest,
   HostInspectResult,
   ProfileOpenRequest,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
+  HostSkillHubPackagePlan,
+  ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageChunkResult,
+  HostSkillHubPackageSignedReceipt,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageResult,
+  HostSkillHubPackageSnapshotTarget,
+  ProfileSkillHubPackageSnapshotRequest,
+  ProfileSkillHubPackageSnapshotResult,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
+  ProfileSkillHubExecutionReceiptResult,
+  HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
+  ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result, HostSkillHubClockV2Command,
   ProfileOpenResult,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
@@ -100,6 +137,8 @@ export type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue, HostGroupInputFenceAssertion,
+  ProfileGroupInputFenceRequest, ProfileGroupInputFenceResult,
   HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
   ProfileCollaborationArchiveStateRequest, ProfileCollaborationArchiveStateResult,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,

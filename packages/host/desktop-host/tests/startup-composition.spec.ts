@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
@@ -291,12 +291,17 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   }) }
   const inspectWorkspaceModelSelection = vi.fn<NonNullable<ProfileWorkerHandle['inspectWorkspaceModelSelection']>>(
     async target => ({ ...target, provider: 'deepseek', model: 'chat' }))
+  const resolveBotIdentity = vi.fn<NonNullable<ProfileWorkerHandle['resolveBotIdentity']>>(
+    async botId => ({ bot_id: botId, actor_ref: `deepseek-bot:${botId}`, display_name: 'My Bot' }))
   const inspectCollaborationArchiveState = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveState']>>(
     async () => ({ archive_phase: 'archived' }))
   const inspectCollaborationArchiveIntent = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationArchiveIntent']>>(
     async () => ({ archive_phase: 'missing', archive_token: null }))
   const transitionCollaborationArchive = vi.fn<NonNullable<ProfileWorkerHandle['transitionCollaborationArchive']>>(
     async () => ({ archive_phase: 'staged' }))
+  const installGroupInputFence = vi.fn<NonNullable<ProfileWorkerHandle['installGroupInputFence']>>(
+    async challenge => ({ workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+      group_id: challenge.group_id, group_version: challenge.group_version }))
   const inspectCollaborationSource = vi.fn<NonNullable<ProfileWorkerHandle['inspectCollaborationSource']>>(
     async () => sourceDescriptor)
   const readCollaborationSourceSnapshot = vi.fn<NonNullable<ProfileWorkerHandle['readCollaborationSourceSnapshot']>>(
@@ -328,9 +333,10 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       viewOrigin: 'http://127.0.0.1:43123',
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
-      generateText,
+      generateText, resolveBotIdentity,
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
+      installGroupInputFence,
       inspectCollaborationSource, readCollaborationSourceSnapshot,
       collaborationAnalysis, receiveCollaborationDelivery,
       closeNotifications: () => { workerEvents.push(`notifications:${spec.profileId}`) },
@@ -360,12 +366,19 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     operations: [], nextOperationOffset: null,
   })
   expect(importAuthorityChecks).toBe(2)
+  const capturedServerOptions = serverOptions
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  const packagesRoot = join(root, 'profiles', profile.profileId, 'skillhub-packages')
+  mkdirSync(packagesRoot, { mode: 0o700 })
+  expect(() => capturedServerOptions.createSkillHubPackageStore?.(randomUUID(), '1', 'a'.repeat(64)))
+    .toThrow()
+  expect(await serverOptions.createSkillHubPackageStore?.(profile.profileId, '1', 'a'.repeat(64)))
+    .toBeDefined()
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimRecovery?.pendingReceipts({
@@ -416,6 +429,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     .resolves.toEqual({ provider: 'deepseek', model: 'deepseek-chat', text: 'answer: question' })
   expect(generateText).toHaveBeenCalledWith('question', expect.any(AbortSignal))
   const collaborationSignal = new AbortController().signal
+  await expect(serverOptions.resolveBotIdentity?.(profile.profileId, 'bot_1', collaborationSignal))
+    .resolves.toEqual({ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' })
+  expect(resolveBotIdentity).toHaveBeenCalledWith('bot_1', collaborationSignal)
   const selectionTarget = { workspace_id: sourceTarget.workspace_id, session_id: sourceTarget.session_id }
   await expect(serverOptions.inspectWorkspaceModelSelection?.(profile.profileId, selectionTarget, collaborationSignal))
     .resolves.toEqual({ ...selectionTarget, provider: 'deepseek', model: 'chat' })
@@ -435,6 +451,18 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.transitionCollaborationArchive?.(profile.profileId, transitionTarget, collaborationSignal))
     .resolves.toEqual({ archive_phase: 'staged' })
   expect(transitionCollaborationArchive).toHaveBeenCalledWith(transitionTarget, collaborationSignal)
+  const challenge = parseHostGroupInputFenceChallenge({
+    request_id: '10000000-0000-4000-8000-000000000001', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, audience: 'https://slark.example.test',
+    environment_id: archiveTarget.environment_id, account_issuer: 'https://accounts.example.test',
+    account_subject: '30000000-0000-4000-8000-000000000003', workspace_id: archiveTarget.workspace_id,
+    session_id: archiveTarget.session_id,
+    group_id: '70000000-0000-4000-8000-000000000007', group_version: 1,
+  })
+  await expect(serverOptions.installGroupInputFence?.(profile.profileId, challenge, collaborationSignal))
+    .resolves.toEqual({ workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+      group_id: challenge.group_id, group_version: challenge.group_version })
+  expect(installGroupInputFence).toHaveBeenCalledWith(challenge, collaborationSignal)
   await expect(serverOptions.inspectCollaborationSource?.(profile.profileId, sourceTarget, collaborationSignal))
     .resolves.toEqual(sourceDescriptor)
   expect(inspectCollaborationSource).toHaveBeenCalledWith(sourceTarget, collaborationSignal)

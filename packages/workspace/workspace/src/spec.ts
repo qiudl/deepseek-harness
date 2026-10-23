@@ -57,6 +57,16 @@ export const collaborationArchiveIntent = z.object({
 /** Persisted Account-bound retry token for one collaboration Session archive. */
 export type CollaborationArchiveIntent = z.infer<typeof collaborationArchiveIntent>
 
+/** Local admission fence installed before Slark may activate a group. */
+export const groupInputFence = z.object({
+  workspaceId,
+  sessionId,
+  groupId: z.string().min(1),
+  groupVersion: z.number().int().nonnegative(),
+}).strict()
+/** Durable local admission fence for one original Session and preparing group. */
+export type GroupInputFence = z.infer<typeof groupInputFence>
+
 /**
  * Durable registry state. `initialized` distinguishes a valid empty registry
  * from one that still needs the header-only history bootstrap;
@@ -81,6 +91,8 @@ export const workspaceDomainState = z.object({
   /** Sessions with a durable Source capture, including promoted ordinary chats. */
   collaborationSessionIds: z.array(sessionId).default([]),
   collaborationArchiveIntents: z.array(collaborationArchiveIntent).default([]),
+  /** Absent in older media; an installed fence retains the original Session. */
+  groupInputFences: z.array(groupInputFence).optional(),
   pendingMutation: workspacePendingMutation.optional(),
 })
 

@@ -16,15 +16,15 @@ import type { WorkspaceEntityHost } from './entity.ts'
 
 export { WorkspaceMoveInvalidError } from './entity.ts'
 import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath, realpathNormalize } from './paths.ts'
-import { collaborationArchiveIntent, workspaceDomainSpec } from './spec.ts'
-import type { CollaborationArchiveIntent, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
+import { collaborationArchiveIntent, groupInputFence, workspaceDomainSpec } from './spec.ts'
+import type { CollaborationArchiveIntent, GroupInputFence, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 import type { SessionActivity, Workspace, WorkspaceId as WorkspaceIdBrand } from './types.ts'
 
 export type {
   SessionActivity, SessionActivityItem, SessionActivityKind, SessionActivityKindMap, Workspace,
 } from './types.ts'
-export { collaborationArchiveIntent, workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
-export type { CollaborationArchiveIntent, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
+export { collaborationArchiveIntent, groupInputFence, workspaceDomainState, workspaceRecord, workspaceDomainSpec } from './spec.ts'
+export type { CollaborationArchiveIntent, GroupInputFence, WorkspaceDomainState, WorkspaceRecord } from './spec.ts'
 export { realpathNormalize } from './paths.ts'
 
 /** Identifies one workspace record (see `src/types.ts` for the brand rationale). */
@@ -103,6 +103,14 @@ export class WorkspaceCollaborationArchiveIntentConflictError extends Error {
   constructor(readonly sessionId: SessionId) {
     super(`collaboration archive intent conflicts for session '${sessionId}'`)
     this.name = 'WorkspaceCollaborationArchiveIntentConflictError'
+  }
+}
+
+/** A Session or group identity already has a different durable admission fence. */
+export class WorkspaceGroupInputFenceConflictError extends Error {
+  constructor(readonly sessionId: SessionId) {
+    super(`group input fence conflicts for session '${sessionId}'`)
+    this.name = 'WorkspaceGroupInputFenceConflictError'
   }
 }
 
@@ -210,6 +218,8 @@ export class WorkspaceRegistry extends Service {
   private readonly sessionPaths = new Map<SessionId, string>()
   private readonly invalidSessionPaths = new Map<SessionId, string>()
   private operationTail: Promise<void> = Promise.resolve()
+  private readonly pendingGroupInputFences = new Map<SessionId, number>()
+  private readonly uncertainGroupInputFences = new Set<SessionId>()
 
   private readonly host: WorkspaceEntityHost = {
     serializeMutation: operation => this.enqueueOperation(operation),
@@ -218,6 +228,7 @@ export class WorkspaceRegistry extends Service {
         item.workspaceId === workspaceId && item.sessionId === sessionId)) {
         throw new WorkspaceCollaborationArchiveIntentConflictError(sessionId)
       }
+      if (this.isGroupInputBlocked(sessionId)) throw new WorkspaceGroupInputFenceConflictError(sessionId)
     },
     table: () => this.requireTable(),
     sessionPath: id => this.sessionPaths.get(id),
@@ -397,6 +408,65 @@ export class WorkspaceRegistry extends Service {
     return this.requireState().collaborationArchiveIntents
   }
 
+  /** Persisted fences; the original Session remains in its Workspace and sidebar slot. */
+  get groupInputFences(): readonly GroupInputFence[] {
+    return this.requireState().groupInputFences ?? []
+  }
+
+  /** Synchronous admission check, including writes waiting on durable storage.
+   * @param sessionId - Original Session to inspect.
+   * @returns Whether its old input route is closed.
+   */
+  isGroupInputBlocked(sessionId: SessionId): boolean {
+    return this.pendingGroupInputFences.has(sessionId) || this.uncertainGroupInputFences.has(sessionId)
+      || this.groupInputFences.some(item => item.sessionId === sessionId)
+  }
+
+  /** Install an irreversible local fence before the cloud group activation CAS.
+   * @param raw - Bound original Session and preparing group identity.
+   * @returns The persisted fence, or the same fence from an exact retry.
+   */
+  installGroupInputFence(raw: GroupInputFence): Promise<GroupInputFence> {
+    const fence = groupInputFence.parse(raw)
+    if (this.uncertainGroupInputFences.has(fence.sessionId)) {
+      return Promise.reject(new Error(`group input fence durability is indeterminate for session '${fence.sessionId}'`))
+    }
+    this.pendingGroupInputFences.set(fence.sessionId, (this.pendingGroupInputFences.get(fence.sessionId) ?? 0) + 1)
+    return this.enqueueOperation(async () => {
+      const state = this.requireState()
+      const previous = (state.groupInputFences ?? []).find(item => item.sessionId === fence.sessionId
+        || item.groupId === fence.groupId)
+      if (previous) {
+        if (previous.workspaceId === fence.workspaceId && previous.sessionId === fence.sessionId
+          && previous.groupId === fence.groupId && previous.groupVersion === fence.groupVersion) return previous
+        throw new WorkspaceGroupInputFenceConflictError(fence.sessionId)
+      }
+      if (!this.requireTable().get(fence.workspaceId)?.sessionIds.includes(fence.sessionId)
+        || !(await this.sessionKnown(fence.sessionId)) || state.archivedSessionIds.includes(fence.sessionId)
+        || state.collaborationArchiveIntents.some(item => item.sessionId === fence.sessionId)) {
+        throw new WorkspaceGroupInputFenceConflictError(fence.sessionId)
+      }
+      const activity = await this.ctx.waterfall(
+        'workspace/session-activity', { sessionId: fence.sessionId }, () => Promise.resolve([]),
+      )
+      if (activity.length > 0) throw new WorkspaceActiveSessionError(fence.sessionId, activity)
+      try {
+        await this.setState({ ...state, groupInputFences: [...(state.groupInputFences ?? []), fence] })
+      } catch (error) {
+        // A lost acknowledgement may follow a committed write. Keep this
+        // process closed until restart reloads the durable truth.
+        this.uncertainGroupInputFences.add(fence.sessionId)
+        throw error
+      }
+      return fence
+    }).finally(() => {
+      // Every install increments the count before entering the operation queue.
+      const remaining = (this.pendingGroupInputFences.get(fence.sessionId) as number) - 1
+      if (remaining === 0) this.pendingGroupInputFences.delete(fence.sessionId)
+      else this.pendingGroupInputFences.set(fence.sessionId, remaining)
+    })
+  }
+
   /** Find the original retry token under the Registry queue after Main or Host restarts.
    * @param raw - Current Account and Workspace membership without a caller token.
    * @returns Bound token and phase, or null when this Session has no outstanding intent.
@@ -464,6 +534,9 @@ export class WorkspaceRegistry extends Service {
         throw new WorkspaceUnknownSessionError(intent.sessionId, 'collaboration')
       }
       if (state.archivedSessionIds.includes(intent.sessionId)) {
+        throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
+      }
+      if (this.isGroupInputBlocked(intent.sessionId)) {
         throw new WorkspaceCollaborationArchiveIntentConflictError(intent.sessionId)
       }
       const collaboration = state.dedicatedCollaborationSessionIds.includes(intent.sessionId)
@@ -633,6 +706,7 @@ export class WorkspaceRegistry extends Service {
       // The chain slot serializes against every other registry write, so this
       // check-then-write pair cannot interleave with another archive.
       if (this.requireState().archivedSessionIds.includes(sessionId)) return
+      if (this.isGroupInputBlocked(sessionId)) throw new WorkspaceGroupInputFenceConflictError(sessionId)
       if (!(await this.sessionKnown(sessionId))) {
         throw new WorkspaceUnknownSessionError(sessionId, 'archive')
       }
@@ -864,6 +938,8 @@ export class WorkspaceRegistry extends Service {
     const state = this.requireState()
     const outstanding = state.collaborationArchiveIntents.find(item => item.workspaceId === id)
     if (outstanding) throw new WorkspaceCollaborationArchiveIntentConflictError(outstanding.sessionId)
+    const fencedSession = this.requireTable().get(id)?.sessionIds.find(sessionId => this.isGroupInputBlocked(sessionId))
+    if (fencedSession) throw new WorkspaceGroupInputFenceConflictError(fencedSession)
     const nextState = {
       ...state,
       pendingMutation: undefined,
@@ -1012,6 +1088,7 @@ export class WorkspaceRegistry extends Service {
         dedicatedCollaborationSessionIds: state.dedicatedCollaborationSessionIds,
         collaborationSessionIds: state.collaborationSessionIds,
         collaborationArchiveIntents: state.collaborationArchiveIntents,
+        ...(state.groupInputFences === undefined ? {} : { groupInputFences: state.groupInputFences }),
       })
     }
     await this.setState({
@@ -1022,6 +1099,7 @@ export class WorkspaceRegistry extends Service {
       dedicatedCollaborationSessionIds: state.dedicatedCollaborationSessionIds,
       collaborationSessionIds: state.collaborationSessionIds,
       collaborationArchiveIntents: state.collaborationArchiveIntents,
+      ...(state.groupInputFences === undefined ? {} : { groupInputFences: state.groupInputFences }),
     })
   }
 
@@ -1041,6 +1119,17 @@ export class WorkspaceRegistry extends Service {
       const archived = state.archivedSessionIds.includes(intent.sessionId)
       if (archived !== (intent.phase === 'archived')) {
         throw new Error(`workspace domain is inconsistent: collaboration archive phase for session '${intent.sessionId}'`)
+      }
+    }
+    const fences = state.groupInputFences ?? []
+    if (new Set(fences.map(item => item.sessionId)).size !== fences.length
+      || new Set(fences.map(item => item.groupId)).size !== fences.length) {
+      throw new Error('workspace domain is inconsistent: group input fence repeats')
+    }
+    for (const fence of fences) {
+      if (!table.get(fence.workspaceId)?.sessionIds.includes(fence.sessionId)
+        || state.archivedSessionIds.includes(fence.sessionId)) {
+        throw new Error(`workspace domain is inconsistent: group input fence for session '${fence.sessionId}'`)
       }
     }
     const order = new Set<WorkspaceId>()

@@ -26,6 +26,8 @@ kind: "package-bundle"
 
 固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。
 
+经过验证的 Windows 启动产物从内存加载，并打包包含归档解码器在内的非 Node 静态依赖；它不能相对于 data URL 解析其他包。
+
 Windows 目录安全证据将 SDDL 的通用权限、标准权限和文件专用权限保留为无符号位掩码。未知标记和超过 32 位的掩码会使检查失败。解析通用权限不会授予私有存储访问权：私有文件仍要求精确的、受保护的三主体文件完全控制 DACL。
 
 启动产物向可信嵌入代码提供 `loadWindowsLegacySourceProbe`。装配通过与本地凭据存储相同的发布版本固定原生模块解析当前进程 SID，不检查旧数据文件系统，并且只返回只读探测函数。不支持的平台、缺失摘要固定值、原生身份解析失败或缺少目录检查器都会使加载失败。嵌入方必须在后续探测调用期间持续保护原生模块，并提供操作系统选定的用户主目录。
@@ -46,10 +48,22 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接，在任一连接重新打开该 Profile 后仍保有自己的 view lease；租约过期、连接断开和 Profile 撤销仍会使相应租约失效。
 
-连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
+连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce、每进程 boot nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
 
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
+
+`profile.skillhub_binding` 为 Slark SkillHub 单独签署 Host 本地 Profile 事实。当前连接必须拥有该 Profile 授权，签名选择器也必须符合当前绑定代次。证明包含 broker 提供的 Slark 用户与 Computer 坐标；只有 Slark 能认证这些远端坐标并消费一次性挑战。该方法不写入 Profile、Session 或凭据数据。
+
+Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
+
+`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证完整不可变 operation，并为该认证连接捕获一个对象。同一连接读取同一 operation 的后续文件时复用该校验；每次文件读取仍校验计划、清单、路径和目标文件摘要。再次请求 manifest 会刷新完整校验，回读当前回执也会校验全部文件。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
+
+`profile.skillhub_execution_receipt` 在签署完成的 daemon 报告前，重新检查同一当前 Profile 授权、激活签名和不可变包文件。Host 与包坐标由本地派生；客户端在返回回执前拒绝任何字段变化或无效签名。Host 证明的是已认证 Main 报告与固定包身份，Slark 仍负责核对 effect、Work 权限、Computer 授权和已准备沙箱。
+
+`profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
+
+独立的 `profile.skillhub_clock_v2` capability 由 Host 按资产或 Work 用途签发带一次性票据的锚，并提供当前 epoch。签发请求须提供 `active_asset_anchor_id`：资产签发时为 null，Work 签发时为当前选中资产锚的 UUID。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使旧 V2 锚失效；若原始 Work 许可窗口仍可能有效，则先拒绝签发，等待最长 30 秒的保留期结束。Work 触发轮换时，Host 只在新代次保留选中的资产见证，供调用方在登记 Work 前在线刷新资产权限。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
 
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 
@@ -61,11 +75,27 @@ REQ-20261022-0022 的 Slark Profile 使用由 Account issuer、subject 和 Slark
 
 `profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
 
+`profile.group_input_fence` 接受绑定一个准备中 Slark 群和原 Session 的账号授权挑战。选定 Profile worker 通过 Workspace Registry 持久关闭旧 Session 输入；只有保存的群 ID 和版本完全匹配，Host 才在独立的群栅栏签名域签发证明。监管器拒绝已替换 worker 的回包；已提交的栅栏继续保持封闭，回包不确定时须对账。此方法不激活 Slark 群；Slark 须核验并消费签名挑战后，才执行激活转移。
+
 `profile.collaboration_archive_transition` 核验当前账号绑定，将一个精确 token 动作转交选定的 Profile worker，并在返回前再次核验账号授权。worker supervisor 拒绝已替换代际的响应；在拒绝前本地写入仍可能已提交。因此调用方保留原 token，并在回包不确定时对账持久阶段。只有启动组合提供 worker 阶段转移函数时才声明此能力。
 
 `profile.collaboration_archive_intent` 使用同一账号授权及当前 worker 代际，按 Session 找回未完成归档的 token。Host 在 worker 读取前后核验账号授权，并拒绝已替换 worker 的结果；只有 Registry 确认工作区成员关系后，无意图结果才有效。
 
 `profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
+
+`profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
+
+私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
+
+补读到结果时，Host 用安装密钥签署准确的正文、Bot 与成员身份、投递 ID，以及当前 Account 与安装身份。客户端会用已检验的 Host 对端公钥复核；Slark 在记录 Bot 群消息前还须按当前注册 Host 再次验签。
+
+Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。
+
+如果 worker 的派送响应丢失，Host 会先按同一投递 ID 读取持久回执，再报告结果。回执缺失或不可用时保留原始失败；对账期间不会再次提交派送。
+
+内部 Bot 派送函数只选择当前 Account Profile，在向 worker 发送单条投递前完成实时确认，并在返回前复查 Account 和 worker 身份。若 worker 已写入后结果被拒绝，该投递仍属不确定状态，必须使用原 delivery ID 对账。
+
+在 macOS 上，签名嵌入应用在 Host 启动时传入只含公钥的 `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS`。Host 校验并固定公钥环后才公布 `profile.bot_group_deliver`；缺失或格式无效的投影不能授权派送。请求仅携带凭据和命令，不能替换验签公钥。
 
 仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 

@@ -5,6 +5,7 @@ import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
 import { DesktopHost } from './desktop-host.ts'
+import { createSkillHubPackageStoreFactory } from './skillhub-package-install.ts'
 import { ProfileExtensionOperations, type ExtensionExecutionContext } from './extension-operations.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { ProfileMcpExecutor } from './profile-mcp-executor.ts'
@@ -35,6 +36,7 @@ import { WindowsHostJournal } from './windows-host-journal.ts'
 import { loadWindowsHostRegistrationFileBindings } from './windows-host-registration-native.ts'
 import {
   assertWindowsHostPrivatePathEvidence,
+  windowsHostPrivateSecurityDescriptor,
   type WindowsHostRegistrationFileBindings,
 } from './windows-host-registration.ts'
 import {
@@ -543,6 +545,14 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
+          /* v8 ignore next -- authorization just resolved this Profile; only concurrent removal reaches this guard. */
+          if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+          const packagesRoot = win32.join(config.root, 'profiles', profileId, 'skillhub-packages')
+          assertWindowsHostPrivatePathEvidence(bindings.ensurePrivateDirectory(
+            packagesRoot, windowsHostPrivateSecurityDescriptor(userSid)), 'directory', userSid)
+          return packagesRoot
+        }),
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,

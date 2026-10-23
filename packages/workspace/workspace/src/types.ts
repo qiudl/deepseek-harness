@@ -33,7 +33,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
  * sees exactly the keys its program compiled and falls through to a generic
  * description for any other. The shipped providers merge `turn` (the Agent
  * registry), `job` (the job registry seam), `subagent` (the Subagent
- * runtime), and `schedule` (the Schedule plugin).
+ * runtime), `schedule` (the Schedule plugin), and `source_capture` (the
+ * Session Controller).
  */
 export interface SessionActivityKindMap {}
 

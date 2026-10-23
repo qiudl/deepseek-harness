@@ -62,6 +62,7 @@ function inspection(
       runtime_generation: 5,
       schema_generation: 1,
       process_nonce: processNonce as never,
+      boot_nonce: 'A'.repeat(43) as never,
       capabilities: [...capabilities],
       challenge_signature: 'A'.repeat(86) as never,
       executable_signature_digest: digest as never,
@@ -637,6 +638,24 @@ describe('Unix Host client protocol projections', () => {
       call: async (frame) => {
         const response = inspection(frame as HostInspectRequest)
         return { ...response, result: { ...response.result, challenge_signature: 'A'.repeat(86) as never } }
+      },
+      isConnected: () => true,
+      close,
+    }
+    await expect(UnixHostClient.connectAuthenticatedTransport({
+      trustedInstallationId: installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: digest,
+    }, transport)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(close).toHaveBeenCalled()
+  })
+
+  it('rejects a boot nonce changed after the Host signed its inspection', async () => {
+    const close = vi.fn()
+    const transport: HostClientFrameTransport = {
+      call: async (frame) => {
+        const response = inspection(frame as HostInspectRequest)
+        return { ...response, result: { ...response.result, boot_nonce: `${'B'.repeat(42)}A` as never } }
       },
       isConnected: () => true,
       close,

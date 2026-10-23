@@ -1,5 +1,5 @@
 /** Host-verified collaboration conversation index in the left sidebar. */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -41,6 +41,54 @@ export interface BrowserInjected {
 
 function hasActiveCollaboration(row: ConversationRow): boolean {
   return row.pending_count > 0 || row.planning_count > 0 || row.running_count > 0 || row.issue_count > 0
+}
+
+/** Read only the visible original Sessions; the list may contain up to 500 rows. */
+function GroupStatus({ row, t }: { row: ConversationRow; t: PropsLocale<'slarkAgent'>['t'] }) {
+  const element = useRef<HTMLSpanElement>(null)
+  const [state, setState] = useState<'preparing' | 'group_active'>()
+  useEffect(() => {
+    const host = window.__DSH_DESKTOP_HOST__
+    if (!host?.collaborationGroupPreparation) return
+    const lookupGroup = host.collaborationGroupPreparation.bind(host)
+    let active = true, visible = false, busy = false
+    let timer: number | undefined
+    const stillActive = () => active
+    const refresh = async () => {
+      if (!active || !visible || busy) return
+      if (window.__DSH_DESKTOP_HOST__ !== host) { setState(undefined); return }
+      busy = true
+      try {
+        const result = await lookupGroup({ operation: 'lookup',
+          workspace_id: row.workspace_id, session_id: row.session_id })
+        if (stillActive() && window.__DSH_DESKTOP_HOST__ === host) {
+          setState(result.state === 'preparing' || result.state === 'group_active' ? result.state : undefined)
+        }
+      } catch { if (stillActive()) setState(undefined) }
+      finally { busy = false }
+    }
+    const show = () => {
+      if (visible) return
+      visible = true
+      void refresh()
+      timer = window.setInterval(() => { void refresh() }, 20_000)
+    }
+    const hide = () => {
+      visible = false
+      if (timer !== undefined) window.clearInterval(timer)
+      timer = undefined
+    }
+    const observer = typeof IntersectionObserver === 'undefined' ? undefined : new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) show()
+      else hide()
+    }, { rootMargin: '100px' })
+    if (observer && element.current) observer.observe(element.current)
+    else show()
+    return () => { active = false; hide(); observer?.disconnect() }
+  }, [row.workspace_id, row.session_id])
+  return <span ref={element} className={state === 'group_active' ? css.groupActive : state === 'preparing' ? css.groupPreparing : undefined}>
+    {state === 'group_active' ? t('browser.groupActive') : state === 'preparing' ? t('browser.groupPreparing') : null}
+  </span>
 }
 
 export function CollaborationBadge({ useCollaborationIndex, useWorkspaces, t }: PropsRuntime<'sidebar.collaboration.badge'> & PropsLocale<'slarkAgent'> & InjectFace<Pick<BrowserInjected, 'hooks'>>) {
@@ -161,6 +209,7 @@ export function CollaborationBrowser({ useCollaborationIndex, useSessions, useWo
             <span className={css.rowTitle}>{item.pinned ? '◆ ' : ''}{session?.displayTitle ?? t('browser.untitled')}</span>
             <span className={css.rowMeta}>{workspaceNames.get(item.workspace_id as WorkspaceId) ?? t('browser.workspaceFallback')} · {
               item.source_count === 0 ? t('browser.draftHint') : t('browser.sources', { count: item.source_count })}</span>
+            <GroupStatus row={item} t={t} />
             {item.archived && <span className={css.running}>{t(hasActiveCollaboration(item) ? 'browser.archiveNeedsRestore' : 'browser.archived')}</span>}
             {item.pending_count > 0 && <span className={css.pending}>{t('browser.pendingItems', { count: item.pending_count })}</span>}
             {item.issue_count > 0 && <span className={css.pending}>{t('browser.issueItems', { count: item.issue_count })}</span>}

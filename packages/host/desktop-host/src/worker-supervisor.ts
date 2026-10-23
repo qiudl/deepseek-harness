@@ -7,11 +7,13 @@ import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborat
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveStateValue,
+  HostGroupInputFenceChallenge, HostGroupInputFenceValue,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -27,6 +29,42 @@ export class ProfileWorkerSupervisor {
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory,
     private readonly assertMayStart?: (profileId: string) => void) {}
+
+  /**
+   * Read a Bot identity from the same live exclusive-writer Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param botId - Exact local Bot ID.
+   * @param signal - Caller cancellation.
+   * @returns Public Bot identity or absence.
+   */
+  async resolveBotIdentity(profileId: string, botId: string, signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.resolveBotIdentity) throw new HostAuthorityError('unavailable')
+    const result = await worker.resolveBotIdentity(botId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Use only the current Account Profile worker for an authorized Bot group command.
+   * @param profileId - Selected Account Profile.
+   * @param command - Host-validated group operation.
+   * @param signal - Caller cancellation.
+   * @returns Worker reply for the exact operation.
+   */
+  async operateBotGroup(profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal): Promise<HostBotGroupResponse> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.operateBotGroup) throw new HostAuthorityError('unavailable')
+    const result = await worker.operateBotGroup(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
     if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
@@ -210,6 +248,24 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.transitionCollaborationArchive) throw new HostAuthorityError('unavailable')
     const result = await worker.transitionCollaborationArchive(target, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /** Discard acknowledgements from a replaced Profile worker after the durable write.
+   * @param profileId - Account-authorized Profile identity.
+   * @param challenge - Exact preparing group and original Session.
+   * @param signal - Owning connection cancellation.
+   * @returns Current worker's persisted fence.
+   */
+  async installGroupInputFence(
+    profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
+  ): Promise<HostGroupInputFenceValue> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.installGroupInputFence) throw new HostAuthorityError('unavailable')
+    const result = await worker.installGroupInputFence(challenge, signal)
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     return result
@@ -520,11 +576,12 @@ export class ProfileWorkerSupervisor {
  * @returns Source and reference readers with their supervisor receiver retained; cloud transfer requires separate authority.
  */
 export function collaborationWorkerReaders(workers: ProfileWorkerSupervisor): Pick<HostControlAuthorityOptions,
-  'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
+  'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot' | 'readCollaborationReferenceGrant'
   | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent'> {
   return {
     inspectWorkspaceModelSelection: workers.inspectWorkspaceModelSelection.bind(workers),
     inspectCollaborationArchiveState: workers.inspectCollaborationArchiveState.bind(workers),
+    installGroupInputFence: workers.installGroupInputFence.bind(workers),
     inspectCollaborationArchiveIntent: workers.inspectCollaborationArchiveIntent.bind(workers),
     transitionCollaborationArchive: workers.transitionCollaborationArchive.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),

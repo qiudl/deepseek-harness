@@ -21,6 +21,7 @@
     "src/media-references.ts",
     "src/model-selection-projection.ts",
     "src/archived-session-gate.ts",
+    "src/group-input-gate.ts",
     "src/skill-catalog.ts",
     "src/collaboration-source-journal.ts",
     "src/collaboration-timeline-journal.ts",
@@ -49,6 +50,9 @@
     },
     {
       "path": "../../core/agent"
+    },
+    {
+      "path": "../../core/agent-loop"
     },
     {
       "path": "../../core/agent-default-model"
