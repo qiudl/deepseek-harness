@@ -74,13 +74,14 @@ it('selects an authorized project Agent and removes that member from the origina
   expect(screen.queryByRole('button', { name: 'Agent B · Project B' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Agent A · Project A' }))
   await waitFor(() => { expect(screen.getByRole('button', { name: 'Remove Agent' })).toBeTruthy() })
-  expect(screen.getAllByText('Agent A · Project A')).toHaveLength(2)
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+  expect(screen.getByText('Agent A · Project A')).toBeTruthy()
   expect(sent.find(command => command.operation === 'agent_join')).toMatchObject({
     project_id: 'project-a', agent_id: 'agent-a', expected_membership_version: 1,
   })
   fireEvent.click(screen.getByRole('button', { name: 'Remove Agent' }))
   await waitFor(() => { expect(screen.queryByRole('button', { name: 'Remove Agent' })).toBeNull() })
-  expect(screen.getAllByText('Agent A · Project A')).toHaveLength(1)
+  expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy()
   expect(sent.find(command => command.operation === 'leave')).toMatchObject({
     member_id: agentMemberId, expected_membership_version: 2,
   })

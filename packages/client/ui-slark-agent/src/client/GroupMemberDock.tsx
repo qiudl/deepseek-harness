@@ -615,12 +615,14 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     <div className={css.memberAdd}>
       <button type="button" disabled={agentBusy || busy || !!pending || !host.collaborationWorkspace}
         onClick={() => { void agentLoad.current?.() }}>{t('group.chooseAgent')}</button>
-      {agentChoices.map(agent => <button type="button"
-        key={`${agent.project_id}:${agent.agent_id}`}
-        disabled={busy || !!pending || agentBusy}
-        onClick={() => { void addAgent(agent) }}>
-        {agent.agent_name} · {agent.project_name}
-      </button>)}
+      {agentChoices.filter(agent => !snapshot?.members.some(member =>
+        member.agent?.project_id === agent.project_id && member.agent.agent_id === agent.agent_id))
+        .map(agent => <button type="button"
+          key={`${agent.project_id}:${agent.agent_id}`}
+          disabled={busy || !!pending || agentBusy}
+          onClick={() => { void addAgent(agent) }}>
+          {agent.agent_name} · {agent.project_name}
+        </button>)}
       {agentCursor && <button type="button" disabled={agentBusy}
         onClick={() => { void agentLoad.current?.(agentCursor) }}>{t('group.moreAgents')}</button>}
     </div>
