@@ -1,4 +1,5 @@
 /** Parent-owned request identity for one original Session group message. */
+import type { DesktopCollaborationSourceInput } from './collaboration-source.ts'
 
 /** Bounded group ledger commands and parent-owned pending key operations. */
 export type GroupAgentMentionSpan = {
@@ -22,6 +23,7 @@ export type GroupMessageCommand =
     mention_spans?: GroupAgentMentionSpan[]
   }
   | { operation: 'receipt'; workspace_id: string; session_id: string; request_id: string }
+  | { operation: 'work-source'; workspace_id: string; session_id: string; message_id: string }
   | { operation: 'page'; workspace_id: string; session_id: string; after_seq: number; limit: number }
   | { operation: 'pending_claim'; workspace_id: string; session_id: string; group_id: string; digest: string }
   | { operation: 'pending_ack'; workspace_id: string; session_id: string; group_id: string; digest: string; request_id: string }
@@ -30,6 +32,12 @@ export type GroupMessageCommand =
 /** Exact group ledger or parent pending-key reply. */
 export type GroupMessageReply =
   | { state: 'recorded'; message_id: string; seq: number }
+  | { state: 'recorded_source'
+    group_id: string
+    request_id: string
+    payload_digest: string
+    message_seq: number
+    source: DesktopCollaborationSourceInput }
   | { state: 'missing' | 'conflict' | 'retry_required' }
   | { state: 'pending'; request_id: string }
   | { state: 'pending_status'; request_id: string; digest: string }

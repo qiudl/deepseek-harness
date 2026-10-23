@@ -159,11 +159,12 @@ type Props = PropsLocale<'slarkAgent'> & {
 }
 const botIdPattern = /^[A-Za-z0-9_-]{1,200}$/u
 const memberLabel = (member: Member, choices: readonly ScopedAgentItem[]): string => {
-  if (!member.agent) return member.actor_ref
-  const loaded = choices.find(item => item.project_id === member.agent?.project_id &&
-    item.agent_id === member.agent?.agent_id)
+  const agent = member.agent
+  if (!agent) return member.actor_ref
+  const loaded = choices.find(item => item.project_id === agent.project_id &&
+    item.agent_id === agent.agent_id)
   return loaded ? `${loaded.agent_name} · ${loaded.project_name}` :
-    `${member.agent.agent_id} · ${member.agent.project_id}`
+    `${agent.agent_id} · ${agent.project_id}`
 }
 
 export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Props) {
@@ -306,7 +307,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         }
         const selected = new Set(scope.value.selected_project_ids)
         const choices = page.value.items.filter((item): item is ScopedAgentItem =>
-          'agent_id' in item && selected.has(item.project_id) && item.available === true &&
+          'agent_id' in item && selected.has(item.project_id) && item.available &&
           item.reason_code === 'ready')
         setAgentChoices(prior => after ? [...prior, ...choices] : choices)
         setAgentCursor(page.value.next_cursor)
