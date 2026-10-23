@@ -50,6 +50,8 @@ it('roundtrips Account-bound native room frames without private fields', () => {
     expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)))
       .toBe(`${JSON.stringify(frame)}\n`)
   }
+  expect(decodeHostControlFrame(`${JSON.stringify({ ...result,
+    result: { binding: null } })}\n`)).toMatchObject({ result: { binding: null } })
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
     params: { ...request.params, profile_id: 'private' } })}\n`)).toThrow()
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...result,

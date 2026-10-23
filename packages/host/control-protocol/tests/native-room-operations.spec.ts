@@ -100,6 +100,44 @@ describe('native room private operations', () => {
       .toThrow()
   })
 
+  it('requires signed turn pages to match the visible room reply', () => {
+    const request_id = '10000000-0000-4000-8000-000000000001'
+    const reply = { state: 'turns', room_id: turns.room_id, group_id: group,
+      member_id: member, cycle: 1, next_seq: 6,
+      turns: [{ turn_id: chunk.turn_id, trigger_room_seq: 6, turn_order: 2 }] }
+    const turn_assertion = { schema_version: 1, after_seq: 5, selection: reply,
+      authority_environment_id: '40000000-0000-4000-8000-000000000004',
+      account_binding_handle: 'binding:bot', authority_binding_version: 1,
+      account_issuer: 'https://accounts.example.test',
+      account_subject: '50000000-0000-4000-8000-000000000005',
+      installation_id: '60000000-0000-4000-8000-000000000006',
+      installation_public_key: 'A'.repeat(43),
+      host_instance_id: '20000000-0000-4000-8000-000000000002',
+      process_nonce: 'B'.repeat(43), issued_at: 1000, signature: 'A'.repeat(86) }
+    const frame = { version: 1, type: 'result', request_id,
+      method: 'profile.native_room_operation', result: { reply, turn_assertion } }
+    expect(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)).toMatchObject(frame)
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame,
+      result: { reply, turn_assertion: { ...turn_assertion,
+        selection: { ...reply, next_seq: 7 } } } })}\n`)).toThrow()
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame,
+      result: { reply } })}\n`)).toThrow()
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame,
+      result: { reply: { state: 'history_gap' }, turn_assertion } })}\n`)).toThrow()
+  })
+
+  it('keeps native Agent chunk receipts on their separate result method', () => {
+    const frame = { version: 1, type: 'result',
+      request_id: '10000000-0000-4000-8000-000000000001',
+      method: 'profile.native_agent_result', result: { reply: { state: 'recorded',
+        turn_id: chunk.turn_id, chunk_index: 0, room_seq: 7 } } }
+    expect(decodeHostControlFrame(`${JSON.stringify(frame)}\n`)).toMatchObject(frame)
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame,
+      result: { reply: { state: 'history_gap' } } })}\n`)).toThrow()
+    expect(() => decodeHostControlFrame(`${JSON.stringify({ ...frame,
+      result: { reply: frame.result.reply, private_context: 'secret' } })}\n`)).toThrow()
+  })
+
   it('matches only the exact acknowledged turn IDs', () => {
     const reply = parseHostNativeRoomReply({ state: 'turns_acknowledged',
       turn_ids: [...turnAck.turn_ids] })
