@@ -38,6 +38,9 @@ export async function readImmutableJournalRecord(path: string, uid: number, maxi
     const after = await handle.stat({ bigint: true })
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
       || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) throw Error(errors.changed)
-    try { return JSON.parse(bytes.toString('utf8')) as unknown } catch { throw Error(errors.invalid) }
+    try {
+      const value: unknown = JSON.parse(bytes.toString('utf8'))
+      return value
+    } catch { throw Error(errors.invalid) }
   } finally { await handle.close() }
 }

@@ -17,7 +17,7 @@ export function parseOwnerPrivateMarkerRecord(bytes: Buffer | undefined,
   if (bytes === undefined) return null
   if (bytes.length < 1 || bytes.length > maximumBytes) throw new HostAuthorityError('unavailable')
   let value: unknown
-  try { value = JSON.parse(UTF8.decode(bytes)) as unknown } catch { throw new HostAuthorityError('unavailable') }
+  try { value = JSON.parse(UTF8.decode(bytes)) } catch { throw new HostAuthorityError('unavailable') }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
   return value as Record<string, unknown>
 }
