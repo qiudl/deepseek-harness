@@ -72,9 +72,28 @@ export type HostNativeRoomCommand = Readonly<{
   cycle: number
 }>
 
-/** One mapping for Host verification and the Profile room service. */
+type NativeAgentResultChunkFields = {
+  groupId: string
+  turnId: string
+  turnOrder: number
+  triggerRoomSeq: number
+  projectId: string
+  agentId: string
+  replyMessageId: string
+  status: 'completed' | 'failed'
+  resultDigest: string
+  chunkIndex: number
+  chunkCount: number
+  chunkText: string
+  chunkDigest: string
+}
+
+/** One mapping for Host verification and the Profile room service.
+ * @param command - Validated Host result chunk command.
+ * @returns The room service and Host ticket's shared camel case coordinates.
+ */
 export function nativeAgentResultChunkFields(command: Extract<HostNativeRoomCommand,
-  { operation: 'agent-result-chunk' }>) {
+  { operation: 'agent-result-chunk' }>): NativeAgentResultChunkFields {
   return {
     groupId: command.group_id, turnId: command.turn_id,
     turnOrder: command.turn_order, triggerRoomSeq: command.trigger_room_seq,
