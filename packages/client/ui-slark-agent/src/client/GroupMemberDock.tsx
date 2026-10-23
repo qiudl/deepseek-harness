@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import type { ScopedAgentItem, WorkspaceBridge } from './project-scope.ts'
 import { clearProxyIntent, readProxyIntent, writeProxyIntent } from './proxy-intent-store.ts'
 import type { ProxyIntent } from './proxy-intent-store.ts'
 import { clearLeaveDecisionIntent, readLeaveDecisionIntent, writeLeaveDecisionIntent } from './leave-decision-intent-store.ts'
@@ -17,6 +18,7 @@ type Member = {
   cycle: number
   joined_seq: number
   sources: ('manual' | 'personal_proxy')[]
+  agent: { project_id: string; agent_id: string } | null
 }
 type Snapshot = {
   state: 'snapshot'
@@ -27,7 +29,7 @@ type Snapshot = {
 }
 type Receipt = {
   state: 'recorded'
-  operation: 'join' | 'leave' | 'proxy_attach' | 'proxy_revoke'
+  operation: 'join' | 'agent_join' | 'leave' | 'proxy_attach' | 'proxy_revoke'
   member_id: string
   membership_version: number
   seq: number
@@ -91,6 +93,15 @@ export type GroupMemberCommand =
     bot_id: string
   }
   | {
+    operation: 'agent_join'
+    workspace_id: string
+    session_id: string
+    request_id: string
+    expected_membership_version: number
+    project_id: string
+    agent_id: string
+  }
+  | {
     operation: 'leave'
     workspace_id: string
     session_id: string
@@ -134,11 +145,11 @@ export type GroupMemberReply = Snapshot | Receipt |
     bot_ref: string | null
     binding_state: 'transferring' | 'unbound' } |
   { state: 'missing' | 'conflict' | 'retry_required' }
-export interface GroupMemberBridge {
+export interface GroupMemberBridge extends WorkspaceBridge {
   collaborationGroupMembers?(command: GroupMemberCommand): Promise<GroupMemberReply>
 }
 type Host = GroupMemberBridge
-type Change = Extract<GroupMemberCommand, { operation: 'join' | 'leave' | 'proxy_attach' }>
+type Change = Extract<GroupMemberCommand, { operation: 'join' | 'agent_join' | 'leave' | 'proxy_attach' }>
 type InFlight = Extract<GroupMemberReply, { state: 'inflight' }>
 type Props = PropsLocale<'slarkAgent'> & {
   host: Host
@@ -147,6 +158,13 @@ type Props = PropsLocale<'slarkAgent'> & {
   groupId: string
 }
 const botIdPattern = /^[A-Za-z0-9_-]{1,200}$/u
+const memberLabel = (member: Member, choices: readonly ScopedAgentItem[]): string => {
+  if (!member.agent) return member.actor_ref
+  const loaded = choices.find(item => item.project_id === member.agent?.project_id &&
+    item.agent_id === member.agent?.agent_id)
+  return loaded ? `${loaded.agent_name} · ${loaded.project_name}` :
+    `${member.agent.agent_id} · ${member.agent.project_id}`
+}
 
 export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Props) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
@@ -154,6 +172,11 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const [roster, setRoster] = useState<Extract<GroupMemberReply, { state: 'bot_roster' }> | null>(null)
   const [rosterBusy, setRosterBusy] = useState(false)
   const [rosterUnavailable, setRosterUnavailable] = useState(false)
+  const [agentChoices, setAgentChoices] = useState<ScopedAgentItem[]>([])
+  const [agentCursor, setAgentCursor] = useState<string | null>(null)
+  const [agentScopeVersion, setAgentScopeVersion] = useState<string | null>(null)
+  const [agentBusy, setAgentBusy] = useState(false)
+  const [agentUnavailable, setAgentUnavailable] = useState(false)
   const [proxyBusy, setProxyBusy] = useState(false)
   const [proxyUnavailable, setProxyUnavailable] = useState(false)
   const [proxyLabel, setProxyLabel] = useState<string | null>(null)
@@ -172,6 +195,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   const snapshotRef = useRef<Snapshot | null>(null)
   const botIdRef = useRef('')
   const rosterLoad = useRef<((after: string) => Promise<void>) | null>(null)
+  const agentLoad = useRef<((after?: string) => Promise<void>) | null>(null)
   const proxySelect = useRef<(() => Promise<void>) | null>(null)
   const proxyUnbind = useRef<(() => Promise<void>) | null>(null)
   const proxyRequestId = useRef<string | null>(null)
@@ -187,6 +211,8 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     pendingDecisionIntent.current = readLeaveDecisionIntent(workspaceId, sessionId, groupId)
     snapshotRef.current = null; botIdRef.current = ''
     setRoster(null); setRosterBusy(false); setRosterUnavailable(false)
+    setAgentChoices([]); setAgentCursor(null); setAgentScopeVersion(null)
+    setAgentBusy(false); setAgentUnavailable(false)
     setProxyBusy(false); setProxyUnavailable(false); setProxyLabel(null)
     setProxyHandoffPending(false); setProxyNeedsReselection(false)
     const savedIntent = readProxyIntent(workspaceId, sessionId, groupId)
@@ -257,6 +283,36 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         setRoster(result)
       } catch { if (current()) setRosterUnavailable(true) }
       finally { rosterInFlight = false; if (current()) setRosterBusy(false) }
+    }
+    let agentInFlight = false
+    agentLoad.current = async (after) => {
+      if (!current() || agentInFlight || !host.collaborationWorkspace) return
+      agentInFlight = true; setAgentBusy(true); setAgentUnavailable(false)
+      try {
+        const scope = await host.collaborationWorkspace({ workspace_id: workspaceId,
+          session_id: sessionId, operation: { kind: 'get' } })
+        if (!current()) return
+        if (!scope.ok || !('selected_project_ids' in scope.value)) {
+          setAgentUnavailable(true); return
+        }
+        const page = await host.collaborationWorkspace({ workspace_id: workspaceId,
+          session_id: sessionId, operation: { kind: 'agents', query: {
+            limit: 50, ...(after ? { cursor: after } : {}),
+          } } })
+        if (!current()) return
+        if (!page.ok || !('items' in page.value) || !('scope_version' in page.value) ||
+          page.value.scope_version !== scope.value.version) {
+          setAgentUnavailable(true); return
+        }
+        const selected = new Set(scope.value.selected_project_ids)
+        const choices = page.value.items.filter((item): item is ScopedAgentItem =>
+          'agent_id' in item && selected.has(item.project_id) && item.available === true &&
+          item.reason_code === 'ready')
+        setAgentChoices(prior => after ? [...prior, ...choices] : choices)
+        setAgentCursor(page.value.next_cursor)
+        setAgentScopeVersion(scope.value.version)
+      } catch { if (current()) setAgentUnavailable(true) }
+      finally { agentInFlight = false; if (current()) setAgentBusy(false) }
     }
     change.current = async (command) => {
       /* v8 ignore next -- action controls are disabled during a change and removed with the Host. */
@@ -396,7 +452,7 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     void load()
     const timer = window.setInterval(() => { void load() }, 20_000)
     return () => { disposed = true; window.clearInterval(timer)
-      change.current = null; rosterLoad.current = null; proxySelect.current = null
+      change.current = null; rosterLoad.current = null; agentLoad.current = null; proxySelect.current = null
       proxyUnbind.current = null }
   }, [host, workspaceId, sessionId, groupId])
   const add = () => {
@@ -405,6 +461,31 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
     void change.current?.({ operation: 'join', workspace_id: workspaceId, session_id: sessionId,
       request_id: randomUUID(), expected_membership_version: snapshot.membership_version,
       bot_id: botId })
+  }
+  const addAgent = async (agent: ScopedAgentItem) => {
+    if (!snapshot || !agentScopeVersion || !host.collaborationWorkspace || pendingRef.current ||
+      busy || window.__DSH_DESKTOP_HOST__ !== host) return
+    try {
+      const scope = await host.collaborationWorkspace({ workspace_id: workspaceId,
+        session_id: sessionId, operation: { kind: 'get' } })
+      if (window.__DSH_DESKTOP_HOST__ !== host) return
+      if (!scope.ok || !('selected_project_ids' in scope.value) ||
+        scope.value.version !== agentScopeVersion ||
+        !scope.value.selected_project_ids.includes(agent.project_id)) {
+        setAgentUnavailable(true); return
+      }
+      void change.current?.({ operation: 'agent_join', workspace_id: workspaceId,
+        session_id: sessionId, request_id: randomUUID(),
+        expected_membership_version: snapshot.membership_version,
+        project_id: agent.project_id, agent_id: agent.agent_id })
+    } catch { if (window.__DSH_DESKTOP_HOST__ === host) setAgentUnavailable(true) }
+  }
+  const removeAgent = (memberId: string) => {
+    if (!snapshot || pendingRef.current || busy || window.__DSH_DESKTOP_HOST__ !== host ||
+      !snapshot.members.some(member => member.member_id === memberId && member.agent !== null)) return
+    void change.current?.({ operation: 'leave', workspace_id: workspaceId,
+      session_id: sessionId, request_id: randomUUID(),
+      expected_membership_version: snapshot.membership_version, member_id: memberId })
   }
   const remove = async (memberId: string) => {
     /* v8 ignore next -- Remove buttons render only from a snapshot and are disabled while a change is pending. */
@@ -499,13 +580,16 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
   return <section className={css.members} aria-label={t('group.members')}>
     <strong>{t('group.members')}</strong>
     {snapshot?.members.map(member => <div className={css.member} key={member.member_id}>
-      <span>{member.actor_ref}</span>
+      <span>{memberLabel(member, agentChoices)}</span>
       {member.sources.includes('personal_proxy') && <small>{t('group.personalProxy')}</small>}
       {member.actor_kind === 'bot' && member.sources.includes('manual') &&
         <button type="button" disabled={busy || !!pending || removalPending || decisionBusy}
           onClick={() => { void remove(member.member_id) }}>
           {t('group.removeBot')}
         </button>}
+      {member.actor_kind === 'slark_agent' && member.agent &&
+        <button type="button" disabled={busy || !!pending}
+          onClick={() => { removeAgent(member.member_id) }}>{t('group.removeAgent')}</button>}
     </div>)}
     <div className={css.memberAdd}>
       <label htmlFor="slark-group-bot-id">{t('group.botId')}</label>
@@ -528,6 +612,19 @@ export function GroupMemberDock({ host, workspaceId, sessionId, groupId, t }: Pr
         {t('group.moreBots')}</button>}
     </div>}
     {rosterUnavailable && <p role="status">{t('group.botRosterUnavailable')}</p>}
+    <div className={css.memberAdd}>
+      <button type="button" disabled={agentBusy || busy || !!pending || !host.collaborationWorkspace}
+        onClick={() => { void agentLoad.current?.() }}>{t('group.chooseAgent')}</button>
+      {agentChoices.map(agent => <button type="button"
+        key={`${agent.project_id}:${agent.agent_id}`}
+        disabled={busy || !!pending || agentBusy}
+        onClick={() => { void addAgent(agent) }}>
+        {agent.agent_name} · {agent.project_name}
+      </button>)}
+      {agentCursor && <button type="button" disabled={agentBusy}
+        onClick={() => { void agentLoad.current?.(agentCursor) }}>{t('group.moreAgents')}</button>}
+    </div>
+    {agentUnavailable && <p role="status">{t('group.agentRosterUnavailable')}</p>}
     {proxyLabel && <p>{t('group.personalProxy')}: {proxyLabel}</p>}
     {proxyHandoffPending && <p role="status">{t('group.proxyHandoffPending')}</p>}
     {proxyNeedsReselection && <p role="status">{t('group.proxyNeedsReselection')}</p>}

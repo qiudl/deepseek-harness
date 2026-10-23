@@ -14,10 +14,10 @@ const groupId = '22222222-2222-4222-8222-222222222222'
 const memberId = '33333333-3333-4333-8333-333333333333'
 const sessionId = SessionId('original-session')
 const owner = { member_id: memberId, actor_kind: 'human' as const, actor_ref: 'owner',
-  role: 'owner' as const, cycle: 1, joined_seq: 0, sources: [] }
+  role: 'owner' as const, cycle: 1, joined_seq: 0, sources: [], agent: null }
 const manualBot = { member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot' as const,
   actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
-  sources: ['manual' as const] }
+  sources: ['manual' as const], agent: null }
 type SnapshotReply = Extract<GroupMemberReply, { state: 'snapshot' }>
 const snapshot = (members: SnapshotReply['members'] = [owner, manualBot]): SnapshotReply => ({ state: 'snapshot',
   group_id: groupId, membership_version: 2, last_seq: 1, members })
@@ -30,6 +30,58 @@ const show = (host: { collaborationGroupMembers?: (command: GroupMemberCommand) 
 }
 afterEach(() => { cleanup(); vi.restoreAllMocks(); sessionStorage.clear(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
+it('selects an authorized project Agent and removes that member from the original group', async () => {
+  const agentMemberId = '66666666-6666-4666-8666-666666666666'
+  const sent: GroupMemberCommand[] = []
+  let joined = false
+  const host = {
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : { ok: true as const, value: { scope_version: '3', next_cursor: null, items: [
+          { project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+            agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+            reason_code: 'ready' },
+        ] } }),
+    collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+      sent.push(command)
+      if (command.operation === 'status') return { state: 'snapshot', group_id: groupId,
+        membership_version: joined ? 2 : 1, last_seq: joined ? 1 : 0,
+        members: joined ? [owner, { member_id: agentMemberId, actor_kind: 'slark_agent',
+          actor_ref: 'slark-agent:' + 'b'.repeat(64), role: 'member', cycle: 1,
+          joined_seq: 1, sources: [], agent: { project_id: 'project-a', agent_id: 'agent-a' } }] : [owner] }
+      if (command.operation === 'agent_join') {
+        joined = true
+        return { state: 'recorded', operation: 'agent_join', member_id: agentMemberId,
+          membership_version: 2, seq: 1 }
+      }
+      if (command.operation === 'leave') {
+        joined = false
+        return { state: 'recorded', operation: 'leave', member_id: agentMemberId,
+          membership_version: 3, seq: 2 }
+      }
+      throw Error('unexpected command')
+    }),
+  }
+  show(host)
+  await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy() })
+  fireEvent.click(screen.getByRole('button', { name: 'Agent A · Project A' }))
+  await waitFor(() => { expect(screen.getByRole('button', { name: 'Remove Agent' })).toBeTruthy() })
+  expect(screen.getAllByText('Agent A · Project A')).toHaveLength(2)
+  expect(sent.find(command => command.operation === 'agent_join')).toMatchObject({
+    project_id: 'project-a', agent_id: 'agent-a', expected_membership_version: 1,
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Agent' }))
+  await waitFor(() => { expect(screen.queryByRole('button', { name: 'Remove Agent' })).toBeNull() })
+  expect(screen.getAllByText('Agent A · Project A')).toHaveLength(1)
+  expect(sent.find(command => command.operation === 'leave')).toMatchObject({
+    member_id: agentMemberId, expected_membership_version: 2,
+  })
+})
+
 it('shows current Bot members and retries an uncertain join with the same request key', async () => {
   const commands: unknown[] = []
   let joined = false, joinAttempts = 0
@@ -38,10 +90,10 @@ it('shows current Bot members and retries an uncertain join with the same reques
     if (command.operation === 'status') return { state: 'snapshot' as const,
       group_id: groupId, membership_version: joined ? 2 : 1, last_seq: joined ? 1 : 0,
       members: [{ member_id: memberId, actor_kind: 'human', actor_ref: 'owner', role: 'owner',
-        cycle: 1, joined_seq: 0, sources: [] },
+        cycle: 1, joined_seq: 0, sources: [], agent: null },
       ...(joined ? [{ member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot' as const,
         actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
-        sources: ['manual' as const] }] : [])] }
+        sources: ['manual' as const], agent: null }] : [])] }
     if (command.operation === 'join') {
       joinAttempts++
       if (joinAttempts === 1) return { state: 'retry_required' as const }
@@ -74,13 +126,13 @@ it('only offers manual Bot removal while showing a personal proxy as a member', 
       group_id: groupId, membership_version: 3, last_seq: 2,
       members: [
         { member_id: memberId, actor_kind: 'human', actor_ref: 'owner', role: 'owner',
-          cycle: 1, joined_seq: 0, sources: [] },
+          cycle: 1, joined_seq: 0, sources: [], agent: null },
         { member_id: '44444444-4444-4444-8444-444444444444', actor_kind: 'bot',
           actor_ref: 'deepseek-bot:manual', role: 'member', cycle: 1, joined_seq: 1,
-          sources: ['manual'] },
+          sources: ['manual'], agent: null },
         { member_id: '55555555-5555-4555-8555-555555555555', actor_kind: 'bot',
           actor_ref: 'deepseek-bot:proxy', role: 'member', cycle: 1, joined_seq: 2,
-          sources: ['personal_proxy'] },
+          sources: ['personal_proxy'], agent: null },
       ] }
     if (command.operation === 'inflight') return noInFlight(command.member_id)
     return { state: 'retry_required' as const }
@@ -741,7 +793,7 @@ it('binds an existing Bot as owner proxy and attaches it to the current group', 
         membership_version: 3, seq: 2 }
     }
     return snapshot(attached ? [owner, { ...manualBot, actor_ref: 'deepseek-bot:my_bot',
-      sources: ['personal_proxy' as const] }] : [owner])
+      sources: ['personal_proxy' as const], agent: null }] : [owner])
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
@@ -1025,7 +1077,7 @@ it('reuses an active personal Bot binding and avoids duplicate group attachment'
         member_id: manualBot.member_id, membership_version: 3, seq: 2 }
     }
     return snapshot(attached ? [owner, { ...manualBot, actor_ref: 'deepseek-bot:my_bot',
-      sources: ['personal_proxy' as const] }] : [owner])
+      sources: ['personal_proxy' as const], agent: null }] : [owner])
   }) }
   show(host)
   await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
