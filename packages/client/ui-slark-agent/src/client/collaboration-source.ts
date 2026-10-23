@@ -283,6 +283,17 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
               if (result.state !== 'recorded') return { kind: 'error',
                 text: t(result.state === 'pending_other' ? 'group.pendingOther' : 'group.uncertain') }
               const recorded = result
+              if (mentionRefs.length) {
+                if (!host.collaborationGroupWork) return { kind: 'error', text: t('group.uncertain') }
+                let planned: Awaited<ReturnType<NonNullable<typeof host.collaborationGroupWork>>>
+                try { planned = await host.collaborationGroupWork({ workspace_id: groupWorkspace,
+                  session_id: session.sessionId, message_id: recorded.messageId }) }
+                catch { return { kind: 'error', text: t('group.uncertain') } }
+                signal.throwIfAborted()
+                if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
+                  !planned.ok)
+                  return { kind: 'error', text: t('group.uncertain') }
+              }
               const inputState = ctx.conversation.input.for(actx).state
               let acknowledged = false
               const acknowledgeWhenCleared = () => {

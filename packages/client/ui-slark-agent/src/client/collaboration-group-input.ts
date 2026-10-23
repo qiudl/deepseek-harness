@@ -55,6 +55,20 @@ export type GroupMessageReply =
 /** The verified Slark parent owns this bridge in bundled remote mode. */
 export interface GroupMessageBridge {
   collaborationGroupMessages?(command: GroupMessageCommand): Promise<GroupMessageReply>
+  collaborationGroupWork?(command: {
+    workspace_id: string
+    session_id: string
+    message_id: string
+  }): Promise<{
+    ok: true
+    planning: 'recorded'
+    root: Record<string, unknown>
+    checkpoint: Record<string, unknown>
+  } | {
+    ok: false
+    errorCode: string
+    reconciliationRequired: boolean
+  }>
 }
 
 const recordedState = 'recorded' as const

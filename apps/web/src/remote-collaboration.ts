@@ -150,6 +150,18 @@ function groupResult(value: unknown): boolean {
   }
   return !value.items.length || previous === value.next_seq
 }
+function groupWorkResult(value: unknown, input: Record<string, unknown>): boolean {
+  if (!row(value)) return false
+  if (value.ok === false) return Object.keys(value).every(key =>
+    ['ok', 'errorCode', 'reconciliationRequired', 'root'].includes(key)) &&
+    text(value.errorCode, 128) && typeof value.reconciliationRequired === 'boolean'
+  if (!exact(value, ['ok', 'planning', 'root', 'checkpoint']) || value.ok !== true ||
+    value.planning !== 'recorded' || !row(value.root) || !row(value.checkpoint)) return false
+  const source = value.root.source_descriptor
+  return row(source) && source.workspace_id === input.workspace_id &&
+    source.session_id === input.session_id && source.source_message_id === input.message_id &&
+    typeof value.root.root_task_id === 'string' && typeof value.root.root_trace_id === 'string'
+}
 function groupMentionCommand(value: Record<string, unknown>): boolean {
   if (!Object.hasOwn(value, 'mention_refs') && !Object.hasOwn(value, 'mention_spans')) return true
   const refs = value.mention_refs, spans = value.mention_spans
@@ -398,17 +410,20 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const conversations = methods.includes('conversations')
     const archive = methods.includes('archive')
     const groupMessages = expectedSchema === groupSchema && methods.includes('groupMessages')
+    const groupWork = expectedSchema === groupSchema && methods.includes('groupWork')
     const groupMembers = expectedSchema === groupSchema && methods.includes('groupMembers')
     const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
     const groupActivation = expectedSchema === groupSchema && methods.includes('groupActivation')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
-      + (groupMessages ? 1 : 0) + (groupMembers ? 1 : 0)
+      + (groupMessages ? 1 : 0) + (groupWork ? 1 : 0) + (groupMembers ? 1 : 0)
       + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0)
       || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
-        'groupMessages', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
+        'groupMessages', 'groupWork', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
+    const collaborationReady = execution || conversations || archive || groupMessages ||
+      groupWork || groupMembers || groupPreparation || groupActivation
     const bridge = {
       async accountIdentity(): Promise<{ name: string; avatarUrl: string | null } | null> {
         const controller = new AbortController()
@@ -426,7 +441,7 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
       },
       collaborationScopeAvailable: true,
       collaborationExecutionAvailable: execution,
-      ...((execution || conversations || archive || groupMessages || groupMembers || groupPreparation || groupActivation) ? (() => {
+      ...(collaborationReady ? (() => {
         const call = async (method: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
           const rpcId = 'collaboration-' + String(++sequence)
           const response = await exchange(fetch, '/api/' + method, { method: 'POST',
@@ -491,6 +506,24 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
               throw Error('invalid group reply')
             return result
           } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
+        ...(groupWork ? { collaborationGroupWork: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 75_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['workspace_id', 'session_id', 'message_id']) ||
+              typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id) ||
+              typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id) ||
+              /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..' ||
+              typeof raw.message_id !== 'string' || !uuid.test(raw.message_id))
+              throw Error('invalid group work')
+            const result = await call('collaboration/groupWork', raw, signal)
+            if (!groupWorkResult(result, raw)) throw Error('invalid group work reply')
+            return result
+          } catch { return { ok: false, errorCode: 'collaboration_group_work_retry_required',
+            reconciliationRequired: true } }
           finally { clearTimeout(timer) }
         } } : {}),
         ...(groupMembers ? { collaborationGroupMembers: async (raw: unknown) => {

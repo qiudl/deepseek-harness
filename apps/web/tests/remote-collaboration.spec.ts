@@ -58,6 +58,7 @@ function bridge(): {
   collaborationDeliveries(value: unknown): Promise<unknown>
   collaborationConversations?(): Promise<unknown>
   collaborationGroupMessages?(value: unknown): Promise<unknown>
+  collaborationGroupWork?(value: unknown): Promise<unknown>
   collaborationGroupMembers?(value: unknown): Promise<unknown>
   collaborationGroupPreparation?(value: unknown): Promise<unknown>
   collaborationGroupActivation?(value: unknown): Promise<unknown>
@@ -334,6 +335,29 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
   expect(requests[0]?.payload.args.request).toEqual(command)
   expect(await bridge().collaborationGroupMessages?.({ ...command, actor_ref: 'bot' }))
     .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261020-0010: Root planning receives only committed group message coordinates', async () => {
+  const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupWork'] }
+  const command = { workspace_id: workspace, session_id: 'session-1',
+    message_id: '44444444-4444-4444-8444-444444444444' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200, value: advertised }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { ok: true, planning: 'recorded',
+      root: { root_task_id: 'root', root_trace_id: 'trace', source_descriptor: {
+        workspace_id: workspace, session_id: 'session-1', source_message_id: command.message_id } },
+      checkpoint: {} }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupWork?.(command)).toMatchObject({ ok: true, planning: 'recorded' })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.method).toBe('collaboration/groupWork')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupWork?.({ ...command, body: '@Guide do it' }))
+    .toMatchObject({ ok: false, reconciliationRequired: true })
   expect(requests).toHaveLength(1)
 })
 it('REQ-20261020-0010: group Agent chips and recovered Source traverse the real remote carrier', async () => {
