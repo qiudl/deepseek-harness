@@ -213,6 +213,10 @@ describe('Profile-owned collaboration Source capture', () => {
       expect(captured.kind).toBe('captured')
       expect(captured.snapshot.session_id).toBe(h.sessionId)
       expect(captured.submission.source.source_message_id).toBe(input.source.source_message_id)
+      const visible = await h.controller.collaborationSources({ sessionId: h.sessionId,
+        includeTimeline: true }, signal)
+      expect(visible.items.some(item => item.source.source_message_id === input.source.source_message_id &&
+        item.original_message === input.source.original_message)).toBe(true)
       const replay = await h.controller.captureCollaborationGroupRoot(input, signal)
       expect(replay.kind).toBe('recovered')
       expect(replay.submission.command_id).toBe(captured.submission.command_id)

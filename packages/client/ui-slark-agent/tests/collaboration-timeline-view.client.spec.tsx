@@ -74,6 +74,18 @@ it('labels legacy positions separately and excludes another Session without trea
   expect(screen.getAllByTestId('slark-timeline-original')).toHaveLength(1)
 })
 
+it('shows an original group Source and its Agent result in the same Session without a Chat position', () => {
+  const original = group(), messageId = '33333333-3333-4333-8333-333333333333'
+  const groupSource = { ...original, original: { ...original.original,
+    source: { ...original.original.source, source_message_id: messageId },
+    timeline_position: null }, replies: original.replies.map(reply => ({ ...reply,
+    source_locator: { ...reply.source_locator, source_message_id: messageId } })) }
+  fixture([groupSource])
+  const history = screen.getByRole('region', { name: zh['task.unpositionedHistory'] })
+  expect(within(history).getByTestId('slark-timeline-original').textContent).toContain('@Guide · Project a')
+  expect(within(history).getByTestId('slark-timeline-reply').textContent).toContain('answer-a')
+})
+
 it('keeps plain text complete and safe, renders pending questions and exposes distinct read/restricted states', async () => {
   const original = group(), answer = '<img src=x onerror=alert(1)>\n' + 'x'.repeat(128 * 1024 - 30)
   const f = fixture([{ ...original, replies: [{ ...original.replies[0]!, answer }], pending: [{
