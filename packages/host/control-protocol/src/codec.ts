@@ -57,6 +57,23 @@ import type {
   ProfileLeaseCloseResult,
   ProfileOpenRequest,
   ProfileOpenResult,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
+  HostSkillHubPackagePlan,
+  ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageChunkResult,
+  HostSkillHubPackageSignedReceipt,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageResult,
+  HostSkillHubPackageSnapshotTarget,
+  ProfileSkillHubPackageSnapshotRequest,
+  ProfileSkillHubPackageSnapshotResult,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
+  ProfileSkillHubExecutionReceiptResult,
+  HostSkillHubClockAnchorId, HostSkillHubClockWitnessValue, HostSkillHubClockWitnessCommand,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockWitnessResult,
+  ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result, HostSkillHubClockV2Command,
   ProfileViewActivateRequest,
   ProfileViewActivateResult,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest, ProfileWorkspaceAuthorityResult,
@@ -141,6 +158,8 @@ import type {
   MigrationImportAbortResult,
 } from './types.ts'
 import { parseHostCollaborationDeliveryChunk, parseHostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import { encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.ts'
+import { parseSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
 
 /** Maximum UTF-8 bytes in one JSON object, excluding its terminating LF. */
 export const HOST_CONTROL_MAX_FRAME_BYTES = 64 * 1024
@@ -247,10 +266,105 @@ function digest(value: unknown): HostControlSha256 {
   return value as HostControlSha256
 }
 
+function skillHubPackagePlan(value: unknown): HostSkillHubPackagePlan {
+  const plan = record(value)
+  exactKeys(plan, ['operationId', 'packageId', 'profileId', 'hostKeyId', 'bindingGeneration',
+    'expectedRevision', 'versionId', 'skillSlug', 'version', 'archiveSha256', 'manifestSha256'])
+  if (typeof plan.packageId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/u.test(plan.packageId)
+    || typeof plan.bindingGeneration !== 'string' || !/^[1-9][0-9]{0,17}$/u.test(plan.bindingGeneration)
+    || typeof plan.expectedRevision !== 'string' || !/^(?:0|[1-9][0-9]{0,17})$/u.test(plan.expectedRevision)
+    || typeof plan.skillSlug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(plan.skillSlug)
+    || plan.skillSlug.length > 200) reject()
+  return {
+    operationId: uuid(plan.operationId), packageId: plan.packageId,
+    profileId: uuid(plan.profileId), hostKeyId: digest(plan.hostKeyId),
+    bindingGeneration: plan.bindingGeneration, expectedRevision: plan.expectedRevision,
+    versionId: wireText(plan.versionId, 200), skillSlug: plan.skillSlug,
+    version: wireText(plan.version, 200), archiveSha256: digest(plan.archiveSha256),
+    manifestSha256: digest(plan.manifestSha256),
+  }
+}
+
+function skillHubPackageReceipt(value: unknown): HostSkillHubPackageSignedReceipt {
+  const receipt = record(value)
+  exactKeys(receipt, ['version', 'installationId', 'challengeId', 'operationId', 'packageId', 'profileId',
+    'hostKeyId', 'bindingGeneration', 'revision', 'versionId', 'archiveSha256',
+    'manifestSha256', 'readiness', 'loadEvidenceId', 'signature'])
+  const parsed = {
+    version: receipt.version, installationId: uuid(receipt.installationId),
+    challengeId: uuid(receipt.challengeId),
+    operationId: uuid(receipt.operationId), packageId: receipt.packageId,
+    profileId: uuid(receipt.profileId), hostKeyId: digest(receipt.hostKeyId),
+    bindingGeneration: receipt.bindingGeneration, revision: receipt.revision,
+    versionId: receipt.versionId, archiveSha256: digest(receipt.archiveSha256),
+    manifestSha256: digest(receipt.manifestSha256), readiness: receipt.readiness,
+    loadEvidenceId: receipt.loadEvidenceId,
+  } as Omit<HostSkillHubPackageSignedReceipt, 'signature'>
+  try { encodeSkillHubPackageReceiptPayload(parsed) } catch { reject() }
+  return { ...parsed, signature: signature(receipt.signature) }
+}
+
+function skillHubPackageSnapshotTarget(value: unknown): HostSkillHubPackageSnapshotTarget {
+  const target = record(value)
+  if (target.kind === 'manifest') {
+    exactKeys(target, ['kind'])
+    return { kind: 'manifest' }
+  }
+  if (target.kind === 'file') {
+    exactKeys(target, ['kind', 'path'])
+    const path = wireText(target.path, 500)
+    if (path.normalize('NFC') !== path || /[\\\u0000-\u001f\u007f-\u009f]/u.test(path)
+      || path.startsWith('/') || path.split('/').some(part => part === '' || part === '.' || part === '..'
+        || /[:*?"<>|]/u.test(part) || /[. ]$/u.test(part)
+        || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(part))) reject()
+    return { kind: 'file', path }
+  }
+  return reject()
+}
+
+function skillHubExecutionReport(value: unknown): HostSkillHubExecutionReport {
+  const parsed = parseSkillHubExecutionReceipt({
+    schema: 'slark-dsh-profile-execution-receipt/v1',
+    receiptId: '00000000-0000-4000-8000-000000000000',
+    ...record(value),
+    hostInstallationId: '00000000-0000-4000-8000-000000000001',
+    hostKeyId: 'a'.repeat(64),
+    packageOperationId: '00000000-0000-4000-8000-000000000002',
+    packageId: 'package', versionId: 'version', archiveSha256: 'b'.repeat(64),
+    manifestSha256: 'c'.repeat(64), publicKey: 'A'.repeat(43), signature: 'A'.repeat(86),
+  })
+  const { schema: _schema, receiptId: _receiptId, hostInstallationId: _hostInstallationId,
+    hostKeyId: _hostKeyId, packageOperationId: _packageOperationId, packageId: _packageId,
+    versionId: _versionId, archiveSha256: _archiveSha256, manifestSha256: _manifestSha256,
+    publicKey: _publicKey, signature: _signature, ...report } = parsed
+  return report
+}
+
 function modelClaimCandidate(value: unknown): string {
   if (typeof value !== 'string'
     || !/^(?:llm-deepseek|llm-pi-ai|web-search-deepseek):[a-z][a-z0-9-]{0,63}$/u.test(value)) reject()
   return value
+}
+
+function clockWitnessValue(value: unknown): HostSkillHubClockWitnessValue {
+  const row = record(value)
+  exactKeys(row, ['revision', 'digest'])
+  if (typeof row.revision !== 'string' || !/^(0|[1-9][0-9]{0,77})$/u.test(row.revision)) reject()
+  return { revision: row.revision, digest: digest(row.digest) }
+}
+
+function clockWitnessCommand(value: unknown): HostSkillHubClockWitnessCommand {
+  const raw = record(value)
+  if (raw.kind === 'read') {
+    exactKeys(raw, ['kind'])
+    return { kind: 'read' }
+  }
+  if (raw.kind === 'compare_and_set') {
+    exactKeys(raw, ['kind', 'previous', 'next'])
+    return { kind: 'compare_and_set', previous: raw.previous === null ? null
+      : clockWitnessValue(raw.previous), next: clockWitnessValue(raw.next) }
+  }
+  return reject()
 }
 
 function capability(value: unknown): HostControlCapability {
@@ -411,6 +525,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
     'runtime_generation',
     'schema_generation',
     'process_nonce',
+    'boot_nonce',
     'capabilities',
     'challenge_signature',
     'executable_signature_digest',
@@ -432,6 +547,7 @@ function decodeInspectResult(frame: Record<string, unknown>): HostInspectResult 
       runtime_generation: generation(result.runtime_generation),
       schema_generation: generation(result.schema_generation),
       process_nonce: nonce(result.process_nonce),
+      boot_nonce: nonce(result.boot_nonce),
       capabilities: capabilities(result.capabilities),
       challenge_signature: signature(result.challenge_signature),
       executable_signature_digest: digest(result.executable_signature_digest),
@@ -1684,6 +1800,13 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 }
 
 function decodeProfileRequest(frame: Record<string, unknown>):
+  | ProfileSkillHubBindingRequest
+  | ProfileSkillHubPackageChunkRequest
+  | ProfileSkillHubPackageRequest
+  | ProfileSkillHubPackageSnapshotRequest
+  | ProfileSkillHubExecutionReceiptRequest
+  | ProfileSkillHubClockWitnessRequest
+  | ProfileSkillHubClockV2Request
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
@@ -1957,6 +2080,116 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       lease_generation: generation(params.lease_generation), runtime_generation: generation(params.runtime_generation),
       command: extensionCommand(params.command),
     } }
+  }
+  if (frame.method === 'profile.skillhub_binding') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'actor_user_id', 'computer_id', 'challenge_id'])
+    const actor_user_id = wireText(params.actor_user_id, 200)
+    const computer_id = wireText(params.computer_id, 200)
+    if (actor_user_id.trim() !== actor_user_id || computer_id.trim() !== computer_id) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+      actor_user_id, computer_id,
+      challenge_id: uuid(params.challenge_id),
+    } }
+  }
+  if (frame.method === 'profile.skillhub_package_chunk') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'plan', 'total_bytes', 'offset', 'chunk_base64url'])
+    if (!Number.isSafeInteger(params.total_bytes) || (params.total_bytes as number) < 1
+      || (params.total_bytes as number) > 110 * 1024 * 1024
+      || !Number.isSafeInteger(params.offset) || (params.offset as number) < 0
+      || typeof params.chunk_base64url !== 'string' || params.chunk_base64url.length > 43691
+      || !/^[A-Za-z0-9_-]+$/u.test(params.chunk_base64url)) reject()
+    const bytes = Buffer.from(params.chunk_base64url, 'base64url')
+    if (bytes.length < 1 || bytes.length > 32768
+      || bytes.toString('base64url') !== params.chunk_base64url
+      || (params.offset as number) + bytes.length > (params.total_bytes as number)) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        plan: skillHubPackagePlan(params.plan), total_bytes: params.total_bytes as number,
+        offset: params.offset as number, chunk_base64url: params.chunk_base64url } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    if (params.action === 'activate') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'operation_id',
+        'binding_generation', 'expected_revision'])
+      if (typeof params.binding_generation !== 'string'
+        || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)
+        || typeof params.expected_revision !== 'string'
+        || !/^(?:0|[1-9][0-9]{0,17})$/u.test(params.expected_revision)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'activate', operation_id: uuid(params.operation_id),
+          binding_generation: params.binding_generation, expected_revision: params.expected_revision } }
+    }
+    if (params.action === 'current') {
+      exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'challenge_id', 'action', 'package_id'])
+      if (typeof params.package_id !== 'string'
+        || !/^[A-Za-z0-9_-]{1,100}$/u.test(params.package_id)) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+        params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+          challenge_id: uuid(params.challenge_id),
+          action: 'current', package_id: params.package_id } }
+    }
+    reject()
+  }
+  if (frame.method === 'profile.skillhub_package_snapshot') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'receipt', 'target', 'offset'])
+    if (!Number.isSafeInteger(params.offset) || (params.offset as number) < 0
+      || (params.offset as number) > 10 * 1024 * 1024) reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        receipt: skillHubPackageReceipt(params.receipt),
+        target: skillHubPackageSnapshotTarget(params.target), offset: params.offset as number } }
+  }
+  if (frame.method === 'profile.skillhub_clock_witness') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'profile_id',
+      'binding_generation', 'host_key_id', 'anchor_id', 'command'])
+    if (typeof params.binding_generation !== 'string'
+      || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
+    const command = clockWitnessCommand(params.command)
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        profile_id: uuid(params.profile_id) as HostProfileId,
+        binding_generation: params.binding_generation, host_key_id: digest(params.host_key_id),
+        anchor_id: uuid(params.anchor_id) as HostSkillHubClockAnchorId, command } }
+  }
+  if (frame.method === 'profile.skillhub_clock_v2') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'profile_id',
+      'binding_generation', 'host_key_id', 'command'])
+    if (typeof params.binding_generation !== 'string'
+      || !/^[1-9][0-9]{0,17}$/u.test(params.binding_generation)) reject()
+    const raw = record(params.command)
+    let command: HostSkillHubClockV2Command
+    if (raw.kind === 'epoch') {
+      exactKeys(raw, ['kind'])
+      command = { kind: raw.kind }
+    } else if (raw.kind === 'issue') {
+      exactKeys(raw, ['kind', 'purpose', 'active_asset_anchor_id'])
+      if (raw.purpose !== 'asset' && raw.purpose !== 'work') reject()
+      if (raw.purpose === 'asset' && raw.active_asset_anchor_id !== null) reject()
+      if (raw.purpose === 'work' && raw.active_asset_anchor_id === null) reject()
+      command = { kind: 'issue', purpose: raw.purpose,
+        active_asset_anchor_id: raw.active_asset_anchor_id === null ? null
+          : uuid(raw.active_asset_anchor_id) as HostSkillHubClockAnchorId }
+    } else if (raw.kind === 'witness') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket', 'command'])
+      command = { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+        epoch: nonce(raw.epoch), ticket: raw.ticket === null ? null : nonce(raw.ticket),
+        command: clockWitnessCommand(raw.command) }
+    } else return reject()
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        profile_id: uuid(params.profile_id) as HostProfileId,
+        binding_generation: params.binding_generation, host_key_id: digest(params.host_key_id),
+        command } }
+  }
+  if (frame.method === 'profile.skillhub_execution_receipt') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'package_receipt', 'execution'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
+        package_receipt: skillHubPackageReceipt(params.package_receipt),
+        execution: skillHubExecutionReport(params.execution) } }
   }
   if (frame.method === 'profile.status' || frame.method === 'profile.open') {
     exactKeys(params, [
@@ -2352,6 +2585,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 }
 
 function decodeProfileResult(frame: Record<string, unknown>):
+  | ProfileSkillHubBindingResult
+  | ProfileSkillHubPackageChunkResult
+  | ProfileSkillHubPackageResult
+  | ProfileSkillHubPackageSnapshotResult
+  | ProfileSkillHubExecutionReceiptResult
+  | ProfileSkillHubClockWitnessResult
+  | ProfileSkillHubClockV2Result
   | ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult
   | ProfileStatusResult | ProfileEnsureResult | ProfileRestoreResult
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
@@ -2595,6 +2835,90 @@ function decodeProfileResult(frame: Record<string, unknown>):
       version: 1, type: 'result', request_id, method: 'profile.recovery_status',
       result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
     }
+  }
+  if (frame.method === 'profile.skillhub_binding') {
+    exactKeys(result, ['version', 'actorUserId', 'computerId', 'installationId', 'profileId',
+      'bindingGeneration', 'challengeId', 'signature'])
+    if (result.version !== 1 || typeof result.bindingGeneration !== 'string'
+      || !/^[1-9][0-9]{0,15}$/u.test(result.bindingGeneration)
+      || !Number.isSafeInteger(Number(result.bindingGeneration))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      version: 1, actorUserId: wireText(result.actorUserId, 200), computerId: wireText(result.computerId, 200),
+      installationId: uuid(result.installationId), profileId: uuid(result.profileId),
+      bindingGeneration: result.bindingGeneration, challengeId: uuid(result.challengeId),
+      signature: signature(result.signature),
+    } }
+  }
+  if (frame.method === 'profile.skillhub_package_chunk') {
+    exactKeys(result, ['next_offset', 'prepared'])
+    if (!Number.isSafeInteger(result.next_offset) || (result.next_offset as number) < 1
+      || (result.next_offset as number) > 110 * 1024 * 1024
+      || typeof result.prepared !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { next_offset: result.next_offset as number, prepared: result.prepared } }
+  }
+  if (frame.method === 'profile.skillhub_package') {
+    exactKeys(result, ['receipt'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { receipt: result.receipt === null ? null : skillHubPackageReceipt(result.receipt) } }
+  }
+  if (frame.method === 'profile.skillhub_package_snapshot') {
+    exactKeys(result, ['operation_id', 'manifest_sha256', 'target', 'offset', 'total_bytes',
+      'chunk_base64url', 'complete'])
+    if (!Number.isSafeInteger(result.offset) || (result.offset as number) < 0
+      || !Number.isSafeInteger(result.total_bytes) || (result.total_bytes as number) < 0
+      || (result.total_bytes as number) > 10 * 1024 * 1024
+      || (result.offset as number) > (result.total_bytes as number)
+      || typeof result.chunk_base64url !== 'string' || result.chunk_base64url.length > 43691
+      || !/^[A-Za-z0-9_-]*$/u.test(result.chunk_base64url)
+      || typeof result.complete !== 'boolean') reject()
+    const bytes = Buffer.from(result.chunk_base64url, 'base64url')
+    if (bytes.length > 32768 || (bytes.length === 0) !== ((result.total_bytes as number) === 0)
+      || bytes.toString('base64url') !== result.chunk_base64url
+      || (result.offset as number) + bytes.length > (result.total_bytes as number)
+      || result.complete !== ((result.offset as number) + bytes.length === (result.total_bytes as number))) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method, result: {
+      operation_id: uuid(result.operation_id), manifest_sha256: digest(result.manifest_sha256),
+      target: skillHubPackageSnapshotTarget(result.target), offset: result.offset as number,
+      total_bytes: result.total_bytes as number, chunk_base64url: result.chunk_base64url,
+      complete: result.complete,
+    } }
+  }
+  if (frame.method === 'profile.skillhub_execution_receipt') {
+    exactKeys(result, ['receipt'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { receipt: parseSkillHubExecutionReceipt(result.receipt) } }
+  }
+  if (frame.method === 'profile.skillhub_clock_witness') {
+    exactKeys(result, ['anchor_id', 'value', 'applied'])
+    if (result.applied !== null && typeof result.applied !== 'boolean') reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { anchor_id: uuid(result.anchor_id) as HostSkillHubClockAnchorId,
+        value: result.value === null ? null : clockWitnessValue(result.value),
+        applied: result.applied } }
+  }
+  if (frame.method === 'profile.skillhub_clock_v2') {
+    const raw = record(result)
+    if (raw.kind === 'epoch') {
+      exactKeys(raw, ['kind', 'epoch'])
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'epoch', epoch: nonce(raw.epoch) } }
+    }
+    if (raw.kind === 'issued') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'ticket'])
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'issued', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+          epoch: nonce(raw.epoch), ticket: nonce(raw.ticket) } }
+    }
+    if (raw.kind === 'witness') {
+      exactKeys(raw, ['kind', 'anchor_id', 'epoch', 'value', 'applied'])
+      if (raw.applied !== null && typeof raw.applied !== 'boolean') reject()
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { kind: 'witness', anchor_id: uuid(raw.anchor_id) as HostSkillHubClockAnchorId,
+          epoch: nonce(raw.epoch), value: raw.value === null ? null : clockWitnessValue(raw.value),
+          applied: raw.applied } }
+    }
+    return reject()
   }
   if (frame.method === 'profile.open' || frame.method === 'profile.open_local') {
     exactKeys(result, ['profile_id', 'view_lease_id', 'view_activation_handle', 'lease_generation', 'expires_at', 'runtime_generation'])
@@ -3196,6 +3520,7 @@ export function encodeHostInspectSignaturePayload(
     runtime_generation: checkedResponse.result.runtime_generation,
     schema_generation: checkedResponse.result.schema_generation,
     process_nonce: checkedResponse.result.process_nonce,
+    boot_nonce: checkedResponse.result.boot_nonce,
     capabilities: checkedResponse.result.capabilities,
     executable_signature_digest: checkedResponse.result.executable_signature_digest,
   }

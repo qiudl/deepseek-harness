@@ -299,6 +299,10 @@ describe('Windows Desktop Host startup', () => {
       expect(client.inspection.capabilities).toContain('profile.extensions')
       const local = await client.bootstrapLocalProfile({ keyHandle: 'windows-credential:local', unlockMaterial })
       const lease = await client.openLocalProfile({ profileSelector: local.profileSelector })
+      await expect(client.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: 'fixture-package', challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      expect(state.loadRegistrationFileBindings).toHaveBeenCalledOnce()
       await expect(client.remoteSession({ ...lease, command: { operation: 'session.list', command_id: randomUUID() as never } }))
         .rejects.toMatchObject({ code: 'unavailable' })
       await expect(client.remoteUiRead({ ...lease, endpoint: 'boot/injections', payload: { args: {} } }))

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.1-alpha.2/host-inspect-boot-nonce/guide.md
+/:
+  en: e3f65dc26c6f5255
+  zh: 00bfd4fcf5e4dd1c
+/host-inspect-includes-a-process-boot-nonce:
+  en: fac7000ab8c88421
+  zh: cea7d2df3cfb9099
+/host-inspect-includes-a-process-boot-nonce/change:
+  en: 334c3ab50749e1a6
+  zh: 23a112a7cd3dc51f
+/host-inspect-includes-a-process-boot-nonce/migration:
+  en: d408a7648a44e14d
+  zh: 75fb776ad19a4d87

@@ -251,12 +251,19 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  const capturedServerOptions = serverOptions
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
 
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  const packagesRoot = join(root, 'profiles', profile.profileId, 'skillhub-packages')
+  mkdirSync(packagesRoot, { mode: 0o700 })
+  expect(() => capturedServerOptions.createSkillHubPackageStore?.(randomUUID(), '1', 'a'.repeat(64)))
+    .toThrow()
+  expect(await serverOptions.createSkillHubPackageStore?.(profile.profileId, '1', 'a'.repeat(64)))
+    .toBeDefined()
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimRecovery?.pendingReceipts({

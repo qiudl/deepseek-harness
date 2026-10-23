@@ -26,6 +26,8 @@ kind: "package-bundle"
 
 固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。
 
+经过验证的 Windows 启动产物从内存加载，并打包包含归档解码器在内的非 Node 静态依赖；它不能相对于 data URL 解析其他包。
+
 Windows 目录安全证据将 SDDL 的通用权限、标准权限和文件专用权限保留为无符号位掩码。未知标记和超过 32 位的掩码会使检查失败。解析通用权限不会授予私有存储访问权：私有文件仍要求精确的、受保护的三主体文件完全控制 DACL。
 
 启动产物向可信嵌入代码提供 `loadWindowsLegacySourceProbe`。装配通过与本地凭据存储相同的发布版本固定原生模块解析当前进程 SID，不检查旧数据文件系统，并且只返回只读探测函数。不支持的平台、缺失摘要固定值、原生身份解析失败或缺少目录检查器都会使加载失败。嵌入方必须在后续探测调用期间持续保护原生模块，并提供操作系统选定的用户主目录。
@@ -46,10 +48,22 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 
 `UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接，在任一连接重新打开该 Profile 后仍保有自己的 view lease；租约过期、连接断开和 Profile 撤销仍会使相应租约失效。
 
-连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
+连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce、每进程 boot nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
 
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
+
+`profile.skillhub_binding` 为 Slark SkillHub 单独签署 Host 本地 Profile 事实。当前连接必须拥有该 Profile 授权，签名选择器也必须符合当前绑定代次。证明包含 broker 提供的 Slark 用户与 Computer 坐标；只有 Slark 能认证这些远端坐标并消费一次性挑战。该方法不写入 Profile、Session 或凭据数据。
+
+Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
+
+`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证完整不可变 operation，并为该认证连接捕获一个对象。同一连接读取同一 operation 的后续文件时复用该校验；每次文件读取仍校验计划、清单、路径和目标文件摘要。再次请求 manifest 会刷新完整校验，回读当前回执也会校验全部文件。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
+
+`profile.skillhub_execution_receipt` 在签署完成的 daemon 报告前，重新检查同一当前 Profile 授权、激活签名和不可变包文件。Host 与包坐标由本地派生；客户端在返回回执前拒绝任何字段变化或无效签名。Host 证明的是已认证 Main 报告与固定包身份，Slark 仍负责核对 effect、Work 权限、Computer 授权和已准备沙箱。
+
+`profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
+
+独立的 `profile.skillhub_clock_v2` capability 由 Host 按资产或 Work 用途签发带一次性票据的锚，并提供当前 epoch。签发请求须提供 `active_asset_anchor_id`：资产签发时为 null，Work 签发时为当前选中资产锚的 UUID。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使旧 V2 锚失效；若原始 Work 许可窗口仍可能有效，则先拒绝签发，等待最长 30 秒的保留期结束。Work 触发轮换时，Host 只在新代次保留选中的资产见证，供调用方在登记 Work 前在线刷新资产权限。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
 
 `profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
 

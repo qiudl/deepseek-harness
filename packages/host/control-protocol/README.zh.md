@@ -11,7 +11,7 @@ kind: "package-reference"
 
 这个零 I/O 库拥有 Desktop Broker 与唯一 DSH Host Supervisor 共享的本地控制线协议。版本 1 从带签名的 `host.inspect` 挑战交换开始，并包含账号与本地专用 Profile 操作、lease 与迁移导出载荷。后续操作必须保留本包的规范 JSON-Lines 信封、品牌化身份、有界帧和脱敏错误词汇。
 
-该传输不是 JSON-RPC。畸形行是必须关闭连接的协议违规，不能被忽略后继续读取。
+该传输不是 JSON-RPC。畸形行是必须关闭连接的协议违规，不能被忽略后继续读取。带签名的 `host.inspect` 结果包含每次 Host authority 进程启动时生成的 `boot_nonce`；同一进程内重新连接保持不变。
 
 ## 目录
 
@@ -61,6 +61,20 @@ kind: "package-reference"
 <a id="challenge-authentication"></a>
 
 ## 挑战认证
+
+`profile.skillhub_binding` 使用独立签名域 `SLARK-SKILLHUB-DSH-PROFILE-BINDING/v1` 为一个 Host 本地 Profile 选择器签署 Slark 挑战。固定顺序 JSON 精确绑定 Slark 用户、Computer、Host 安装、本地 Profile、绑定代次和挑战 UUID。Host 根据当前本地 Profile 授权核验选择器；Desktop broker 提供 Slark 用户和 Computer 坐标。Slark 必须再与已认证 daemon 和数据库一次性挑战核对，才能建立 SkillHub 目标绑定。此签名本身不授予安装或执行权限。
+
+`profile.skillhub_package_chunk` 每个规范控制帧最多传输同一固定 ZIP 的 32 KiB。每片重复 Profile 选择器、包计划、总字节数和下一偏移；Host 每次重查当前连接的 Profile 授权，拒绝坐标变化、片段缺口和超限片段。最后的确认只表示完整包已在该 Profile 私有存储中完成验证和准备，不表示已激活、加载或授权。Slark 在单独提交前仍须重查来源和目标权限。
+
+`profile.skillhub_package` 使用固定的 Profile 选择器、绑定代次和预期包 revision 激活已准备的操作，也可读取当前包回执。两种操作均要求当前连接拥有 Profile 授权，并携带调用方提供的挑战 UUID。Host 验证已准备文件并比较 revision 后才替换版本指针；回执在 `SLARK-SKILLHUB-DSH-PACKAGE-RECEIPT/v1` 签名域下绑定该挑战、Host 安装、Profile、公钥、操作、版本和新 revision。当前结果为空表示没有已激活的包。`readiness: prepared` 只证明存储激活；运行时加载需要独立证据，Slark 激活前仍须重查自身的当前来源和目标授权。
+
+`profile.skillhub_package_snapshot` 按完整 Host 签名回执读取不可变的已激活 operation，而不跟随 current 指针。每次请求都重复当前 Profile 选择器、签名回执、精确的 manifest 或文件目标及字节偏移。偏移零会在已认证连接下验证并捕获该对象；后续请求重新检查 Profile 授权与回执签名，并且只接受下一偏移或同一分片重试。每个响应最多携带 32 KiB，并重复 operation 与 manifest 身份。非法路径、被修改的回执、过期授权、偏移缺口、竞争绑定和响应连续性不一致均关闭失败。该只读能力只传输包字节，不授权执行，也不证明运行时已加载这些字节。
+
+`profile.skillhub_execution_receipt` 接收一份 daemon 观测到的沙箱结果及完整的已签名激活回执。Host 重新检查当前 Profile 授权、验证激活签名和固定包文件、派生全部 Host 与包身份字段，再在 `SLARK-DSH-PROFILE-EXECUTION-RECEIPT/v1` 域下签署完整执行事实。该签名记录已认证 Main daemon 在执行后报告的内容，并不表示 Host 自身是沙箱执行器。Slark 仍须在结算前绑定 effect、Work 权限、Computer 授权和已准备容器。
+
+`profile.skillhub_clock_witness` 要求单独声明的 capability 和当前连接自己的 Profile selector。每次请求绑定 Profile ID、绑定代次、Host 密钥指纹和锚 UUID。命令读取见证，或对精确 revision/digest 执行 compare-and-set；初始化要求 revision 为零，更新要求旧 revision 加一。结果重复锚 ID，返回当前值，读取的 `applied` 为 null，CAS 则返回布尔判定。见证独立于 daemon checkpoint 文件，换连接后仍保留，Host authority 重启后丢失；丢失后必须在线恢复，不能从缓存静默初始化。它不授予资产或 effect 权限。
+
+`profile.skillhub_clock_v2` 是独立声明的 Host 签发锚协议。`issue` 必须标明 `asset` 或 `work` 用途，并提供 `active_asset_anchor_id`：签发资产锚时为 null，签发 Work 锚时为当前选中资产锚的 UUID。它返回新锚 UUID、32 字节 base64url epoch 和一次性票据；票据按 Host 单调时间在 30 秒后过期。首次 revision-zero CAS 必须匹配票据、Profile 范围和 epoch。`epoch` 供离线权限检查读取当前代次；`witness` 仅在该代次读取或推进锚，请求始终携带 epoch 和可为 null 的票据。初始化锚达到 4,096 个后，下一次签发会轮换 epoch 并清空 V2 记录，使旧锚和待用票据失效。如果本次签发 Work，Host 只在新代次保留选中的资产见证；调用方必须在线刷新资产权限后才能登记该 Work。Work 签发会将原代次保留 30 秒，覆盖 Work 许可的最长有效窗口；保留期内达到容量时，签发返回 `busy`，不在仍可能执行 Work 时轮换。待用票据也限制为 4,096 个，满额期间签发返回 `busy`。旧 V1 独立保留满额拒绝行为。调用方必须把当前 epoch 纳入权限，并在轮换后拒绝旧离线工作；仅有该 Host 能力不会启用 V2 离线工作。
 
 `profile.workspace_model_selection` 接受已验证的 Account 绑定、工作区注册表 UUID 和 Session id。精确响应包含这些身份、provider/model（各最多 256 UTF-8 字节），以及可选 reasoning effort（最多 128 字节）。调用方指定的模型、Profile 路径和额外响应字段均被拒绝。结果只是只读选择，不是可执行适配器快照或 Source 凭据；Host 必须发布已安装执行器的能力才可调用。
 
