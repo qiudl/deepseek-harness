@@ -68,6 +68,22 @@ it('accepts the exact signed chunk and rejects altered context or text', () => {
     valid, now + 60_001)).toThrow('native_agent_result_ticket_invalid')
 })
 
+it('rejects malformed ticket framing, authority URL, key selection, and signature', () => {
+  const signed = ticket()
+  const rejects = (token: string, ring = keyring, context = valid) =>
+    expect(() => verifyNativeAgentResultTicket(token, ring, context, now))
+      .toThrow('native_agent_result_ticket_invalid')
+  rejects(null as unknown as string)
+  rejects('x'.repeat(8193))
+  rejects('unsigned')
+  rejects(signed, keyring, { ...valid, slarkAudience: null as unknown as string })
+  rejects(signed, keyring, { ...valid, slarkAudience: '%' })
+  rejects(signed, { ...keyring, keys: [] })
+  rejects(signed, { ...keyring, keys: [{ ...keyring.keys[0]!, validUntil: now + 1 }] })
+  const parts = signed.split('.')
+  rejects(`${parts[0]}.${parts[1]}.${Buffer.alloc(64, 7).toString('base64url')}`)
+})
+
 it('confirms current Slark authority using only the signed bearer ticket', async () => {
   const signed = ticket()
   let called = false
@@ -89,4 +105,35 @@ it('confirms current Slark authority using only the signed bearer ticket', async
       value: { state: 'authorized', turn_id: randomUUID(), chunk_index: 0,
         expires_at: now + 60_000 } }), { status: 200 }), () => now + 1000))
     .rejects.toThrow('native_agent_result_ticket_invalid')
+})
+
+it('fails closed when Slark confirmation is cancelled, absent, malformed, or stale', async () => {
+  const signed = ticket()
+  const cancelled = new AbortController()
+  cancelled.abort()
+  let fetched = false
+  await expect(confirmNativeAgentResultTicket(signed, keyring, valid, cancelled.signal,
+    async () => { fetched = true; return new Response(null, { status: 200 }) }, () => now))
+    .rejects.toThrow('native_agent_result_ticket_invalid')
+  expect(fetched).toBe(false)
+
+  const accepted = { ok: true, value: { state: 'authorized', turn_id: valid.turnId,
+    chunk_index: 0, expires_at: now + 60_000 } }
+  for (const response of [
+    new Response(null, { status: 503 }),
+    new Response(null, { status: 200 }),
+    new Response('{', { status: 200 }),
+    new Response('x'.repeat(4097), { status: 200 }),
+    new Response(JSON.stringify({ ...accepted, extra: 'private' }), { status: 200 }),
+    new Response(JSON.stringify({ ...accepted, value: { ...accepted.value,
+      expires_at: now + 60_001 } }), { status: 200 }),
+  ]) {
+    await expect(confirmNativeAgentResultTicket(signed, keyring, valid,
+      new AbortController().signal, async () => response, () => now + 1000))
+      .rejects.toThrow('native_agent_result_ticket_invalid')
+  }
+  await expect(confirmNativeAgentResultTicket(signed, keyring, valid,
+    new AbortController().signal,
+    async () => new Response(JSON.stringify(accepted), { status: 200 }),
+    () => now + 60_000)).rejects.toThrow('native_agent_result_ticket_invalid')
 })
