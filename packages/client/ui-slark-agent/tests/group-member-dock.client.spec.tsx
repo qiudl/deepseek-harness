@@ -43,6 +43,9 @@ it('selects an authorized project Agent and removes that member from the origina
           { project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
             agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
             reason_code: 'ready' },
+          { project_id: 'project-b', project_name: 'Project B', agent_id: 'agent-b',
+            agent_name: 'Agent B', available: true, capability_snapshot: 'b'.repeat(64),
+            reason_code: 'ready' },
         ] } }),
     collaborationGroupMembers: vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
       sent.push(command)
@@ -68,6 +71,7 @@ it('selects an authorized project Agent and removes that member from the origina
   await waitFor(() => { expect(screen.getByText('owner')).toBeTruthy() })
   fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
   await waitFor(() => { expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy() })
+  expect(screen.queryByRole('button', { name: 'Agent B · Project B' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Agent A · Project A' }))
   await waitFor(() => { expect(screen.getByRole('button', { name: 'Remove Agent' })).toBeTruthy() })
   expect(screen.getAllByText('Agent A · Project A')).toHaveLength(2)
