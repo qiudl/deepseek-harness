@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { matchesHostNativeRoomReply, parseHostNativeRoomCommand,
   parseHostNativeRoomReply } from '../src/native-room-operations.ts'
+import { parseHostNativeAgentResultInput } from '../src/native-agent-result.ts'
 import { decodeHostControlFrame, encodeHostControlFrame } from '../src/index.ts'
 
 const group = '11111111-1111-4111-8111-111111111111'
@@ -20,6 +21,19 @@ const chunk = { operation: 'agent-result-chunk', room_id: 'room_1', group_id: gr
   chunk_index: 0, chunk_count: 2, chunk_text: 'answer', chunk_digest: 'b'.repeat(64) } as const
 
 describe('native room private operations', () => {
+  it('rejects unsigned or redirected native Agent result coordinates before ticket verification', () => {
+    const input = { computer_id: 'desktop-1', slark_audience: 'https://slark.example.test',
+      workspace_id: group, session_id: 'original', ticket: 'aaa.bbb.ccc', command: chunk }
+    expect(parseHostNativeAgentResultInput(input)).toEqual(input)
+    for (const bad of [null, [], { ...input, extra: 'private' },
+      { ...input, ticket: 'unsigned' }, { ...input, slark_audience: 'not-a-url' },
+      { ...input, slark_audience: 'http://slark.example.test' },
+      { ...input, slark_audience: 'https://slark.example.test/path' },
+      { ...input, command: { ...chunk, chunk_count: 101 } },
+      { ...input, command: messages }])
+      expect(() => parseHostNativeAgentResultInput(bad)).toThrow('native_agent_result_invalid')
+  })
+
   it('admits exact bounded commands and rejects added fields and invalid identities', () => {
     expect(parseHostNativeRoomCommand(join)).toEqual(join)
     expect(parseHostNativeRoomCommand(messages)).toEqual(messages)
