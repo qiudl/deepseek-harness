@@ -1,8 +1,9 @@
 /** REQ-20261023-0013: only the signed and live Slark turn may write a native room result. */
-import { matchesHostNativeRoomReply, type HostNativeRoomCommand,
+import { matchesHostNativeRoomReply, nativeAgentResultChunkFields, type HostNativeRoomCommand,
   type HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { BotGroupPublicKeyring } from './bot-group-ticket.ts'
 import { confirmNativeAgentResultTicket } from './native-agent-result-ticket.ts'
+import { accountBindingIdentity } from './account-bot-group-delivery.ts'
 import type { BotIdentityAccount } from './account-bot-identity.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
@@ -34,21 +35,10 @@ export async function deliverAccountNativeAgentResultChunk(input: {
   const profileId = input.host.authorizeAccountModelText(input.account)
   const command = input.command
   const expected = {
-    ownerUserId: input.account.ownerId, computerId: input.computerId,
-    accountIssuer: input.account.issuer, accountSubject: input.account.subject,
-    environmentId: input.account.authorityEnvironmentId,
-    accountBindingHandle: input.account.accountBindingHandle,
-    accountBindingEpoch: input.account.authorityBindingVersion,
-    installationId: input.installationId, slarkAudience: input.slarkAudience,
-    groupId: command.group_id, workspaceId: input.workspaceId,
+    ...accountBindingIdentity(input),
+    ...nativeAgentResultChunkFields(command), workspaceId: input.workspaceId,
     sessionId: input.sessionId, roomId: command.room_id,
     memberId: command.member_id, memberCycle: command.cycle,
-    turnId: command.turn_id, turnOrder: command.turn_order,
-    triggerRoomSeq: command.trigger_room_seq, projectId: command.project_id,
-    agentId: command.agent_id, replyMessageId: command.reply_message_id,
-    status: command.status, resultDigest: command.result_digest,
-    chunkIndex: command.chunk_index, chunkCount: command.chunk_count,
-    chunkText: command.chunk_text,
   }
   await (input.confirm ?? confirmNativeAgentResultTicket)(input.ticket, input.keyring,
     expected, input.signal)

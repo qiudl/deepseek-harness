@@ -76,7 +76,7 @@ const exact = (value: unknown, fields: readonly string[]): value is Record<strin
   typeof value === 'object' && value !== null && !Array.isArray(value) &&
   Object.keys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key))
 const positive = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) > 0
-function issuerOrigin(value: unknown): string | null {
+export function issuerOrigin(value: unknown): string | null {
   if (typeof value !== 'string') return null
   try {
     const url = new URL(value)
@@ -84,7 +84,7 @@ function issuerOrigin(value: unknown): string | null {
       !url.search && !url.hash ? url.origin : null
   } catch { return null }
 }
-function decoded(value: string): unknown {
+export function decoded(value: string): unknown {
   if (!SEGMENT.test(value) || Buffer.from(value, 'base64url').toString('base64url') !== value) fail()
   try { return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) }
   catch { return fail() }

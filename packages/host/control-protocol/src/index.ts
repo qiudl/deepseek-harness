@@ -58,7 +58,7 @@ export { parseHostNativeRoomTurnAssertion,
   encodeHostNativeRoomTurnAssertionPayload } from './native-room-turn-assertion.js'
 export type { HostNativeRoomTurnAssertion } from './native-room-turn-assertion.js'
 export { parseHostNativeRoomCommand, parseHostNativeRoomReply,
-  matchesHostNativeRoomReply } from './native-room-operations.js'
+  matchesHostNativeRoomReply, nativeAgentResultChunkFields } from './native-room-operations.js'
 export type { HostNativeRoomCommand, HostNativeRoomReply } from './native-room-operations.js'
 export { parseHostNativeAgentResultInput } from './native-agent-result.js'
 export type { HostNativeAgentResultInput } from './native-agent-result.js'

@@ -1,11 +1,11 @@
 /** REQ-20261023-0013: accept one Slark Agent result chunk under current Host authority. */
 import { createHash, createPublicKey, verify } from 'node:crypto'
-import { botGroupHostRegistryId, type BotGroupPublicKeyring } from './bot-group-ticket.ts'
+import { botGroupHostRegistryId, decoded, issuerOrigin,
+  type BotGroupPublicKeyring } from './bot-group-ticket.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
 const OPAQUE = /^[\x21-\x7e]{1,256}$/u
-const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const AUDIENCE = 'urn:slark:dsh-native-agent-result:v1'
 const FIELDS = ['schema_version', 'issuer', 'audience', 'slark_audience',
   'environment_id', 'owner_user_id', 'computer_id', 'account_issuer',
@@ -26,19 +26,6 @@ function origin(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try { const url = new URL(value); return url.protocol === 'https:' && url.origin === value }
   catch { return false }
-}
-function issuerOrigin(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && !url.username && !url.password &&
-      !url.search && !url.hash ? url.origin : null
-  } catch { return null }
-}
-function decoded(value: string): unknown {
-  if (!SEGMENT.test(value) || Buffer.from(value, 'base64url').toString('base64url') !== value) fail()
-  try { return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) }
-  catch { return fail() }
 }
 
 export interface NativeAgentResultExpected {

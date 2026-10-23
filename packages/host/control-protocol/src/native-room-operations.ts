@@ -72,6 +72,20 @@ export type HostNativeRoomCommand = Readonly<{
   cycle: number
 }>
 
+/** One mapping for Host verification and the Profile room service. */
+export function nativeAgentResultChunkFields(command: Extract<HostNativeRoomCommand,
+  { operation: 'agent-result-chunk' }>) {
+  return {
+    groupId: command.group_id, turnId: command.turn_id,
+    turnOrder: command.turn_order, triggerRoomSeq: command.trigger_room_seq,
+    projectId: command.project_id, agentId: command.agent_id,
+    replyMessageId: command.reply_message_id, status: command.status,
+    resultDigest: command.result_digest, chunkIndex: command.chunk_index,
+    chunkCount: command.chunk_count, chunkText: command.chunk_text,
+    chunkDigest: command.chunk_digest,
+  }
+}
+
 /** Bounded reply returned by the current Profile's room service. */
 export type HostNativeRoomReply = Readonly<{
   state: 'joined'

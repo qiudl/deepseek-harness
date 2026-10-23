@@ -233,6 +233,20 @@ function assertionIdentityFields(identity: HostIdentity) {
     process_nonce: identity.processNonce as HostControlNonce,
   }
 }
+function nativeRoomAccountAssertionFields(
+  params: Pick<ProfileCollaborationAnalysisRequest['params'],
+    'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' |
+    'account_issuer' | 'account_subject'>,
+  identity: HostIdentity, issuedAt: number,
+) {
+  return {
+    authority_environment_id: params.authority_environment_id,
+    account_binding_handle: params.account_binding_handle,
+    authority_binding_version: params.authority_binding_version,
+    account_issuer: params.account_issuer, account_subject: params.account_subject,
+    ...assertionIdentityFields(identity), issued_at: issuedAt,
+  }
+}
 function commandReadAccount(
   params: Pick<ProfileCollaborationAnalysisRequest['params'],
     'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' | 'account_issuer' | 'account_subject'>,
@@ -2401,11 +2415,8 @@ export class HostControlAuthority {
           const identity = this.options.identity
           const unsigned: HostNativeRoomAssertion | null = binding === null ? null : {
             schema_version: 1, binding,
-            authority_environment_id: frame.params.authority_environment_id,
-            account_binding_handle: frame.params.account_binding_handle,
-            authority_binding_version: frame.params.authority_binding_version,
-            account_issuer: frame.params.account_issuer, account_subject: frame.params.account_subject,
-            ...assertionIdentityFields(identity), issued_at: (this.options.now ?? Date.now)(),
+            ...nativeRoomAccountAssertionFields(frame.params, identity,
+              (this.options.now ?? Date.now)()),
             signature: 'A'.repeat(86),
           }
           const assertion = unsigned === null ? null : { ...unsigned,
@@ -2425,12 +2436,8 @@ export class HostControlAuthority {
           const unsigned: HostNativeRoomTurnAssertion | null = reply.state === 'turns' &&
             frame.params.command.operation === 'turns' ? {
               schema_version: 1, after_seq: frame.params.command.after_seq, selection: reply,
-              authority_environment_id: frame.params.authority_environment_id,
-              account_binding_handle: frame.params.account_binding_handle,
-              authority_binding_version: frame.params.authority_binding_version,
-              account_issuer: frame.params.account_issuer,
-              account_subject: frame.params.account_subject,
-              ...assertionIdentityFields(identity), issued_at: (this.options.now ?? Date.now)(),
+              ...nativeRoomAccountAssertionFields(frame.params, identity,
+                (this.options.now ?? Date.now)()),
               signature: 'A'.repeat(86),
             } : null
           const turnAssertion = unsigned === null ? null : { ...unsigned,
@@ -2861,6 +2868,30 @@ export class UnixHostClient {
     private readonly now: () => number,
     readonly inspection: HostInspectResult['result'],
   ) {}
+
+  private matchesNativeRoomAssertionAuthority(
+    assertion: Pick<HostNativeRoomAssertion,
+      'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' |
+      'account_issuer' | 'account_subject' | 'installation_id' | 'installation_public_key' |
+      'host_instance_id' | 'process_nonce' | 'issued_at'>,
+    input: {
+      readonly authorityEnvironmentId: string
+      readonly accountBindingHandle: string
+      readonly authorityBindingVersion: number
+      readonly issuer: string
+      readonly subject: string
+    },
+  ): boolean {
+    return assertion.authority_environment_id === input.authorityEnvironmentId &&
+      assertion.account_binding_handle === input.accountBindingHandle &&
+      assertion.authority_binding_version === input.authorityBindingVersion &&
+      assertion.account_issuer === input.issuer && assertion.account_subject === input.subject &&
+      assertion.installation_id === this.inspection.installation_id &&
+      assertion.installation_public_key === this.inspection.installation_public_key &&
+      assertion.host_instance_id === this.inspection.host_instance_id &&
+      assertion.process_nonce === this.inspection.process_nonce &&
+      assertion.issued_at <= this.now() + 5000 && assertion.issued_at >= this.now() - 60_000
+  }
 
   /**
    * Connect, attest the Host process, and verify its signed fresh challenge.
@@ -4453,15 +4484,7 @@ export class UnixHostClient {
     const assertion = frame.result.binding === null ? null : parseHostNativeRoomAssertion(frame.result.binding)
     if (assertion) {
       if (assertion.binding.room_id !== target.room_id ||
-        assertion.authority_environment_id !== input.authorityEnvironmentId ||
-        assertion.account_binding_handle !== input.accountBindingHandle ||
-        assertion.authority_binding_version !== input.authorityBindingVersion ||
-        assertion.account_issuer !== input.issuer || assertion.account_subject !== input.subject ||
-        assertion.installation_id !== this.inspection.installation_id ||
-        assertion.installation_public_key !== this.inspection.installation_public_key ||
-        assertion.host_instance_id !== this.inspection.host_instance_id ||
-        assertion.process_nonce !== this.inspection.process_nonce ||
-        assertion.issued_at > this.now() + 5000 || assertion.issued_at < this.now() - 60_000 ||
+        !this.matchesNativeRoomAssertionAuthority(assertion, input) ||
         !verify(null, encodeHostNativeRoomAssertionPayload(assertion),
           publicKeyObject(this.inspection.installation_public_key),
           Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
@@ -4504,15 +4527,7 @@ export class UnixHostClient {
         Reflect.get(frame.result, 'turn_assertion'))
       if (command.operation !== 'turns' || assertion.after_seq !== command.after_seq ||
         JSON.stringify(assertion.selection) !== JSON.stringify(reply) ||
-        assertion.authority_environment_id !== input.authorityEnvironmentId ||
-        assertion.account_binding_handle !== input.accountBindingHandle ||
-        assertion.authority_binding_version !== input.authorityBindingVersion ||
-        assertion.account_issuer !== input.issuer || assertion.account_subject !== input.subject ||
-        assertion.installation_id !== this.inspection.installation_id ||
-        assertion.installation_public_key !== this.inspection.installation_public_key ||
-        assertion.host_instance_id !== this.inspection.host_instance_id ||
-        assertion.process_nonce !== this.inspection.process_nonce ||
-        assertion.issued_at > this.now() + 5000 || assertion.issued_at < this.now() - 60_000 ||
+        !this.matchesNativeRoomAssertionAuthority(assertion, input) ||
         !verify(null, encodeHostNativeRoomTurnAssertionPayload(assertion),
           publicKeyObject(this.inspection.installation_public_key),
           Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')

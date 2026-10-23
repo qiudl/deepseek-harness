@@ -486,23 +486,32 @@ export class DshWebProfileWorkerFactory {
     }, 'await')
   }
 
-  private async resolveBotIdentity(
-    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
-  ): Promise<HostBotIdentity | null> {
+  private async postPrivateProfileResource<T>(
+    viewOrigin: string, token: string, route: string, target: unknown,
+    timeoutMs: number, maxBytes: number, signal: AbortSignal, stopped: () => boolean,
+    parse: (bytes: Buffer) => T,
+  ): Promise<T> {
     signal.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
-    const target = parseHostBotIdentityTarget({ bot_id: botId })
-    const response = await fetch(`${viewOrigin}/internal/desktop-bot-identity`, {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+    const response = await fetch(`${viewOrigin}${route}`, {
       method: 'POST', redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
-      const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
-      if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
-      return identity
-    }, 'await')
+    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+  }
+
+  private async resolveBotIdentity(
+    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotIdentity | null> {
+    const target = parseHostBotIdentityTarget({ bot_id: botId })
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bot-identity',
+      target, 10_000, 2048, signal, stopped, (bytes) => {
+        const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
+        if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+        return identity
+      })
   }
 
   private async listBotRoster(
@@ -530,21 +539,14 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string, token: string, roomId: string,
     signal: AbortSignal, stopped: () => boolean,
   ): Promise<HostNativeRoomSource | null> {
-    signal.throwIfAborted()
-    if (stopped()) throw new HostAuthorityError('unavailable')
-    const active = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
     const target = parseHostNativeRoomTarget({ room_id: roomId })
-    const response = await fetch(`${viewOrigin}/internal/desktop-native-room`, {
-      method: 'POST', redirect: 'error',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target), signal: active,
-    })
-    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
-      const value: unknown = JSON.parse(bytes.toString('utf8'))
-      const binding = value === null ? null : parseHostNativeRoomSource(value)
-      if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
-      return binding
-    }, 'await')
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-native-room',
+      target, 30_000, 2048, signal, stopped, (bytes) => {
+        const value: unknown = JSON.parse(bytes.toString('utf8'))
+        const binding = value === null ? null : parseHostNativeRoomSource(value)
+        if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
+        return binding
+      })
   }
 
   private async operateBotGroup(
