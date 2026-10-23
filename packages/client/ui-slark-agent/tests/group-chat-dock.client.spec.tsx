@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GroupChatDock } from '../src/client/GroupChatDock.tsx'
-import type { CollaborationResultsModel } from '../src/client/collaboration-results.ts'
+import type { CollaborationResultGroup, CollaborationResultsSnapshot } from '../src/client/collaboration-results.ts'
 import { en } from '../src/client/locales.ts'
 
 const workspaceId = '11111111-1111-4111-8111-111111111111'
@@ -63,15 +63,19 @@ it('shows an Agent result under the exact committed group message with its actor
       actor_ref: 'owner', body: '@Agent investigate', created_at: Date.UTC(2026, 9, 22, 12) }],
     next_seq: 1, has_more: false, last_seq: 1 }
     : { state: 'pending_empty' as const }) }
-  const result = { original: { source: { workspace_id: workspaceId, session_id: sessionId,
-    source_message_id: messageId }, snapshot_digest: 'digest' }, phase: 'ready',
-  replies: [{ delivery_id: 'delivery-1', task_id: 'task-1', execution_state: 'succeeded',
-    answer: 'Issue fixed' }], execution: { tasks: [{ taskId: 'task-1', agentName: 'Fixer', question: 'investigate' }],
-    outcomes: { 'task-1': 'recorded' } } }
-  const results = { groups: [{ ...result, original: { ...result.original,
+  const source = { workspace_id: workspaceId, session_id: sessionId,
+    source_message_id: messageId, source_revision: '1' }
+  const result: CollaborationResultGroup = { original: { source, snapshot_digest: 'digest',
+    original_message: '@Agent investigate', timeline_position: null }, phase: 'ready',
+  replies: [{ delivery_id: 'delivery-1', invocation_id: 'invocation-1', task_id: 'task-1',
+    delivery_state: 'delivered', delivery_state_version: '1', source_locator: source,
+    source_snapshot_digest: 'digest', execution_state: 'succeeded', answer: 'Issue fixed' }],
+  execution: { phase: 'ready', tasks: [{ taskId: 'task-1', agentName: 'Fixer',
+    projectName: 'Test project', question: 'investigate' }], outcomes: { 'task-1': 'recorded' } } }
+  const results: CollaborationResultsSnapshot = { phase: 'ready', groups: [{ ...result, original: { ...result.original,
     source: { ...result.original.source, workspace_id: '44444444-4444-4444-8444-444444444444' } },
-  replies: [{ ...result.replies[0], answer: 'Private other workspace' }] }, result] }
-  const resultsModel = { subscribe: () => () => {}, getSnapshot: () => results } as unknown as CollaborationResultsModel
+  replies: [{ ...result.replies[0]!, answer: 'Private other workspace' }] }, result] }
+  const resultsModel = { subscribe: () => () => {}, getSnapshot: () => results }
   Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
   render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId, resultsModel,
     t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)

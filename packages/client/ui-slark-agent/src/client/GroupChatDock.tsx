@@ -29,7 +29,7 @@ type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'>
   host: Host
   workspaceId: () => string | undefined
   subscribeWorkspace?: (listener: () => void) => () => void
-  resultsModel?: CollaborationResultsModel
+  resultsModel?: Pick<CollaborationResultsModel, 'subscribe' | 'getSnapshot'>
 }
 const noSubscription = () => () => {}
 const noResults = () => undefined
