@@ -84,6 +84,8 @@ kind: "package-reference"
 
 `profile.bot_team_read` 使用 `HostBotTeamReadRequest` 与 `HostBotTeamPage` 从当前 Account Profile 的私有 worker 读取一次团队目录分页。请求只允许 `team`、1–100 条的数量上限和不透明游标。响应包含修订号、有界游标、Bot 与群聊逻辑身份、名称、角色、主 Bot 标记和群成员；工作路径、模型、指令和密钥均不进入响应。Host 控制帧限制为 64 KiB，目录页限制为 60 KiB。该方法本身不授权远程设备。
 
+`HostBotMemoryReadRequest` 与 `HostBotMemoryPage` 现在校验私有 worker 路由的一块 Profile 本机记忆。请求只接受 `team` 或 Bot/群聊逻辑范围；响应仅接受精确的 Markdown 文件名和每页最多 32 KiB 的 base64 解码字节。游标绑定整个范围的摘要。目前没有 Unix Host 控制方法开放记忆。
+
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 
 `profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。
