@@ -1,12 +1,19 @@
-import { expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { beforeEach, expect, it, onTestFinished, vi } from 'vitest'
 import { activateProfileImportCandidate } from '../src/profile-import-candidate-activation.ts'
 import { waitForPluginRuntime } from '../src/plugin-runtime-ack.ts'
 import type { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
+const boot = vi.hoisted(() => ({ skipBundle: false }))
+
+beforeEach(() => { boot.skipBundle = false })
+
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
-  loadProfileDirectory: () => ({ layers: [], patches: [], skippedBundles: [] }),
+  loadProfileDirectory: () => ({ layers: [], patches: [], skippedBundles: boot.skipBundle ? ['fixture'] : [] }),
   loadOverlayPatches: () => [],
 }))
 vi.mock('../src/plugin-bundle-entries.ts', () => ({
@@ -51,6 +58,51 @@ it('adopts a live candidate only after selected plugins report active', async ()
   expect(abort).not.toHaveBeenCalled()
 })
 
+it('rejects skipped or ambiguous plugin contributions before starting a candidate', async () => {
+  const { input, createImportCandidate } = fixture()
+  boot.skipBundle = true
+  await expect(activateProfileImportCandidate(input))
+    .rejects.toThrow('profile_import_plugin_composition_skipped')
+  boot.skipBundle = false
+  await expect(activateProfileImportCandidate({ ...input, selectedPluginNames: [] }))
+    .rejects.toThrow('profile_import_plugin_contribution_ambiguous')
+  await expect(activateProfileImportCandidate({ ...input,
+    selectedPluginNames: ['@deepseek-ai/dsh-tools', '@deepseek-ai/dsh-tools'] }))
+    .rejects.toThrow('profile_import_plugin_contribution_ambiguous')
+  expect(createImportCandidate).not.toHaveBeenCalled()
+})
+
+it('loads an existing owner patch before attesting the candidate', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-import-candidate-patch-'))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  writeFileSync(join(root, 'cordis.patch.yml'), '[]\n')
+  const { input, adoptImportCandidate } = fixture()
+  vi.mocked(waitForPluginRuntime).mockResolvedValueOnce()
+  await activateProfileImportCandidate({ ...input, profileRoot: root })
+  expect(adoptImportCandidate).toHaveBeenCalledOnce()
+})
+
+it('stops a candidate missing its attested view', async () => {
+  const { input, worker, createImportCandidate, closeNotifications, abort } = fixture()
+  createImportCandidate.mockResolvedValueOnce({ generation: 1,
+    bootstrapCookie: { name: 'fixture', value: 'private' }, done: worker.done,
+    closeNotifications: worker.closeNotifications, abort: worker.abort })
+  await expect(activateProfileImportCandidate(input)).rejects.toThrow('profile_import_candidate_view_missing')
+  expect(closeNotifications).toHaveBeenCalledOnce()
+  expect(abort).toHaveBeenCalledOnce()
+})
+
+it('keeps a rejected candidate exit private and finishes cleanup', async () => {
+  const { input, worker, createImportCandidate, closeNotifications, abort } = fixture()
+  const done = Promise.reject(new Error('private candidate failure'))
+  void done.catch(() => undefined)
+  createImportCandidate.mockResolvedValueOnce({ ...worker, done })
+  vi.mocked(waitForPluginRuntime).mockImplementationOnce(() => new Promise(() => {}))
+  await expect(activateProfileImportCandidate(input)).rejects.toThrow('profile_import_candidate_exited')
+  expect(closeNotifications).toHaveBeenCalledOnce()
+  expect(abort).toHaveBeenCalledOnce()
+})
+
 it('stops a candidate whose plugin runtime fails before adoption', async () => {
   const { input, adoptImportCandidate, closeNotifications, abort } = fixture()
   vi.mocked(waitForPluginRuntime).mockRejectedValueOnce(Error('plugin_startup_failed'))
@@ -68,10 +120,20 @@ it('stops a candidate that exits before plugin readiness', async () => {
   expect(adoptImportCandidate).not.toHaveBeenCalled()
 })
 
+it('rejects a candidate that exits as runtime acknowledgement arrives', async () => {
+  const { input, worker, adoptImportCandidate } = fixture()
+  vi.mocked(waitForPluginRuntime).mockImplementationOnce(() => new Promise<void>((resolve) => {
+    setTimeout(() => { resolve(); worker.abort() }, 0)
+  }))
+  await expect(activateProfileImportCandidate(input)).rejects.toThrow('profile_import_candidate_exited')
+  expect(adoptImportCandidate).not.toHaveBeenCalled()
+})
+
 it('disposes a candidate that exits during supervisor adoption', async () => {
   const { input, worker, adoptImportCandidate, dispose } = fixture()
   vi.mocked(waitForPluginRuntime).mockResolvedValueOnce()
   adoptImportCandidate.mockImplementationOnce(async () => { worker.abort(); await worker.done })
+  dispose.mockRejectedValueOnce(Error('private disposal failure'))
   await expect(activateProfileImportCandidate(input)).rejects.toThrow('profile_import_candidate_exited')
   expect(dispose).toHaveBeenCalledWith('target')
 })
