@@ -48,7 +48,9 @@ it('roundtrips an exact owner stop command and rejects a delivery ticket in its 
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
     params: { ...request.params, command } })}\n`)).toThrow()
   expect(() => decodeHostControlFrame(`${JSON.stringify({ ...result,
-    result: { reply: { state: 'accepted', deliveryId: command.deliveryId } } })}\n`)).toThrow()
+    result: { reply: { state: 'accepted', deliveryId: command.deliveryId,
+      groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'bot-session' } } })}\n`)).toThrow()
 })
 
 it('roundtrips only an exact public-key Bot delivery control frame', () => {

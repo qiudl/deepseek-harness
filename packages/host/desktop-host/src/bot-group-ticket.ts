@@ -8,12 +8,14 @@ const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const REGISTRY = /^h2_[0-9a-f]{64}$/u
 const AUDIENCE = 'urn:slark:dsh-bot-group-delivery:v1'
 const STOP_AUDIENCE = 'urn:slark:dsh-bot-group-stop:v1'
+const RESULT_AUDIENCE = 'urn:slark:dsh-bot-group-result:v1'
 const CLAIMS = ['schema_version', 'issuer', 'audience', 'slark_audience', 'environment_id',
   'owner_user_id', 'computer_id', 'account_issuer', 'account_subject', 'account_binding_epoch',
   'host_registry_id', 'group_id', 'workspace_id', 'session_id', 'delivery_id',
   'message_id', 'message_seq', 'bot_id', 'member_cycle', 'payload_digest',
   'token_id', 'issued_at', 'expires_at'] as const
 const STOP_CLAIMS = [...CLAIMS, 'decision_request_id'] as const
+const RESULT_CLAIMS = [...CLAIMS, 'decision_request_id'] as const
 
 interface BotGroupPublicKey {
   readonly kid: string
@@ -53,6 +55,7 @@ export interface BotGroupStopTicketExpected extends Omit<BotGroupTicketExpected,
   readonly payloadDigest: string
   readonly requestId: string
 }
+export type BotGroupResultTicketExpected = BotGroupTicketExpected
 export interface BotGroupTicket {
   readonly workspaceId: string
   readonly sessionId: string
@@ -114,8 +117,8 @@ export function botGroupHostRegistryId(input: Pick<BotGroupTicketExpected,
 
 /** Only a pinned Slark environment key and current Account tuple authorize the payload. */
 function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyring,
-  expected: BotGroupTicketExpected | BotGroupStopTicketExpected,
-  kind: 'delivery' | 'stop', now: number): BotGroupTicket {
+  expected: BotGroupTicketExpected | BotGroupStopTicketExpected | BotGroupResultTicketExpected,
+  kind: 'delivery' | 'stop' | 'result', now: number): BotGroupTicket {
   if (typeof token !== 'string' || Buffer.byteLength(token) > 8192) fail()
   const pieces = token.split('.')
   if (pieces.length !== 3) fail()
@@ -124,16 +127,19 @@ function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyrin
     const headerValue = decoded(headerPart)
     const claimsValue = decoded(claimsPart)
     if (!exact(headerValue, ['alg', 'typ', 'version', 'kid']) ||
-        !exact(claimsValue, kind === 'stop' ? STOP_CLAIMS : CLAIMS)) fail()
+        !exact(claimsValue, kind === 'stop' ? STOP_CLAIMS :
+          kind === 'result' ? RESULT_CLAIMS : CLAIMS)) fail()
     const header = headerValue as Record<string, unknown>
     const claims = claimsValue as Record<string, unknown>
     if (header.alg !== 'EdDSA' ||
         header.typ !== (kind === 'stop' ? 'SLARK-DSH-BOT-GROUP-STOP' :
-          'SLARK-DSH-BOT-GROUP') || header.version !== 1 ||
+          kind === 'result' ? 'SLARK-DSH-BOT-GROUP-RESULT' :
+            'SLARK-DSH-BOT-GROUP') || header.version !== 1 ||
         typeof header.kid !== 'string' ||
         claims.schema_version !== 1 || claims.issuer !== keyring.issuer ||
         issuerOrigin(keyring.issuer) !== expected.slarkAudience ||
-        claims.audience !== (kind === 'stop' ? STOP_AUDIENCE : AUDIENCE) ||
+        claims.audience !== (kind === 'stop' ? STOP_AUDIENCE :
+          kind === 'result' ? RESULT_AUDIENCE : AUDIENCE) ||
         claims.slark_audience !== expected.slarkAudience ||
         claims.environment_id !== expected.environmentId ||
         claims.environment_id !== keyring.environmentId ||
@@ -171,6 +177,11 @@ function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyrin
         claims.message_id, claims.group_id, `deepseek-bot:${expected.botId}`,
         expected.memberCycle, expected.messageSeq, delivery.text])).digest('hex')
       if (claims.payload_digest !== digest) fail()
+      if (kind === 'result') {
+        if (claims.decision_request_id !== null &&
+            (typeof claims.decision_request_id !== 'string' ||
+              !UUID.test(claims.decision_request_id))) fail()
+      }
     }
     const accepted: AcceptedClaims = {
       issued_at: claims.issued_at as number, expires_at: claims.expires_at as number,
@@ -197,6 +208,12 @@ export function verifyBotGroupTicket(token: string, keyring: BotGroupPublicKeyri
 export function verifyBotGroupStopTicket(token: string, keyring: BotGroupPublicKeyring,
   expected: BotGroupStopTicketExpected, now = Date.now()): BotGroupTicket {
   return verifySignedBotGroupTicket(token, keyring, expected, 'stop', now)
+}
+
+/** A result ticket permits observation and acknowledgement, never a new delivery. */
+export function verifyBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, now = Date.now()): BotGroupTicket {
+  return verifySignedBotGroupTicket(token, keyring, expected, 'result', now)
 }
 
 /** Recheck live Slark membership at the pinned origin before the worker accepts a delivery. */
@@ -228,8 +245,22 @@ export async function confirmBotGroupStopTicket(token: string, keyring: BotGroup
   return ticket
 }
 
+/** Result observation remains bound to the current Slark owner and original delivery. */
+export async function confirmBotGroupResultTicket(token: string, keyring: BotGroupPublicKeyring,
+  expected: BotGroupResultTicketExpected, signal: AbortSignal,
+  fetchFn: typeof fetch = fetch, clock: () => number = Date.now): Promise<BotGroupTicket> {
+  const ticket = verifyBotGroupResultTicket(token, keyring, expected, clock())
+  const { value, bounded } = await onlineConfirmation(token, expected.slarkAudience,
+    'result-confirm', signal, fetchFn)
+  if (!exact(value, ['state', 'delivery_id', 'expires_at']) ||
+      value.state !== 'authorized' || value.delivery_id !== expected.deliveryId ||
+      value.expires_at !== ticket.expiresAt || bounded.aborted ||
+      clock() >= ticket.expiresAt) fail()
+  return ticket
+}
+
 async function onlineConfirmation(token: string, slarkAudience: string,
-  operation: 'delivery-confirm' | 'stop-confirm', signal: AbortSignal,
+  operation: 'delivery-confirm' | 'stop-confirm' | 'result-confirm', signal: AbortSignal,
   fetchFn: typeof fetch): Promise<{ value: unknown; bounded: AbortSignal }> {
   if (signal.aborted) fail()
   const bounded = AbortSignal.any([signal, AbortSignal.timeout(5_000)])

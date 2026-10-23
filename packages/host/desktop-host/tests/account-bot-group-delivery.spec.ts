@@ -20,14 +20,15 @@ function fixture() {
   const claim = { workspaceId: randomUUID(), sessionId: 'original',
     messageId: randomUUID(), payloadDigest: digest, expiresAt: Date.now() + 60_000 }
   const confirm = vi.fn(async () => claim)
+  const resultConfirm = vi.fn(async () => claim)
   const input = { host: host as never, workers: workers as never, account,
     installationId: randomUUID(), computerId: 'desktop-1',
     slarkAudience: 'https://slark.example.test',
     keyring: { version: 1 as const, environmentId: account.authorityEnvironmentId,
       issuer: 'https://slark.example.test/dsh-environment', keys: [] },
     ticket: 'signed-ticket', command, signal: new AbortController().signal,
-    confirm: confirm as never }
-  return { input, host, workers, confirm, command, result }
+    confirm: confirm as never, resultConfirm: resultConfirm as never }
+  return { input, host, workers, confirm, resultConfirm, command, result }
 }
 
 function stopFixture() {
@@ -142,7 +143,7 @@ it('reconciles a lost worker reply through the same durable delivery receipt', a
   }, f.input.signal)
 })
 
-it('reads Bot results only while the original delivery and Account remain live', async () => {
+it('reads Bot results only under result authority and a live Account', async () => {
   const f = fixture()
   const result = { state: 'ok' as const, results: [{ id: `${f.command.deliveryId}:final`,
     deliveryId: f.command.deliveryId, groupId: f.command.groupId,
@@ -150,23 +151,27 @@ it('reads Bot results only while the original delivery and Account remain live',
     seq: 1, status: 'completed' as const, text: 'done' }], next: 1 }
   f.workers.operateBotGroup.mockResolvedValueOnce(result as never)
   expect(await readAccountBotGroupResultPage({ ...f.input, after: 0 })).toEqual(result)
+  expect(f.resultConfirm).toHaveBeenCalledTimes(1)
+  expect(f.confirm).not.toHaveBeenCalled()
   expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', {
     operation: 'result_page', groupId: f.command.groupId,
     botId: f.command.botId, memberCycle: f.command.memberCycle,
     after: 0, limit: 1,
   }, f.input.signal)
   const revoked = fixture()
-  revoked.confirm.mockRejectedValueOnce(Error('revoked'))
+  revoked.resultConfirm.mockRejectedValueOnce(Error('revoked'))
   await expect(readAccountBotGroupResultPage({ ...revoked.input, after: 0 }))
     .rejects.toThrow('revoked')
   expect(revoked.workers.operateBotGroup).not.toHaveBeenCalled()
 })
 
-it('acknowledges only the exact result under a live original delivery', async () => {
+it('acknowledges only the exact result under result authority', async () => {
   const f = fixture()
   f.workers.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' } as never)
   expect(await acknowledgeAccountBotGroupResult({ ...f.input,
     resultId: `${f.command.deliveryId}:final` })).toEqual({ state: 'acknowledged' })
+  expect(f.resultConfirm).toHaveBeenCalledTimes(1)
+  expect(f.confirm).not.toHaveBeenCalled()
   expect(f.workers.operateBotGroup).toHaveBeenCalledWith('profile', {
     operation: 'ack_result', groupId: f.command.groupId, botId: f.command.botId,
     memberCycle: f.command.memberCycle, deliveryId: f.command.deliveryId,

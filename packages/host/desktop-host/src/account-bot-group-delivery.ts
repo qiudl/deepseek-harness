@@ -1,6 +1,6 @@
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   type HostBotGroupCommand, type HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
-import { confirmBotGroupTicket, confirmBotGroupStopTicket,
+import { confirmBotGroupTicket, confirmBotGroupResultTicket, confirmBotGroupStopTicket,
   type BotGroupPublicKeyring, type BotGroupTicketExpected,
   type BotGroupStopTicketExpected } from './bot-group-ticket.ts'
 import type { DesktopHost } from './desktop-host.ts'
@@ -10,6 +10,7 @@ import type { BotIdentityAccount } from './account-bot-identity.ts'
 
 type DeliverCommand = Extract<HostBotGroupCommand, { operation: 'deliver' }>
 type Confirmation = typeof confirmBotGroupTicket
+type ResultConfirmation = typeof confirmBotGroupResultTicket
 type StopConfirmation = typeof confirmBotGroupStopTicket
 
 type AccountBotGroupInput = {
@@ -24,6 +25,7 @@ type AccountBotGroupInput = {
   command: DeliverCommand
   signal: AbortSignal
   confirm?: Confirmation
+  resultConfirm?: ResultConfirmation
 }
 
 function ticketIdentity(input: Pick<AccountBotGroupInput,
@@ -51,7 +53,8 @@ function checkedWorkerReply(input: Pick<AccountBotGroupInput, 'signal' | 'host' 
   return result
 }
 
-async function authorizeDelivery(input: AccountBotGroupInput) {
+async function authorizeDelivery(input: AccountBotGroupInput,
+  purpose: 'delivery' | 'result' = 'delivery') {
   input.signal.throwIfAborted()
   const command = parseHostBotGroupCommand(input.command)
   if (command.operation !== 'deliver') throw new HostAuthorityError('invalid_input')
@@ -62,7 +65,9 @@ async function authorizeDelivery(input: AccountBotGroupInput) {
     messageSeq: command.messageSeq,
     text: command.text,
   }
-  const confirmation = input.confirm ?? confirmBotGroupTicket
+  const confirmation = purpose === 'result'
+    ? input.resultConfirm ?? confirmBotGroupResultTicket
+    : input.confirm ?? confirmBotGroupTicket
   const claim = await confirmation(input.ticket, input.keyring, expected, input.signal)
   if (claim.payloadDigest !== command.payloadDigest) throw new HostAuthorityError('profile_mismatch')
   input.signal.throwIfAborted()
@@ -100,13 +105,13 @@ export async function deliverAccountBotGroup(input: AccountBotGroupInput): Promi
   return result
 }
 
-/** The result reader proves a current original delivery before exposing any Bot output. */
+/** The result reader confirms result-only Slark authority before exposing Bot output. */
 export async function readAccountBotGroupResultPage(input: AccountBotGroupInput & {
   after: number
 }): Promise<HostBotGroupResponse> {
   if (!Number.isSafeInteger(input.after) || input.after < 0)
     throw new HostAuthorityError('invalid_input')
-  const profileId = await authorizeDelivery(input)
+  const profileId = await authorizeDelivery(input, 'result')
   const query: HostBotGroupCommand = { operation: 'result_page', groupId: input.command.groupId,
     botId: input.command.botId, memberCycle: input.command.memberCycle,
     after: input.after, limit: 1 }
@@ -124,7 +129,7 @@ export async function acknowledgeAccountBotGroupResult(input: AccountBotGroupInp
 }): Promise<HostBotGroupResponse> {
   if (input.resultId !== `${input.command.deliveryId}:final`)
     throw new HostAuthorityError('invalid_input')
-  const profileId = await authorizeDelivery(input)
+  const profileId = await authorizeDelivery(input, 'result')
   const command: HostBotGroupCommand = { operation: 'ack_result',
     groupId: input.command.groupId, botId: input.command.botId,
     memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
