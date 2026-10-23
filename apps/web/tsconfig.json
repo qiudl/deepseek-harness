@@ -14,6 +14,7 @@
     ]
   },
   "include": [
+    "native-document.ts",
     "src",
     "tests"
   ],
@@ -22,6 +23,7 @@
   // this client-registered project must not also hold them (one program
   // cannot see both sides of the cordis Context merges).
   "exclude": [
+    "tests/native-workbench.e2e.ts",
     "tests/collapse-timing.e2e.ts",
     "tests/chat-flow-layout.e2e.ts",
     "tests/layout-bottom.e2e.ts",

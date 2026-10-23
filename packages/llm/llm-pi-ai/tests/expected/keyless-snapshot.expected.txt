@@ -1,0 +1,5 @@
+provider=ollama-local
+model=qwen3.8-flash-next:125b-mlx
+source-preparation-requests=0
+captured-requests=1
+authorization=undefined

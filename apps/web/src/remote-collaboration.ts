@@ -1,5 +1,6 @@
 /** Project scope calls over the authenticated Slark parent port; execution is advertised separately. */
 import type { TunnelFetch } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
+import { exchange, readJson } from './remote-response.ts'
 import { createRemoteCollaborationExecution } from './remote-collaboration-execution.ts'
 
 const schema = 'dsh-remote-collaboration/v1'
@@ -72,49 +73,6 @@ function capture(value: unknown): Record<string, unknown> {
     (op.query.cursor === undefined || text(op.query.cursor, 2048))) return input
   throw Error('remote collaboration operation is invalid')
 }
-function reasonError(reason: unknown): Error {
-  return reason instanceof Error ? reason : Error('remote collaboration operation failed', { cause: reason })
-}
-function wait<T>(signal: AbortSignal, pending: Promise<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) { reject(reasonError(signal.reason)); return }
-    const abort = (): void => { signal.removeEventListener('abort', abort); reject(reasonError(signal.reason)) }
-    signal.addEventListener('abort', abort, { once: true })
-    void pending.then((value) => { signal.removeEventListener('abort', abort); resolve(value) },
-      (error: unknown) => { signal.removeEventListener('abort', abort); reject(reasonError(error)) })
-  })
-}
-async function readJson(response: Response, signal: AbortSignal, maxBytes = 256 * 1024): Promise<unknown> {
-  if (!response.body || Number(response.headers.get('content-length')) > maxBytes) {
-    void response.body?.cancel().catch(() => undefined)
-    throw Error('remote collaboration response too large')
-  }
-  const reader = response.body.getReader()
-  const chunks: Uint8Array[] = []
-  let bytes = 0
-  try {
-    for (;;) {
-      const next = await wait(signal, reader.read())
-      signal.throwIfAborted()
-      if (next.done) break
-      bytes += next.value.length
-      if (bytes > maxBytes) throw Error('remote collaboration response too large')
-      chunks.push(next.value)
-    }
-    const body = new Uint8Array(bytes)
-    let offset = 0
-    for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.length }
-    return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
-  } finally { void reader.cancel().catch(() => undefined) }
-}
-async function exchange(fetch: TunnelFetch, path: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
-  const pending = fetch(path, { ...init, signal })
-  void pending.then((response) => { if (signal.aborted) void response.body?.cancel().catch(() => undefined) }, () => undefined)
-  const response = await wait(signal, pending)
-  signal.throwIfAborted()
-  return response
-}
-
 /**
  * Negotiate scope support before applying Client plugins. Old parents leave the bridge absent.
  * @param fetch - Unary transport using only the authenticated parent port.

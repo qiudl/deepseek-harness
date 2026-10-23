@@ -38,6 +38,8 @@ kind: "package-library"
 
 [已构建 bundle 导入检查](tests/compile/transform-corpus-check.ts)在库构建后检查裸 Node 导入。Dockkit 例外接受 Node 针对任意样式表报告的未知 `.css` 扩展名错误，而不限定某一固定路径；其他扩展名、错误码或消息，以及意外成功的豁免导入，仍然报错。
 
+`WorkerTunnel` 构造函数可选的第二个参数为不透明原生 frame 固定 Host URL 命名空间。普通调用方继续使用页面 origin。它只解析请求和 source-map URL，父页面仍负责来源检查、接口准入和 Host 认证。
+
 -----
 
 <a id="model-experience"></a>

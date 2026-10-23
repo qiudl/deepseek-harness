@@ -1,14 +1,25 @@
 /** Isolated static-page carrier for a Slark parent that has authenticated Host assets. */
 import { WorkerTunnel, type TunnelEndpoint } from '@deepseek-ai/dsh-experimental-webworker-runtime/client'
 import { installRemoteCollaboration } from './remote-collaboration.ts'
+import { installRemoteWorkbench } from './remote-workbench.ts'
 
 const schema = 'dsh-remote-frame/v1'
 const expectedOrigin: unknown = import.meta.env.VITE_DSH_REMOTE_PARENT_ORIGIN
+const nativeFrame = import.meta.env.MODE === 'native'
 const gate = Promise.withResolvers<void>()
 ;(globalThis as { __DSH_BOOT_READY__?: PromiseWithResolvers<void> }).__DSH_BOOT_READY__ = gate
 void gate.promise.catch(() => {})
 
+function nativeAssetOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^https:\/\/[^/?#]+$/u.test(value)) return false
+  try { return new URL(value).origin === value } catch { return false }
+}
+
 function parentOrigin(): string {
+  if (nativeFrame) {
+    if (window.parent === window) throw new Error('native web: parent frame is required')
+    return 'null'
+  }
   if (typeof expectedOrigin !== 'string' || expectedOrigin.length === 0) {
     throw new Error('remote web: parent origin is not configured')
   }
@@ -35,7 +46,7 @@ function portEndpoint(port: MessagePort): TunnelEndpoint {
 async function connect(): Promise<WorkerTunnel> {
   const origin = parentOrigin()
   const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
-  const connected = Promise.withResolvers<MessagePort>()
+  const connected = Promise.withResolvers<{ port: MessagePort; assetOrigin?: string }>()
   const timer = setTimeout(() => { connected.reject(new Error('remote web: parent connection timed out')) }, 30_000)
   const onMessage = (event: MessageEvent<unknown>): void => {
     if (event.source !== window.parent || event.origin !== origin) return
@@ -46,15 +57,16 @@ async function connect(): Promise<WorkerTunnel> {
         event.ports.length !== 1) return
     const port = event.ports[0]
     if (port === undefined) return
+    if (nativeFrame && !nativeAssetOrigin(row.assetOrigin)) return
     window.removeEventListener('message', onMessage)
-    connected.resolve(port)
+    connected.resolve({ port, ...(nativeFrame ? { assetOrigin: row.assetOrigin as string } : {}) })
   }
   window.addEventListener('message', onMessage)
-  window.parent.postMessage({ schema, kind: 'ready', nonce }, origin)
+  window.parent.postMessage({ schema, kind: 'ready', nonce }, nativeFrame ? '*' : origin)
   try {
-    const port = await connected.promise
+    const { port, assetOrigin } = await connected.promise
     port.start()
-    return new WorkerTunnel(portEndpoint(port))
+    return new WorkerTunnel(portEndpoint(port), assetOrigin)
   } finally {
     clearTimeout(timer)
     window.removeEventListener('message', onMessage)
@@ -67,7 +79,7 @@ void tunnel.catch(() => {})
   async ready() {
     const carrier = await tunnel
     const payload = await carrier.bootPayload()
-    await installRemoteCollaboration(carrier.fetch)
+    await Promise.all([installRemoteCollaboration(carrier.fetch), installRemoteWorkbench(carrier.fetch)])
     return {
       injections: payload.injections,
       transport: {

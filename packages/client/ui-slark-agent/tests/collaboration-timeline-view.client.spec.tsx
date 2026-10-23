@@ -123,9 +123,12 @@ it('paginates Sources and replies independently and focuses a locator once witho
   expect(f.props.loadReplies).toHaveBeenCalledWith('a'.repeat(64))
   await act(async () => { f.state.set({ ...f.state.getSnapshot(), phase: 'loading' }) })
   expect(scroll).toHaveBeenCalledOnce()
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: zh['task.moreMessages'] }).disabled).toBe(false)
+  expect(screen.getByRole<HTMLButtonElement>('button', { name: zh['task.moreResults'] }).disabled).toBe(false)
+  await act(async () => { f.state.set({ ...f.state.getSnapshot(), historyReadPending: true }) })
   expect(screen.getByRole<HTMLButtonElement>('button', { name: zh['task.moreMessages'] }).disabled).toBe(true)
   expect(screen.getByRole<HTMLButtonElement>('button', { name: zh['task.moreResults'] }).disabled).toBe(true)
-  await act(async () => { f.state.set({ ...f.state.getSnapshot(), phase: 'ready', groups: [] }) })
+  await act(async () => { f.state.set({ phase: 'ready', groups: [] }) })
   expect(screen.queryByTestId('slark-timeline-original')).toBeNull()
   expect(scroll).toHaveBeenCalledOnce()
 })
@@ -184,4 +187,19 @@ it('replaces provisional assignments by delivery identity and keeps uncertain ta
   expect(assignment.queryByText('Earlier completed task')).toBeNull()
   expect(assignment.queryByText('Earlier live task')).toBeNull()
   expect(assignment.getByText(zh['execution.uncertain'])).toBeTruthy()
+})
+
+it('shows a retained local planning failure without declaring the task terminal or adding retry controls', async () => {
+  const a = { ...group(), replies: [], planningState: 'planning', planningFailure: {
+    reason: 'timeout' as const, observedAt: '2026-10-19T00:00:00.000Z' } }
+  const f = fixture([a])
+  expect(screen.getByText(/本机识别任务曾失败/).textContent).toContain(zh['task.planningFailure.timeout'])
+  expect(screen.getByText(a.original.original_message)).toBeTruthy()
+  expect(screen.queryByText(zh['task.planning'])).toBeNull()
+  expect(screen.queryByText(zh['task.planningFailed'])).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  expect(screen.queryByRole('button', { name: /重试|retry/i })).toBeNull()
+  await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...a, replies: group().replies }] }) })
+  expect(screen.queryByText(/本机识别任务曾失败/)).toBeNull()
+  expect(screen.getByText('answer-a')).toBeTruthy()
 })

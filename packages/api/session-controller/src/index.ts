@@ -1,3 +1,4 @@
+export type { CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { openCollaborationContinuationJournal, collaborationContinuationCommit, type CollaborationContinuationResult } from './collaboration-continuation-journal.ts'
 import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
 import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'

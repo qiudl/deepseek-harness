@@ -234,6 +234,8 @@ describe('candidates', () => {
     const b = await bench({ initialOpen: () => opened.promise, commands: () => response.promise })
     try {
       const pending = b.source.candidates(proj('s1'), req(''))
+      expect(b.sessions.retainInfo(sid('s1')).getSnapshot().retainedBy.commandCatalog).toBeUndefined()
+      await Promise.resolve()
       expect(b.sessions.retainInfo(sid('s1')).getSnapshot().retainedBy.commandCatalog).toBe(1)
       expect(b.listCalls).toEqual([])
       opened.resolve(undefined)
@@ -246,6 +248,14 @@ describe('candidates', () => {
       opened.resolve(undefined)
       response.resolve({ commands: S1_CMDS })
     }
+  })
+
+  it('does not acquire a catalog reference after its owning service is disposed', async () => {
+    const b = await bench()
+    await b.fiber.dispose()
+    await expect(b.source.candidates(proj('s1'), req(''))).rejects.toThrow()
+    expect(b.sessions.retainInfo(sid('s1')).getSnapshot().retainedBy.commandCatalog).toBeUndefined()
+    expect(b.listCalls).toEqual([])
   })
 
   it.each([true, false])('refuses an unsuccessful history open (reported error: %s)', async (reported) => {

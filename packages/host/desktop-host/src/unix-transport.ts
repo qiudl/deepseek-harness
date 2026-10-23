@@ -1,3 +1,4 @@
+import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostRecoveryMaterials } from './recovery-materials.ts'
 import {
   parseRecoveryDescribeInput, parseRecoveryValidateInput,
@@ -391,7 +392,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiItemChunksSupported?: boolean
   /** Open only native read streams in the lease-selected worker. */
   readonly remoteUiStream?: (
-    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list' | 'workbench/read' | 'workspaceFiles/changes' | 'terminal/stream', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
       { action: 'open' }>['payload'], signal: AbortSignal, itemChunks?: boolean,
   ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
   /** Read-only source inspection; omitted on hosts without a validated legacy source. */
@@ -1739,7 +1740,7 @@ export class HostControlAuthority {
           const profileId = authority()
           let result: ProfileRemoteUiStreamResult['result']
           if (command.action === 'open') {
-            if (command.endpoint === 'session/follow' && command.item_chunks && !this.options.remoteUiItemChunksSupported)
+            if ((command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks && !this.options.remoteUiItemChunksSupported)
               throw new HostAuthorityError('upgrade_required')
             const execute = this.options.remoteUiStream
             if (!execute) throw new HostAuthorityError('upgrade_required')
@@ -1747,7 +1748,7 @@ export class HostControlAuthority {
               throw new HostAuthorityError('conflict')
             }
             const cursor = await RemoteUiStreamCursor.open(
-              cursorSignal => command.endpoint === 'session/follow' && command.item_chunks === true
+              cursorSignal => (command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks === true
                 ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
                 : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
             try {
@@ -1937,6 +1938,7 @@ export class HostControlAuthority {
           if (command.action === 'resume_root' && !this.options.rootLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'resume_source' && !this.options.sourceLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'read_source_output' && !this.options.sourceAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'read_root_diagnostic' && !this.options.rootAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'read_root_output' && !this.options.rootAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'reconcile_root' && !this.options.rootPendingLookupSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'recover_root' && !this.options.rootLookupSupported) throw new HostAuthorityError('upgrade_required')
@@ -1948,7 +1950,7 @@ export class HostControlAuthority {
             identity.installationPublicKey,identity.hostInstanceId,identity.processNonce,profileId,resumeAccount])).digest('hex')
           const sourceResumeBinding = createHash('sha256').update(JSON.stringify(['dsh-source-live-resume-v1', identity.installationId,
             identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, resumeAccount])).digest('hex')
-          const payload = (command.action === 'read_source_output' || command.action === 'read_root_output' || command.action === 'read_root_attempt' || command.action === 'prepare_root_attempt') ? { ...command, target: { ...command.target }, binding_key: binding }
+          const payload = (command.action === 'read_root_diagnostic' || command.action === 'read_source_output' || command.action === 'read_root_output' || command.action === 'read_root_attempt' || command.action === 'prepare_root_attempt') ? { ...command, target: { ...command.target }, binding_key: binding }
             : { ...command, binding_key: binding, ...((command.action==='prepare_root' || command.action==='resume_root') &&
               this.options.rootLiveResumeSupported ? { resume_binding_key:resumeBinding } : {}),
             ...((command.action === 'prepare' || command.action === 'resume_source') && this.options.sourceLiveResumeSupported
@@ -2004,6 +2006,9 @@ export class HostControlAuthority {
             result = { kind: 'source_output', evidence: evidence.state === 'saved'
               ? parseHostSourceAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
               : evidence }
+          }
+          else if (command.action === 'read_root_diagnostic') {
+            result = { kind: 'root_diagnostic', evidence: matchHostRootAnalysisDiagnostic(value, command.target) }
           }
           else if (command.action === 'read_root_output') {
             const evidence = matchHostRootAnalysisOutput(value, command.target)
@@ -2399,7 +2404,7 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis && this.options.rootPendingLookupSupported ? ['profile.root_pending_lookup'] : []),
           ...(this.options.collaborationAnalysis && this.options.sourceAnalysisRecoverySupported ? ['profile.source_analysis_recovery'] : []),
           ...(this.options.collaborationAnalysis && this.options.sourceLiveResumeSupported ? ['profile.source_live_resume'] : []),
-          ...(this.options.collaborationAnalysis && this.options.rootAnalysisRecoverySupported ? ['profile.root_analysis_recovery'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootAnalysisRecoverySupported ? ['profile.root_analysis_recovery', 'profile.root_analysis_diagnostic'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootAnalysisSupported ? ['profile.root_analysis'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootCaptureSupported ? ['profile.root_capture'] : []),
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
@@ -2414,7 +2419,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
-            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list',
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
             ...(this.options.remoteUiItemChunksSupported ? ['profile.remote_ui_stream.item_chunks'] : [])] : []),
           ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
           ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
@@ -3616,6 +3621,7 @@ export class UnixHostClient {
     if (command.action === 'resume_root' && !this.inspection.capabilities.includes('profile.root_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'read_source_output' && !this.inspection.capabilities.includes('profile.source_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'resume_source' && !this.inspection.capabilities.includes('profile.source_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_root_diagnostic' && !this.inspection.capabilities.includes('profile.root_analysis_diagnostic' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'read_root_output' && !this.inspection.capabilities.includes('profile.root_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'reconcile_root' && !this.inspection.capabilities.includes('profile.root_pending_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'recover_root' && !this.inspection.capabilities.includes('profile.root_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
@@ -3652,7 +3658,7 @@ export class UnixHostClient {
             Buffer.from(receipt.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
       }
     }
-    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
     if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
       Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
@@ -3661,6 +3667,7 @@ export class UnixHostClient {
     if (result.kind === 'root_attempt_evidence' && command.action === 'read_root_attempt') matchHostRootPlanningEvidence(result.evidence, command.target)
     if (result.kind === 'root_attempt_prepared' && command.action === 'prepare_root_attempt')
       matchHostRootPlanningAttemptTarget(result.preparation, command.target)
+    if (result.kind === 'root_diagnostic' && command.action === 'read_root_diagnostic') matchHostRootAnalysisDiagnostic(result.evidence, command.target)
     if (result.kind === 'root_output' && command.action === 'read_root_output') matchHostRootAnalysisOutput(result.evidence,command.target)
     if (result.kind === 'source_output' && command.action === 'read_source_output') matchHostSourceAnalysisOutput(result.evidence, command.target)
     const saved = (result.kind === 'source_output' || result.kind === 'root_output') && result.evidence.state === 'saved'
