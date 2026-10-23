@@ -86,6 +86,7 @@ it('shows an Agent result under the exact committed group message with its actor
   expect(article?.textContent).toContain('Group member')
   expect(article?.textContent).toContain('Fixer')
   expect(article?.textContent).toContain('Issue fixed')
+  expect(article?.textContent).toContain('Only you can see this Agent result')
   expect(article?.textContent).not.toContain('Private other workspace')
   expect(article?.querySelector('[data-task-id="task-1"]')).toBeTruthy()
 })

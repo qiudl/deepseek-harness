@@ -240,6 +240,7 @@ function GroupWorkResult({ group, t }: { group: CollaborationResultGroup; t: Pro
     return <p className={css.workStatus} role="status">{t('task.awaitingResult')}</p>
   return <section className={css.work} aria-label={t('task.assignment')}>
     <strong>{t('task.assignment')}</strong>
+    <small className={css.workStatus}>{t('group.ownerOnlyResult')}</small>
     {tasks.map((task) => {
       const reply = group.replies.find(item => item.task_id === task.taskId)
       const outcome = group.execution?.outcomes?.[task.taskId]
