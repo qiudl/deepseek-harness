@@ -54,6 +54,21 @@ it('retains the parent request ID across an uncertain send and missing receipt',
   expect(sends[0]?.request_id).toBe(sends[1]?.request_id)
 })
 
+it('binds the parent pending key to the selected Agent refs and preserves them on retry', async () => {
+  vi.stubGlobal('crypto', webcrypto)
+  const { bridge, commands } = parent()
+  const ref = `slark-agent:${'a'.repeat(64)}`
+  const input = { bridge, workspaceId, sessionId, groupId, body: 'please review', mentionRefs: [ref] }
+  expect((await sendGroupText(input)).state).toBe('retry_required')
+  expect(await sendGroupText({ ...input, mentionRefs: [] })).toEqual({ state: 'pending_other' })
+  expect((await sendGroupText(input)).state).toBe('recorded')
+  const sends = commands.filter((command): command is Extract<GroupMessageCommand, { operation: 'send' }> =>
+    command.operation === 'send')
+  expect(sends).toHaveLength(2)
+  expect(sends[0]).toMatchObject({ request_id: requestId, mention_refs: [ref] })
+  expect(sends[1]).toEqual(sends[0])
+})
+
 it('holds a recorded tombstone until the composer confirms its draft cleared', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const { bridge, commands, setReceipt } = parent()

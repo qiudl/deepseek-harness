@@ -1520,6 +1520,36 @@ it('routes plain text from the original active Session to one durable group comm
   expect(f.sink).not.toHaveBeenCalled()
 })
 
+it('records a picked Agent chip as a project-qualified group target', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  const groupId = '22222222-2222-4222-8222-222222222222'
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+    version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+    : command.operation === 'receipt' ? { state: 'missing' as const }
+      : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  host.collaborationGroupMessages = messages
+  await f.pick('', ' 请检查登录问题')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  const body = f.composer.snapshot.draft
+  const outcome = await source.matchEnter?.(session, body,
+    new AbortController().signal, { attachments: 0 })
+  const scoped = f.ctx.sessions.scope(session.sessionId)
+  if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+    throw Error('missing Agent group claim')
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'success' })
+  const actorRef = `slark-agent:${createHash('sha256').update(JSON.stringify([
+    'slark_group_agent_v1', 'project-1', 'agent-1',
+  ])).digest('hex')}`
+  expect(messages).toHaveBeenCalledWith(expect.objectContaining({ operation: 'send',
+    mention_refs: [actorRef], body }))
+  expect(f.submit).not.toHaveBeenCalled()
+})
+
 it('registers the group ledger dock only for a verified group bridge', async () => {
   const f = await bench(true, true, true, false, true, false, undefined, undefined, undefined, 'unmapped')
   const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-group-chat')

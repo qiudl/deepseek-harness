@@ -100,6 +100,11 @@ function parse(value: string): Reference | undefined {
   } catch { return undefined }
 }
 const label = (r: Reference) => `${r.agent_name} · ${r.project_name}`
+async function groupAgentRef(r: Reference): Promise<string> {
+  const payload = new TextEncoder().encode(JSON.stringify(['slark_group_agent_v1', r.project_id, r.agent_id]))
+  const digest = await crypto.subtle.digest('SHA-256', payload)
+  return `slark-agent:${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`
+}
 /**
  * Preserve the full scoped display label during chip clipboard export.
  * @param ref - the original scoped chip metadata.
@@ -216,18 +221,42 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
         if (mapping.state === 'preparing') throw Error(t('group.preparing'))
         if (mapping.state === 'group_active') {
           if (!host.collaborationGroupMessages) throw Error(t('group.uncertain'))
-          if (snapshot.occurrences.length || envelope.attachments > 0 || snapshot.draft.trim() !== line)
+          if (envelope.attachments > 0 || snapshot.draft.trim() !== line || snapshot.occurrences.length > 10)
             throw Error(t('group.textOnly'))
+          let previousEnd = 0, question = ''
+          const mentions = [...snapshot.occurrences].sort((a, b) => a.offset - b.offset).map((mention) => {
+            const r = parse(mention.ref), end = mention.offset + mention.length
+            if (!r?.source_id || mention.source !== 'slark-agent' ||
+              r.workspace_id !== groupWorkspace || r.session_id !== session.sessionId ||
+              !Number.isSafeInteger(mention.offset) || !Number.isSafeInteger(mention.length) ||
+              mention.offset < previousEnd || mention.length < 2 || end > snapshot.draft.length ||
+              mention.clipboardText !== `@${label(r)}` ||
+              snapshot.draft.slice(mention.offset, end) !== mention.clipboardText)
+              throw Error(t('submit.unavailable'))
+            question += snapshot.draft.slice(previousEnd, mention.offset)
+            previousEnd = end
+            return r
+          })
+          if (mentions.length && !(question + snapshot.draft.slice(previousEnd)).trim())
+            throw Error(t('submit.question'))
+          const mentionRefs = await Promise.all(mentions.map(groupAgentRef))
+          if (new Set(mentionRefs).size !== mentionRefs.length) throw Error(t('submit.unavailable'))
           const body = snapshot.draft, groupId = mapping.group_id
           return { claim: { name: 'slark-agent', token: line, retainOnFailure: false,
             async submit(args, actx) {
               signal.throwIfAborted()
               const latest = ctx.conversation.input.for(actx).state.getSnapshot()
               if (args.trim() || ctx.sessions.scopeOf(actx) !== session.sessionId || latest.draft !== body ||
-                latest.occurrences.length || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
+                latest.occurrences.length !== snapshot.occurrences.length ||
+                latest.occurrences.some((current, index) => {
+                  const captured = snapshot.occurrences[index]
+                  return !captured || current.source !== captured.source || current.ref !== captured.ref ||
+                    current.offset !== captured.offset || current.length !== captured.length ||
+                    current.clipboardText !== captured.clipboardText
+                }) || workspaceOf(ctx, session.sessionId) !== groupWorkspace ||
                 window.__DSH_DESKTOP_HOST__ !== host) return { kind: 'error', text: t('submit.changed') }
               const result = await sendGroupText({ bridge: host,
-                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body })
+                workspaceId: groupWorkspace, sessionId: session.sessionId, groupId, body, mentionRefs })
               signal.throwIfAborted()
               if (window.__DSH_DESKTOP_HOST__ !== host || workspaceOf(ctx, session.sessionId) !== groupWorkspace)
                 return { kind: 'error', text: t('group.uncertain') }
