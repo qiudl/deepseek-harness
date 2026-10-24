@@ -309,6 +309,35 @@ describe('FileJsonlMigrationExportSource', () => {
     expect((await stat(log)).mode & 0o777).toBe(0o600)
   })
 
+  it('bounds import selections and preserves parent links without writing to the source', async () => {
+    const { source, target, log } = await fixture()
+    const child = { ...header, id: SessionId('export-child'), parentSession: header.id }
+    await target.importSession(4, child, events)
+    const before = await readFile(log)
+    const inventory = await source.listImportInventory()
+    expect(inventory).toMatchObject([
+      { id: 'export-child', parentSession: header.id, eventCount: 2 },
+      { id: header.id, eventCount: 2 },
+    ])
+    expect(await source.readImportSessions([child.id])).toMatchObject([
+      { meta: { id: child.id, parentSession: header.id }, events },
+    ])
+    for (const ids of [[child.id, child.id], [''], Array(10_001).fill(child.id)]) {
+      await expect(source.readImportSessions(ids)).rejects.toThrow('profile_import_selection_invalid')
+    }
+    await expect(source.readImportSessions(['missing-session']))
+      .rejects.toThrow('profile_import_selection_stale')
+    expect(await readFile(log)).toEqual(before)
+  })
+
+  it('classifies an unexpected source file as invalid inventory and leaves the log untouched', async () => {
+    const { source, session, log } = await fixture()
+    const before = await readFile(log)
+    await writeFile(join(session, 'unexpected.txt'), 'do not import', { mode: 0o600 })
+    await expect(source.listImportInventory()).rejects.toThrow('profile_import_inventory_invalid')
+    expect(await readFile(log)).toEqual(before)
+  })
+
   it('refuses an unsupported physical V2 chronology from dsh-v0.1.3-alpha.2 without changing it', async () => {
     const root = await tempRoot('dsh-import-released-v2-')
     const session = join(root, 'project', 'preview-showcase')
