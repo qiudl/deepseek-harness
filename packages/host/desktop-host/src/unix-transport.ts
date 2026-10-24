@@ -2501,15 +2501,18 @@ export class HostControlAuthority {
               // Scan a bounded page window; only the original delivery's result may cross this boundary.
               let after = frame.params.after
               let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              let slarkOwnerUserId: string | null = null
               for (let scan = 0; scan < 1000; scan++) {
                 const page = await readAccountBotGroupResultPage({ ...groupInput, after })
-                if (page.state !== 'ok' || page.results.length === 0) {
-                  reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                slarkOwnerUserId = page.ownerUserId
+                if (page.reply.state !== 'ok' || page.reply.results.length === 0) {
+                  reply = page.reply.state === 'ok' ?
+                    { state: 'ok', results: [], next: frame.params.after } : page.reply
                   break
                 }
                 // The worker parser bounds an `ok` page to one valid result, and
                 // the empty page returned above; this entry is present here.
-                const result = page.results[0] as (typeof page.results)[number]
+                const result = page.reply.results[0] as (typeof page.reply.results)[number]
                 if (result.deliveryId === frame.params.command.deliveryId) {
                   reply = { state: 'ok', results: [result], next: result.seq }
                   break
@@ -2520,13 +2523,14 @@ export class HostControlAuthority {
               const item = reply.state === 'ok' ? reply.results[0] : undefined
               let proof: HostBotGroupResultProof | null = null
               if (item) {
+                if (!slarkOwnerUserId) throw new HostAuthorityError('unavailable')
                 const unsigned = {
                   schema_version: 1 as const,
                   authority_environment_id: account.authorityEnvironmentId,
                   account_binding_handle: account.accountBindingHandle,
                   authority_binding_version: account.authorityBindingVersion,
                   account_issuer: account.issuer, account_subject: account.subject,
-                  owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                  owner_user_id: slarkOwnerUserId, computer_id: frame.params.computer_id,
                   slark_audience: frame.params.slark_audience,
                   installation_id: this.options.identity.installationId,
                   installation_public_key: this.options.identity.installationPublicKey,
