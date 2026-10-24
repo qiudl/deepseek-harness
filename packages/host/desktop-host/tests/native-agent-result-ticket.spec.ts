@@ -7,9 +7,10 @@ import { confirmNativeAgentResultTicket, nativeAgentResultChunkDigest,
 
 const now = 1_900_000_000_000
 const pair = generateKeyPairSync('ed25519')
+const slarkOwnerUserId = 'slark-user'
 const text = 'Agent answer'
 const expected: NativeAgentResultExpected = {
-  ownerUserId: 'alice', computerId: 'desktop-1',
+  computerId: 'desktop-1',
   accountIssuer: 'https://accounts.staging.dsh.colorbuyai.com',
   accountSubject: randomUUID(), environmentId: randomUUID(),
   accountBindingHandle: 'binding:test', accountBindingEpoch: 3,
@@ -34,10 +35,11 @@ function ticket(change: Record<string, unknown> = {}): string {
   const claims = { schema_version: 1, issuer: keyring.issuer,
     audience: 'urn:slark:dsh-native-agent-result:v1',
     slark_audience: valid.slarkAudience, environment_id: valid.environmentId,
-    owner_user_id: valid.ownerUserId, computer_id: valid.computerId,
+    owner_user_id: slarkOwnerUserId, computer_id: valid.computerId,
     account_issuer: valid.accountIssuer, account_subject: valid.accountSubject,
     account_binding_epoch: valid.accountBindingEpoch,
-    host_registry_id: botGroupHostRegistryId(valid), group_id: valid.groupId,
+    host_registry_id: botGroupHostRegistryId({ ...valid, ownerUserId: slarkOwnerUserId }),
+    group_id: valid.groupId,
     workspace_id: valid.workspaceId, session_id: valid.sessionId,
     room_id: valid.roomId, member_id: valid.memberId, member_cycle: valid.memberCycle,
     turn_id: valid.turnId, turn_order: valid.turnOrder,
@@ -63,6 +65,8 @@ it('accepts the exact signed chunk and rejects altered context or text', () => {
   expect(() => verifyNativeAgentResultTicket(signed, keyring,
     { ...valid, memberCycle: 3 }, now)).toThrow('native_agent_result_ticket_invalid')
   expect(() => verifyNativeAgentResultTicket(ticket({ audience: 'urn:other' }),
+    keyring, valid, now)).toThrow('native_agent_result_ticket_invalid')
+  expect(() => verifyNativeAgentResultTicket(ticket({ owner_user_id: 'invalid owner' }),
     keyring, valid, now)).toThrow('native_agent_result_ticket_invalid')
   expect(() => verifyNativeAgentResultTicket(signed, keyring,
     valid, now + 60_001)).toThrow('native_agent_result_ticket_invalid')

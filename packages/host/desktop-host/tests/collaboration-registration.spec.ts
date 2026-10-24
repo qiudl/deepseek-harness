@@ -15,6 +15,8 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
+const slarkOwnerUserId = 'slark-owner'
+
 async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
@@ -218,7 +220,7 @@ it('delivers a native Agent chunk only with a signed live Slark ticket', async (
     .update(JSON.stringify(['dsh-native-agent-chunk-v1', command.turn_id,
       0, 1, command.chunk_text])).digest('hex') }
   const workspaceId = randomUUID(), sessionId = 'original'
-  const registry = botGroupHostRegistryId({ ownerUserId: f.ownerId,
+  const registry = botGroupHostRegistryId({ ownerUserId: slarkOwnerUserId,
     accountIssuer: f.account.issuer, accountSubject: f.account.subject,
     environmentId: f.account.authorityEnvironmentId,
     installationId: f.identity.installationId,
@@ -227,7 +229,7 @@ it('delivers a native Agent chunk only with a signed live Slark ticket', async (
   const claims = { schema_version: 1, issuer: f.botGroupKeyring.issuer,
     audience: 'urn:slark:dsh-native-agent-result:v1',
     slark_audience: 'https://slark.example.test',
-    environment_id: f.account.authorityEnvironmentId, owner_user_id: f.ownerId,
+    environment_id: f.account.authorityEnvironmentId, owner_user_id: slarkOwnerUserId,
     computer_id: 'desktop-1', account_issuer: f.account.issuer,
     account_subject: f.account.subject,
     account_binding_epoch: f.account.authorityBindingVersion,
@@ -437,10 +439,10 @@ it('delivers through the Host only after signed Slark and current membership con
   const claims = { schema_version: 1, issuer: origin,
     audience: 'urn:slark:dsh-bot-group-delivery:v1', slark_audience: origin,
     environment_id: f.account.authorityEnvironmentId,
-    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    owner_user_id: slarkOwnerUserId, computer_id: 'desktop-1',
     account_issuer: f.account.issuer, account_subject: f.account.subject,
     account_binding_epoch: f.account.authorityBindingVersion,
-    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: slarkOwnerUserId,
       accountIssuer: f.account.issuer, accountSubject: f.account.subject,
       environmentId: f.account.authorityEnvironmentId,
       installationId: f.identity.installationId,
@@ -492,6 +494,7 @@ it('delivers through the Host only after signed Slark and current membership con
   expect(page.proof).not.toBeNull()
   const signedProof = page.proof
   if (!signedProof) throw Error('missing result proof')
+  expect(signedProof.owner_user_id).toBe(slarkOwnerUserId)
   const { signature, ...unsigned } = signedProof
   expect(verify(null, encodeHostBotGroupResultProofPayload(unsigned), f.keys.publicKey,
     Buffer.from(signature, 'base64url'))).toBe(true)
@@ -671,10 +674,10 @@ it('routes one signed owner stop decision to the exact Bot delivery', async () =
   const claims = { schema_version: 1, issuer: origin,
     audience: 'urn:slark:dsh-bot-group-stop:v1', slark_audience: origin,
     environment_id: f.account.authorityEnvironmentId,
-    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    owner_user_id: slarkOwnerUserId, computer_id: 'desktop-1',
     account_issuer: f.account.issuer, account_subject: f.account.subject,
     account_binding_epoch: f.account.authorityBindingVersion,
-    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: slarkOwnerUserId,
       accountIssuer: f.account.issuer, accountSubject: f.account.subject,
       environmentId: f.account.authorityEnvironmentId,
       installationId: f.identity.installationId,

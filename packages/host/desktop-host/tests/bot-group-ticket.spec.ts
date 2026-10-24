@@ -9,8 +9,9 @@ import { botGroupHostRegistryId, confirmBotGroupTicket, confirmBotGroupResultTic
 
 const now = 1_900_000_000_000
 const pair = generateKeyPairSync('ed25519')
+const slarkOwnerUserId = 'slark-user'
 const expected: BotGroupTicketExpected = {
-  ownerUserId: 'alice', computerId: 'desktop-1',
+  computerId: 'desktop-1',
   accountIssuer: 'https://accounts.staging.dsh.colorbuyai.com',
   accountSubject: randomUUID(), environmentId: randomUUID(),
   accountBindingHandle: 'binding:test', accountBindingEpoch: 3,
@@ -34,11 +35,12 @@ function ticket(change: Record<string, unknown> = {}): string {
   const claims = { schema_version: 1, issuer: keyring.issuer,
     audience: 'urn:slark:dsh-bot-group-delivery:v1',
     slark_audience: expected.slarkAudience, environment_id: expected.environmentId,
-    owner_user_id: expected.ownerUserId, computer_id: expected.computerId,
+    owner_user_id: slarkOwnerUserId, computer_id: expected.computerId,
     account_issuer: expected.accountIssuer,
     account_subject: expected.accountSubject,
     account_binding_epoch: expected.accountBindingEpoch,
-    host_registry_id: botGroupHostRegistryId(expected), group_id: expected.groupId,
+    host_registry_id: botGroupHostRegistryId({ ...expected, ownerUserId: slarkOwnerUserId }),
+    group_id: expected.groupId,
     workspace_id: ids.workspace, session_id: ids.session,
     delivery_id: expected.deliveryId, message_id: ids.message,
     message_seq: expected.messageSeq, bot_id: expected.botId,
@@ -155,6 +157,7 @@ it('requires online Slark confirmation of the same owner stop request', async ()
 
 it('accepts one pinned Slark signature for the current Account and exact message', () => {
   const result = verifyBotGroupTicket(ticket(), keyring, expected, now + 1_000)
+  expect(result.ownerUserId).toBe(slarkOwnerUserId)
   expect(result.workspaceId).toBe(ids.workspace)
   expect(result.sessionId).toBe(ids.session)
   expect(result.messageId).toBe(ids.message)
@@ -174,6 +177,8 @@ it('rejects altered message, Account, Host, Bot cycle, group and expired tickets
   expect(() => verifyBotGroupTicket(signed, keyring, expected, now + 60_001))
     .toThrow('bot_group_ticket_invalid')
   expect(() => verifyBotGroupTicket(ticket({ payload_digest: 'a'.repeat(64) }),
+    keyring, expected, now)).toThrow('bot_group_ticket_invalid')
+  expect(() => verifyBotGroupTicket(ticket({ owner_user_id: 'invalid owner' }),
     keyring, expected, now)).toThrow('bot_group_ticket_invalid')
   const parts = signed.split('.')
   expect(() => verifyBotGroupTicket(`${parts[0]}.${parts[1]}A.${parts[2]}`,

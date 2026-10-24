@@ -33,7 +33,7 @@ it('confirms Slark authority before writing a chunk to the current Account Profi
   const f = fixture()
   expect(await deliverAccountNativeAgentResultChunk(f.input)).toEqual(f.reply)
   expect(f.confirm).toHaveBeenCalledWith(f.input.ticket, f.input.keyring,
-    expect.objectContaining({ ownerUserId: 'alice', memberId: f.command.member_id,
+    expect.objectContaining({ memberId: f.command.member_id,
       turnId: f.command.turn_id, chunkText: f.command.chunk_text,
       accountBindingEpoch: 3, workspaceId: f.input.workspaceId }), f.input.signal)
   expect(f.workers.operateNativeRoom).toHaveBeenCalledWith('profile', f.command,

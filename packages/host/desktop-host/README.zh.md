@@ -89,7 +89,7 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 补读到结果时，Host 用安装密钥签署准确的正文、Bot 与成员身份、投递 ID，以及当前 Account 与安装身份。客户端会用已检验的 Host 对端公钥复核；Slark 在记录 Bot 群消息前还须按当前注册 Host 再次验签。
 
-Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。
+Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。registry 使用签名凭据中的 Slark 用户 ID；随机生成的 Unix 连接 owner ID 只用作本地授权键。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。Host 用已确认结果凭据中的 Slark 用户 ID 签署结果证明。
 
 如果 worker 的派送响应丢失，Host 会先按同一投递 ID 读取持久回执，再报告结果。回执缺失或不可用时保留原始失败；对账期间不会再次提交派送。
 
