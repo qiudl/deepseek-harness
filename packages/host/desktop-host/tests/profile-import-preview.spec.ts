@@ -174,6 +174,15 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
     }), { mode: 0o600 })
     await expect(inspectProfileImportInventory({ ...source, uid }))
       .rejects.toThrow('profile_import_manifest_invalid')
+    await writeFile(source.manifestPath, JSON.stringify({
+      dependencies: { alpha: '1.0.0' }, dsh: { profile: { bundles: ['alpha', 'alpha'] } },
+    }), { mode: 0o600 })
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+    await writeFile(source.manifestPath, JSON.stringify({ dependencies: { alpha: '1.0.0' } }), { mode: 0o600 })
+    await unlink(join(source.profileRoot, 'profiles', 'web', 'pnpm-lock.yaml'))
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_manifest_invalid')
   })
 
   it('reports a missing generation owner record as an invalid inventory without creating a replacement', async () => {
