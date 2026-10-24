@@ -73,10 +73,13 @@ it('rejects malformed ticket framing, authority URL, key selection, and signatur
   const rejects = (token: string, ring = keyring, context = valid) =>
     expect(() => verifyNativeAgentResultTicket(token, ring, context, now))
       .toThrow('native_agent_result_ticket_invalid')
-  rejects(null as unknown as string)
+  expect(() => Reflect.apply(verifyNativeAgentResultTicket, undefined,
+    [null, keyring, valid, now])).toThrow('native_agent_result_ticket_invalid')
   rejects('x'.repeat(8193))
   rejects('unsigned')
-  rejects(signed, keyring, { ...valid, slarkAudience: null as unknown as string })
+  expect(() => Reflect.apply(verifyNativeAgentResultTicket, undefined,
+    [signed, keyring, { ...valid, slarkAudience: null }, now]))
+    .toThrow('native_agent_result_ticket_invalid')
   rejects(signed, keyring, { ...valid, slarkAudience: '%' })
   rejects(signed, { ...keyring, keys: [] })
   rejects(signed, { ...keyring, keys: [{ ...keyring.keys[0]!, validUntil: now + 1 }] })
