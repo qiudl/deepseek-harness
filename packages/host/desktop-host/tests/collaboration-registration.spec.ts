@@ -115,6 +115,12 @@ it('prepares a native room through the Account-authorized Host transport', async
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
     ? { ...frame, result: { binding: { ...assertion!, issued_at: assertion!.issued_at + 1 } } } : frame)
   await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.native_room')
+      Reflect.set(frame, 'method', 'profile.bot_identity')
+    return frame
+  })
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'unavailable' })
   f.alter(undefined)
   const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.native_room')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
@@ -140,12 +146,25 @@ it('keeps native room messages on the Account-authorized Host control channel', 
   expect(f.operateNativeRoom).not.toHaveBeenCalled()
   expect(await f.client.operateNativeRoom(input)).toEqual({ state: 'ok',
     room_id: command.room_id, next_seq: 5, last_seq: 5, messages: [] })
+  const raw = structuredClone(f.seen.at(-1))
+  if (!raw || raw.type !== 'request' || raw.method !== 'profile.native_room_operation')
+    throw Error('missing native room request')
+  Reflect.set(raw, 'request_id', randomUUID())
+  Reflect.set(raw.params, 'command', forbidden)
+  Reflect.set(raw.params, 'jti', randomUUID())
+  expect(await f.session.handleRequest(raw)).toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
   expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, command,
     expect.any(AbortSignal))
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_operation'
     ? { ...frame, result: { reply: { state: 'ok', room_id: 'other',
       next_seq: 5, last_seq: 5, messages: [] } } } : frame)
   await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.native_room_operation')
+      Reflect.set(frame, 'method', 'profile.bot_identity')
+    return frame
+  })
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'unavailable' })
   f.alter(undefined)
   await expect(f.client.operateNativeRoom({ ...input, issuer: 'https://other.example.test' }))
     .rejects.toThrow()
@@ -153,6 +172,36 @@ it('keeps native room messages on the Account-authorized Host control channel', 
     value => value !== 'profile.native_room_operation')
   expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
   await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('rejects native room calls when the live Host drops its room worker capability', async () => {
+  const f = await fixture()
+  await f.grant()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  Reflect.deleteProperty(options, 'prepareNativeRoom')
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.deleteProperty(options, 'operateNativeRoom')
+  await expect(f.client.operateNativeRoom({ ...input, command: { operation: 'messages',
+    room_id: input.roomId, member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 1 } }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('signs native room assertions with the Host default clock when no clock is injected', async () => {
+  const f = await fixture()
+  await f.grant()
+  f.time.value = Date.now()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'now')
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  expect((await f.client.prepareNativeRoom(input))?.binding).toEqual(f.nativeRoom)
+  const turns = await f.client.operateNativeRoom({ ...input, command: { operation: 'turns',
+    room_id: input.roomId, member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 1 } })
+  expect(turns.state).toBe('turns')
 })
 
 it('delivers a native Agent chunk only with a signed live Slark ticket', async () => {
@@ -201,9 +250,25 @@ it('delivers a native Agent chunk only with a signed live Slark ticket', async (
   const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
     computerId: 'desktop-1', slarkAudience: 'https://slark.example.test',
     workspaceId, sessionId, ticket, command: signedCommand }
+  const capabilities = f.client.inspection.capabilities
+  Reflect.set(f.client.inspection, 'capabilities', capabilities.filter(
+    value => value !== 'profile.native_agent_result'))
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(f.client.inspection, 'capabilities', capabilities)
   await expect(f.client.deliverNativeAgentResultChunk(input))
     .rejects.toMatchObject({ code: 'unauthorized' })
   await f.grant()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'trustedBotGroupKeyrings')
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(options, 'trustedBotGroupKeyrings', [f.botGroupKeyring])
+  Reflect.deleteProperty(options, 'operateNativeRoom')
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(options, 'operateNativeRoom', f.operateNativeRoom)
   f.operateNativeRoom.mockResolvedValue({ state: 'recorded',
     turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
   const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -217,10 +282,23 @@ it('delivers a native Agent chunk only with a signed live Slark ticket', async (
       turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
     expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, signedCommand,
       expect.any(AbortSignal))
+    f.alter((frame) => {
+      if (frame.type === 'result' && frame.method === 'profile.native_agent_result')
+        Reflect.set(frame, 'method', 'profile.bot_identity')
+      return frame
+    })
+    await expect(f.client.deliverNativeAgentResultChunk(input))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_agent_result'
+      ? { ...frame, result: { reply: { state: 'recorded', turn_id: randomUUID(),
+        chunk_index: 0, room_seq: 2 } } } : frame)
+    await expect(f.client.deliverNativeAgentResultChunk(input))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    f.alter(undefined)
     await expect(f.client.deliverNativeAgentResultChunk({ ...input,
       command: { ...signedCommand, chunk_text: 'tampered' } }))
       .rejects.toThrow()
-    expect(f.operateNativeRoom).toHaveBeenCalledTimes(1)
+    expect(f.operateNativeRoom).toHaveBeenCalledTimes(3)
   } finally { fetchMock.mockRestore() }
 })
 
