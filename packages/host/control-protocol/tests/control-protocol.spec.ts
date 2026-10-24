@@ -222,7 +222,7 @@ describe('Main-only Profile operations', () => {
     continued.result.plugins[0]!.version = null
     expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
     continued.result.sessions[0] = { ...continued.result.sessions[0] }
-    delete continued.result.sessions[0]!.target_digest
+    delete continued.result.sessions[0].target_digest
     continued.result.plugins[0]!.target_version = '2.0.0'
     expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
   })
