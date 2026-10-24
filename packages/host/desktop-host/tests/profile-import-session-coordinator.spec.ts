@@ -141,6 +141,11 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       targetProfileId: target.profileId, operationOffset: 0,
       assertAuthority: async () => { throw Error('revoked') } }))
       .rejects.toThrow('revoked')
+    let postReadChecks = 0
+    await expect(restored.listStatus({ sourceProfileId: source.profileId,
+      targetProfileId: target.profileId, operationOffset: 0,
+      assertAuthority: async () => { if (++postReadChecks === 2) throw Error('revoked') } }))
+      .rejects.toThrow('revoked')
     expect(await restored.listStatus({ sourceProfileId: target.profileId,
       targetProfileId: source.profileId, operationOffset: 0,
       assertAuthority: async () => {} })).toEqual({ operations: [], nextOperationOffset: null })
@@ -169,6 +174,10 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect(second.operations).toHaveLength(1)
     expect(second.nextOperationOffset).toBeNull()
     expect(new Set([...first.operations, ...second.operations].map(row => row.operationId)).size).toBe(65)
+    await expect(coordinator.listStatus({ ...input, operationOffset: -1 }))
+      .rejects.toThrow('profile_import_selection_invalid')
+    await expect(coordinator.listStatus({ ...input, operationOffset: 66 }))
+      .rejects.toThrow('profile_import_selection_invalid')
   })
   it('records intent, fences both workers, stages without publishing, and durably aborts', async () => {
     const { root, source, target, journal, fence, base } = await fixture()
