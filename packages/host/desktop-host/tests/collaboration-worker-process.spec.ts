@@ -60,6 +60,10 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 const botTeamPage = { team_revision: 7, next_cursor: null, items: [
   { kind: 'bot', logical_id: 'bot:thanos', name: '灭霸Thanos', role: 'Main', main: true },
 ], source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
+const botMemoryPage = { logical_id: 'bot:thanos', scope_revision: 'a'.repeat(64), next_cursor: null,
+  item: { file: 'MEMORY.md', offset: 0, total_bytes: 3, sha256: 'b'.repeat(64),
+    content_base64: Buffer.from('abc').toString('base64') },
+  source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
@@ -90,6 +94,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-team-read': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-memory-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -137,6 +142,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
             : input.operation === 'leave' ? { state: 'left', left_room_seq: 3 }
             : { state: 'history_gap' }
           : url.pathname.endsWith('bot-team-read') ? ${JSON.stringify(botTeamPage)}
+          : url.pathname.endsWith('bot-memory-read') ? ${JSON.stringify(botMemoryPage)}
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -173,19 +179,19 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam } = worker
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam, readBotMemory } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
-    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !readBotTeam)
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !readBotTeam || !readBotMemory)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam }
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam, readBotMemory }
 }
 
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
@@ -230,6 +236,19 @@ it('reads the private Bot team page only through the live worker capability', as
   expect(await h.readBotTeam(request, signal)).toEqual(botTeamPage)
   h.worker.abort()
   await expect(h.readBotTeam(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('reads a private Bot memory chunk only through the live worker capability', async () => {
+  const h = await harness()
+  const request = { schema_version: 'dsh-remote-bot-read/v1', kind: 'memory',
+    logical_id: 'bot:thanos', limit: 50 } as const
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-memory-read`, {
+    method: 'POST', body: JSON.stringify(request),
+  })).status).toBe(403)
+  expect(await h.readBotMemory(request, signal)).toEqual(botMemoryPage)
+  h.worker.abort()
+  await expect(h.readBotMemory(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {

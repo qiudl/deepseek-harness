@@ -11,6 +11,8 @@ import { matchesHostNativeRoomReply, parseHostNativeRoomCommand, parseHostNative
   type HostNativeRoomCommand, type HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotTeamPage, parseHostBotTeamReadRequest,
   type HostBotTeamPage, type HostBotTeamReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest,
+  type HostBotMemoryPage, type HostBotMemoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
 } from '@deepseek-ai/dsh-host-control-protocol'
@@ -294,6 +296,8 @@ export class DshWebProfileWorkerFactory {
       bootstrapCookie,
       readBotTeam: (request, signal) => this.readBotTeam(
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
+      readBotMemory: (request, signal) => this.readBotMemory(
+        viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
@@ -567,6 +571,27 @@ export class DshWebProfileWorkerFactory {
     })
     return this.readPrivateResponse(response, active, signal, stopped, 128 * 1024,
       bytes => parseHostBotTeamPage(JSON.parse(bytes.toString('utf8'))), 'await')
+  }
+
+  private async readBotMemory(
+    viewOrigin: string, token: string, request: HostBotMemoryReadRequest,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotMemoryPage> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const target = parseHostBotMemoryReadRequest(request)
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-memory-read`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 128 * 1024,
+      (bytes) => {
+        const page = parseHostBotMemoryPage(JSON.parse(bytes.toString('utf8')))
+        if (page.logical_id !== target.logical_id) throw new HostAuthorityError('profile_mismatch')
+        return page
+      }, 'await')
   }
 
   private async operateBotGroup(

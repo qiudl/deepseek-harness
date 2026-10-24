@@ -8,6 +8,7 @@ import { encodeHostCollaborationRegistrationSignaturePayload,
   encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotMemoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
@@ -51,6 +52,10 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   ], source: 'authority' as const, last_confirmed_at: '2026-10-23T17:00:00.000Z' }
   const readBotTeam = vi.fn(async (_profileId: string, _request: { schema_version: 'dsh-remote-bot-read/v1'; kind: 'team'; limit: number },
     _signal: AbortSignal) => teamPage)
+  const memoryPage = { logical_id: 'bot:bot_1', scope_revision: 'a'.repeat(64), next_cursor: null,
+    item: null, source: 'authority' as const, last_confirmed_at: '2026-10-23T17:00:00.000Z' }
+  const readBotMemory = vi.fn(async (_profileId: string, _request: HostBotMemoryReadRequest,
+    _signal: AbortSignal) => memoryPage)
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -67,7 +72,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
         turns: [{ turn_id: randomUUID(), trigger_room_seq: command.after_seq + 1,
           turn_order: 1 }] } : { state: 'unavailable' })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
-    readBotTeam,
+    readBotTeam, readBotMemory,
     ...(supportBot ? {
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -101,6 +106,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
     bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup, operateNativeRoom, readBotTeam, teamPage,
+    readBotMemory, memoryPage,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -119,6 +125,25 @@ it('reads a team page only for the current Account and rejects revocation after 
   }
   f.readBotTeam.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.teamPage })
   await expect(f.client.readBotTeam(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('reads memory only for the current Account and exact logical scope', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    request: { schema_version: 'dsh-remote-bot-read/v1' as const, kind: 'memory' as const,
+      logical_id: 'bot:bot_1', limit: 50 } }
+  await expect(f.client.readBotMemory(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.readBotMemory(input)).toEqual(f.memoryPage)
+  expect(f.readBotMemory).toHaveBeenCalledWith(f.profile.profileId, input.request, expect.any(AbortSignal))
+  for (const change of [{ issuer: 'https://other.example.test' }, { subject: randomUUID() },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.readBotMemory({ ...input, ...change })).rejects.toThrow()
+  }
+  f.readBotMemory.mockImplementationOnce(async () => ({ ...f.memoryPage, logical_id: 'team' }))
+  await expect(f.client.readBotMemory(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.readBotMemory.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.memoryPage })
+  await expect(f.client.readBotMemory(input)).rejects.toMatchObject({ code: 'unauthorized' })
 })
 
 it('prepares a native room through the Account-authorized Host transport', async () => {

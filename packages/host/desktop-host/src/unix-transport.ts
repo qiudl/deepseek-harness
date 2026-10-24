@@ -4,6 +4,9 @@ import { parseHostBotIdentity, parseHostBotIdentityTarget,
 import { parseHostBotTeamPage, parseHostBotTeamReadRequest,
   type HostBotTeamPage, type HostBotTeamReadRequest, type ProfileBotTeamReadRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest,
+  type HostBotMemoryPage, type HostBotMemoryReadRequest, type ProfileBotMemoryReadRequest,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
   encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
@@ -20,6 +23,7 @@ import { resolveAccountBotIdentity, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
 import { deliverAccountNativeAgentResultChunk } from './account-native-agent-result.ts'
 import { readAccountBotTeam } from './account-bot-team-read.ts'
+import { readAccountBotMemory } from './account-bot-memory-read.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -315,6 +319,9 @@ export interface UnixHostServerOptions {
   /** Read only a bounded team directory page from the current Account Profile. */
   readonly readBotTeam?: (profileId: string, request: HostBotTeamReadRequest,
     signal: AbortSignal) => Promise<HostBotTeamPage>
+  /** Read only a bounded memory chunk from the current Account Profile. */
+  readonly readBotMemory?: (profileId: string, request: HostBotMemoryReadRequest,
+    signal: AbortSignal) => Promise<HostBotMemoryPage>
   /** Prepare a native room Source in the current Account Profile. */
   readonly prepareNativeRoom?: (profileId: string, roomId: string,
     signal: AbortSignal) => Promise<HostNativeRoomSource | null>
@@ -590,7 +597,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'readBotTeam' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'readBotTeam' | 'readBotMemory' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
@@ -2421,6 +2428,14 @@ export class HostControlAuthority {
             { readBotTeam: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_memory_read') {
+          const read = this.options.readBotMemory
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const page = await readAccountBotMemory(this.options.host,
+            { readBotMemory: read }, account, frame.params.read, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { page } })
         } else if (frame.method === 'profile.native_room') {
           const prepare = this.options.prepareNativeRoom
           if (!prepare) throw new HostAuthorityError('upgrade_required')
@@ -2676,6 +2691,7 @@ export class HostControlAuthority {
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.readBotTeam ? ['profile.bot_team_read'] : []),
+          ...(this.options.readBotMemory ? ['profile.bot_memory_read'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
           ...(this.options.operateNativeRoom && this.options.trustedBotGroupKeyrings?.length
@@ -4595,7 +4611,6 @@ export class UnixHostClient {
     return reply
   }
 
-  /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   /** Read a bounded directory page from this connection's current Account Profile. */
   async readBotTeam(input: {
     readonly authorityEnvironmentId: string
@@ -4620,6 +4635,33 @@ export class UnixHostClient {
     return parseHostBotTeamPage(frame.result.page)
   }
 
+  /** Read one bounded memory chunk from the current Account Profile. */
+  async readBotMemory(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly request: HostBotMemoryReadRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotMemoryPage> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_memory_read' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileBotMemoryReadRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_memory_read',
+      params: { ...this.collaborationAccountRequestParams(input),
+        read: parseHostBotMemoryReadRequest(input.request) },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const page = parseHostBotMemoryPage(frame.result.page)
+    if (page.logical_id !== input.request.logical_id) throw new HostAuthorityError('profile_mismatch')
+    return page
+  }
+
+  /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest |
   ProfileBotGroupResultAckRequest | ProfileBotGroupStopRequest,
   signal?: AbortSignal): Promise<HostBotGroupResponse> {
@@ -5628,7 +5670,8 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest | ProfileBotTeamReadRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
+      | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest

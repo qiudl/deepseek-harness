@@ -41,6 +41,7 @@ export { parseHostBotMemoryReadRequest, parseHostBotMemoryPage } from './bot-mem
 export type { HostBotMemoryReadRequest, HostBotMemoryPage } from './bot-memory-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
+  ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
