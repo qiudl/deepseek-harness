@@ -103,6 +103,11 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Read a committed group journal page from this worker's exclusive-writer DS Bot plugin. */
+  readonly readBotGroupHistory?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryReadRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryPage>
   /** Read one logical memory chunk from this worker's exclusive-writer DS Bot plugin. */
   readonly readBotMemory?: (
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotMemoryReadRequest,

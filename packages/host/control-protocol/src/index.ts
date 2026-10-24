@@ -38,9 +38,12 @@ export { parseHostBotTeamReadRequest, parseHostBotTeamPage } from './bot-team-re
 export type { HostBotTeamReadRequest, HostBotTeamPage, HostBotTeamItem } from './bot-team-read.js'
 export { parseHostBotMemoryReadRequest, parseHostBotMemoryPage } from './bot-memory-read.js'
 export type { HostBotMemoryReadRequest, HostBotMemoryPage } from './bot-memory-read.js'
+export { parseHostBotGroupHistoryReadRequest, parseHostBotGroupHistoryPage } from './bot-group-history-read.js'
+export type { HostBotGroupHistoryReadRequest, HostBotGroupHistoryPage } from './bot-group-history-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
+  ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

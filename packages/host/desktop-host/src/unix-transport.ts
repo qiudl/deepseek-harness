@@ -10,6 +10,10 @@ import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest,
   type HostBotMemoryPage, type HostBotMemoryReadRequest, type ProfileBotMemoryReadRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { readAccountBotMemory } from './account-bot-memory-read.ts'
+import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest,
+  type HostBotGroupHistoryPage, type HostBotGroupHistoryReadRequest, type ProfileBotGroupHistoryReadRequest,
+} from '@deepseek-ai/dsh-host-control-protocol'
+import { readAccountBotGroupHistory } from './account-bot-group-history-read.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -289,6 +293,9 @@ export interface UnixHostServerOptions {
   /** Read only a bounded memory chunk from the current Account Profile. */
   readonly readBotMemory?: (profileId: string, request: HostBotMemoryReadRequest,
     signal: AbortSignal) => Promise<HostBotMemoryPage>
+  /** Read a bounded committed group journal page from the current Account Profile. */
+  readonly readBotGroupHistory?: (profileId: string, request: HostBotGroupHistoryReadRequest,
+    signal: AbortSignal) => Promise<HostBotGroupHistoryPage>
   /** Private worker command after signed Slark and current Account authorization. */
   readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
     signal: AbortSignal) => Promise<HostBotGroupResponse>
@@ -558,7 +565,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'readBotTeam' | 'readBotMemory' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'readBotTeam' | 'readBotMemory' | 'readBotGroupHistory' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2387,6 +2394,14 @@ export class HostControlAuthority {
             { readBotMemory: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_group_history_read') {
+          const read = this.options.readBotGroupHistory
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const page = await readAccountBotGroupHistory(this.options.host,
+            { readBotGroupHistory: read }, account, frame.params.read, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { page } })
         } else if (frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
           const operate = this.options.operateBotGroup
@@ -2566,6 +2581,7 @@ export class HostControlAuthority {
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.readBotTeam ? ['profile.bot_team_read'] : []),
           ...(this.options.readBotMemory ? ['profile.bot_memory_read'] : []),
+          ...(this.options.readBotGroupHistory ? ['profile.bot_group_history_read'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
               'profile.bot_group_result_ack'] : []),
@@ -4350,6 +4366,32 @@ export class UnixHostClient {
     return page
   }
 
+  /** Read one committed group journal page from the current Account Profile. */
+  async readBotGroupHistory(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly request: HostBotGroupHistoryReadRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupHistoryPage> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_history_read' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileBotGroupHistoryReadRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_history_read',
+      params: { ...this.collaborationAccountRequestParams(input),
+        read: parseHostBotGroupHistoryReadRequest(input.request) },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const page = parseHostBotGroupHistoryPage(frame.result.page)
+    if (page.logical_id !== input.request.logical_id) throw new HostAuthorityError('profile_mismatch')
+    return page
+  }
+
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest | ProfileBotGroupResultAckRequest,
     signal?: AbortSignal): Promise<HostBotGroupResponse> {
@@ -5326,7 +5368,7 @@ export class UnixHostClient {
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
-      | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest | ProfileBotGroupDeliverRequest
+      | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest | ProfileBotGroupHistoryReadRequest | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest

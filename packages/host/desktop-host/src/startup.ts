@@ -763,6 +763,7 @@ export async function startDesktopHostApplication(
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
       readBotTeam: (profileId, request, signal) => workers.readBotTeam(profileId, request, signal),
       readBotMemory: (profileId, request, signal) => workers.readBotMemory(profileId, request, signal),
+      readBotGroupHistory: (profileId, request, signal) => workers.readBotGroupHistory(profileId, request, signal),
       operateBotGroup: workers.operateBotGroup.bind(workers),
       trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),

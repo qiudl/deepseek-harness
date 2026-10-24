@@ -923,6 +923,31 @@ export interface ProfileBotMemoryReadResult {
   readonly result: { readonly page: import('./bot-memory-read.ts').HostBotMemoryPage }
 }
 
+/** Account-bound, bounded committed group transcript read from the selected Profile. */
+export interface ProfileBotGroupHistoryReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_history_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-group-history-read.ts').HostBotGroupHistoryReadRequest
+  }
+}
+
+/** One bounded committed journal byte page. */
+export interface ProfileBotGroupHistoryReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_history_read'
+  readonly result: { readonly page: import('./bot-group-history-read.ts').HostBotGroupHistoryPage }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2298,6 +2323,8 @@ export type HostControlFrame =
   | ProfileBotTeamReadResult
   | ProfileBotMemoryReadRequest
   | ProfileBotMemoryReadResult
+  | ProfileBotGroupHistoryReadRequest
+  | ProfileBotGroupHistoryReadResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest

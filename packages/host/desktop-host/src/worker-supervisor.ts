@@ -29,6 +29,19 @@ export class ProfileWorkerSupervisor {
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
+  /** Read only a committed page from the selected live Profile worker generation. */
+  async readBotGroupHistory(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryReadRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotGroupHistory) throw new HostAuthorityError('unavailable')
+    const result = await worker.readBotGroupHistory(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
   /**
    * Read one chunk from the same live Profile worker generation.
    * @param profileId - Selected Account Profile.
