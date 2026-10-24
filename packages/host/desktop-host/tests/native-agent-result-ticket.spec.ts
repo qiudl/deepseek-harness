@@ -70,15 +70,16 @@ it('accepts the exact signed chunk and rejects altered context or text', () => {
 
 it('rejects malformed ticket framing, authority URL, key selection, and signature', () => {
   const signed = ticket()
-  const rejects = (token: string, ring = keyring, context = valid) =>
+  const rejects = (token: string, ring = keyring, context = valid): void => {
     expect(() => verifyNativeAgentResultTicket(token, ring, context, now))
       .toThrow('native_agent_result_ticket_invalid')
-  expect(() => Reflect.apply(verifyNativeAgentResultTicket, undefined,
-    [null, keyring, valid, now])).toThrow('native_agent_result_ticket_invalid')
+  }
+  expect(() => { Reflect.apply(verifyNativeAgentResultTicket, undefined,
+    [null, keyring, valid, now]) }).toThrow('native_agent_result_ticket_invalid')
   rejects('x'.repeat(8193))
   rejects('unsigned')
-  expect(() => Reflect.apply(verifyNativeAgentResultTicket, undefined,
-    [signed, keyring, { ...valid, slarkAudience: null }, now]))
+  expect(() => { Reflect.apply(verifyNativeAgentResultTicket, undefined,
+    [signed, keyring, { ...valid, slarkAudience: null }, now]) })
     .toThrow('native_agent_result_ticket_invalid')
   rejects(signed, keyring, { ...valid, slarkAudience: '%' })
   rejects(signed, { ...keyring, keys: [] })
