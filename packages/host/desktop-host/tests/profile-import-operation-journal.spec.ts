@@ -145,6 +145,26 @@ describe.skipIf(process.platform === 'win32')('Profile import operation journal'
       .toEqual(prepared)
   })
 
+  it('rejects a non-record version and inaccessible journal storage', async () => {
+    const { root, directory, journal, input } = await fixture()
+    await journal.create(input)
+    await writeFile(join(directory, `${input.operationId}.1.json`), 'null\n', { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    const control = join(root, 'control')
+    await chmod(control, 0o400)
+    try { await expect(journal.load(input.operationId)).rejects.toThrow() }
+    finally { await chmod(control, 0o700) }
+  })
+
+  it('does not create an intent under a read-only journal parent', async () => {
+    const { root, journal, input } = await fixture()
+    const control = join(root, 'control')
+    await chmod(control, 0o500)
+    try { await expect(journal.create(input)).rejects.toThrow() }
+    finally { await chmod(control, 0o700) }
+    expect(await journal.load(input.operationId)).toBeNull()
+  })
+
   it('rejects a malformed newer version and a redirected parent directory', async () => {
     const { root, directory, journal, input } = await fixture()
     await journal.create(input)
