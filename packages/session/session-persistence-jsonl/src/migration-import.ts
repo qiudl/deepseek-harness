@@ -172,6 +172,7 @@ async function ensurePrivateRoot(root: string, expectedUid: number, unsafeCode: 
 /** Read-only facts for one already-materialized persistence generation. */
 export interface ExistingPersistenceInspection {
   readonly root: string
+  /** Encoding for this generation target; retained source logs may use Zstandard. */
   readonly compression: 'none'
   readonly generation: number
   readonly sessionCount: number
@@ -220,6 +221,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
   /**
    * Validate and inspect an existing active generation without creating roots,
    * active records, owner state, sessions, or any other Profile artifact.
+   * Retained canonical compressed generations are inventory entries, not write targets.
    * @returns canonical persistence root plus digest-only semantic records.
    */
   async inspectExistingPersistence(): Promise<ExistingPersistenceInspection> {
@@ -238,12 +240,11 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
         if (directoryFiles.length === 0 && session.name === 'preset-user-default') continue
         const files = directoryFiles.filter(name => name !== LEASE_FILENAME)
         const ordinaryGenerations = files.filter(name => parseGenerationLogFilename(name, 'none') !== undefined)
-        const legacyZstd = files.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
+        const compressedGenerations = files.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
         const metadata = files.filter(name => name === 'migration-records.json')
-        const recognized = ordinaryGenerations.length + legacyZstd.length + metadata.length
-        if (recognized !== files.length || ordinaryGenerations.length + legacyZstd.length < 1
-          || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
-          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
+        const recognized = ordinaryGenerations.length + compressedGenerations.length + metadata.length
+        if (recognized !== files.length || ordinaryGenerations.length + compressedGenerations.length < 1
+          || (ordinaryGenerations.length > 0 && compressedGenerations.length > 0)) {
           throw new Error('migration_generation_unsafe')
         }
         if (directoryFiles.includes(LEASE_FILENAME)) {

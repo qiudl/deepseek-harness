@@ -1,6 +1,7 @@
 import {
   chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile,
 } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -288,6 +289,49 @@ describe('FileJsonlMigrationExportSource', () => {
     expect(await readFile(log)).toEqual(bytes)
     expect((await stat(log)).mode & 0o777).toBe(0o600)
     expect(await readdir(session)).toEqual(names)
+  })
+
+  it('previews and selects a physical V4 log written by the released dsh-v0.2.0-rc.2 backend', async () => {
+    const root = await tempRoot('dsh-import-released-v4-')
+    const session = join(root, '_no-cwd', 'req0022-released-v4')
+    await mkdir(session, { recursive: true, mode: 0o700 })
+    const bytes = await readFile(new URL('./fixtures/released-v4-rc2-writer.jsonl', import.meta.url))
+    expect(createHash('sha256').update(bytes).digest('hex'))
+      .toBe('7201e96c270347c367047eb8e2427e0c15d60df064ddba5a3c1849b6caf7cdac')
+    const log = join(session, 'session.v4.jsonl')
+    await writeFile(log, bytes, { mode: 0o600 })
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    expect(await source.listImportInventory()).toMatchObject([{
+      id: 'req0022-released-v4', eventCount: 6,
+    }])
+    expect((await source.readImportSessions(['req0022-released-v4']))[0]?.events).toHaveLength(6)
+    expect(await readFile(log)).toEqual(bytes)
+    expect((await stat(log)).mode & 0o777).toBe(0o600)
+  })
+
+  it('refuses an unsupported physical V2 chronology from dsh-v0.1.3-alpha.2 without changing it', async () => {
+    const root = await tempRoot('dsh-import-released-v2-')
+    const session = join(root, 'project', 'preview-showcase')
+    await mkdir(session, { recursive: true, mode: 0o700 })
+    const fixture = await readFile(new URL('./fixtures/released-v2-preview-showcase.jsonl', import.meta.url))
+    expect((await import('node:crypto')).createHash('sha256').update(fixture).digest('hex'))
+      .toBe('67102c6f7f9595505963ebd899bd98c00358d32bc1cc1fb9baa5474caaafe886')
+    const log = join(session, 'session.v2.jsonl')
+    await writeFile(log, fixture, { mode: 0o600 })
+    const source = new FileJsonlMigrationExportSource(root, uid, { read: async () => ownerState })
+    await expect(source.listImportInventory()).rejects.toThrow('profile_import_schema_unsupported')
+    expect(await readFile(log)).toEqual(fixture)
+    expect((await stat(log)).mode & 0o777).toBe(0o600)
+  })
+
+  it('reports a corrupt source inventory without changing its physical log', async () => {
+    const { log, source } = await fixture()
+    const corrupt = Buffer.from('{not-json}\n')
+    await writeFile(log, corrupt, { mode: 0o600 })
+    const before = await stat(log)
+    await expect(source.listImportInventory()).rejects.toThrow('profile_import_inventory_invalid')
+    expect(await readFile(log)).toEqual(corrupt)
+    expect((await stat(log)).mode).toBe(before.mode)
   })
 
   it('continues to refuse mixed encodings when the compressed generation is versioned', async () => {

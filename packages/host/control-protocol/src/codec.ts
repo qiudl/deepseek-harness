@@ -139,6 +139,16 @@ import type {
   ProfileOpenOfflineAccountResult,
   ProfileRecoveryStatusRequest,
   ProfileRecoveryStatusResult,
+  ProfileImportPreviewRequest,
+  ProfileImportPreviewResult,
+  ProfileImportStatusRequest,
+  ProfileImportStatusResult,
+  ProfileImportPrepareRequest,
+  ProfileImportPrepareResult,
+  ProfileImportCommitRequest,
+  ProfileImportCommitResult,
+  ProfileImportAbortRequest,
+  ProfileImportAbortResult,
   HostRecoveryCandidateId,
   HostRecoveryOperationId,
   MigrationExportBeginRequest,
@@ -589,6 +599,32 @@ function authorized(params: Record<string, unknown>): {
     jti: uuid(params.jti) as HostControlJti,
     issued_at: issuedAt,
     expires_at: expiresAt,
+  }
+}
+
+const IMPORT_IDENTITY_KEYS = [
+  'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
+  'account_issuer', 'account_subject', 'source_account_issuer', 'source_account_subject',
+  'source_profile_key_handle', 'source_unlock_material',
+] as const
+
+function importPreviewState(value: unknown): 'new' | 'same' | 'conflict' {
+  if (value !== 'new' && value !== 'same' && value !== 'conflict') reject()
+  return value
+}
+
+function importIdentity(params: Record<string, unknown>) {
+  return {
+    ...authorized(params),
+    authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer),
+    account_subject: boundedText(params.account_subject, 512),
+    source_account_issuer: accountIssuer(params.source_account_issuer),
+    source_account_subject: boundedText(params.source_account_subject, 512),
+    source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
+    source_unlock_material: unlockMaterial(params.source_unlock_material),
   }
 }
 
@@ -1819,6 +1855,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest | ProfileOpenRequest | ProfileOpenLocalRequest
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
+  | ProfileImportPreviewRequest | ProfileImportStatusRequest
+  | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
   | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
   | ProfileNativeRoomRequest
@@ -2226,9 +2264,32 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     ]
     const hasAccountAccessToken = Object.hasOwn(params, 'account_access_token')
     const hasBindingScope = Object.hasOwn(params, 'authority_binding_scope')
+    const hasSlarkExpected = Object.hasOwn(params, 'slark_expected')
     if (hasBindingScope && !hasAccountAccessToken) reject()
+    if (hasSlarkExpected && (!hasAccountAccessToken || hasBindingScope)) reject()
     exactKeys(params, [...(hasAccountAccessToken ? tokenKeys : legacyKeys),
-      ...(hasBindingScope ? ['authority_binding_scope'] : [])])
+      ...(hasBindingScope ? ['authority_binding_scope'] : []),
+      ...(hasSlarkExpected ? ['slark_expected'] : [])])
+    let slarkExpected: ProfileEnsureRequest['params']['slark_expected']
+    if (hasSlarkExpected) {
+      const expected = record(params.slark_expected)
+      exactKeys(expected, ['slark_user_id', 'environment_id', 'person_profile_id', 'device_id',
+        'device_key_thumbprint', 'login_epoch', 'binding_epoch'])
+      const thumbprint = boundedText(expected.device_key_thumbprint, 43)
+      if (!/^[A-Za-z0-9_-]{43}$/u.test(thumbprint)
+        || Buffer.from(thumbprint, 'base64url').length !== 32
+        || Buffer.from(thumbprint, 'base64url').toString('base64url') !== thumbprint
+        || !Number.isSafeInteger(expected.login_epoch) || (expected.login_epoch as number) < 0) reject()
+      slarkExpected = {
+        slark_user_id: boundedText(expected.slark_user_id, 128),
+        environment_id: uuid(expected.environment_id),
+        person_profile_id: uuid(expected.person_profile_id),
+        device_id: uuid(expected.device_id),
+        device_key_thumbprint: thumbprint,
+        login_epoch: expected.login_epoch as number,
+        binding_epoch: generation(expected.binding_epoch),
+      }
+    }
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.ensure',
       params: {
@@ -2241,6 +2302,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         profile_key_handle: boundedText(params.profile_key_handle, 512),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
         ...(hasBindingScope ? { authority_binding_scope: digest(params.authority_binding_scope) } : {}),
+        ...(slarkExpected ? { slark_expected: slarkExpected } : {}),
       },
     }
   }
@@ -2352,6 +2414,51 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         ...authorized(params), recovery_operation_id: uuid(params.recovery_operation_id) as HostRecoveryOperationId,
       },
     }
+  }
+  if (frame.method === 'profile.import_preview') {
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'session_offset', 'plugin_offset',
+      ...(Object.hasOwn(params, 'expected_preview_digest') ? ['expected_preview_digest'] : [])])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_preview', params: {
+      ...importIdentity(params),
+      session_offset: nonnegative(params.session_offset), plugin_offset: nonnegative(params.plugin_offset),
+      ...(Object.hasOwn(params, 'expected_preview_digest')
+        ? { expected_preview_digest: digest(params.expected_preview_digest) } : {}),
+    } }
+  }
+  if (frame.method === 'profile.import_status') {
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'operation_offset'])
+    return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_status', params: {
+      ...importIdentity(params),
+      operation_offset: nonnegative(params.operation_offset),
+    } }
+  }
+  if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
+    || frame.method === 'profile.import_abort') {
+    const prepare = frame.method === 'profile.import_prepare'
+    exactKeys(params, [...AUTHORIZED_KEYS, ...IMPORT_IDENTITY_KEYS, 'operation_id',
+      ...(prepare ? ['expected_preview_digest', 'selected_session_ids', 'selected_plugin_names'] : [])])
+    const identity = {
+      ...importIdentity(params),
+      operation_id: uuid(params.operation_id),
+    }
+    if (prepare) {
+      if (!Array.isArray(params.selected_session_ids) || params.selected_session_ids.length > 1000
+        || !Array.isArray(params.selected_plugin_names) || params.selected_plugin_names.length > 128
+        || params.selected_session_ids.length + params.selected_plugin_names.length === 0) reject()
+      const selected_session_ids = params.selected_session_ids.map(value => boundedText(value, 512))
+      const selected_plugin_names = params.selected_plugin_names.map(value => boundedText(value, 214))
+      if (new Set(selected_session_ids).size !== selected_session_ids.length
+        || new Set(selected_plugin_names).size !== selected_plugin_names.length) reject()
+      return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_prepare', params: {
+        ...identity, expected_preview_digest: digest(params.expected_preview_digest),
+        selected_session_ids, selected_plugin_names,
+      } }
+    }
+    if (frame.method === 'profile.import_commit') {
+      return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: identity }
+    }
+    return { version: 1, type: 'request', request_id: requestId,
+      method: 'profile.import_abort', params: identity }
   }
   if (frame.method === 'profile.lease_close') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation'])
@@ -2632,6 +2739,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBootstrapLocalResult | ProfileRestoreLocalResult | ProfileOpenResult | ProfileOpenLocalResult
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
+  | ProfileImportPreviewResult | ProfileImportStatusResult
+  | ProfileImportPrepareResult | ProfileImportCommitResult | ProfileImportAbortResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotRosterResult
   | ProfileNativeRoomResult
@@ -2873,6 +2982,77 @@ function decodeProfileResult(frame: Record<string, unknown>):
       version: 1, type: 'result', request_id, method: 'profile.recovery_status',
       result: { state: result.state as 'recovering' | 'offline_ready' | 'unknown' },
     }
+  }
+  if (frame.method === 'profile.import_preview') {
+    exactKeys(result, ['source_snapshot_digest', 'target_snapshot_digest', 'preview_digest', 'session_count',
+      'plugin_count', 'next_session_offset', 'next_plugin_offset', 'sessions', 'plugins'])
+    if (!Array.isArray(result.sessions) || result.sessions.length > 32
+      || !Array.isArray(result.plugins) || result.plugins.length > 32) reject()
+    const sessions = result.sessions.map((value) => {
+      const item = record(value)
+      exactKeys(item, ['id', 'created_at', ...(Object.hasOwn(item, 'parent_session') ? ['parent_session'] : []),
+        'event_count', 'source_digest', 'state', ...(Object.hasOwn(item, 'target_digest') ? ['target_digest'] : [])])
+      return { id: boundedText(item.id, 512), created_at: nonnegative(item.created_at),
+        ...(Object.hasOwn(item, 'parent_session') ? { parent_session: boundedText(item.parent_session, 512) } : {}),
+        event_count: nonnegative(item.event_count), source_digest: digest(item.source_digest),
+        state: importPreviewState(item.state),
+        ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }
+    })
+    const plugins = result.plugins.map((value) => {
+      const item = record(value)
+      exactKeys(item, ['name', 'version', 'source_digest', 'state',
+        ...(Object.hasOwn(item, 'target_version') ? ['target_version'] : []),
+        ...(Object.hasOwn(item, 'target_digest') ? ['target_digest'] : [])])
+      return { name: boundedText(item.name, 214),
+        version: item.version === null ? null : boundedText(item.version, 128),
+        source_digest: digest(item.source_digest), state: importPreviewState(item.state),
+        ...(Object.hasOwn(item, 'target_version') ? {
+          target_version: item.target_version === null ? null : boundedText(item.target_version, 128) } : {}),
+        ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.import_preview', result: {
+      source_snapshot_digest: digest(result.source_snapshot_digest),
+      target_snapshot_digest: digest(result.target_snapshot_digest), preview_digest: digest(result.preview_digest),
+      session_count: nonnegative(result.session_count), plugin_count: nonnegative(result.plugin_count),
+      next_session_offset: result.next_session_offset === null ? null : nonnegative(result.next_session_offset),
+      next_plugin_offset: result.next_plugin_offset === null ? null : nonnegative(result.next_plugin_offset),
+      sessions, plugins,
+    } }
+  }
+  if (frame.method === 'profile.import_status') {
+    exactKeys(result, ['next_operation_offset', 'operations'])
+    if (!Array.isArray(result.operations) || result.operations.length > 64) reject()
+    const operations = result.operations.map((value) => {
+      const item = record(value)
+      exactKeys(item, ['operation_id', 'phase', 'revision', 'session_count', 'plugin_count'])
+      if (!['prepared', 'fenced', 'staged', 'committing', 'committed', 'aborted'].includes(item.phase as string)) reject()
+      return { operation_id: uuid(item.operation_id),
+        phase: item.phase as ProfileImportStatusResult['result']['operations'][number]['phase'],
+        revision: generation(item.revision), session_count: nonnegative(item.session_count),
+        plugin_count: nonnegative(item.plugin_count) }
+    })
+    return { version: 1, type: 'result', request_id, method: 'profile.import_status', result: {
+      next_operation_offset: result.next_operation_offset === null ? null : nonnegative(result.next_operation_offset),
+      operations,
+    } }
+  }
+  if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
+    || frame.method === 'profile.import_abort') {
+    exactKeys(result, ['operation_id', 'phase'])
+    const operation_id = uuid(result.operation_id)
+    if (frame.method === 'profile.import_prepare' && result.phase === 'staged') {
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { operation_id, phase: 'staged' } }
+    }
+    if (frame.method === 'profile.import_commit' && result.phase === 'committed') {
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { operation_id, phase: 'committed' } }
+    }
+    if (frame.method === 'profile.import_abort' && result.phase === 'aborted') {
+      return { version: 1, type: 'result', request_id, method: frame.method,
+        result: { operation_id, phase: 'aborted' } }
+    }
+    return reject()
   }
   if (frame.method === 'profile.skillhub_binding') {
     exactKeys(result, ['version', 'actorUserId', 'computerId', 'installationId', 'profileId',

@@ -1,0 +1,33 @@
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { describe, expect, it } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { meta, oneTurnLog } from '../../session-persistence/tests/contract.ts'
+import { logPath, scanLog } from '../src/format.ts'
+
+describe('REQ-20261022-0022 released V4 physical fixture writer', () => {
+  it('writes and reads a physical V4 log through the release backend', async () => {
+    const root = process.env.DSH_V4_FIXTURE_ROOT
+    if (!root) throw new Error('DSH_V4_FIXTURE_ROOT missing')
+    expect(SESSION_FORMAT_VERSION).toBe(4)
+    const ctx = new Context()
+    const fiber = await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+    try {
+      const header = meta('req0022-released-v4')
+      const events = oneTurnLog()
+      const handle = await ctx.sessionPersistence.create(header)
+      await handle.append(events)
+      await handle.close()
+      const reader = await ctx.sessionPersistence.open(header.id, 'read')
+      expect((await reader.read()).events).toEqual(events)
+      await reader.close()
+      const bytes = await readFile(logPath(root, header.cwd, header.id, 'none'))
+      expect(scanLog(bytes).events).toEqual(events)
+      console.log(`REQ0022_RELEASE_V4_SHA256=${createHash('sha256').update(bytes).digest('hex')}`)
+    } finally {
+      await fiber.dispose()
+    }
+  })
+})
