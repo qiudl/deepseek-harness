@@ -68,6 +68,27 @@ describe.skipIf(process.platform === 'win32')('plugin publish intent journal', (
     await expect(journal.create(input)).rejects.toThrow('profile_import_plugin_publish_journal_stale')
   })
 
+  it('reloads the largest valid plugin selection after restart', async () => {
+    const { root, journal, input } = await fixture()
+    const selectedPluginNames = Array.from({ length: 128 }, (_, index) =>
+      `plugin-${String(index).padStart(3, '0')}-${'x'.repeat(203)}`)
+    const prepared = await journal.create({ ...input, selectedPluginNames })
+    const path = join(root, 'plugin-publish', `${input.operationId}.1.json`)
+    expect((await readFile(path)).byteLength).toBeGreaterThan(4096)
+    const restarted = new FileProfileImportPluginPublishJournal(join(root, 'plugin-publish'), uid)
+    expect(await restarted.load(input.operationId)).toEqual(prepared)
+    const switching = await restarted.advance(prepared, 'switching')
+    expect(await journal.load(input.operationId)).toEqual(switching)
+
+    const escapedNames = Array.from({ length: 128 }, (_, index) =>
+      `plugin-${String(index).padStart(3, '0')}-${'\u0001'.repeat(203)}`)
+    const escapedInput = { ...input, operationId: randomUUID(), selectedPluginNames: escapedNames }
+    const escapedRecord = await journal.create(escapedInput)
+    const escapedPath = join(root, 'plugin-publish', `${escapedInput.operationId}.1.json`)
+    expect((await readFile(escapedPath)).byteLength).toBeGreaterThan(64 * 1024)
+    expect(await restarted.load(escapedInput.operationId)).toEqual(escapedRecord)
+  })
+
   it('refuses an incomplete or non-private latest record', async () => {
     const { root, journal, input } = await fixture()
     const prepared = await journal.create(input)

@@ -10,6 +10,7 @@ import { inspectProfileImportPluginDirectoryState,
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
 const PHASES = ['prepared', 'switching', 'published', 'rolling_back', 'rolled_back'] as const
+const MAX_RECORD_BYTES = 256 * 1024
 export type ProfileImportPluginPublishPhase = typeof PHASES[number]
 
 export type ProfileImportPluginPublishRecord = Readonly<{
@@ -78,7 +79,7 @@ export class FileProfileImportPluginPublishJournal {
       'profile_import_plugin_publish_journal_invalid')
     if (revision === undefined) return null
     const decoded = await readImmutableJournalRecord(join(this.root, `${operationId}.${revision}.json`),
-      this.uid, 4096, { unsafe: 'profile_import_plugin_publish_journal_unsafe',
+      this.uid, MAX_RECORD_BYTES, { unsafe: 'profile_import_plugin_publish_journal_unsafe',
         changed: 'profile_import_plugin_publish_journal_changed',
         invalid: 'profile_import_plugin_publish_journal_invalid' })
     const row = validate(decoded)
@@ -119,6 +120,8 @@ export class FileProfileImportPluginPublishJournal {
   }
 
   private async write(row: ProfileImportPluginPublishRecord): Promise<void> {
+    const bytes = Buffer.from(`${JSON.stringify(row)}\n`)
+    if (bytes.byteLength > MAX_RECORD_BYTES) throw Error('profile_import_plugin_publish_journal_invalid')
     await this.checkedParent()
     let created = false
     try { await mkdir(this.root, { mode: 0o700 }); created = true } catch (error) {
@@ -129,7 +132,6 @@ export class FileProfileImportPluginPublishJournal {
       const parent = await open(dirname(this.root), constants.O_RDONLY | constants.O_NOFOLLOW)
       try { await parent.sync() } finally { await parent.close() }
     }
-    const bytes = Buffer.from(`${JSON.stringify(row)}\n`)
     const path = join(this.root, `${row.operationId}.${row.revision}.json`)
     const temporary = join(this.root, `.${row.operationId}.${row.revision}.${randomBytes(8).toString('hex')}.tmp`)
     const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
