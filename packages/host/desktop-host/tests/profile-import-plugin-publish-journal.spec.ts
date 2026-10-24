@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -19,6 +19,38 @@ async function fixture() {
 }
 
 describe.skipIf(process.platform === 'win32')('plugin publish intent journal', () => {
+  it('rejects invalid authority and a plan that cannot distinguish old and new web layers', async () => {
+    const { root, journal, input } = await fixture()
+    expect(() => new FileProfileImportPluginPublishJournal('relative', uid))
+      .toThrow('profile_import_plugin_publish_journal_invalid')
+    expect(() => new FileProfileImportPluginPublishJournal(join(root, 'plugin-publish'), -1))
+      .toThrow('profile_import_plugin_publish_journal_invalid')
+    await expect(journal.load('invalid')).rejects.toThrow('profile_import_plugin_publish_journal_invalid')
+    await expect(journal.create({ ...input, selectedPluginNames: ['fixture-plugin', 'fixture-plugin'] }))
+      .rejects.toThrow('profile_import_plugin_publish_journal_invalid')
+    await expect(journal.create({ ...input, plan: { ...plan,
+      candidateWebDigest: plan.targetWebDigest } }))
+      .rejects.toThrow('profile_import_plugin_publish_journal_invalid')
+    const prepared = await journal.create(input)
+    expect(await journal.load(randomUUID())).toBeNull()
+    const path = join(root, 'plugin-publish', `${input.operationId}.1.json`)
+    await writeFile(path, `${JSON.stringify({ ...prepared, revision: 2 })}\n`, { mode: 0o600 })
+    await expect(journal.load(input.operationId))
+      .rejects.toThrow('profile_import_plugin_publish_journal_invalid')
+  })
+
+  it('refuses a publish journal directory exposed to other users', async () => {
+    const { root, journal, input } = await fixture()
+    await journal.create(input)
+    const directory = join(root, 'plugin-publish')
+    await chmod(directory, 0o755)
+    await expect(journal.load(input.operationId))
+      .rejects.toThrow('profile_import_plugin_publish_journal_unsafe')
+    await expect(journal.create({ ...input, operationId: randomUUID() }))
+      .rejects.toThrow('profile_import_plugin_publish_journal_unsafe')
+    expect(await readdir(directory)).toEqual([`${input.operationId}.1.json`])
+  })
+
   it('persists an immutable switch and rollback history across journal instances', async () => {
     const { root, journal, input } = await fixture()
     const prepared = await journal.create(input)
