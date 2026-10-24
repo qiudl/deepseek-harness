@@ -221,6 +221,10 @@ describe('Main-only Profile operations', () => {
     expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
     continued.result.plugins[0]!.version = null
     expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
+    continued.result.sessions[0] = { ...continued.result.sessions[0] }
+    delete continued.result.sessions[0]!.target_digest
+    continued.result.plugins[0]!.target_version = '2.0.0'
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
   })
 
   it('round-trips durable import status with the same identity proof and no secret result fields', () => {
@@ -248,7 +252,7 @@ describe('Main-only Profile operations', () => {
     expect(decodeHostControlFrame(wire(nextPage))).toMatchObject(nextPage)
     expectMutationsRejected(wire(request), ['params', 'source_unlock_material'], [null, 'guess'])
     expectMutationsRejected(wire(result), ['result', 'operations'], [null, [{ ...result.result.operations[0],
-      source_profile_id: 'secret' }]])
+      source_profile_id: 'secret' }], [{ ...result.result.operations[0], phase: 'unknown' }]])
   })
 
   it('bounds and pins explicit import prepare, commit and abort frames', () => {
