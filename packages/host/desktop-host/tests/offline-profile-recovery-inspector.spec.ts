@@ -407,6 +407,15 @@ describe('offline Profile existing-only inspector', () => {
     expect(await treeInventory(value.target.profileRoot)).toEqual(beforeTarget)
   })
 
+  it('rejects empty, repeated, or oversized plugin selections before reading either Profile', async () => {
+    const value = await pluginPlanFixture()
+    for (const selectedPluginNames of [[], ['fixture-plugin', 'fixture-plugin'],
+      Array.from({ length: 129 }, (_, index) => `plugin-${index}`)]) {
+      await expect(planSelectedProfileImportPlugins({ ...value.input, selectedPluginNames }))
+        .rejects.toThrow('profile_import_plugin_selection_invalid')
+    }
+  })
+
   it('rejects an unlisted target dependency and an unlisted installed tree occupying the plugin name', async () => {
     const value = await pluginPlanFixture()
     await writeFile(join(value.target.web, 'package.json'), JSON.stringify({ dependencies: {},
