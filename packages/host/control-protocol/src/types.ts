@@ -898,6 +898,31 @@ export interface ProfileBotTeamReadResult {
   readonly result: { readonly page: import('./bot-team-read.ts').HostBotTeamPage }
 }
 
+/** Account-bound memory chunk read from the selected Profile. */
+export interface ProfileBotMemoryReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_memory_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-memory-read.ts').HostBotMemoryReadRequest
+  }
+}
+
+/** One bounded memory file chunk from the current Profile. */
+export interface ProfileBotMemoryReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_memory_read'
+  readonly result: { readonly page: import('./bot-memory-read.ts').HostBotMemoryPage }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2271,6 +2296,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotTeamReadRequest
   | ProfileBotTeamReadResult
+  | ProfileBotMemoryReadRequest
+  | ProfileBotMemoryReadResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest

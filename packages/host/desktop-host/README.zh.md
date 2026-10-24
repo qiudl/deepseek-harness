@@ -83,7 +83,7 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_team_read` 从选定的运行中 worker 读取一页有界的 `dsBotSlarkRemoteRead` 团队目录。Host 在读取前后核验当前连接的 Account 绑定，并拒绝已替换的 worker。私有令牌留在 Host 内部。Slark 转发到远程设备前仍须执行自身的受信设备授权。
 
-私有 `/internal/desktop-bot-memory-read` worker 路由使用 Host 令牌读取一块有界的逻辑记忆。它尚未接到 Unix Host 控制方法或远程设备路由。
+`profile.bot_memory_read` 经私有 `/internal/desktop-bot-memory-read` worker 路由读取一块有界的逻辑记忆。Host 在读取前后核验当前连接的 Account 绑定，并拒绝已替换的 worker。私有令牌留在 Host 内部。Slark 转发记忆到远程设备前仍须执行自身的受信设备授权。
 
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 

@@ -30,6 +30,25 @@ export class ProfileWorkerSupervisor {
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
+   * Read one chunk from the same live Profile worker generation.
+   * @param profileId - Selected Account Profile.
+   * @param request - Exact logical memory selector.
+   * @param signal - Parent operation cancellation.
+   * @returns One bounded memory chunk or a stale failure.
+   */
+  async readBotMemory(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotMemoryReadRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotMemoryPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotMemory) throw new HostAuthorityError('unavailable')
+    const result = await worker.readBotMemory(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /**
    * Read only the selected live Profile's private DS Bot team projection.
    * @param profileId - Selected Account Profile.
    * @param request - Bounded roster selector.

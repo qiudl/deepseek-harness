@@ -1,6 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
 import { parseHostBotTeamPage, parseHostBotTeamReadRequest } from './bot-team-read.ts'
+import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest } from './bot-memory-read.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
@@ -106,6 +107,7 @@ import type {
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
+  ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
@@ -1807,6 +1809,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
   | ProfileBotTeamReadRequest
+  | ProfileBotMemoryReadRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
@@ -2506,6 +2509,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), read: parseHostBotTeamReadRequest(params.read),
     } } satisfies ProfileBotTeamReadRequest
   }
+  if (frame.method === 'profile.bot_memory_read') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'read'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), read: parseHostBotMemoryReadRequest(params.read),
+    } } satisfies ProfileBotMemoryReadRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2582,6 +2592,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult
   | ProfileBotTeamReadResult
+  | ProfileBotMemoryReadResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
@@ -2996,6 +3007,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['page'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { page: parseHostBotTeamPage(result.page) } } satisfies ProfileBotTeamReadResult
+  }
+  if (frame.method === 'profile.bot_memory_read') {
+    exactKeys(result, ['page'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { page: parseHostBotMemoryPage(result.page) } } satisfies ProfileBotMemoryReadResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])
