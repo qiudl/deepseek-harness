@@ -120,6 +120,33 @@ async function stagedJointFixture(selectedSessionIds: string[] = ['source-sessio
 }
 
 describe.skipIf(process.platform === 'win32')('private Profile import session coordination', () => {
+  it('rejects invalid selections before recording or fencing an import operation', async () => {
+    const { root, source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    for (const selectedSessionIds of [[], ['source-session', 'source-session'],
+      ['missing-session'], Array(10_001).fill('source-session')]) {
+      await expect(coordinator.prepare({ ...base, selectedSessionIds }))
+        .rejects.toThrow('profile_import_selection_invalid')
+    }
+    await expect(coordinator.prepare({ ...base, expectedPreviewDigest: '0'.repeat(64) }))
+      .rejects.toThrow('profile_import_inventory_changed')
+    await expect(coordinator.prepare({ ...base, selectedPluginNames: ['missing-plugin'] }))
+      .rejects.toThrow('profile_import_plugins_unavailable')
+    const pluginJournal = new FileProfileImportPluginPublishJournal(join(root, 'plugin-journal'), uid)
+    await expect(coordinator.prepareWithPlugins(base, { journal: pluginJournal, prepare: async () => {} }))
+      .rejects.toThrow('profile_import_selection_invalid')
+    for (const operationOffset of [-1, 1]) {
+      await expect(coordinator.listStatus({ sourceProfileId: source.profileId,
+        targetProfileId: target.profileId, operationOffset, assertAuthority: async () => {} }))
+        .rejects.toThrow('profile_import_selection_invalid')
+    }
+    expect(await journal.load(base.operationId)).toBeNull()
+    expect(fence.hasPendingPair(source.profileId, target.profileId, base.operationId)).toBe(false)
+  })
+
   it('restores status after restart only while the same pair remains authorized', async () => {
     const { source, target, journal, fence, base } = await fixture()
     const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
