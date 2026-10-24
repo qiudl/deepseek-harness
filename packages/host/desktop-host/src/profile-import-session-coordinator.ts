@@ -424,6 +424,7 @@ export class ProfileImportSessionCoordinator {
   }
 
   /** Explicit crash recovery: stop the exact inherited candidate before reversing its generation. */
+  /* v8 ignore start -- orphan signalling is macOS-only and the native darwin recovery test exercises this method. */
   async recoverFailedActivationWithPlugins(input: CommitInput & Readonly<{
     pluginJournal: FileProfileImportPluginPublishJournal
     pluginPublisher: ProfileImportPluginPublisherInput
@@ -461,6 +462,7 @@ export class ProfileImportSessionCoordinator {
     await assertRecoverable()
     return this.rollbackFailedActivationWithPlugins(input)
   }
+  /* v8 ignore stop */
 
   private async abortWithPluginsInternal(input: CommitInput & Readonly<{
     pluginJournal: FileProfileImportPluginPublishJournal
