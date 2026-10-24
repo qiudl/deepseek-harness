@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -26,6 +26,44 @@ async function fixture() {
 }
 
 describe.skipIf(process.platform === 'win32')('Profile import operation journal', () => {
+  it('rejects invalid authority and a record moved under another operation ID', async () => {
+    const { directory, journal, input } = await fixture()
+    expect(() => new FileProfileImportOperationJournal('relative', uid))
+      .toThrow('profile_import_journal_invalid')
+    expect(() => new FileProfileImportOperationJournal(directory, -1))
+      .toThrow('profile_import_journal_invalid')
+    await expect(journal.load('invalid')).rejects.toThrow('profile_import_journal_invalid')
+    await expect(journal.listForPair('invalid', input.targetProfileId))
+      .rejects.toThrow('profile_import_journal_invalid')
+    const prepared = await journal.create(input)
+    expect(await journal.load(randomUUID())).toBeNull()
+    await writeFile(join(directory, `${input.operationId}.1.json`),
+      `${JSON.stringify({ ...prepared, operationId: randomUUID() })}\n`, { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    await writeFile(join(directory, `${input.operationId}.1.json`),
+      `${JSON.stringify({ ...prepared, revision: 2 })}\n`, { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+  })
+
+  it('rejects an oversized intent before leaving an operation record', async () => {
+    const { directory, journal, input } = await fixture()
+    const selectedSessionIds = Array.from({ length: 10_000 }, (_, index) =>
+      `session-${String(index).padStart(5, '0')}-${'x'.repeat(230)}`)
+    await expect(journal.create({ ...input, selectedSessionIds }))
+      .rejects.toThrow('profile_import_journal_too_large')
+    expect(await journal.load(input.operationId)).toBeNull()
+    expect(await readdir(directory)).toEqual([])
+  })
+
+  it('refuses a journal directory opened to other users', async () => {
+    const { directory, journal, input } = await fixture()
+    await journal.create(input)
+    await chmod(directory, 0o755)
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_unsafe')
+    await expect(journal.create({ ...input, operationId: randomUUID() }))
+      .rejects.toThrow('profile_import_journal_unsafe')
+  })
+
   it('records intent before mutation and advances through strict durable versions', async () => {
     const { directory, journal, input } = await fixture()
     expect(await journal.load(input.operationId)).toBeNull()
