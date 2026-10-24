@@ -123,8 +123,14 @@ it('reads only the requested file after a complete fixed snapshot check', async 
   await expect(installation.current(packageId)).rejects.toThrow()
   writeFileSync(unrelated, resource)
   const manifest = join(base, 'manifest.json')
-  writeFileSync(manifest, '[]')
-  await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  const originalManifest = readFileSync(manifest)
+  for (const malformed of ['{}', '[]', JSON.stringify(Array(501).fill({})),
+    JSON.stringify([{ path: 'SKILL.md', mode: '0644', size: 0, sha256: '0'.repeat(64) }])]) {
+    writeFileSync(manifest, malformed)
+    await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+  }
+  writeFileSync(manifest, originalManifest)
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
 })
 
 it('rejects changed fixed-file bytes and directory permissions after snapshot capture', async () => {

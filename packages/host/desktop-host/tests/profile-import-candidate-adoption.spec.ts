@@ -58,3 +58,16 @@ it.each(['fence lost', 'closed', 'missing origin', 'missing generation', 'missin
   expect(worker.closeNotifications).toHaveBeenCalledOnce()
   expect(worker.abort).toHaveBeenCalledOnce()
 })
+
+it('reclaims a rejected candidate even when its shutdown promise fails', async () => {
+  const worker = candidate()
+  let rejectDone!: (error: Error) => void
+  const done = new Promise<void>((_resolve, reject) => { rejectDone = reject })
+  const abort = vi.fn(() => { rejectDone(Error('shutdown failed')) })
+  const handle: ProfileWorkerHandle = { ...worker.handle, done, abort }
+  const supervisor = new ProfileWorkerSupervisor(async () => { throw Error('unexpected ordinary start') })
+  await expect(supervisor.adoptImportCandidate(profileId, handle, () => { throw Error('fence lost') }))
+    .rejects.toThrow('fence lost')
+  expect(worker.closeNotifications).toHaveBeenCalledOnce()
+  expect(abort).toHaveBeenCalledOnce()
+})
