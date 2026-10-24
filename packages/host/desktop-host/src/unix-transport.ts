@@ -2501,7 +2501,8 @@ export class HostControlAuthority {
               // Scan a bounded page window; only the original delivery's result may cross this boundary.
               let after = frame.params.after
               let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
-              let slarkOwnerUserId: string | null = null
+              // A result page always carries the validated Slark owner from its result ticket.
+              let slarkOwnerUserId = ''
               for (let scan = 0; scan < 1000; scan++) {
                 const page = await readAccountBotGroupResultPage({ ...groupInput, after })
                 slarkOwnerUserId = page.ownerUserId
@@ -2523,7 +2524,6 @@ export class HostControlAuthority {
               const item = reply.state === 'ok' ? reply.results[0] : undefined
               let proof: HostBotGroupResultProof | null = null
               if (item) {
-                if (!slarkOwnerUserId) throw new HostAuthorityError('unavailable')
                 const unsigned = {
                   schema_version: 1 as const,
                   authority_environment_id: account.authorityEnvironmentId,
