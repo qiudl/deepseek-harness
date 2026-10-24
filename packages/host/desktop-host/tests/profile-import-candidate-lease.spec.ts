@@ -46,6 +46,14 @@ it.skipIf(process.platform === 'win32')('refuses a redirected candidate lease di
   await expect(lease.acquireForSpawn()).rejects.toThrow('profile_import_candidate_lease_unsafe')
 })
 
+it.skipIf(process.platform === 'win32')('does not create a witness under an unwritable profile root', async () => {
+  const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
+  onTestFinished(async () => { await chmod(profileRoot, 0o700); await rm(profileRoot, { recursive: true, force: true }) })
+  await chmod(profileRoot, 0o500)
+  const lease = new FileProfileImportCandidateLease(profileRoot, randomUUID(), process.getuid!())
+  await expect(lease.acquireForSpawn()).rejects.toThrow()
+})
+
 it.skipIf(process.platform === 'win32')('fails closed when the lifetime witness is missing', async () => {
   const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
   onTestFinished(() => rm(profileRoot, { recursive: true, force: true }))
@@ -147,6 +155,20 @@ it.skipIf(process.platform === 'win32')('refuses a redirected identity record', 
   const identity = join(directory, `${operationId}.identity`)
   await unlink(identity)
   await symlink(join(directory, `${operationId}.lock`), identity)
+  await expect(lease.assertStopped()).rejects.toThrow()
+})
+
+it.skipIf(process.platform === 'win32')('refuses a redirected lifetime witness before checking its identity', async () => {
+  const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
+  onTestFinished(() => rm(profileRoot, { recursive: true, force: true }))
+  const operationId = randomUUID()
+  const lease = new FileProfileImportCandidateLease(profileRoot, operationId, process.getuid!())
+  const handle = await lease.acquireForSpawn()
+  await handle.close()
+  const directory = join(profileRoot, 'profile-import-candidate-leases')
+  const lock = join(directory, `${operationId}.lock`)
+  await unlink(lock)
+  await symlink(join(directory, `${operationId}.identity`), lock)
   await expect(lease.assertStopped()).rejects.toThrow()
 })
 

@@ -203,6 +203,7 @@ export class FileProfileImportCandidateLease {
     dshEntrypointPath: string
     assertAuthority: () => void | Promise<void>
   }): Promise<boolean> {
+    /* v8 ignore next -- Linux cannot enter the darwin orphan recovery branch; native macOS tests cover it. */
     if (process.platform !== 'darwin') throw Error('profile_import_candidate_stop_unsupported')
     /* v8 ignore start -- exact orphan signalling is exercised by native darwin process tests. */
     await options.assertAuthority()
