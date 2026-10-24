@@ -19,6 +19,20 @@ const manualBot = { member_id: '44444444-4444-4444-8444-444444444444', actor_kin
   actor_ref: 'deepseek-bot:helper', role: 'member' as const, cycle: 1, joined_seq: 1,
   sources: ['manual' as const], agent: null }
 type SnapshotReply = Extract<GroupMemberReply, { state: 'snapshot' }>
+type ScopeReply = { ok: true
+  value: { workspace_id: string
+    version: string
+    selected_project_ids: string[] } }
+type AgentPageReply = { ok: true
+  value: { scope_version: string
+    next_cursor: null
+    items: { project_id: string
+      project_name: string
+      agent_id: string
+      agent_name: string
+      available: boolean
+      capability_snapshot: string
+      reason_code: string }[] } }
 const snapshot = (members: SnapshotReply['members'] = [owner, manualBot]): SnapshotReply => ({ state: 'snapshot',
   group_id: groupId, membership_version: 2, last_seq: 1, members })
 const noInFlight = (member_id: string): Extract<GroupMemberReply, { state: 'inflight' }> =>
@@ -86,6 +100,270 @@ it('selects an authorized project Agent and removes that member from the origina
     member_id: agentMemberId, expected_membership_version: 2,
   })
 })
+
+it('rechecks project scope before adding an Agent selected from the roster', async () => {
+  let scopeReads = 0
+  const members = vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot([owner])
+    throw Error('Agent join must not be sent after project access is revoked')
+  })
+  const host = {
+    collaborationGroupMembers: members,
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) => {
+      if (request.operation.kind === 'get') {
+        scopeReads += 1
+        return { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: scopeReads === 1 ? ['project-a'] : [] } }
+      }
+      return { ok: true as const, value: { scope_version: '3', next_cursor: null,
+        items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+          agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+          reason_code: 'ready' }] } }
+    }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  const choice = await screen.findByRole('button', { name: 'Agent A · Project A' })
+  fireEvent.click(choice)
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(scopeReads).toBe(2)
+  expect(members.mock.calls.some(([command]) => command.operation === 'agent_join')).toBe(false)
+})
+
+it('pages only eligible project Agents without replacing earlier roster choices', async () => {
+  const host = {
+    collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string
+      query?: { cursor?: string } } }) => {
+      if (request.operation.kind === 'get') return { ok: true as const,
+        value: { workspace_id: workspaceId, version: '3', selected_project_ids: ['project-a'] } }
+      const later = request.operation.query?.cursor === 'next-page'
+      return { ok: true as const, value: { scope_version: '3',
+        next_cursor: later ? null : 'next-page', items: [
+          { project_id: 'project-a', project_name: 'Project A',
+            agent_id: later ? 'agent-b' : 'agent-a', agent_name: later ? 'Agent B' : 'Agent A',
+            available: true, capability_snapshot: 'a'.repeat(64), reason_code: 'ready' },
+          { project_id: 'project-b', project_name: 'Project B', agent_id: 'foreign',
+            agent_name: 'Foreign Agent', available: true,
+            capability_snapshot: 'b'.repeat(64), reason_code: 'ready' },
+          { project_id: 'project-a', project_name: 'Project A', agent_id: 'offline',
+            agent_name: 'Offline Agent', available: false,
+            capability_snapshot: 'c'.repeat(64), reason_code: 'offline' },
+        ] } }
+    }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByRole('button', { name: 'Agent A · Project A' })
+  expect(screen.queryByRole('button', { name: 'Foreign Agent · Project B' })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Offline Agent · Project A' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'More Agents' }))
+  await screen.findByRole('button', { name: 'Agent B · Project A' })
+  expect(screen.getByRole('button', { name: 'Agent A · Project A' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'More Agents' })).toBeNull()
+})
+
+it('rejects an Agent roster page from a different project scope version', async () => {
+  const host = {
+    collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : { ok: true as const, value: { scope_version: '4', next_cursor: null,
+          items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+            agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+            reason_code: 'ready' }] } }),
+  }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+})
+
+it('keeps an invited Agent identifiable when the project directory is unavailable', async () => {
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> =>
+    snapshot([owner, { member_id: '66666666-6666-4666-8666-666666666666',
+      actor_kind: 'slark_agent', actor_ref: 'slark-agent:' + 'b'.repeat(64),
+      role: 'member', cycle: 1, joined_seq: 1, sources: [],
+      agent: { project_id: 'project-a', agent_id: 'agent-a' } }])) }
+  show(host)
+  await screen.findByText('agent-a · project-a')
+  expect(screen.getByRole('button', { name: 'Remove Agent' })).toBeTruthy()
+})
+
+it('refuses an Agent picker when project scope cannot be read', async () => {
+  const workspace = vi.fn(async () => ({ ok: false as const, errorCode: 'scope_revoked' }))
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: workspace }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(workspace).toHaveBeenCalledTimes(1)
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+})
+
+it('does not show an Agent roster page after the Host is replaced', async () => {
+  let resolvePage!: (value: AgentPageReply) => void
+  const page = new Promise<Parameters<typeof resolvePage>[0]>((resolve) => { resolvePage = resolve })
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : page) }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await waitFor(() => { expect(host.collaborationWorkspace).toHaveBeenCalledTimes(2) })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  await act(async () => { resolvePage({ ok: true, value: { scope_version: '3', next_cursor: null,
+    items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+      agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+      reason_code: 'ready' }] } }); await page })
+  expect(screen.queryByRole('button', { name: 'Agent A · Project A' })).toBeNull()
+})
+
+it('discards an Agent scope response when the Host changes before the roster request', async () => {
+  let resolveScope!: (value: ScopeReply) => void
+  const scope = new Promise<Parameters<typeof resolveScope>[0]>((resolve) => { resolveScope = resolve })
+  const workspace = vi.fn(async () => scope)
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: workspace }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await waitFor(() => { expect(workspace).toHaveBeenCalledTimes(1) })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  await act(async () => { resolveScope({ ok: true, value: { workspace_id: workspaceId,
+    version: '3', selected_project_ids: ['project-a'] } }); await scope })
+  expect(workspace).toHaveBeenCalledTimes(1)
+})
+
+it('shows a retryable Agent picker error when the directory request fails', async () => {
+  const workspace = vi.fn(async (request: { operation: { kind: string } }) => {
+    if (request.operation.kind === 'get') return { ok: true as const,
+      value: { workspace_id: workspaceId, version: '3', selected_project_ids: ['project-a'] } }
+    throw Error('directory temporarily unavailable')
+  })
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: workspace }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(workspace).toHaveBeenCalledTimes(2)
+})
+
+it('does not start Agent member actions from a replaced Host', async () => {
+  const agentMember = { member_id: '66666666-6666-4666-8666-666666666666',
+    actor_kind: 'slark_agent' as const, actor_ref: 'slark-agent:' + 'b'.repeat(64),
+    role: 'member' as const, cycle: 1, joined_seq: 1, sources: [],
+    agent: { project_id: 'project-a', agent_id: 'agent-a' } }
+  const members = vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot([owner, agentMember])
+    throw Error('stale Host must not change members')
+  })
+  const workspace = vi.fn(async () => { throw Error('stale Host must not read scope') })
+  const host = { collaborationGroupMembers: members, collaborationWorkspace: workspace }
+  show(host)
+  await screen.findByText('agent-a · project-a')
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Remove Agent' }))
+  expect(workspace).not.toHaveBeenCalled()
+  expect(members.mock.calls.map(([command]) => command.operation))
+    .not.toContain('leave')
+})
+
+it('discards a failed Agent roster read after Host replacement', async () => {
+  let rejectPage!: (error: Error) => void
+  const page = new Promise<never>((_, reject) => { rejectPage = reject })
+  const host = { collaborationGroupMembers: vi.fn(async (): Promise<GroupMemberReply> => snapshot([owner])),
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) =>
+      request.operation.kind === 'get'
+        ? { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+        : page) }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  await waitFor(() => { expect(host.collaborationWorkspace).toHaveBeenCalledTimes(2) })
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+  await act(async () => { rejectPage(Error('old Host failed')); await page.catch(() => undefined) })
+  expect(screen.queryByText('Agent list is unavailable. Try again.')).toBeNull()
+})
+
+it('refuses Agent admission when project scope fails at selection time', async () => {
+  let reads = 0
+  const members = vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+    if (command.operation === 'status') return snapshot([owner])
+    throw Error('Agent admission must not run after scope failure')
+  })
+  const host = { collaborationGroupMembers: members,
+    collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) => {
+      if (request.operation.kind === 'get') {
+        if (++reads === 2) throw Error('scope read failed')
+        return { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+          selected_project_ids: ['project-a'] } }
+      }
+      return { ok: true as const, value: { scope_version: '3', next_cursor: null,
+        items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+          agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+          reason_code: 'ready' }] } }
+    }) }
+  show(host)
+  await screen.findByText('owner')
+  fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Agent A · Project A' }))
+  await screen.findByText('Agent list is unavailable. Try again.')
+  expect(members.mock.calls.map(([command]) => command.operation)).not.toContain('agent_join')
+})
+
+it.each(['resolved', 'failed'] as const)(
+  'does not admit an Agent after the Host changes during a %s scope read', async (outcome) => {
+    let reads = 0
+    let resolveScope!: (value: ScopeReply) => void
+    let rejectScope!: (error: Error) => void
+    const scope = new Promise<Parameters<typeof resolveScope>[0]>((resolve, reject) => {
+      resolveScope = resolve; rejectScope = reject
+    })
+    const members = vi.fn(async (command: GroupMemberCommand): Promise<GroupMemberReply> => {
+      if (command.operation === 'status') return snapshot([owner])
+      throw Error('stale Host must not admit an Agent')
+    })
+    const host = { collaborationGroupMembers: members,
+      collaborationWorkspace: vi.fn(async (request: { operation: { kind: string } }) => {
+        if (request.operation.kind === 'get') {
+          if (++reads === 2) return scope
+          return { ok: true as const, value: { workspace_id: workspaceId, version: '3',
+            selected_project_ids: ['project-a'] } }
+        }
+        return { ok: true as const, value: { scope_version: '3', next_cursor: null,
+          items: [{ project_id: 'project-a', project_name: 'Project A', agent_id: 'agent-a',
+            agent_name: 'Agent A', available: true, capability_snapshot: 'a'.repeat(64),
+            reason_code: 'ready' }] } }
+      }) }
+    show(host)
+    await screen.findByText('owner')
+    fireEvent.click(screen.getByRole('button', { name: 'Choose project Agent' }))
+    const choice = await screen.findByRole('button', { name: 'Agent A · Project A' })
+    fireEvent.click(choice)
+    await waitFor(() => { expect(reads).toBe(2) })
+    Reflect.set(window, '__DSH_DESKTOP_HOST__', { ...host })
+    await act(async () => {
+      if (outcome === 'resolved') resolveScope({ ok: true, value: { workspace_id: workspaceId,
+        version: '3', selected_project_ids: ['project-a'] } })
+      else rejectScope(Error('old Host scope read failed'))
+      await scope.catch(() => undefined)
+    })
+    fireEvent.click(choice)
+    expect(members.mock.calls.map(([command]) => command.operation)).not.toContain('agent_join')
+  })
 
 it('shows current Bot members and retries an uncertain join with the same request key', async () => {
   const commands: unknown[] = []

@@ -254,6 +254,13 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     const target = { workspace_id: source.workspace_id, session_id: source.session_id,
       source_message_id: source.source_message_id, source_revision: source.source_revision,
       namespace_id: root.namespace_id, command_id: root.command_id }
+    const sourceOutput = await postAnalysis({ action: 'read_source_output', binding_key: command.binding_key,
+      target: { workspace_id: source.workspace_id, session_id: source.session_id,
+        source_message_id: source.source_message_id, source_revision: source.source_revision } })
+    expect(sourceOutput.status).toBe(200)
+    expect((await sourceOutput.json() as { value: { state: string } }).value.state).toBe('missing')
+    const unfencedGroup = await postAnalysis({ ...command, action: 'capture_group_root' })
+    expect(unfencedGroup.status).toBe(422)
     await ctx.sessionController.acceptCollaborationRoot(target, { root_task_id: root.root_task_id,
       root_trace_id: root.root_trace_id, admission_id: root.command_id, task_revision: 1, state_version: 1, state: 'active' },
     new AbortController().signal)

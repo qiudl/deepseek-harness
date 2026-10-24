@@ -1566,22 +1566,57 @@ it('records a picked Agent chip as a project-qualified group target', async () =
   expect(f.submit).not.toHaveBeenCalled()
 })
 
-it('keeps the addressed group draft when planning succeeded but execution needs reconciliation', async () => {
+it('does not submit a group Agent chip without an actual work request', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: '22222222-2222-4222-8222-222222222222', workspace_id: f.workspace.id,
+    session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn()
+  host.collaborationGroupMessages = messages
+  await f.pick('', '')
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  await expect(source.matchEnter?.(session, f.composer.snapshot.draft.trim(),
+    new AbortController().signal, { attachments: 0 })).rejects.toThrow('submit.question')
+  expect(messages).not.toHaveBeenCalled()
+})
+
+it('rejects duplicate Agent chips in one group request before recording work', async () => {
+  const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+  if (!host) throw Error('missing Host')
+  host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: '22222222-2222-4222-8222-222222222222', workspace_id: f.workspace.id,
+    session_id: 'session-1', version: 2 as const, last_seq: 0 }))
+  const messages = vi.fn()
+  host.collaborationGroupMessages = messages
+  await f.pick('请 ', '检查')
+  const first = f.composer.snapshot, occurrence = first.occurrences[0]!
+  const end = '请 '.length + 2 + '检查'.length
+  expect(f.composer.insertReference({ source: occurrence.source, ref: occurrence.ref,
+    label: occurrence.label, clipboardText: occurrence.clipboardText },
+  { start: end, end, draftRev: first.draftRev })).toBe(true)
+  const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+  const session = { sessionId: SessionId('session-1') }
+  await expect(source.matchEnter?.(session, f.composer.snapshot.draft.trim(),
+    new AbortController().signal, { attachments: 0 })).rejects.toThrow('submit.unavailable')
+  expect(messages).not.toHaveBeenCalled()
+})
+
+it('keeps an addressed group draft when the Agent work bridge is unavailable', async () => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
   if (!host) throw Error('missing Host')
   const groupId = '22222222-2222-4222-8222-222222222222'
   host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
     group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
     version: 2 as const, last_seq: 0 }))
-  const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
-    ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
-    : command.operation === 'receipt' ? { state: 'missing' as const }
-      : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+  const messages = vi.fn(async (command: { operation: string }) =>
+    command.operation === 'pending_claim'
+      ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+      : command.operation === 'receipt' ? { state: 'missing' as const }
+        : { state: 'recorded' as const, message_id: groupId, seq: 1 })
   host.collaborationGroupMessages = messages
-  host.collaborationGroupWork = vi.fn(async () => ({ ok: true as const,
-    planning: 'recorded' as const, root: {}, checkpoint: {},
-    execution: { ok: false as const, errorCode: 'collaboration_group_execution_retry_required',
-      reconciliationRequired: true as const } }))
+  Reflect.deleteProperty(host, 'collaborationGroupWork')
   await f.pick('', ' 请检查登录问题')
   const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
   const session = { sessionId: SessionId('session-1') }, body = f.composer.snapshot.draft
@@ -1590,10 +1625,42 @@ it('keeps the addressed group draft when planning succeeded but execution needs 
   const scoped = f.ctx.sessions.scope(session.sessionId)
   if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
     throw Error('missing Agent group claim')
-  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error' })
+  expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error', text: 'group.uncertain' })
   expect(f.composer.snapshot.draft).toBe(body)
   expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
 })
+
+it.each(['uncertain', 'rejected'] as const)(
+  'keeps the addressed group draft when Agent work is %s', async (failure) => {
+    const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
+    if (!host) throw Error('missing Host')
+    const groupId = '22222222-2222-4222-8222-222222222222'
+    host.collaborationGroupPreparation = vi.fn(async () => ({ state: 'group_active' as const,
+      group_id: groupId, workspace_id: f.workspace.id, session_id: 'session-1',
+      version: 2 as const, last_seq: 0 }))
+    const messages = vi.fn(async (command: { operation: string }) => command.operation === 'pending_claim'
+      ? { state: 'pending' as const, request_id: '33333333-3333-4333-8333-333333333333' }
+      : command.operation === 'receipt' ? { state: 'missing' as const }
+        : { state: 'recorded' as const, message_id: groupId, seq: 1 })
+    host.collaborationGroupMessages = messages
+    host.collaborationGroupWork = vi.fn(async () => {
+      if (failure === 'rejected') throw Error('Host work channel failed')
+      return { ok: true as const, planning: 'recorded' as const, root: {}, checkpoint: {},
+        execution: { ok: false as const, errorCode: 'collaboration_group_execution_retry_required',
+          reconciliationRequired: true as const } }
+    })
+    await f.pick('', ' 请检查登录问题')
+    const source = createScopedCollaborationSource(f.ctx, key => key, () => true)
+    const session = { sessionId: SessionId('session-1') }, body = f.composer.snapshot.draft
+    const outcome = await source.matchEnter?.(session, body,
+      new AbortController().signal, { attachments: 0 })
+    const scoped = f.ctx.sessions.scope(session.sessionId)
+    if (!outcome || typeof outcome !== 'object' || !('claim' in outcome) || !scoped)
+      throw Error('missing Agent group claim')
+    expect(await outcome.claim.submit('', scoped, [])).toMatchObject({ kind: 'error' })
+    expect(f.composer.snapshot.draft).toBe(body)
+    expect(messages).not.toHaveBeenCalledWith(expect.objectContaining({ operation: 'pending_ack' }))
+  })
 
 it('keeps an addressed group draft for same-message retry when Root planning is uncertain', async () => {
   const f = await bench(true), host = window.__DSH_DESKTOP_HOST__
@@ -1644,6 +1711,29 @@ it('registers the group ledger dock only for a verified group bridge', async () 
   f.workspace.archived = true
   expect(bindings.workspaceId()).toBeUndefined()
   expect(f.controller.adjudicatesPlainText()).toBe(false)
+})
+
+it('binds the group dock to the owner Session result model when collaboration is active', async () => {
+  const f = await bench(true, true, true, true, true, false,
+    undefined, undefined, undefined, 'mapped')
+  const entry = f.ctx.slots.entries('conversation.input.dock')
+    .find(item => item.options.id === 'slark-group-chat')
+  if (!entry?.inject) throw Error('missing active collaboration group dock')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as {
+    sessionId: SessionId
+    host: Window['__DSH_DESKTOP_HOST__']
+    workspaceId(): string | undefined
+    subscribeWorkspace(listener: () => void): () => void
+    resultsModel: { getSnapshot(): unknown }
+  }
+  expect(bindings.sessionId).toBe(SessionId('session-1'))
+  expect(bindings.host).toBe(window.__DSH_DESKTOP_HOST__)
+  expect(bindings.workspaceId()).toBe(f.workspace.id)
+  expect(bindings.resultsModel.getSnapshot()).toHaveProperty('groups')
+  const changed = vi.fn(), unsubscribe = bindings.subscribeWorkspace(changed)
+  f.workspaceChanged()
+  expect(changed).toHaveBeenCalledOnce()
+  unsubscribe()
 })
 
 it('arbitrates plain text for a recovered collaboration row from the Host index', async () => {

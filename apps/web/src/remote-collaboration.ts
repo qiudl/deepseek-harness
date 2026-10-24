@@ -208,8 +208,10 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
                   : value.operation === 'receipt' ? ['operation', 'workspace_id', 'session_id', 'request_id']
                     : value.operation === 'join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
                       'expected_membership_version', 'bot_id']
-                      : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
-                        'expected_membership_version', 'member_id'] : []
+                      : value.operation === 'agent_join' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                        'expected_membership_version', 'project_id', 'agent_id']
+                        : value.operation === 'leave' ? ['operation', 'workspace_id', 'session_id', 'request_id',
+                          'expected_membership_version', 'member_id'] : []
   if (!fields.length || !exact(value, fields) || typeof value.workspace_id !== 'string'
     || !uuid.test(value.workspace_id) || typeof value.session_id !== 'string'
     || !/^[!-~]{1,256}$/u.test(value.session_id) || /[/\\]/u.test(value.session_id)
@@ -243,6 +245,7 @@ function groupMemberInput(value: unknown): value is Record<string, unknown> {
     && Number.isSafeInteger(value.binding_epoch) && Number(value.binding_epoch) >= 1
   if (!Number.isSafeInteger(value.expected_membership_version)
     || Number(value.expected_membership_version) < 1) return false
+  if (value.operation === 'agent_join') return text(value.project_id, 256) && text(value.agent_id, 256)
   return value.operation === 'join'
     ? typeof value.bot_id === 'string' && /^[A-Za-z0-9_-]{1,200}$/u.test(value.bot_id)
     : typeof value.member_id === 'string' && uuid.test(value.member_id)
@@ -315,7 +318,7 @@ function groupMemberResult(value: unknown): boolean {
       || (value.operation === 'revoke' || value.operation === 'attach')
         && ['recorded', 'idle', 'blocked'].includes(String(value.result)))
   if (value.state === 'recorded') return exact(value, ['state', 'operation', 'member_id',
-    'membership_version', 'seq']) && ['join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
+    'membership_version', 'seq']) && ['join', 'agent_join', 'leave', 'proxy_attach', 'proxy_revoke'].includes(String(value.operation))
     && typeof value.member_id === 'string' && uuid.test(value.member_id)
     && Number.isSafeInteger(value.membership_version) && Number(value.membership_version) >= 1
     && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0
@@ -326,14 +329,17 @@ function groupMemberResult(value: unknown): boolean {
     || !Array.isArray(value.members) || value.members.length > 100) return false
   let owners = 0
   for (const member of value.members) {
-    if (!exact(member, ['member_id', 'actor_kind', 'actor_ref', 'role', 'cycle', 'joined_seq', 'sources'])
+    if (!exact(member, ['member_id', 'actor_kind', 'actor_ref', 'role', 'cycle', 'joined_seq', 'sources', 'agent'])
       || typeof member.member_id !== 'string' || !uuid.test(member.member_id)
       || !['human', 'bot', 'slark_agent', 'system'].includes(String(member.actor_kind))
       || !text(member.actor_ref, 256) || !['owner', 'member'].includes(String(member.role))
       || !Number.isSafeInteger(member.cycle) || Number(member.cycle) < 1
       || !Number.isSafeInteger(member.joined_seq) || Number(member.joined_seq) < 0
       || !Array.isArray(member.sources) || member.sources.length > 2
-      || !member.sources.every(source => source === 'manual' || source === 'personal_proxy')) return false
+      || !member.sources.every(source => source === 'manual' || source === 'personal_proxy')
+      || (member.actor_kind === 'slark_agent') !== (member.agent !== null)
+      || (member.agent !== null && (!exact(member.agent, ['project_id', 'agent_id']) ||
+        !text(member.agent.project_id, 256) || !text(member.agent.agent_id, 256)))) return false
     if (member.actor_kind === 'human' && member.role === 'owner') owners++
   }
   return owners === 1
@@ -341,6 +347,18 @@ function groupMemberResult(value: unknown): boolean {
 function groupPreparationResult(value: unknown, input: Record<string, unknown>): boolean {
   if (!row(value)) return false
   if (value.state === 'retry_required') return exact(value, ['state'])
+  if (input.operation === 'native_room') {
+    const active = value.state === 'group_active'
+    return exact(value, active || Object.hasOwn(value, 'last_seq') ?
+      ['group_id', 'last_seq', 'room_id', 'session_id', 'state', 'version', 'workspace_id'] :
+      ['group_id', 'room_id', 'session_id', 'state', 'version', 'workspace_id']) &&
+      (value.state === 'preparing' || active) && value.version === (active ? 2 : 1) &&
+      value.room_id === input.room_id && typeof value.group_id === 'string' && uuid.test(value.group_id) &&
+      typeof value.workspace_id === 'string' && uuid.test(value.workspace_id) &&
+      typeof value.session_id === 'string' && /^[!-~]{1,256}$/u.test(value.session_id) &&
+      !/[/\\]/u.test(value.session_id) && value.session_id !== input.room_id &&
+      (!Object.hasOwn(value, 'last_seq') || Number.isSafeInteger(value.last_seq) && Number(value.last_seq) >= 0)
+  }
   if (input.operation === 'lookup') {
     if (value.state === 'missing') return exact(value, ['state'])
     return exact(value, ['group_id', 'last_seq', 'session_id', 'state', 'version', 'workspace_id'])
@@ -414,16 +432,18 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
     const groupMembers = expectedSchema === groupSchema && methods.includes('groupMembers')
     const groupPreparation = expectedSchema === groupSchema && methods.includes('groupPreparation')
     const groupActivation = expectedSchema === groupSchema && methods.includes('groupActivation')
+    const nativeRoomPump = expectedSchema === groupSchema && methods.includes('nativeRoomPump')
     const execution = ['workspace', 'submit', 'pending', 'deliveries'].every(method => methods.includes(method))
     if (!methods.includes('workspace') || methods.length !== (execution ? 4 : 1) + (conversations ? 1 : 0) + (archive ? 1 : 0)
       + (groupMessages ? 1 : 0) + (groupWork ? 1 : 0) + (groupMembers ? 1 : 0)
-      + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0)
+      + (groupPreparation ? 1 : 0) + (groupActivation ? 1 : 0) + (nativeRoomPump ? 1 : 0)
       || methods.some(method => !['workspace', 'submit', 'pending', 'deliveries', 'conversations', 'archive',
-        'groupMessages', 'groupWork', 'groupMembers', 'groupPreparation', 'groupActivation'].includes(String(method)))) return
+        'groupMessages', 'groupWork', 'groupMembers', 'groupPreparation', 'groupActivation',
+        'nativeRoomPump'].includes(String(method)))) return
     if (Reflect.get(window, '__DSH_DESKTOP_HOST__') !== undefined) throw Error('remote web: Host bridge already installed')
     let sequence = 0
     const collaborationReady = execution || conversations || archive || groupMessages ||
-      groupWork || groupMembers || groupPreparation || groupActivation
+      groupWork || groupMembers || groupPreparation || groupActivation || nativeRoomPump
     const bridge = {
       async accountIdentity(): Promise<{ name: string; avatarUrl: string | null } | null> {
         const controller = new AbortController()
@@ -526,6 +546,35 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
             reconciliationRequired: true } }
           finally { clearTimeout(timer) }
         } } : {}),
+        ...(nativeRoomPump ? { collaborationNativeRoomPump: async (raw: unknown) => {
+          const controller = new AbortController()
+          const timer = setTimeout(() => { controller.abort() }, 60_000)
+          const signal = AbortSignal.any([controller.signal, lifetime.signal])
+          try {
+            if (!exact(raw, ['workspace_id', 'session_id', 'member_id']) ||
+              typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id) ||
+              typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id) ||
+              /[/\\]/u.test(raw.session_id) || raw.session_id === '.' || raw.session_id === '..' ||
+              typeof raw.member_id !== 'string' || !uuid.test(raw.member_id))
+              throw Error('invalid native room pump')
+            const result = await call('collaboration/nativeRoomPump', raw, signal)
+            if (!row(result)) throw Error('invalid native room pump reply')
+            const invalid = result.state === 'processed' ?
+              !exact(result, ['state', 'room_id', 'through_seq', 'user_messages', 'bot_messages', 'has_more']) ||
+              typeof result.room_id !== 'string' || !/^[!-~]{1,256}$/u.test(result.room_id) ||
+              /[/\\]/u.test(result.room_id) || result.room_id === '.' || result.room_id === '..' ||
+              !Number.isSafeInteger(result.through_seq) || Number(result.through_seq) < 0 ||
+              !Number.isSafeInteger(result.user_messages) || Number(result.user_messages) < 0 ||
+              !Number.isSafeInteger(result.bot_messages) || Number(result.bot_messages) < 0 ||
+              Number(result.user_messages) + Number(result.bot_messages) > 3 ||
+              typeof result.has_more !== 'boolean' :
+              !exact(result, ['state']) || !['retry_required', 'history_gap', 'unverifiable_message'].includes(String(result.state))
+            if (invalid)
+              throw Error('invalid native room pump reply')
+            return result
+          } catch { return { state: 'retry_required' as const } }
+          finally { clearTimeout(timer) }
+        } } : {}),
         ...(groupMembers ? { collaborationGroupMembers: async (raw: unknown) => {
           const controller = new AbortController()
           const timer = setTimeout(() => { controller.abort() }, 60_000)
@@ -544,7 +593,12 @@ export async function installRemoteCollaboration(fetch: TunnelFetch): Promise<vo
           const signal = AbortSignal.any([controller.signal, lifetime.signal])
           try {
             const lookup = row(raw) && raw.operation === 'lookup'
-            if (!exact(raw, lookup ? ['operation', 'workspace_id', 'session_id']
+            const nativeRoom = row(raw) && raw.operation === 'native_room'
+            if (nativeRoom) {
+              if (!exact(raw, ['operation', 'room_id']) || typeof raw.room_id !== 'string' ||
+                !/^[!-~]{1,256}$/u.test(raw.room_id) || /[/\\]/u.test(raw.room_id) ||
+                raw.room_id === '.' || raw.room_id === '..') throw Error('invalid native room')
+            } else if (!exact(raw, lookup ? ['operation', 'workspace_id', 'session_id']
               : ['workspace_id', 'session_id', 'source_message_id', 'source_revision'])
               || typeof raw.workspace_id !== 'string' || !uuid.test(raw.workspace_id)
               || typeof raw.session_id !== 'string' || !/^[!-~]{1,256}$/u.test(raw.session_id)

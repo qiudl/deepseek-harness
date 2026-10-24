@@ -14,6 +14,8 @@ import { HostAuthorityError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import { matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -69,6 +71,25 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Prepare one native room only in the current Account Profile worker.
+   * @param profileId - Selected Account Profile.
+   * @param roomId - Existing native room Session ID.
+   * @param signal - Caller cancellation.
+   * @returns Separate bridge Source or absence.
+   */
+  async prepareNativeRoom(profileId: string, roomId: string, signal: AbortSignal):
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.prepareNativeRoom) throw new HostAuthorityError('unavailable')
+    const binding = await worker.prepareNativeRoom(roomId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
+    return binding
+  }
+
+  /**
    * Use only the current Account Profile worker for an authorized Bot group command.
    * @param profileId - Selected Account Profile.
    * @param command - Host-validated group operation.
@@ -84,6 +105,24 @@ export class ProfileWorkerSupervisor {
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     return result
+  }
+
+  /** Admit a native room operation only from the selected live Profile writer.
+   * @param profileId Selected Account Profile.
+   * @param command Bounded member or message command.
+   * @param signal Caller cancellation signal.
+   * @returns Reply from the same live worker generation.
+   */
+  async operateNativeRoom(profileId: string, command: HostNativeRoomCommand,
+    signal: AbortSignal): Promise<HostNativeRoomReply> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.operateNativeRoom) throw new HostAuthorityError('unavailable')
+    const reply = await worker.operateNativeRoom(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (!matchesHostNativeRoomReply(reply, command)) throw new HostAuthorityError('profile_mismatch')
+    return reply
   }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
