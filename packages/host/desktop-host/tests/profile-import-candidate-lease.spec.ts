@@ -8,6 +8,13 @@ import { expect, it, onTestFinished } from 'vitest'
 import { FileProfileImportCandidateLease } from '../src/profile-import-candidate-lease.ts'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
+it.runIf(process.platform === 'linux')('rejects macOS orphan signalling without inspecting the lease', async () => {
+  const lease = new FileProfileImportCandidateLease('/nonexistent-profile', randomUUID(), process.getuid!())
+  await expect(lease.stopOrphan({ nodeExecutablePath: process.execPath,
+    dshEntrypointPath: '/unused', assertAuthority: () => { throw Error('should_not_run') } }))
+    .rejects.toThrow('profile_import_candidate_stop_unsupported')
+})
+
 it.skipIf(process.platform === 'win32')('keeps the candidate lifetime lock through Host fd close and child exit', async () => {
   const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
   const child: { current?: ChildProcess } = {}

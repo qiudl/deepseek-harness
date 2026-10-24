@@ -12,10 +12,12 @@ const run = promisify(execFile)
 
 type CandidateHolder = { pid: number; started: string }
 
+/* v8 ignore start -- macOS orphan inspection runs only in the native darwin candidate tests. */
 async function command(file: string, args: string[]): Promise<string> {
   const result = await run(file, args, { timeout: 5000, maxBuffer: 32768, encoding: 'utf8' })
   return result.stdout.trim()
 }
+/* v8 ignore stop */
 
 function contention(error: unknown): boolean {
   return ['EAGAIN', 'EWOULDBLOCK'].includes((error as NodeJS.ErrnoException | null)?.code ?? '')
@@ -144,6 +146,7 @@ export class FileProfileImportCandidateLease {
     } finally { await handle.close() }
   }
 
+  /* v8 ignore start -- lsof and ps validate a macOS child; Linux cannot enter this path. */
   private async holder(nodeExecutablePath: string, dshEntrypointPath: string): Promise<CandidateHolder> {
     await this.checkedRoot(false)
     const handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -192,6 +195,7 @@ export class FileProfileImportCandidateLease {
     }
     return { pid, started }
   }
+  /* v8 ignore stop */
 
   /** Requires the caller to hold Host's single-instance authority and the matching import fence. */
   async stopOrphan(options: {
@@ -200,6 +204,7 @@ export class FileProfileImportCandidateLease {
     assertAuthority: () => void | Promise<void>
   }): Promise<boolean> {
     if (process.platform !== 'darwin') throw Error('profile_import_candidate_stop_unsupported')
+    /* v8 ignore start -- exact orphan signalling is exercised by native darwin process tests. */
     await options.assertAuthority()
     try { await this.assertStopped(); return false } catch (error) {
       if ((error as Error).message !== 'profile_import_candidate_running') throw error
@@ -222,5 +227,6 @@ export class FileProfileImportCandidateLease {
       }
     }
     throw Error('profile_import_candidate_still_running')
+    /* v8 ignore stop */
   }
 }
