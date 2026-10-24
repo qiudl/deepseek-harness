@@ -436,6 +436,24 @@ describe('offline Profile existing-only inspector', () => {
     await expect(planSelectedProfileImportPlugins(installed)).rejects.toThrow('profile_import_plugin_target_conflict')
   })
 
+  it('rejects malformed extra dependency declarations during plugin selection', async () => {
+    const value = await pluginPlanFixture()
+    const targetPath = join(value.target.web, 'package.json')
+    const targetManifest = await readFile(targetPath)
+    await writeFile(targetPath, JSON.stringify({ dependencies: {}, devDependencies: [],
+      dsh: { profile: { bundles: [] } } }))
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      expectedPreviewDigest: (await value.inspect()).previewDigest }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+    await writeFile(targetPath, targetManifest)
+    const sourcePath = join(value.source.web, 'package.json')
+    const sourceManifest = JSON.parse(await readFile(sourcePath, 'utf8')) as Record<string, unknown>
+    await writeFile(sourcePath, JSON.stringify({ ...sourceManifest, peerDependencies: { peer: 42 } }))
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      expectedPreviewDigest: (await value.inspect()).previewDigest }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+  })
+
   it('rejects stale previews and missing direct lockfile evidence', async () => {
     const value = await pluginPlanFixture()
     await expect(planSelectedProfileImportPlugins({ ...value.input, expectedPreviewDigest: 'f'.repeat(64) }))
