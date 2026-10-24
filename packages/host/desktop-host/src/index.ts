@@ -7,7 +7,12 @@ export {
   DshAccountAccessTokenVerifier,
   parseDshAccountAccessKeyring,
 } from './account-access-token.ts'
-export type { DshAccountAccessIdentity, DshAccountAccessKeyring } from './account-access-token.ts'
+export type {
+  DshAccountAccessIdentity,
+  DshAccountAccessKeyring,
+  DshSlarkAccessExpected,
+  DshSlarkAccessIdentity,
+} from './account-access-token.ts'
 export { ProfileRegistry, personIndex } from './profile-registry.ts'
 export { RestartingMigrationTarget } from './restarting-migration-target.ts'
 export { MigrationOwnerStateApplicator, type AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'

@@ -46,6 +46,9 @@ export interface SessionFixtureLayout {
  * @returns True for physical WebWorker and installed-runtime session logs.
  */
 export function isPhysicalSessionFixture(path: string): boolean {
+  if (path === 'packages/session/session-persistence-jsonl/tests/fixtures/released-v4-rc2-writer.jsonl') {
+    return true
+  }
   if (path.startsWith(WEBWORKER_PHYSICAL_SESSION_FIXTURE_ROOT)) {
     return /\/session(?:\.v[1-9]\d*)?\.jsonl$/.test(path)
   }

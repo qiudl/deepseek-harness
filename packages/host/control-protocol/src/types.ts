@@ -219,6 +219,16 @@ export interface ProfileEnsureRequest {
     readonly account_subject: string
     readonly profile_key_handle: string
     readonly profile_unlock_material: string
+    /** REQ-20261022-0022: present only for the distinct Slark federation verifier. */
+    readonly slark_expected?: {
+      readonly slark_user_id: string
+      readonly environment_id: string
+      readonly person_profile_id: string
+      readonly device_id: string
+      readonly device_key_thumbprint: string
+      readonly login_epoch: number
+      readonly binding_epoch: number
+    }
   }
 }
 
@@ -428,6 +438,156 @@ export interface ProfileRecoveryStatusResult {
   readonly result:
     | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
     | { readonly state: 'failed'; readonly reason_code: 'recovery_worker_failed' }
+}
+
+/** Read-only, owner-authorized Slark import preview; old Profile proof stays in Main. */
+export interface ProfileImportPreviewRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_preview'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly source_account_issuer: string
+    readonly source_account_subject: string
+    readonly source_profile_key_handle: string
+    readonly source_unlock_material: string
+    readonly session_offset: number
+    readonly plugin_offset: number
+    readonly expected_preview_digest?: HostControlSha256
+  }
+}
+
+/** One bounded page; content, paths, credentials, and package source strings are excluded. */
+export interface ProfileImportPreviewResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_preview'
+  readonly result: {
+    readonly source_snapshot_digest: HostControlSha256
+    readonly target_snapshot_digest: HostControlSha256
+    readonly preview_digest: HostControlSha256
+    readonly session_count: number
+    readonly plugin_count: number
+    readonly next_session_offset: number | null
+    readonly next_plugin_offset: number | null
+    readonly sessions: readonly {
+      readonly id: string
+      readonly created_at: number
+      readonly parent_session?: string
+      readonly event_count: number
+      readonly source_digest: HostControlSha256
+      readonly state: 'new' | 'same' | 'conflict'
+      readonly target_digest?: HostControlSha256
+    }[]
+    readonly plugins: readonly {
+      readonly name: string
+      readonly version: string | null
+      readonly source_digest: HostControlSha256
+      readonly state: 'new' | 'same' | 'conflict'
+      readonly target_version?: string | null
+      readonly target_digest?: HostControlSha256
+    }[]
+  }
+}
+
+/** Rediscover durable imports for the currently proved old Account and Slark binding. */
+export interface ProfileImportStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_status'
+  readonly params: HostAuthorizedParams & Pick<ProfileImportPreviewRequest['params'],
+    'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version'
+    | 'account_issuer' | 'account_subject' | 'source_account_issuer' | 'source_account_subject'
+    | 'source_profile_key_handle' | 'source_unlock_material'> & {
+      readonly operation_offset: number
+    }
+}
+
+/** Journal phase only; `committing` requires separate recovery evidence before declaring success. */
+export interface ProfileImportStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_status'
+  readonly result: { readonly next_operation_offset: number | null
+    readonly operations: readonly {
+      readonly operation_id: string
+      readonly phase: 'prepared' | 'fenced' | 'staged' | 'committing' | 'committed' | 'aborted'
+      readonly revision: number
+      readonly session_count: number
+      readonly plugin_count: number
+    }[] }
+}
+
+type ProfileImportIdentityParams = Pick<ProfileImportPreviewRequest['params'],
+  'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version'
+  | 'account_issuer' | 'account_subject' | 'source_account_issuer' | 'source_account_subject'
+  | 'source_profile_key_handle' | 'source_unlock_material'>
+
+/** Main-only explicit selection pinned to one read-only preview snapshot. */
+export interface ProfileImportPrepareRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_prepare'
+  readonly params: HostAuthorizedParams & ProfileImportIdentityParams & {
+    readonly operation_id: string
+    readonly expected_preview_digest: HostControlSha256
+    readonly selected_session_ids: readonly string[]
+    readonly selected_plugin_names: readonly string[]
+  }
+}
+
+/** An operation is durable and fenced before Host reports staged. */
+export interface ProfileImportPrepareResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_prepare'
+  readonly result: { readonly operation_id: string; readonly phase: 'staged' }
+}
+
+/** Commit a staged import under the current Main and old Account proof. */
+export interface ProfileImportCommitRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_commit'
+  readonly params: HostAuthorizedParams & ProfileImportIdentityParams & { readonly operation_id: string }
+}
+
+/** The selected import is durable when Host reports committed. */
+export interface ProfileImportCommitResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_commit'
+  readonly result: { readonly operation_id: string; readonly phase: 'committed' }
+}
+
+/** Cancel a staged import under the current Main and old Account proof. */
+export interface ProfileImportAbortRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_abort'
+  readonly params: HostAuthorizedParams & ProfileImportIdentityParams & { readonly operation_id: string }
+}
+
+/** Host has durably discarded the staged import. */
+export interface ProfileImportAbortResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.import_abort'
+  readonly result: { readonly operation_id: string; readonly phase: 'aborted' }
 }
 
 /** Online-issued clock anchor scoped by the authorized Profile and Host installation. */
@@ -2352,6 +2512,16 @@ export type HostControlFrame =
   | ProfileOpenOfflineAccountResult
   | ProfileRecoveryStatusRequest
   | ProfileRecoveryStatusResult
+  | ProfileImportPreviewRequest
+  | ProfileImportPreviewResult
+  | ProfileImportStatusRequest
+  | ProfileImportStatusResult
+  | ProfileImportPrepareRequest
+  | ProfileImportPrepareResult
+  | ProfileImportCommitRequest
+  | ProfileImportCommitResult
+  | ProfileImportAbortRequest
+  | ProfileImportAbortResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
   | ProfileWorkspaceModelSelectionRequest

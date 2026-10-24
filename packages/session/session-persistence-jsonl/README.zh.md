@@ -75,6 +75,12 @@ kind: "package-reference"
 
 迁移导出同样从原始或 Zstandard 存储中选择最高 generation，包括已发布 V3 写入器的 `session.v3.jsonl.zstd`。导出校验所选 header 与文件名的版本一致，仅解码格式目录中登记的格式，且不写入源文件。混合编码、未知格式及损坏的后继文件均拒绝导出，不会回退到保留的前代文件。`tests/fixtures/released-v3-old-writer.jsonl.zstd` 回归夹具由已签名的 `0.1.6-alpha.2` 基线写入器生成并读回验证，其来源记录包含写入器 SHA 和内容摘要。
 
+对于 REQ-20261022-0022，仅 Host 使用的 `FileJsonlMigrationExportSource.listImportInventory()` 单次最多解码 10,000 个会话，返回 ID、时间、父会话 ID、事件数量、物理修订号和解码后 header 与语义事件的摘要，不返回事件正文。Host 用它构造只读 Profile 导入预览；此方法不会发布 generation 或导入会话。已有 generation 的只读清单允许保留的规范版本化 Zstandard 日志，包括已发行 V3 夹具；同一会话目录混用压缩与非压缩编码仍拒绝。源资料变化会要求重新预览，不受支持的已发行格式会明确拒绝。
+
+`readImportSessions(ids)` 使用同一有界解码器和错误映射，只向 owner 侧未激活暂存函数返回选中的解码会话。暂存函数在未来的发布步骤之前复核源与目标快照，并比较暂存后的语义摘要。两个读取方法均不修改源字节或激活 generation。
+
+`tests/fixtures/released-v4-rc2-writer.jsonl` 是由隔离的 `dsh-v0.2.0-rc.2` 已发行后端实际写入并读回的 Session V4 物理日志。相邻的来源记录固定发行标签、写入器与编码器摘要、生成测试及原文件摘要。导入清单和未激活暂存测试均验证这些字节不变。
+
 ### 持久性与崩溃语义
 
 会话延迟实体化：`create(header)` 不写入任何内容并返回持有的写句柄，句柄的第一次 `append` 通过无覆盖发布写入并 `fsync` 编码后的 header 与第一批——因此已创建但从未 append 的会话不留下任何磁盘内容，除非其所有者调用 `handle.flush()`，以无事件的单个 header 帧发布它。后续每个批次追加行或一个压缩帧，并在 append 完成前 `fsync`；捕获到写入或同步失败时把文件回滚到之前的字节长度。已提交事件绝不重写。崩溃后，已存储日志保留被中断的最终轮次——已提交前缀中的每条记录都保留下来，由执行恢复的读方通过其写句柄追加合成 closer。不完整的最终原始行会被丢弃。撕裂的最终 Zstandard 帧只贡献其中完整解码出的 JSONL 记录；写句柄会截掉撕裂字节，并在第一次新批次之前持久重写这些恢复出的记录。完整已提交帧中的校验和、解压或结构失败以损坏拒绝。

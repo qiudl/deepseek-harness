@@ -1,6 +1,6 @@
 /** REQ-20261013-0021 / 24205. Host facts, never the Server's project-install projection. */
 import { createHash, randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import AdmZip from 'adm-zip'
@@ -125,6 +125,22 @@ it('reads only the requested file after a complete fixed snapshot check', async 
   const manifest = join(base, 'manifest.json')
   writeFileSync(manifest, '[]')
   await expect(fixed.readFile('SKILL.md')).rejects.toThrow()
+})
+
+it('rejects a package file directory replaced after an otherwise intact fixed snapshot', async () => {
+  const { root, installation } = await store()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  const receipt = await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshotFixed(receipt)
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+  const files = join(root, 'skillhub-versions', plan.operationId, 'files')
+  const saved = join(root, 'skillhub-versions', plan.operationId, 'saved-files')
+  renameSync(files, saved)
+  writeFileSync(files, 'blocked')
+  try { await expect(fixed.readFile('SKILL.md')).rejects.toThrow('skillhub_package_unavailable') }
+  finally { unlinkSync(files); renameSync(saved, files) }
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
 })
 
 it('rejects changed fixed-file bytes and directory permissions after snapshot capture', async () => {

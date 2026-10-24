@@ -29,7 +29,8 @@ export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
-  constructor(private readonly factory: ProfileWorkerFactory) {}
+  constructor(private readonly factory: ProfileWorkerFactory,
+    private readonly assertMayStart?: (profileId: string) => void) {}
 
   /**
    * Read a Bot identity from the same live exclusive-writer Profile worker.
@@ -140,12 +141,18 @@ export class ProfileWorkerSupervisor {
 
   private async startOwned(input: StartProfileWorkerInput): Promise<void> {
     if (this.workers.has(input.profileId)) throw new HostAuthorityError('conflict')
+    this.assertMayStart?.(input.profileId)
     const spec: ProfileWorkerSpec = {
       ...input,
       pluginRoots: [...input.pluginRoots],
       env: {},
     }
     this.workers.set(input.profileId, await this.factory(spec))
+    try { this.assertMayStart?.(input.profileId) }
+    catch (error) {
+      await this.disposeOwned(input.profileId)
+      throw error
+    }
   }
 
   /**
@@ -155,8 +162,40 @@ export class ProfileWorkerSupervisor {
   async ensure(input: StartProfileWorkerInput): Promise<void> {
     if (this.closed) throw new HostAuthorityError('unavailable')
     await this.serial(input.profileId, async () => {
+      this.assertMayStart?.(input.profileId)
       if (!this.workers.has(input.profileId)) await this.startOwned(input)
+      this.assertMayStart?.(input.profileId)
     })
+  }
+
+  /**
+   * Take ownership of a ready import worker while the durable fence is held.
+   * @param profileId - Target Profile ID.
+   * @param worker - Attested candidate worker.
+   * @param assertFenced - Throws if the caller no longer owns the import fence.
+   */
+  async adoptImportCandidate(profileId: string, worker: ProfileWorkerHandle,
+    assertFenced: () => void): Promise<void> {
+    const state = { adopted: false }
+    try {
+      await this.serial(profileId, () => {
+        if (this.closed) throw new HostAuthorityError('unavailable')
+        assertFenced()
+        if (this.workers.has(profileId)) throw new HostAuthorityError('conflict')
+        if (!worker.viewOrigin || !worker.generation || !worker.bootstrapCookie) {
+          throw new HostAuthorityError('unavailable')
+        }
+        this.workers.set(profileId, worker)
+        state.adopted = true
+        return Promise.resolve()
+      })
+    } finally {
+      if (!state.adopted) {
+        worker.closeNotifications()
+        worker.abort()
+        await worker.done.catch(() => undefined)
+      }
+    }
   }
 
   /**
@@ -170,6 +209,7 @@ export class ProfileWorkerSupervisor {
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
     await Promise.resolve()
+    this.assertMayStart?.(profileId)
     const worker = this.workers.get(profileId)
     if (!worker || worker.viewOrigin === undefined || worker.generation === undefined || worker.bootstrapCookie === undefined) {
       throw new HostAuthorityError('unavailable')

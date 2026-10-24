@@ -32,6 +32,10 @@ kind: "package-reference"
 - capability 是排序、去重的点分 token，且必须包含 `host.inspect`；未协商方法显式拒绝。
 - 错误只暴露稳定 code、是否可重试和 correlation id；异常文本和本地路径不得进入帧。
 
+`profile.import_preview` 只读分页比较由 Main 选定的旧 Account Profile 与当前已验证的 Slark Profile。请求携带两边 issuer/subject、当前绑定、旧 Profile 钥匙句柄和解锁材料、偏移量及可选的预览摘要。Host 在读取前后核对两边 Profile 身份与旧钥匙证明。每页最多返回 32 条会话和 32 条插件记录，以及快照摘要与总数；结果不含事件正文、凭据、路径或插件包来源。后续页必须固定同一预览摘要。此方法不提交导入。
+
+`profile.import_prepare` 接受 Main 明确选中的新会话/插件、预览摘要和稳定操作 ID；`profile.import_commit` 与 `profile.import_abort` 用同一操作 ID 完成或中止。三个命令每次都携带当前 Slark 绑定及旧 Profile 解锁证明，Host 执行前后重验授权。`profile.import_status` 可在回执丢失后查询持久阶段；`committing` 不能当作成功。旧 Host 未声明能力时，Main 必须保留只读预览。
+
 协商后的 `profile.extensions` 方法携带 Main 持有的租约，以及清单、准备、提交、状态或取消命令。准备载荷上限为 32,768 个 UTF-8 字节；结果仅包含计划、有界元数据或持久回执状态。插件继续执行的操作类型必须为字面字符串 `install`、`update` 或 `remove`；数组和对象直接拒绝，不做强制转换。种类支持由 Host 执行器决定，能够解析某种类不代表安装能力可用。 技能清单可包含布尔字段 `skill_archives`；缺失时调用方不能认定支持资源包。资源包计划在同一载荷上限内携带 URL 和摘要元数据，不携带 ZIP 字节。
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。

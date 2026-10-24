@@ -1303,8 +1303,7 @@
     "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1
   },
   "packages/host/desktop-host/src/legacy-claim-marker.ts": {
-    "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1,
-    "7585ceb4984aa18938280086d1c6a745d0dfeea1b529c5b0ddf4e38d23e964cd": 1
+    "487a58a6269113d4cbfd31915a9abdbf016e672be9a2af2c6d5d57b087d0b011": 1
   },
   "packages/host/desktop-host/src/legacy-claim-projection.ts": {
     "173039827a6b504d018203e79f8a726ba7c524b7f55f91e1115405009f52ace5": 1

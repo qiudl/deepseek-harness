@@ -36,16 +36,17 @@ const accountId = '30000000-0000-4000-8000-000000000003'
 
 afterEach(() => { vi.restoreAllMocks() })
 
-function accountToken(key: KeyObject, now: number): string {
+function accountToken(key: KeyObject, now: number, tokenType = 'dsh-access+jwt',
+  claims: Record<string, unknown> = {}): string {
   const issuedAt = Math.floor(now / 1_000)
   const header = Buffer.from(JSON.stringify({
-    alg: 'ES256', kid: 'identity-2026-09', typ: 'dsh-access+jwt',
+    alg: 'ES256', kid: 'identity-2026-09', typ: tokenType,
   })).toString('base64url')
   const payload = Buffer.from(JSON.stringify({
     ag: 3, aud: 'dsh-host', exp: issuedAt + 600, iat: issuedAt, iss: issuer,
     jti: '50000000-0000-4000-8000-000000000005', kg: 7, nbf: issuedAt,
     sg: 5, sid: '40000000-0000-4000-8000-000000000004', sub: accountId,
-    typ: 'dsh-access+jwt',
+    typ: tokenType, ...claims,
   })).toString('base64url')
   const input = `${header}.${payload}`
   return `${input}.${sign('sha256', Buffer.from(input, 'ascii'), {
@@ -474,6 +475,40 @@ describe('Windows Desktop Host startup', () => {
     })).resolves.toMatchObject({ bindingGeneration: 1 })
     expect(clock.now).toHaveBeenCalled()
     await application.close()
+  })
+
+  it('accepts the Slark scoped token only for its declared Windows device binding', async () => {
+    const state = fixture()
+    const now = 1_780_000_000_000
+    const application = await startWindowsDesktopHostApplication(state.options,
+      { now: () => now }, state.dependencies)
+    try {
+      const expected = { slarkUserId: 'slark-user',
+        environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        profileId: '11111111-1111-4111-8111-111111111111',
+        deviceId: '33333333-3333-4333-8333-333333333333',
+        deviceKeyThumbprint: Buffer.alloc(32, 4).toString('base64url'),
+        loginEpoch: 2, bindingEpoch: 3 }
+      const bindingScope = createHash('sha256').update(JSON.stringify([
+        'slark-dsh-binding-scope-v1', expected.environmentId, expected.slarkUserId,
+      ])).digest('hex')
+      const token = accountToken(state.accountPrivateKey, now, 'dsh-slark-access+jwt', {
+        slark_user_id: expected.slarkUserId, environment_id: expected.environmentId,
+        profile_id: expected.profileId, device_id: expected.deviceId,
+        device_key_thumbprint: expected.deviceKeyThumbprint, binding_scope: bindingScope,
+        login_epoch: expected.loginEpoch, binding_epoch: expected.bindingEpoch,
+        operation_id: '70000000-0000-4000-8000-000000000007',
+      })
+      const base = { issuer, subject: accountId, authorityEnvironmentId: expected.environmentId,
+        accountBindingHandle: `slark:${expected.profileId}`, authorityBindingVersion: 3,
+        accountAccessToken: token, keyHandle: 'windows-credential:slark', unlockMaterial,
+        ownerId: 'slark-owner' }
+      const ready = await application.host.ensureSlarkAccountProfile({ ...base, expected })
+      expect(typeof ready.profileId).toBe('string')
+      await expect(application.host.ensureSlarkAccountProfile({ ...base,
+        expected: { ...expected, deviceId: '44444444-4444-4444-8444-444444444444' } }))
+        .rejects.toThrow()
+    } finally { await application.close() }
   })
 
   it('uses platform defaults and forwards an optional failure observer', async () => {

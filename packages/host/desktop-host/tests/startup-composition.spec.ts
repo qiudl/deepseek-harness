@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
-import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
-import type { Config } from '../src/startup.ts'
+import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
+import type { Config, StartDesktopHostApplicationDependencies } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
+import { FileProfileImportFenceFiles, ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
 import { FileLegacyClaimEventStore } from '../src/legacy-claim-store.ts'
 import { LegacyClaimLedger } from '../src/legacy-claim-ledger.ts'
 import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files.ts'
@@ -51,6 +53,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
   loadProfileDirectory: mocks.loadProfileDirectory,
   loadOverlayPatches: mocks.loadOverlayPatches,
+  PROFILE_TEMPLATES: { web: { bundles: [] } },
 }))
 vi.mock('../src/plugin-command.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/plugin-command.ts')>(),
@@ -150,6 +153,106 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     },
   }
 }
+
+it.skipIf(process.platform === 'win32')('keeps an import-fenced Profile closed across Mac Host restart', async () => {
+  const { config, root } = fixture()
+  let workerStarts = 0
+  let transportOptions: UnixHostServerOptions | undefined
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const dependencies: StartDesktopHostApplicationDependencies = {
+    platform: 'darwin' as const,
+    createServer: (options) => { transportOptions = options; return server },
+    profileWorkerFactory: async (): Promise<ProfileWorkerHandle> => {
+      workerStarts += 1
+      return { viewOrigin: 'http://127.0.0.1:43123', generation: workerStarts,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => undefined, abort: () => undefined, done: Promise.resolve() }
+    },
+  }
+  const first = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  const cleanup: { restarted?: Awaited<ReturnType<typeof startDesktopHostApplication>> } = {}
+  onTestFinished(async () => {
+    await cleanup.restarted?.close()
+    await first.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const profile = await first.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-fence',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner' })
+  const secondId = randomUUID()
+  mkdirSync(join(root, 'profiles', secondId), { mode: 0o700 })
+  const gate = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(join(root, 'profiles'), process.getuid!()))
+  gate.reservePair(profile.profileId, secondId, randomUUID())
+  await first.close()
+  const restarted = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  cleanup.restarted = restarted
+  const patchPath = join(root, 'profiles', profile.profileId, 'cordis.patch.yml')
+  const patchBefore = lstatSync(patchPath)
+  await expect(restarted.host.restoreLocalProfile({ ...profile, keyHandle: 'keychain:import-fence',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner' }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(workerStarts).toBe(1)
+  expect(lstatSync(patchPath).ino).toBe(patchBefore.ino)
+  const migration = transportOptions!.createMigrationImport!('owner', profile.profileId)
+  await expect(migration.verify(randomUUID(), 1)).rejects.toThrow('unavailable')
+})
+
+it.skipIf(process.platform === 'win32')('wires a session import through prepare, commit, and durable status', async () => {
+  const { config, root } = fixture()
+  let options: UnixHostServerOptions | undefined
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: (value) => { options = value; return server },
+    profileWorkerFactory: async () => ({
+      viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => {}, abort: () => {}, done: Promise.resolve(),
+    }),
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  if (!options) throw Error('missing server options')
+  const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-source',
+    unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
+  const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-target',
+    unlockMaterial: Buffer.alloc(32, 2).toString('base64url'), ownerId: 'owner' })
+  for (const profile of [source, target]) {
+    const web = join(root, 'profiles', profile.profileId, 'profiles', 'web')
+    mkdirSync(web, { recursive: true, mode: 0o700 })
+    writeFileSync(join(web, 'package.json'), JSON.stringify({ dependencies: {} }), { mode: 0o600 })
+  }
+  const generationTarget = (profileId: string) => new FileOwnerJsonlMigrationGenerationTarget(
+    join(root, 'profiles', profileId, 'persistence'), process.getuid!(), config.schemaGeneration)
+  await generationTarget(source.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('source-session'), createdAt: 1, isSeeded: false }, [])
+  await generationTarget(target.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('target-session'), createdAt: 1, isSeeded: false }, [])
+  const preview = await options.inspectProfileImport!(source.profileId, target.profileId,
+    new AbortController().signal)
+  const operationId = randomUUID()
+  const input = { sourceProfileId: source.profileId, targetProfileId: target.profileId,
+    operationId, assertAuthority: async () => {} }
+  expect(await options.prepareProfileImport?.({ ...input, expectedPreviewDigest: preview.previewDigest,
+    selectedSessionIds: ['source-session'], selectedPluginNames: [] })).toEqual({ operationId, phase: 'staged' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(1)
+  expect(await options.commitProfileImport?.(input)).toEqual({ operationId, phase: 'committed' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(2)
+  expect(await options.listProfileImportStatus?.({ sourceProfileId: source.profileId,
+    targetProfileId: target.profileId, operationOffset: 0, assertAuthority: async () => {} }))
+    .toMatchObject({ operations: [{ operationId, phase: 'committed' }] })
+  await generationTarget(source.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('source-session-2'), createdAt: 2, isSeeded: false }, [])
+  const nextPreview = await options.inspectProfileImport!(source.profileId, target.profileId,
+    new AbortController().signal)
+  const abortId = randomUUID()
+  const abortInput = { ...input, operationId: abortId }
+  expect(await options.prepareProfileImport?.({ ...abortInput, expectedPreviewDigest: nextPreview.previewDigest,
+    selectedSessionIds: ['source-session-2'], selectedPluginNames: [] })).toEqual({
+    operationId: abortId, phase: 'staged',
+  })
+  expect(await options.abortProfileImport?.(abortInput)).toEqual({ operationId: abortId, phase: 'aborted' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(2)
+})
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
@@ -254,6 +357,18 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  await expect(serverOptions.prepareProfileImport?.({ sourceProfileId: randomUUID(),
+    targetProfileId: randomUUID(), operationId: randomUUID(), expectedPreviewDigest: 'a'.repeat(64),
+    selectedSessionIds: ['source-session'], selectedPluginNames: [],
+    assertAuthority: async () => { throw Error('revoked') },
+  })).rejects.toThrow('revoked')
+  let importAuthorityChecks = 0
+  expect(await serverOptions.listProfileImportStatus?.({ sourceProfileId: randomUUID(),
+    targetProfileId: randomUUID(), operationOffset: 0,
+    assertAuthority: async () => { importAuthorityChecks++ } })).toEqual({
+    operations: [], nextOperationOffset: null,
+  })
+  expect(importAuthorityChecks).toBe(2)
   const capturedServerOptions = serverOptions
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
@@ -583,7 +698,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   const ledgerRoot = join(root, 'control', 'legacy-model-claims')
   mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
   writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
@@ -599,7 +716,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
   const { config, root, accountPrivateKey } = fixture()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   let workerStarts = 0
   const { startDesktopHostApplication } = await import('../src/startup.ts')

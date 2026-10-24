@@ -198,6 +198,9 @@ describe('canonicalSessionFixture', () => {
 describe('isPhysicalSessionFixture', () => {
   it('recognizes fixtures that preserve physical persistence encoding', () => {
     expect(isPhysicalSessionFixture(
+      'packages/session/session-persistence-jsonl/tests/fixtures/released-v4-rc2-writer.jsonl',
+    )).toBe(true)
+    expect(isPhysicalSessionFixture(
       'packages/experimental/webworker-runtime/tests/fixtures/vfs-example/home/sessions/--dsh-workspace--/main/session.jsonl',
     )).toBe(true)
     expect(isPhysicalSessionFixture(
