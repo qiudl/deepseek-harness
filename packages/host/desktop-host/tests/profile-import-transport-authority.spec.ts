@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import type { HostControlFrame, ProfileImportPrepareRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, ProfileImportPrepareRequest, ProfileImportStatusRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
@@ -45,8 +45,16 @@ async function fixture() {
     await input.assertAuthority()
     return { operationId: input.operationId, phase: 'aborted' as const }
   })
+  const status = vi.fn(async (input: { sourceProfileId: string
+    targetProfileId: string
+    operationOffset: number
+    assertAuthority(): Promise<void> }) => {
+    await input.assertAuthority()
+    return { nextOperationOffset: null, operations: [{ operationId: randomUUID(), phase: 'staged' as const,
+      revision: 3, sessionCount: 1, pluginCount: 0 }] }
+  })
   const authority = new HostControlAuthority({ identity, host, prepareProfileImport: prepare,
-    commitProfileImport: commit, abortProfileImport: abort,
+    commitProfileImport: commit, abortProfileImport: abort, listProfileImportStatus: status,
     profilePersistenceGeneration: () => 1, now: clock.now })
   const session = authority.openSession(ownerId, new AbortController().signal)
   onTestFinished(() => { session.close() })
@@ -69,7 +77,7 @@ async function fixture() {
   const grant = () => host.ensureSlarkAccountProfile({ ...binding, issuer, subject,
     accountAccessToken: 'slark-token', keyHandle: 'keychain:slark',
     unlockMaterial: Buffer.alloc(32, 5).toString('base64url'), ownerId, expected })
-  return { session, request, grant, prepare, commit, abort, host, old, ownerId }
+  return { session, request, grant, prepare, commit, abort, status, host, old, ownerId }
 }
 
 it('requires both current Slark grant and old Account unlock proof before preparing an import', async () => {
@@ -114,4 +122,46 @@ it('rechecks both identities on explicit commit and abort', async () => {
   expect(await f.session.handleRequest(abort)).toMatchObject({ type: 'result', result: { phase: 'aborted' } })
   expect(f.commit).toHaveBeenCalledOnce()
   expect(f.abort).toHaveBeenCalledOnce()
+})
+
+it('maps import changes and invalid selections to actionable protocol errors', async () => {
+  const f = await fixture()
+  await f.grant()
+  const cases = [
+    ['profile_import_inventory_changed', 'stale'],
+    ['profile_import_selection_invalid', 'invalid_frame'],
+    ['profile_import_plugin_publish_changed', 'profile_integrity_failed'],
+  ] as const
+  for (const [failure, code] of cases) {
+    f.prepare.mockRejectedValueOnce(Error(failure))
+    expect(await f.session.handleRequest(f.request())).toMatchObject({
+      type: 'error', error: { code },
+    })
+  }
+  expect(f.prepare).toHaveBeenCalledTimes(cases.length)
+})
+
+it('returns import status only while both identities remain authorized', async () => {
+  const f = await fixture()
+  const prepare = f.request()
+  const { operation_id: _operation, expected_preview_digest: _digest,
+    selected_session_ids: _sessions, selected_plugin_names: _plugins, ...params } = prepare.params
+  const request = (): ProfileImportStatusRequest => ({ version: 1, type: 'request',
+    request_id: randomUUID() as never, method: 'profile.import_status',
+    params: { ...params, jti: randomUUID() as never, operation_offset: 0 } })
+  expect(await f.session.handleRequest(request()))
+    .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+  expect(f.status).not.toHaveBeenCalled()
+  const target = await f.grant()
+  expect(await f.session.handleRequest(request())).toMatchObject({ type: 'result',
+    result: { next_operation_offset: null, operations: [{ phase: 'staged', revision: 3,
+      session_count: 1, plugin_count: 0 }] } })
+  expect(f.status).toHaveBeenCalledWith(expect.objectContaining({ sourceProfileId: f.old.profileId,
+    targetProfileId: target.profileId, operationOffset: 0 }))
+  f.status.mockImplementationOnce(async () => {
+    f.host.revokeOwner(f.ownerId)
+    return { nextOperationOffset: null, operations: [] }
+  })
+  expect(await f.session.handleRequest(request()))
+    .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
 })
