@@ -227,6 +227,26 @@ function setup() {
 }
 
 describe('Profile extension operations', () => {
+  it('blocks new and queued extension writes while a Profile import fence is pending', async () => {
+    const f = setup()
+    let fenced = false
+    const operations = new ProfileExtensionOperations(f.store, f.executor, { now: () => 1000 },
+      () => { if (fenced) throw Error('profile_import_fenced') })
+    const plan = await operations.prepare(f.authority, 'plugin', 'immutable payload')
+    fenced = true
+    await expect(operations.prepare(f.authority, 'plugin', 'immutable payload'))
+      .rejects.toThrow('profile_import_fenced')
+    expect(() => operations.commit(f.authority, plan.planId, randomUUID())).toThrow('profile_import_fenced')
+    fenced = false
+    const operationId = randomUUID()
+    operations.commit(f.authority, plan.planId, operationId)
+    fenced = true
+    await operations.settledProfile(f.profileId)
+    expect(f.executions()).toBe(0)
+    expect(readFileSync(f.file, 'utf8')).toBe('before')
+    expect(operations.status(f.authority, operationId)).toMatchObject({ state: 'failed', reason: 'authority_revoked' })
+  })
+
   it('requires the exact preflight script digest before queuing an approved build', async () => {
     const f = setup()
     const scriptDigest = hash('reviewed scripts')

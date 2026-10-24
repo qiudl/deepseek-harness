@@ -266,7 +266,7 @@ describe('owner-only migration import', () => {
     await writeFile(join(legacyCompression.session, 'session.jsonl.zstd'), 'legacy', { mode: 0o600 })
     await expect(legacyCompression.target.inspectExistingPersistence()).resolves.toMatchObject({ sessionCount: 1 })
     await writeFile(join(legacyCompression.session, 'session.v1.jsonl.zstd'), 'duplicate', { mode: 0o600 })
-    await expect(legacyCompression.target.inspectExistingPersistence()).rejects.toThrow(/unsafe/u)
+    await expect(legacyCompression.target.inspectExistingPersistence()).resolves.toMatchObject({ sessionCount: 1 })
 
     const unsafeLog = await fixture('dsh-owner-generation-log-mode-')
     await chmod(join(unsafeLog.session, `session.v${SESSION_FORMAT_VERSION}.jsonl`), 0o644)

@@ -231,6 +231,7 @@ export class ProfileExtensionOperations {
     private readonly store: ExtensionReceiptStore,
     private readonly executor: ExtensionExecutor,
     private readonly clock: { now(): number },
+    private readonly assertProfileOpen: (profileId: string) => void = () => {},
   ) {}
 
   /**
@@ -242,6 +243,7 @@ export class ProfileExtensionOperations {
   async prepare(authority: () => string, kind: ExtensionKind, payload: string): Promise<Omit<Plan, 'payload'>> {
     this.assertOpen()
     const profileId = uuid(authority())
+    this.assertProfileOpen(profileId)
     if (!kinds.includes(kind) || typeof payload !== 'string' || !payload || Buffer.byteLength(payload) > 32_768) throw new Error('invalid_input')
     for (const [id, plan] of this.plans) if (plan.expiresAt <= this.clock.now()) this.plans.delete(id)
     if (this.plans.size >= 128) throw new Error('busy')
@@ -274,6 +276,7 @@ export class ProfileExtensionOperations {
     const revision = await this.executor.revision(profileId)
     this.assertOpen()
     if (authority() !== profileId) throw new Error('unauthorized')
+    this.assertProfileOpen(profileId)
     if (this.plans.size >= 128) throw new Error('busy')
     const plan: Plan = { planId: randomUUID(), profileId, kind, payload, revision,
       ...(restores && recoveryDigest ? { restores, recoveryDigest } : {}),
@@ -299,6 +302,7 @@ export class ProfileExtensionOperations {
       if (existing.profileId !== profileId || existing.planId !== planId) throw new Error('idempotency_conflict')
       return this.status(authority, operationId)
     }
+    this.assertProfileOpen(profileId)
     const plan = this.plans.get(planId)
     if (!plan || plan.profileId !== profileId) throw new Error('unauthorized')
     if (plan.expiresAt <= this.clock.now()) throw new Error('expired')
@@ -349,6 +353,7 @@ export class ProfileExtensionOperations {
     if (plan.expiresAt <= this.clock.now()) { finish('failed', 'expired'); return }
     const guard = () => {
       if (controller.signal.aborted || authority() !== plan.profileId) throw new Error('unauthorized')
+      this.assertProfileOpen(plan.profileId)
     }
     try { guard() } catch { finish('failed', 'authority_revoked'); return }
     let revision: string
@@ -494,6 +499,8 @@ export class ProfileExtensionOperations {
   }
   /** @returns Completion of all accepted work, including executor quiescence. */
   async settled(): Promise<void> { await Promise.all(this.tails.values()) }
+  /** @returns Completion of one Profile's accepted work before a durable import fence is released. */
+  async settledProfile(profileId: string): Promise<void> { await this.tails.get(uuid(profileId)) }
   /** Abort owned work and await all effects before disposal. @returns Quiescence. */
   async dispose(): Promise<void> {
     this.closed = true

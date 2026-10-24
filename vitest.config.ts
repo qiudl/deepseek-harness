@@ -170,6 +170,33 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       'packages/host/desktop-host/src/profile-mcp-storage.ts',
       'packages/host/desktop-host/src/profile-plugin-executor.ts',
       'packages/host/desktop-host/src/profile-registry.ts',
+      // The new import transaction is assembled only by macOS startup. Its
+      // owner-private files, candidate lease, and isolated pnpm workspace use
+      // POSIX uid/mode/link semantics; the Windows Host has no import writer.
+      // Linux keeps the per-file gate for these modules, while macOS exercises
+      // the real candidate-worker and recovery paths in native tests.
+      'packages/host/desktop-host/src/owner-private-profile-marker-files.ts',
+      'packages/host/desktop-host/src/profile-import-candidate-lease.ts',
+      'packages/host/desktop-host/src/profile-import-journal-io.ts',
+      'packages/host/desktop-host/src/profile-import-operation-journal.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-composition.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-isolated-install.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-plan.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-preparation.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-private-dir.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-publish-journal.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-publish-plan.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-publisher.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-stage.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-target-install.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-target-manifest.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-target-resolution.ts',
+      'packages/host/desktop-host/src/profile-import-plugin-trust.ts',
+      'packages/host/desktop-host/src/profile-import-preview.ts',
+      'packages/host/desktop-host/src/profile-import-runtime-patch.ts',
+      'packages/host/desktop-host/src/profile-import-session-coordinator.ts',
+      'packages/host/desktop-host/src/profile-import-stage.ts',
+      'packages/host/desktop-host/src/profile-import-worker-fence.ts',
       'packages/host/desktop-host/src/profile-skill-executor.ts',
       'packages/host/desktop-host/src/profile-worker-process.ts',
       'packages/host/desktop-host/src/private-file-io.ts',

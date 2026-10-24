@@ -184,6 +184,111 @@ describe('Host control frame boundary', () => {
 describe('Main-only Profile operations', () => {
   const auth = '"client_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3111","host_instance_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3120","process_nonce":"_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q","jti":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3130","issued_at":1000,"expires_at":2000'
 
+  it('bounds read-only Slark import preview pages and rejects extra fields', () => {
+    const request = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.import_preview","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"binding:slark","authority_binding_version":1,"account_issuer":"https://slark.example.com","account_subject":"person-1","source_account_issuer":"https://accounts.dsh.example.com","source_account_subject":"old-person","source_profile_key_handle":"keychain:old","source_unlock_material":"${'A'.repeat(43)}","session_offset":0,"plugin_offset":0}}\n`
+    const result = `{"version":1,"type":"result","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.import_preview","result":{"source_snapshot_digest":"${'a'.repeat(64)}","target_snapshot_digest":"${'b'.repeat(64)}","preview_digest":"${'c'.repeat(64)}","session_count":1,"plugin_count":1,"next_session_offset":null,"next_plugin_offset":null,"sessions":[{"id":"session-1","created_at":1,"event_count":2,"source_digest":"${'d'.repeat(64)}","state":"conflict","target_digest":"${'e'.repeat(64)}"}],"plugins":[{"name":"example-plugin","version":"1.0.0","source_digest":"${'f'.repeat(64)}","state":"new"}]}}\n`
+    for (const source of [request, result]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
+    }
+    expect(() => decodeHostControlFrame(request.replace('"session_offset":0', '"session_offset":-1')))
+      .toThrow(HostControlProtocolError)
+    expect(() => decodeHostControlFrame(request.replace('"plugin_offset":0', '"plugin_offset":0,"source_path":"/tmp"')))
+      .toThrow(HostControlProtocolError)
+    expect(() => decodeHostControlFrame(request.replace('"source_account_issuer":"https://accounts.dsh.example.com",', '')))
+      .toThrow(HostControlProtocolError)
+    expect(() => decodeHostControlFrame(result.replace('"state":"new"', '"state":"replace"')))
+      .toThrow(HostControlProtocolError)
+    const oversized = JSON.parse(result) as { result: { sessions: unknown[] } }
+    oversized.result.sessions = Array(33).fill(oversized.result.sessions[0])
+    expect(() => decodeHostControlFrame(wire(oversized))).toThrow(HostControlProtocolError)
+    const continuedRequest = JSON.parse(request) as { params: Record<string, unknown> }
+    continuedRequest.params.expected_preview_digest = 'c'.repeat(64)
+    expect(decodeHostControlFrame(wire(continuedRequest))).toMatchObject(continuedRequest)
+    const continued = JSON.parse(result) as { result: {
+      next_session_offset: number | null
+      next_plugin_offset: number | null
+      sessions: Array<Record<string, unknown>>
+      plugins: Array<Record<string, unknown>>
+    } }
+    continued.result.next_session_offset = 32
+    continued.result.next_plugin_offset = 32
+    const session = continued.result.sessions[0]!
+    continued.result.sessions[0] = { id: session.id, created_at: session.created_at,
+      parent_session: 'parent-session', event_count: session.event_count,
+      source_digest: session.source_digest, state: session.state, target_digest: session.target_digest }
+    continued.result.plugins[0]!.target_version = null
+    continued.result.plugins[0]!.target_digest = 'e'.repeat(64)
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
+    continued.result.plugins[0]!.version = null
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
+    continued.result.sessions[0] = { ...continued.result.sessions[0] }
+    delete continued.result.sessions[0].target_digest
+    continued.result.plugins[0]!.target_version = '2.0.0'
+    expect(decodeHostControlFrame(wire(continued))).toMatchObject(continued)
+  })
+
+  it('round-trips durable import status with the same identity proof and no secret result fields', () => {
+    const request = { version: 1, type: 'request',
+      request_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3140', method: 'profile.import_status',
+      params: { client_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111',
+        host_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120',
+        process_nonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q',
+        jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3130', issued_at: 1000, expires_at: 2000,
+        authority_environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        account_binding_handle: 'binding:slark', authority_binding_version: 1,
+        account_issuer: 'https://slark.example.com', account_subject: 'person-1',
+        source_account_issuer: 'https://accounts.dsh.example.com', source_account_subject: 'old-person',
+        source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43),
+        operation_offset: 0 } }
+    const result = { version: 1, type: 'result', request_id: request.request_id,
+      method: request.method, result: { next_operation_offset: null, operations: [{
+        operation_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190', phase: 'committing',
+        revision: 4, session_count: 1, plugin_count: 1,
+      }] } }
+    for (const frame of [request, result]) {
+      expect(encodeHostControlFrame(decodeHostControlFrame(wire(frame)))).toBe(wire(frame))
+    }
+    const nextPage = { ...result, result: { ...result.result, next_operation_offset: 64 } }
+    expect(decodeHostControlFrame(wire(nextPage))).toMatchObject(nextPage)
+    expectMutationsRejected(wire(request), ['params', 'source_unlock_material'], [null, 'guess'])
+    expectMutationsRejected(wire(result), ['result', 'operations'], [null, [{ ...result.result.operations[0],
+      source_profile_id: 'secret' }], [{ ...result.result.operations[0], phase: 'unknown' }]])
+  })
+
+  it('bounds and pins explicit import prepare, commit and abort frames', () => {
+    const shared = { client_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111',
+      host_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120',
+      process_nonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q',
+      jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3130', issued_at: 1000, expires_at: 2000,
+      authority_environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+      account_binding_handle: 'binding:slark', authority_binding_version: 1,
+      account_issuer: 'https://slark.example.com', account_subject: 'person-1',
+      source_account_issuer: 'https://accounts.dsh.example.com', source_account_subject: 'old-person',
+      source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43),
+      operation_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190' }
+    const request_id = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3140'
+    const prepare = { version: 1, type: 'request', request_id, method: 'profile.import_prepare',
+      params: { ...shared, expected_preview_digest: 'a'.repeat(64),
+        selected_session_ids: ['source-session'], selected_plugin_names: ['fixture-plugin'] } }
+    const commit = { version: 1, type: 'request', request_id, method: 'profile.import_commit', params: shared }
+    const abort = { version: 1, type: 'request', request_id, method: 'profile.import_abort', params: shared }
+    for (const [request, phase] of [[prepare, 'staged'], [commit, 'committed'], [abort, 'aborted']] as const) {
+      expect(decodeHostControlFrame(wire(request))).toMatchObject(request)
+      const result = { version: 1, type: 'result', request_id, method: request.method,
+        result: { operation_id: shared.operation_id, phase } }
+      expect(decodeHostControlFrame(wire(result))).toMatchObject(result)
+      expect(() => decodeHostControlFrame(wire({ ...result, result: { ...result.result,
+        phase: 'committing' } }))).toThrow(HostControlProtocolError)
+    }
+    expectMutationsRejected(wire(prepare), ['params', 'selected_session_ids'],
+      [null, ['source-session', 'source-session'], Array(1001).fill('s')])
+    expect(() => decodeHostControlFrame(wire({ ...prepare, params: { ...prepare.params,
+      selected_session_ids: [], selected_plugin_names: [] } }))).toThrow(HostControlProtocolError)
+    expectMutationsRejected(wire(prepare), ['params', 'expected_preview_digest'], [null, 'stale'])
+    expectMutationsRejected(wire(commit), ['params', 'source_unlock_material'], [null, 'guess'])
+    expectMutationsRejected(wire(abort), ['params', 'operation_id'], [null, 'wrong'])
+  })
+
   it('round-trips both legacy and Account-token Profile ensure payloads for safe rolling upgrades', () => {
     const prefix = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.ensure","params":{${auth},"authority_environment_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3181","account_binding_handle":"binding:opaque","authority_binding_version":1,`
     const suffix = '"account_issuer":"https://accounts.dsh.colorbuyai.com","account_subject":"person","profile_key_handle":"keychain:person","profile_unlock_material":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk"}}\n'
@@ -192,6 +297,38 @@ describe('Main-only Profile operations', () => {
     for (const source of [legacy, tokenBearing]) {
       expect(encodeHostControlFrame(decodeHostControlFrame(source))).toBe(source)
     }
+  })
+
+  it('REQ-20261022-0022 accepts only a token-bound Slark Profile expectation', () => {
+    const source = {
+      version: 1, type: 'request', request_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3140',
+      method: 'profile.ensure', params: {
+        client_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111',
+        host_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120',
+        process_nonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q',
+        jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3130', issued_at: 1000, expires_at: 2000,
+        authority_environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        account_binding_handle: 'binding:opaque', authority_binding_version: 1,
+        account_access_token: 'header.payload.signature',
+        account_issuer: 'https://accounts.dsh.colorbuyai.com', account_subject: 'person',
+        profile_key_handle: 'keychain:person', profile_unlock_material: 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk',
+        slark_expected: {
+          slark_user_id: 'user-1', environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+          person_profile_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+          device_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+          device_key_thumbprint: 'A'.repeat(43), login_epoch: 0, binding_epoch: 1,
+        },
+      },
+    }
+    const frame = decodeHostControlFrame(`${JSON.stringify(source)}\n`)
+    expect(frame.type).toBe('request')
+    if (frame.type !== 'request' || frame.method !== 'profile.ensure') throw new Error('unexpected frame')
+    expect(frame.params.slark_expected?.login_epoch).toBe(0)
+    const missingToken = structuredClone(source)
+    delete (missingToken.params as { account_access_token?: string }).account_access_token
+    expect(() => decodeHostControlFrame(`${JSON.stringify(missingToken)}\n`)).toThrow(HostControlProtocolError)
+    source.params.slark_expected.device_key_thumbprint = 'wrong'
+    expect(() => decodeHostControlFrame(`${JSON.stringify(source)}\n`)).toThrow(HostControlProtocolError)
   })
 
   it('round-trips local Profile bootstrap, restore, and open without account fields', () => {

@@ -1,17 +1,21 @@
 /** Owner-only reader for an active uncompressed migration generation. */
 import { constants } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
 import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
+import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { SessionPersistenceRevision, SessionFormatUnsupportedError } from '@deepseek-ai/dsh-session-persistence'
 import { createSessionFormatCatalogWithChildren, historicalSessionFormatCatalog, sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { historicalChildCatalogSource } from '@deepseek-ai/dsh-session-format-v3-to-v4'
-import type { SessionFormatArtifact, SessionFormatHeader, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
+import { SessionFormatError, SessionFormatUnsupportedMigrationError,
+  type SessionFormatArtifact, type SessionFormatHeader, type SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
 import { parseGenerationLogFilename, scanLog } from './format.ts'
 import { LEASE_FILENAME } from './lease-filename.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
+  migrationSemanticRecords,
   migrationSourceInventoryDigest,
   type MigrationExportSource,
   type MigrationOwnerStateBundle,
@@ -99,6 +103,54 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     return (await this.scan(signal)).map(row => ({ header: structuredClone(row.header), revision: row.revision }))
   }
 
+  /**
+   * Decode once and return content digests for a Host-only item-level import preview.
+   * @param signal - Optional cancellation signal.
+   * @returns Session headers, event counts, and semantic digests.
+   */
+  async listImportInventory(signal?: AbortSignal): Promise<readonly Readonly<{
+    id: string
+    createdAt: number
+    parentSession?: string
+    eventCount: number
+    semanticDigest: string
+    revision: string
+  }>[]> {
+    const rows = await this.scanImport(signal)
+    return rows.map(row => ({
+      id: row.header.id, createdAt: row.header.createdAt,
+      ...(row.header.parentSession === undefined ? {} : { parentSession: row.header.parentSession }),
+      eventCount: row.inspection.events.length,
+      semanticDigest: createHash('sha256').update(JSON.stringify([
+        row.inspection.meta,
+        migrationSemanticDigest(migrationSemanticRecords([{
+          header: row.inspection.meta, events: row.inspection.events,
+        }])),
+      ])).digest('hex'),
+      revision: row.revision,
+    }))
+  }
+
+  /**
+   * Decode a bounded set in one source scan for a fenced Profile import stage.
+   * @param ids - Exact source Session IDs to read.
+   * @param signal - Optional cancellation signal.
+   * @returns Independent decoded Session copies.
+   */
+  async readImportSessions(ids: readonly string[], signal?: AbortSignal): Promise<readonly SessionInspection[]> {
+    if (ids.length > 10_000 || new Set(ids).size !== ids.length
+      || ids.some(id => typeof id !== 'string' || id.length < 1)) {
+      throw new Error('profile_import_selection_invalid')
+    }
+    const rows = await this.scanImport(signal)
+    const byId = new Map<string, SessionInspection>(rows.map(row => [row.header.id, row.inspection]))
+    return ids.map((id) => {
+      const selected = byId.get(id)
+      if (!selected) throw new Error('profile_import_selection_stale')
+      return structuredClone(selected)
+    })
+  }
+
   async inspect(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<SessionInspection> {
     const rows = (await this.scan(signal)).filter(row => row.header.id === id)
     if (rows.length !== 1) throw new Error('migration_source_not_found')
@@ -113,7 +165,26 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     return rows[0]?.revision
   }
 
-  private async scan(signal?: AbortSignal): Promise<Stored[]> {
+  private async scanImport(signal?: AbortSignal): Promise<Stored[]> {
+    try { return await this.scan(signal, 10_000) }
+    catch (error) {
+      if (error instanceof SessionFormatUnsupportedMigrationError)
+        throw new Error('profile_import_schema_unsupported', { cause: error })
+      if (error instanceof Error && error.message === 'migration_source_changed')
+        throw new Error('profile_import_inventory_changed', { cause: error })
+      if (error instanceof Error && (error.message.startsWith('migration_export_source_')
+        || error.message.startsWith('migration_source_')
+        || error.message.startsWith('corrupt session log:')
+        || error.message.startsWith('corrupt Zstandard session log:')
+        || error.message === 'empty or header-less session log'))
+        throw new Error('profile_import_inventory_invalid', { cause: error })
+      if (error instanceof SessionFormatError || error instanceof SyntaxError)
+        throw new Error('profile_import_inventory_invalid', { cause: error })
+      throw error
+    }
+  }
+
+  private async scan(signal?: AbortSignal, maxRows?: number): Promise<Stored[]> {
     signal?.throwIfAborted()
     const root = await this.checkedDirectory(this.root)
     const pending: (Stored | HistoricalStored)[] = []
@@ -151,6 +222,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         if (!selected) throw new Error('migration_export_source_unsafe')
         pending.push(await this.readLog(join(sessionPath, selected.name), compressedGenerations.length > 0,
           selected.version, signal))
+        if (maxRows !== undefined && pending.length > maxRows) throw new Error('migration_source_too_large')
       }
     }
     const ids = new Set<string>()

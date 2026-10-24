@@ -1,0 +1,12 @@
+{
+  "requirement": "REQ-20261022-0022",
+  "writerTag": "dsh-v0.2.0-rc.2",
+  "writerEntrypointSha256": "6c56c465034c7673dd167f2ad7270ad8ce9ae7536457a291dc6a7abb81328436",
+  "writerFormatSha256": "87d536ead041fb953f866e0191a79b4dbbbc510aee1461706f9cdc2e4c46a038",
+  "generatorSha256": "e504b55987855d9700476d1866cd31147adf4e4ca12b95fbb9b6b255ee79e993",
+  "sessionVersion": 4,
+  "compression": "none",
+  "eventCount": 6,
+  "sha256": "7201e96c270347c367047eb8e2427e0c15d60df064ddba5a3c1849b6caf7cdac",
+  "generation": "Isolated release-tag worktree installed from its frozen pnpm lockfile; native/system host addon built from that tag. Its JsonlSessionPersistence.create/append writer produced the physical log, then the same release persistence reader and scanLog decoded all events. The sibling generator.txt is the exact one-off test source."
+}
