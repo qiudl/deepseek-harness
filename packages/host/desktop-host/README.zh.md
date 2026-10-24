@@ -81,6 +81,10 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
+`profile.native_room` 通过当前 Account Profile worker 为已有 DS Bot 房间准备独立的桥接 Source。请求由 worker 私有 token 保护。Host 校验准确的房间和 Source 字段，拒绝已替换的 worker，重新检查 Account 授权，并用安装密钥签署房间与 Source 映射。客户端校验签名及当前 Account/Host 身份；超时的写入可能已经提交，调用方须以相同房间 ID 重试核对。
+
+`profile.native_room_operation` 向当前 worker 转发有界的房间命令。Host 在调用前后检查当前连接的 Account 授权、worker 代际及命令与响应的准确范围。`messages` 和 `turns` 每页最多返回三条。写入响应丢失时，调用方须以同一房间和成员周期对账。对于 `turns`，Host 在完成这些检查后签署所选页面，Unix 客户端验证签名及当前 Host 身份后才返回。
+
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 
 补读到结果时，Host 用安装密钥签署准确的正文、Bot 与成员身份、投递 ID，以及当前 Account 与安装身份。客户端会用已检验的 Host 对端公钥复核；Slark 在记录 Bot 群消息前还须按当前注册 Host 再次验签。

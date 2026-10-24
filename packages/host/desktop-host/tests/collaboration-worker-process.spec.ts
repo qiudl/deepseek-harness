@@ -15,6 +15,8 @@ import type { ProfileWorkerHandle } from '../src/types.ts'
 
 const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
   session_id: 'session', source_message_id: 'message', source_revision: '1' })
+const nativeRoom = { room_id: 'room_1', source: { workspace_id: target.workspace_id,
+  session_id: 'bridge_1', source_message_id: 'source_1', source_revision: '1' as const } }
 const archiveTarget = { workspace_id: target.workspace_id, session_id: target.session_id,
   archive_token: '70000000-0000-4000-8000-000000000007',
   environment_id: '20000000-0000-4000-8000-000000000002',
@@ -82,6 +84,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -122,6 +126,12 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
           : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
             { bots: [botIdentity], next_cursor: null })}
+          : url.pathname.endsWith('native-room') ? ${JSON.stringify(nativeRoom)}
+          : url.pathname.endsWith('native-room-operations') ? input.operation === 'messages'
+            ? { state: 'ok', room_id: input.room_id, next_seq: input.after_seq,
+              last_seq: input.after_seq, messages: [] }
+            : input.operation === 'leave' ? { state: 'left', left_room_seq: 3 }
+            : { state: 'history_gap' }
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -157,18 +167,53 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
-    installGroupInputFence, resolveBotIdentity, listBotRoster, operateBotGroup } = worker
+    installGroupInputFence, resolveBotIdentity, listBotRoster,
+    prepareNativeRoom, operateNativeRoom, operateBotGroup } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
-    || !installGroupInputFence || !resolveBotIdentity || !listBotRoster || !operateBotGroup)
+    || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
-    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster, operateBotGroup }
+    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
+    prepareNativeRoom, operateNativeRoom, operateBotGroup }
 }
+
+it('uses the private Profile token for native room Source and exact operation replies', async () => {
+  const h = await harness(), signal = new AbortController().signal
+  const command = { operation: 'messages' as const, room_id: nativeRoom.room_id,
+    member_id: '22222222-2222-4222-8222-222222222222', cycle: 1,
+    after_seq: 2, limit: 2 }
+  for (const route of ['native-room', 'native-room-operations'])
+    expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-${route}`, { method: 'POST' })).status).toBe(403)
+  expect(await h.prepareNativeRoom(nativeRoom.room_id, signal)).toEqual(nativeRoom)
+  expect(await h.operateNativeRoom(command, signal)).toEqual({ state: 'ok',
+    room_id: command.room_id, next_seq: 2, last_seq: 2, messages: [] })
+  expect(await h.operateNativeRoom({ operation: 'leave', room_id: command.room_id,
+    member_id: command.member_id, cycle: command.cycle }, signal))
+    .toEqual({ state: 'left', left_room_seq: 3 })
+  const response = vi.spyOn(globalThis, 'fetch')
+  try {
+    response.mockResolvedValueOnce(new Response('null'))
+    await expect(h.prepareNativeRoom('missing', signal)).resolves.toBeNull()
+    response.mockResolvedValueOnce(new Response(JSON.stringify({ ...nativeRoom, room_id: 'other' })))
+    await expect(h.prepareNativeRoom(nativeRoom.room_id, signal))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    response.mockResolvedValueOnce(new Response(JSON.stringify({ state: 'ok', room_id: 'other',
+      next_seq: 2, last_seq: 2, messages: [] })))
+    await expect(h.operateNativeRoom(command, signal))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  } finally { response.mockRestore() }
+  await expect(h.operateNativeRoom(command, AbortSignal.abort()))
+    .rejects.toMatchObject({ name: 'AbortError' })
+  h.worker.abort()
+  await expect(h.prepareNativeRoom(nativeRoom.room_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
+  await expect(h.operateNativeRoom(command, signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {
   const command = { operation: 'receipt' as const,

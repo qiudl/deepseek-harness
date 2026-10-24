@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostCollaborationRegistrationSignaturePayload,
-  encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  encodeHostBotGroupResultProofPayload,
+  encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -33,6 +35,8 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const identity = { hostInstanceId: randomUUID(), installationId: randomUUID(), installationPublicKey: publicKey,
     installationPrivateKey: keys.privateKey, processNonce: 'A'.repeat(43), executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
   const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const nativeRoom = { room_id: 'room_1', source: { workspace_id: randomUUID(),
+    session_id: 'bridge_1', source_message_id: 'source_1', source_revision: '1' as const } }
   const botGroupSigner = generateKeyPairSync('ed25519')
   const botGroupNow = Date.now()
   const botGroupKeyring = { version: 1 as const, environmentId: binding.authorityEnvironmentId,
@@ -47,8 +51,22 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       botId: command.botId, memberCycle: command.memberCycle,
       payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
   })
+  const operateNativeRoom = vi.fn(async (_profileId: string, command: HostNativeRoomCommand,
+    _signal: AbortSignal): Promise<HostNativeRoomReply> => command.operation === 'messages'
+    ? { state: 'ok', room_id: command.room_id, next_seq: command.after_seq,
+      last_seq: command.after_seq, messages: [] } : command.operation === 'turns'
+      ? { state: 'turns', room_id: command.room_id, group_id: randomUUID(),
+        member_id: command.member_id, cycle: command.cycle, next_seq: command.after_seq + 1,
+        turns: [{ turn_id: randomUUID(), trigger_room_seq: command.after_seq + 1,
+          turn_order: 1 }] } : { state: 'unavailable' })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
+      prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
+        signal.throwIfAborted()
+        if (profileId !== profile.profileId || roomId !== nativeRoom.room_id) return null
+        return nativeRoom
+      },
+      operateNativeRoom,
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
       listBotRoster: async (profileId: string, afterBotId: string, limit: number, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -74,10 +92,235 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
-    bot, botGroupSigner, botGroupKeyring, operateBotGroup,
+    bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup, operateNativeRoom,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('prepares a native room through the Account-authorized Host transport', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  const assertion = await f.client.prepareNativeRoom(input)
+  expect(assertion?.binding).toEqual(f.nativeRoom)
+  expect(assertion?.authority_environment_id).toBe(f.account.authorityEnvironmentId)
+  expect(assertion?.installation_id).toBe(f.identity.installationId)
+  expect(await f.client.prepareNativeRoom({ ...input, roomId: 'missing' })).toBeNull()
+  await expect(f.client.prepareNativeRoom({ ...input, issuer: 'https://other.example.test' })).rejects.toThrow()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
+    ? { ...frame, result: { binding: { ...assertion!, binding: { ...f.nativeRoom, room_id: 'other' } } } } : frame)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room'
+    ? { ...frame, result: { binding: { ...assertion!, issued_at: assertion!.issued_at + 1 } } } : frame)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.native_room')
+      Reflect.set(frame, 'method', 'profile.bot_identity')
+    return frame
+  })
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.native_room')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('keeps native room messages on the Account-authorized Host control channel', async () => {
+  const f = await fixture()
+  const command = { operation: 'messages' as const, room_id: f.nativeRoom.room_id,
+    member_id: randomUUID(), cycle: 1, after_seq: 5, limit: 2 }
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, command }
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.operateNativeRoom).not.toHaveBeenCalled()
+  await f.grant()
+  const forbidden = { operation: 'agent-result-chunk' as const,
+    room_id: f.nativeRoom.room_id, group_id: randomUUID(), member_id: command.member_id,
+    cycle: 1, turn_id: randomUUID(), turn_order: 1, trigger_room_seq: 1,
+    project_id: 'p', agent_id: 'guide', reply_message_id: 'reply-1',
+    status: 'completed' as const, result_digest: 'a'.repeat(64),
+    chunk_index: 0, chunk_count: 1, chunk_text: 'answer', chunk_digest: 'b'.repeat(64) }
+  await expect(f.client.operateNativeRoom({ ...input, command: forbidden }))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.operateNativeRoom).not.toHaveBeenCalled()
+  expect(await f.client.operateNativeRoom(input)).toEqual({ state: 'ok',
+    room_id: command.room_id, next_seq: 5, last_seq: 5, messages: [] })
+  const raw = structuredClone(f.seen.at(-1))
+  if (!raw || raw.type !== 'request' || raw.method !== 'profile.native_room_operation')
+    throw Error('missing native room request')
+  Reflect.set(raw, 'request_id', randomUUID())
+  Reflect.set(raw.params, 'command', forbidden)
+  Reflect.set(raw.params, 'jti', randomUUID())
+  expect(await f.session.handleRequest(raw)).toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+  expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, command,
+    expect.any(AbortSignal))
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_operation'
+    ? { ...frame, result: { reply: { state: 'ok', room_id: 'other',
+      next_seq: 5, last_seq: 5, messages: [] } } } : frame)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.native_room_operation')
+      Reflect.set(frame, 'method', 'profile.bot_identity')
+    return frame
+  })
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(undefined)
+  await expect(f.client.operateNativeRoom({ ...input, issuer: 'https://other.example.test' }))
+    .rejects.toThrow()
+  const capabilities = f.client.inspection.capabilities.filter(
+    value => value !== 'profile.native_room_operation')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('rejects native room calls when the live Host drops its room worker capability', async () => {
+  const f = await fixture()
+  await f.grant()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  Reflect.deleteProperty(options, 'prepareNativeRoom')
+  await expect(f.client.prepareNativeRoom(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.deleteProperty(options, 'operateNativeRoom')
+  await expect(f.client.operateNativeRoom({ ...input, command: { operation: 'messages',
+    room_id: input.roomId, member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 1 } }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('signs native room assertions with the Host default clock when no clock is injected', async () => {
+  const f = await fixture()
+  await f.grant()
+  f.time.value = Date.now()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'now')
+  const input = { ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, roomId: f.nativeRoom.room_id }
+  expect((await f.client.prepareNativeRoom(input))?.binding).toEqual(f.nativeRoom)
+  const turns = await f.client.operateNativeRoom({ ...input, command: { operation: 'turns',
+    room_id: input.roomId, member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 1 } })
+  expect(turns.state).toBe('turns')
+})
+
+it('delivers a native Agent chunk only with a signed live Slark ticket', async () => {
+  const f = await fixture(true, true)
+  const now = Date.now()
+  const command = { operation: 'agent-result-chunk' as const,
+    room_id: f.nativeRoom.room_id, group_id: randomUUID(), member_id: randomUUID(),
+    cycle: 1, turn_id: randomUUID(), turn_order: 1, trigger_room_seq: 1,
+    project_id: 'p', agent_id: 'guide', reply_message_id: 'reply-1',
+    status: 'completed' as const, result_digest: 'a'.repeat(64),
+    chunk_index: 0, chunk_count: 1, chunk_text: 'answer',
+    chunk_digest: 'b'.repeat(64) }
+  const signedCommand = { ...command, chunk_digest: createHash('sha256')
+    .update(JSON.stringify(['dsh-native-agent-chunk-v1', command.turn_id,
+      0, 1, command.chunk_text])).digest('hex') }
+  const workspaceId = randomUUID(), sessionId = 'original'
+  const registry = botGroupHostRegistryId({ ownerUserId: f.ownerId,
+    accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+    environmentId: f.account.authorityEnvironmentId,
+    installationId: f.identity.installationId,
+    accountBindingHandle: f.account.accountBindingHandle,
+    accountBindingEpoch: f.account.authorityBindingVersion })
+  const claims = { schema_version: 1, issuer: f.botGroupKeyring.issuer,
+    audience: 'urn:slark:dsh-native-agent-result:v1',
+    slark_audience: 'https://slark.example.test',
+    environment_id: f.account.authorityEnvironmentId, owner_user_id: f.ownerId,
+    computer_id: 'desktop-1', account_issuer: f.account.issuer,
+    account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: registry, group_id: command.group_id,
+    workspace_id: workspaceId, session_id: sessionId,
+    room_id: command.room_id, member_id: command.member_id,
+    member_cycle: 1, turn_id: command.turn_id, turn_order: 1,
+    trigger_room_seq: 1, project_id: command.project_id,
+    agent_id: command.agent_id, reply_message_id: command.reply_message_id,
+    status: command.status, result_digest: command.result_digest,
+    chunk_index: 0, chunk_count: 1, chunk_digest: signedCommand.chunk_digest,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA',
+    typ: 'SLARK-DSH-NATIVE-AGENT-RESULT', version: 1,
+    kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: 'https://slark.example.test',
+    workspaceId, sessionId, ticket, command: signedCommand }
+  const capabilities = f.client.inspection.capabilities
+  Reflect.set(f.client.inspection, 'capabilities', capabilities.filter(
+    value => value !== 'profile.native_agent_result'))
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(f.client.inspection, 'capabilities', capabilities)
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'trustedBotGroupKeyrings')
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(options, 'trustedBotGroupKeyrings', [f.botGroupKeyring])
+  Reflect.deleteProperty(options, 'operateNativeRoom')
+  await expect(f.client.deliverNativeAgentResultChunk(input))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  Reflect.set(options, 'operateNativeRoom', f.operateNativeRoom)
+  f.operateNativeRoom.mockResolvedValue({ state: 'recorded',
+    turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+    expect(url).toBe('https://slark.example.test/api/v1/dsh/collaboration-v2/group-messages/native-result-confirm')
+    expect(init?.headers).toMatchObject({ authorization: `Bearer ${ticket}` })
+    return Response.json({ ok: true, value: { state: 'authorized',
+      turn_id: command.turn_id, chunk_index: 0, expires_at: claims.expires_at } })
+  })
+  try {
+    expect(await f.client.deliverNativeAgentResultChunk(input)).toEqual({ state: 'recorded',
+      turn_id: command.turn_id, chunk_index: 0, room_seq: 2 })
+    expect(f.operateNativeRoom).toHaveBeenCalledWith(f.profile.profileId, signedCommand,
+      expect.any(AbortSignal))
+    f.alter((frame) => {
+      if (frame.type === 'result' && frame.method === 'profile.native_agent_result')
+        Reflect.set(frame, 'method', 'profile.bot_identity')
+      return frame
+    })
+    await expect(f.client.deliverNativeAgentResultChunk(input))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_agent_result'
+      ? { ...frame, result: { reply: { state: 'recorded', turn_id: randomUUID(),
+        chunk_index: 0, room_seq: 2 } } } : frame)
+    await expect(f.client.deliverNativeAgentResultChunk(input))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    f.alter(undefined)
+    await expect(f.client.deliverNativeAgentResultChunk({ ...input,
+      command: { ...signedCommand, chunk_text: 'tampered' } }))
+      .rejects.toThrow()
+    expect(f.operateNativeRoom).toHaveBeenCalledTimes(3)
+  } finally { fetchMock.mockRestore() }
+})
+
+it('signs a native Agent turn page for the current Account and rejects tampering', async () => {
+  const f = await fixture()
+  await f.grant()
+  const command = { operation: 'turns' as const, room_id: f.nativeRoom.room_id,
+    member_id: randomUUID(), cycle: 1, after_seq: 0, limit: 3 }
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, command }
+  const page = await f.client.operateNativeRoom(input)
+  expect(page.state).toBe('turns')
+  if (page.state !== 'turns') throw Error('turn page missing')
+  expect(page.assertion.selection.turns).toEqual(page.turns)
+  expect(verify(null, encodeHostNativeRoomTurnAssertionPayload(page.assertion),
+    f.keys.publicKey, Buffer.from(page.assertion.signature, 'base64url'))).toBe(true)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_operation' &&
+    'turn_assertion' in frame.result ? { ...frame, result: {
+      ...frame.result, turn_assertion: { ...frame.result.turn_assertion,
+        signature: 'A'.repeat(86) },
+    } } : frame)
+  await expect(f.client.operateNativeRoom(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {
   const f = await fixture()

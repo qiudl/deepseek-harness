@@ -31,9 +31,8 @@ type AccountBotGroupInput = {
   resultAckConfirm?: ResultAckConfirmation
 }
 
-function ticketIdentity(input: Pick<AccountBotGroupInput,
-  'account' | 'computerId' | 'installationId' | 'slarkAudience'>,
-command: { groupId: string; deliveryId: string; botId: string; memberCycle: number }) {
+export function accountBindingIdentity(input: Pick<AccountBotGroupInput,
+  'account' | 'computerId' | 'installationId' | 'slarkAudience'>) {
   return {
     ownerUserId: input.account.ownerId, computerId: input.computerId,
     accountIssuer: input.account.issuer, accountSubject: input.account.subject,
@@ -41,6 +40,14 @@ command: { groupId: string; deliveryId: string; botId: string; memberCycle: numb
     accountBindingHandle: input.account.accountBindingHandle,
     accountBindingEpoch: input.account.authorityBindingVersion,
     installationId: input.installationId, slarkAudience: input.slarkAudience,
+  }
+}
+
+function ticketIdentity(input: Pick<AccountBotGroupInput,
+  'account' | 'computerId' | 'installationId' | 'slarkAudience'>,
+command: { groupId: string; deliveryId: string; botId: string; memberCycle: number }) {
+  return {
+    ...accountBindingIdentity(input),
     groupId: command.groupId, deliveryId: command.deliveryId,
     botId: command.botId, memberCycle: command.memberCycle,
   }

@@ -32,6 +32,7 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
+import { nativeAgentResultChunkFields } from '@deepseek-ai/dsh-host-control-protocol'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
@@ -47,6 +48,8 @@ import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-co
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
+import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
+import { handleDesktopNativeRoomOperationRequest } from './desktop-native-room-operations.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
 import type {} from '@deepseek-ai/dsh-workspace'
@@ -317,6 +320,58 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room',
+      handler: (req, res) => handleDesktopNativeRoomRequest(req, res, sourceToken,
+        async (roomId, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            prepare(input: { roomId: string }): Promise<unknown>
+          }
+          if (!service) throw Error('native_room_unavailable')
+          const result = await service.prepare({ roomId })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-operations',
+      handler: (req, res) => handleDesktopNativeRoomOperationRequest(req, res, sourceToken,
+        async (command, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            joinAgent(input: Record<string, unknown>): Promise<unknown>
+            roomMessages(input: Record<string, unknown>): Promise<unknown>
+            roomTurns(input: Record<string, unknown>): Promise<unknown>
+            acknowledgeTurns(input: Record<string, unknown>): Promise<unknown>
+            acknowledgeMessages(input: Record<string, unknown>): Promise<unknown>
+            appendAgentResultChunk(input: Record<string, unknown>): Promise<unknown>
+            leaveAgent(input: Record<string, unknown>): Promise<unknown>
+          }
+          if (!service) throw Error('native_room_unavailable')
+          const base = { roomId: command.room_id, memberId: command.member_id,
+            cycle: command.cycle }
+          const result = command.operation === 'join'
+            ? await service.joinAgent({ ...base, groupId: command.group_id,
+              projectId: command.project_id, agentId: command.agent_id, name: command.name })
+            : command.operation === 'messages'
+              ? await service.roomMessages({ ...base, afterSeq: command.after_seq,
+                limit: command.limit })
+              : command.operation === 'turns'
+                ? await service.roomTurns({ ...base, afterSeq: command.after_seq,
+                  limit: command.limit })
+                : command.operation === 'turn-ack'
+                  ? await service.acknowledgeTurns({ ...base, turnIds: command.turn_ids })
+                  : command.operation === 'agent-result-chunk'
+                    ? await service.appendAgentResultChunk({ ...base,
+                      ...nativeAgentResultChunkFields(command) })
+                    : command.operation === 'ack'
+                      ? await service.acknowledgeMessages({ ...base, throughSeq: command.through_seq })
+                      : await service.leaveAgent(base)
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-group',
       handler: (req, res) => handleDesktopBotGroupRequest(req, res, sourceToken, async (command, signal) => {

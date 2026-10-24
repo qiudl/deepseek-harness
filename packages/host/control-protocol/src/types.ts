@@ -899,6 +899,73 @@ export interface ProfileBotRosterResult {
   readonly result: { readonly page: import('./bot-identity.ts').HostBotRosterPage | null }
 }
 
+/** Current Account Profile prepares a Slark Source for one existing native room. */
+export interface ProfileNativeRoomRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly room_id: string
+  }
+}
+
+/** Signed room-to-bridge Source or absence from the Profile writer. */
+export interface ProfileNativeRoomResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
+}
+
+/** Account-bound member and message operation for an existing native room. */
+export interface ProfileNativeRoomOperationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_operation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly command: import('./native-room-operations.ts').HostNativeRoomCommand
+  }
+}
+
+/** Exact result of a private Account-bound room operation. */
+export interface ProfileNativeRoomOperationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_operation'
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply } |
+    { readonly reply: Extract<import('./native-room-operations.ts').HostNativeRoomReply,
+      { state: 'turns' }>
+    readonly turn_assertion: import('./native-room-turn-assertion.ts').HostNativeRoomTurnAssertion }
+}
+
+/** Result chunks are separate from ordinary room operations and require Slark authority. */
+export interface ProfileNativeAgentResultRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> &
+    import('./native-agent-result.ts').HostNativeAgentResultInput
+}
+
+/** Profile receipt for one Account-verified native Agent result chunk. */
+export interface ProfileNativeAgentResultResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2295,6 +2362,12 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileNativeRoomRequest
+  | ProfileNativeRoomResult
+  | ProfileNativeRoomOperationRequest
+  | ProfileNativeRoomOperationResult
+  | ProfileNativeAgentResultRequest
+  | ProfileNativeAgentResultResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupStopRequest
