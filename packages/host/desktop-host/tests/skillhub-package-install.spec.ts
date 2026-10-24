@@ -133,6 +133,21 @@ it('reads only the requested file after a complete fixed snapshot check', async 
   expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
 })
 
+it('rejects a manifest changed after an otherwise intact fixed snapshot', async () => {
+  const { root, installation } = await store()
+  const evidence = archive(), plan = target('version-1', evidence)
+  await installation.prepare(plan, evidence.bytes)
+  const receipt = await installation.activate(plan.operationId, '1', '0')
+  const fixed = await installation.snapshotFixed(receipt)
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+  const manifest = join(root, 'skillhub-versions', plan.operationId, 'manifest.json')
+  const original = readFileSync(manifest)
+  writeFileSync(manifest, '[]')
+  await expect(fixed.readFile('SKILL.md')).rejects.toThrow('skillhub_package_unavailable')
+  writeFileSync(manifest, original)
+  expect(await fixed.readFile('SKILL.md')).toEqual(markdown)
+})
+
 it('rejects changed fixed-file bytes and directory permissions after snapshot capture', async () => {
   const { root, installation } = await store()
   const evidence = archive(), plan = target('version-1', evidence)
