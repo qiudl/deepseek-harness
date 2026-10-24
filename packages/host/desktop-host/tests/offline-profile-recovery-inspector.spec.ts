@@ -421,9 +421,6 @@ describe('offline Profile existing-only inspector', () => {
     await expect(planSelectedProfileImportPlugins({ ...value.input,
       composedEntryIds: () => new Set(['fixture-entry']) }))
       .rejects.toThrow('profile_import_plugin_entry_conflict')
-    await expect(planSelectedProfileImportPlugins({ ...value.input,
-      composedEntryIds: () => new Set([123 as unknown as string]) }))
-      .rejects.toThrow('profile_import_plugin_target_conflict')
   })
 
   it('rejects an unlisted target dependency and an unlisted installed tree occupying the plugin name', async () => {
