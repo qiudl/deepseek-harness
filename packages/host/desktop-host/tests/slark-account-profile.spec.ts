@@ -42,6 +42,40 @@ function fixture() {
 }
 
 describe('Slark Account Profile admission', () => {
+  it('rejects missing verification, environment drift, and token identity drift before provisioning', async () => {
+    const { registry, workerStarts } = fixture()
+    const clock = { now: () => 1_000 }
+    const unavailable = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      ensureProfileWorker: async () => {},
+    })
+    await expect(unavailable.ensureSlarkAccountProfile(input))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    const mismatched = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      verifySlarkAccountAccessToken: () => ({ issuer, subject: 'different-account', bindingScope }),
+      ensureProfileWorker: async () => {},
+    })
+    await expect(mismatched.ensureSlarkAccountProfile({ ...input,
+      expected: { ...expected, environmentId: 'different-environment' } }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(mismatched.ensureSlarkAccountProfile(input))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    const wrongIssuer = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      verifySlarkAccountAccessToken: () => ({ issuer: 'https://other.example', subject, bindingScope }),
+      ensureProfileWorker: async () => {},
+    })
+    await expect(wrongIssuer.ensureSlarkAccountProfile(input))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    const missingScope = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      verifySlarkAccountAccessToken: () => ({ issuer, subject,
+        bindingScope: undefined as unknown as string }),
+      ensureProfileWorker: async () => {},
+    })
+    await expect(missingScope.ensureSlarkAccountProfile(input))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    expect(workerStarts()).toBe(0)
+    expect(registry.listUnlocked()).toEqual([])
+  })
+
   it('rejects malformed scoped indexes and a scope that differs from the verified binding', async () => {
     expect(() => slarkPersonIndex(Buffer.alloc(31), { issuer, subject }, bindingScope))
       .toThrow(/invalid_input/u)
