@@ -19,7 +19,8 @@ import { planProfileImportPluginTargetManifest } from '../src/profile-import-plu
 import { inspectResolvedProfileImportTargetPluginsInIsolation, resolveProfileImportTargetPluginsInIsolation } from '../src/profile-import-plugin-target-resolution.ts'
 import { inspectResolvedProfileImportTargetPluginLayer, installResolvedProfileImportTargetPlugins } from '../src/profile-import-plugin-target-install.ts'
 import { inspectProfileImportPluginComposition } from '../src/profile-import-plugin-composition.ts'
-import { inspectProfileImportPluginDirectoryState, inspectStagedProfileImportPluginPublishCandidate,
+import { fingerprintProfileImportPluginWeb, inspectProfileImportPluginDirectoryState,
+  inspectStagedProfileImportPluginPublishCandidate,
   planProfileImportPluginPublish,
   stageProfileImportPluginPublishCandidate } from '../src/profile-import-plugin-publish-plan.ts'
 import { FileProfileImportPluginPublishJournal,
@@ -750,12 +751,23 @@ describe('offline Profile existing-only inspector', () => {
     const publishPlan = await planProfileImportPluginPublish(publishInput)
     expect(publishPlan.targetWebDigest).toMatch(/^[a-f0-9]{64}$/u)
     expect(publishPlan.candidateWebDigest).toMatch(/^[a-f0-9]{64}$/u)
+    const targetWebMode = (await lstat(value.target.web)).mode & 0o777
+    await chmod(value.target.web, 0o777)
+    await expect(fingerprintProfileImportPluginWeb(value.target.web, uid))
+      .rejects.toThrow('profile_import_plugin_publish_unsafe')
+    await chmod(value.target.web, targetWebMode)
     const staged = await stageProfileImportPluginPublishCandidate(publishInput, publishPlan)
     expect(staged.stagedWebDigest).toBe(publishPlan.candidateWebDigest)
     expect(await readFile(join(staged.stagedWeb, 'node_modules', 'baseline-plugin', 'index.js')))
       .toEqual(baselineInstalledBefore)
     expect(await inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
       .toEqual(staged)
+    const stagedPluginDirectory = join(staged.stagedWeb, 'node_modules', 'baseline-plugin')
+    const stagedPluginDirectoryMode = (await lstat(stagedPluginDirectory)).mode & 0o777
+    await chmod(stagedPluginDirectory, 0o777)
+    await expect(inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .rejects.toThrow('profile_import_plugin_publish_unsafe')
+    await chmod(stagedPluginDirectory, stagedPluginDirectoryMode)
     const stagedSessions = await stageSelectedProfileImportSessions({
       source: input.source, target: input.target, sourceProfileId: input.source.profileId,
       targetProfileId: input.target.profileId, operationId: input.operationId, fence: input.fence,
@@ -785,6 +797,11 @@ describe('offline Profile existing-only inspector', () => {
     const directoryState = () => inspectProfileImportPluginDirectoryState({
       profileRoot: value.target.profileRoot, operationId: input.operationId, uid, plan: publishPlan,
     })
+    expect(await directoryState()).toBe('prepared')
+    const heldStagedWeb = `${staged.stagedWeb}.held`
+    await rename(staged.stagedWeb, heldStagedWeb)
+    try { await expect(directoryState()).rejects.toThrow('profile_import_plugin_publish_state_unknown') }
+    finally { await rename(heldStagedWeb, staged.stagedWeb) }
     expect(await directoryState()).toBe('prepared')
     const publishJournal = new FileProfileImportPluginPublishJournal(
       join(value.target.profileRoot, 'profile-import-plugin-publish'), uid)
