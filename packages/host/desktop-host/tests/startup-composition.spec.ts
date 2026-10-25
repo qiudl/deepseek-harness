@@ -254,6 +254,40 @@ it.skipIf(process.platform === 'win32')('wires a session import through prepare,
   expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(2)
 })
 
+it.skipIf(process.platform === 'win32')('rejects plugin import before durable intent when trusted dependencies are unavailable', async () => {
+  for (const missing of ['installer', 'catalog'] as const) {
+    const value = fixture()
+    const config = value.config
+    Reflect.deleteProperty(config, missing === 'installer' ? 'pnpmEntrypointPath' : 'bundledPluginsRoot')
+    let options: UnixHostServerOptions | undefined
+    const server = { start: async () => {}, close: async () => {} } as unknown as UnixHostServer
+    const { startDesktopHostApplication } = await import('../src/startup.ts')
+    const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+      platform: 'darwin', createServer: (captured) => { options = captured; return server },
+      profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => {}, abort: () => {}, done: Promise.resolve() }),
+    })
+    onTestFinished(async () => { await application.close(); rmSync(value.root, { recursive: true, force: true }) })
+    if (!options) throw Error('missing server options')
+    const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:missing-installer-source',
+      unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
+    const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:missing-installer-target',
+      unlockMaterial: Buffer.alloc(32, 2).toString('base64url'), ownerId: 'owner' })
+    const operationId = randomUUID()
+    await expect(options.prepareProfileImport?.({ sourceProfileId: source.profileId,
+      targetProfileId: target.profileId, operationId, expectedPreviewDigest: 'a'.repeat(64),
+      selectedSessionIds: [], selectedPluginNames: ['dsh-duet'], assertAuthority: async () => {} }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(await options.listProfileImportStatus?.({ sourceProfileId: source.profileId,
+      targetProfileId: target.profileId, operationOffset: 0, assertAuthority: async () => {} }))
+      .toEqual({ operations: [], nextOperationOffset: null })
+    const fence = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(
+      join(value.root, 'profiles'), process.getuid!()))
+    expect(fence.hasPendingPair(source.profileId, target.profileId, operationId)).toBe(false)
+  }
+})
+
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
   const cleanup = { closeApplication: undefined as (() => Promise<void>) | undefined }
