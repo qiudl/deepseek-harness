@@ -40,10 +40,13 @@ export { parseHostBotMemoryReadRequest, parseHostBotMemoryPage } from './bot-mem
 export type { HostBotMemoryReadRequest, HostBotMemoryPage } from './bot-memory-read.js'
 export { parseHostBotGroupHistoryReadRequest, parseHostBotGroupHistoryPage } from './bot-group-history-read.js'
 export type { HostBotGroupHistoryReadRequest, HostBotGroupHistoryPage } from './bot-group-history-read.js'
+export { parseHostBotChatReadRequest, parseHostBotChatPage } from './bot-chat-read.js'
+export type { HostBotChatReadRequest, HostBotChatPage } from './bot-chat-read.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
+  ProfileBotChatReadRequest, ProfileBotChatReadResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

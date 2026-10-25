@@ -85,6 +85,8 @@ The separate `profile.skillhub_clock_v2` capability issues Host-owned anchors wi
 
 `profile.bot_group_history_read` reads one committed group journal page through the private `/internal/desktop-bot-group-history-read` worker route. The Host checks the caller's Account binding and worker generation before and after the read, and rejects another logical room. Slark must authorize the remote device before forwarding any page.
 
+`profile.bot_chat_read` reads one text-only private Bot chat page through the private `/internal/desktop-bot-chat-read` worker route. The Host checks the caller's Account binding and worker generation before and after the read, and rejects another logical Bot or part. Slark must authorize the remote device before forwarding any page.
+
 The private Bot group worker bridge supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. `profile.bot_group_result_page` exposes one result after revalidating the original Slark delivery ticket against the current Account and group membership. `profile.bot_group_result_ack` clears that result after Slark records its receipt, under the same live ticket. Member-cycle revocation has no public control method.
 
 When a result is present, the Host signs its exact text, Bot/member identity, delivery ID and current Account/installation tuple with the installation key. The client verifies this proof against its inspected Host peer. Slark must verify it again against the current registered Host before recording a Bot message.

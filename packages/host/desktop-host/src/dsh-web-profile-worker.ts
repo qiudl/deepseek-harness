@@ -10,6 +10,8 @@ import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest,
   type HostBotMemoryPage, type HostBotMemoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest,
   type HostBotGroupHistoryPage, type HostBotGroupHistoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatPage, parseHostBotChatReadRequest,
+  type HostBotChatPage, type HostBotChatReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
 } from '@deepseek-ai/dsh-host-control-protocol'
@@ -297,6 +299,8 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       readBotGroupHistory: (request, signal) => this.readBotGroupHistory(
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
+      readBotChat: (request, signal) => this.readBotChat(
+        viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       operateBotGroup: (command, signal) => this.operateBotGroup(
@@ -560,6 +564,28 @@ export class DshWebProfileWorkerFactory {
       (bytes) => {
         const page = parseHostBotGroupHistoryPage(JSON.parse(bytes.toString('utf8')))
         if (page.logical_id !== target.logical_id) throw new HostAuthorityError('profile_mismatch')
+        return page
+      }, 'await')
+  }
+
+  private async readBotChat(
+    viewOrigin: string, token: string, request: HostBotChatReadRequest,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotChatPage> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
+    const target = parseHostBotChatReadRequest(request)
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-chat-read`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 64 * 1024,
+      (bytes) => {
+        const page = parseHostBotChatPage(JSON.parse(bytes.toString('utf8')))
+        if (page.logical_id !== target.logical_id || page.part !== target.part)
+          throw new HostAuthorityError('profile_mismatch')
         return page
       }, 'await')
   }

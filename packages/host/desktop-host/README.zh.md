@@ -87,6 +87,8 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_group_history_read` 经私有 `/internal/desktop-bot-group-history-read` worker 路由读取一页已提交的群聊日志。Host 在读取前后核验当前连接的 Account 绑定与 worker 代际，并拒绝其他逻辑群。Slark 转发页面前仍须授权远程设备。
 
+`profile.bot_chat_read` 经私有 `/internal/desktop-bot-chat-read` worker 路由读取一页 Bot 私聊纯文本。Host 在读取前后核验当前连接的 Account 绑定与 worker 代际，并拒绝其他逻辑 Bot 或段编号。Slark 转发页面前仍须授权远程设备。
+
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 
 补读到结果时，Host 用安装密钥签署准确的正文、Bot 与成员身份、投递 ID，以及当前 Account 与安装身份。客户端会用已检验的 Host 对端公钥复核；Slark 在记录 Bot 群消息前还须按当前注册 Host 再次验签。

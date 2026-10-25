@@ -65,6 +65,10 @@ const botMemoryPage = { logical_id: 'bot:thanos', scope_revision: 'a'.repeat(64)
 const botGroupHistoryPage = { logical_id: 'room:room_1', seq: 1, digest: 'a'.repeat(64),
   complete: true, total_bytes: 9, offset: 0, content_base64: Buffer.from('123456789').toString('base64'),
   next_cursor: null, source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
+const botChatPage = { logical_id: 'bot:session-aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  part: 0, part_count: 1, team_revision: 7, event_digest: 'a'.repeat(64), rows_digest: 'b'.repeat(64),
+  complete: true, total_bytes: 2, offset: 0, content_base64: Buffer.from('[]').toString('base64'),
+  next_cursor: null, source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
@@ -94,6 +98,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-bot-team-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-memory-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group-history-read': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-chat-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -135,6 +140,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('bot-team-read') ? ${JSON.stringify(botTeamPage)}
           : url.pathname.endsWith('bot-memory-read') ? ${JSON.stringify(botMemoryPage)}
           : url.pathname.endsWith('bot-group-history-read') ? ${JSON.stringify(botGroupHistoryPage)}
+          : url.pathname.endsWith('bot-chat-read') ? ${JSON.stringify(botChatPage)}
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -171,18 +177,19 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, operateBotGroup, readBotTeam, readBotMemory,
-    readBotGroupHistory } = worker
+    readBotGroupHistory, readBotChat } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
-    || !installGroupInputFence || !resolveBotIdentity || !operateBotGroup || !readBotTeam || !readBotMemory || !readBotGroupHistory)
+    || !installGroupInputFence || !resolveBotIdentity || !operateBotGroup || !readBotTeam
+    || !readBotMemory || !readBotGroupHistory || !readBotChat)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, operateBotGroup,
-    readBotTeam, readBotMemory, readBotGroupHistory }
+    readBotTeam, readBotMemory, readBotGroupHistory, readBotChat }
 }
 
 it('reads the private Bot team page only through the live worker capability', async () => {
@@ -221,6 +228,19 @@ it('reads a committed Bot group page only through the live worker capability', a
   expect(await h.readBotGroupHistory(request, signal)).toEqual(botGroupHistoryPage)
   h.worker.abort()
   await expect(h.readBotGroupHistory(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('reads a private Bot chat page only through the live worker capability', async () => {
+  const h = await harness()
+  const request = { schema_version: 'dsh-remote-bot-read/v1', kind: 'bot-chat',
+    logical_id: botChatPage.logical_id, part: 0, limit: 32768 } as const
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-chat-read`, {
+    method: 'POST', body: JSON.stringify(request),
+  })).status).toBe(403)
+  expect(await h.readBotChat(request, signal)).toEqual(botChatPage)
+  h.worker.abort()
+  await expect(h.readBotChat(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {

@@ -88,6 +88,8 @@ kind: "package-reference"
 
 `profile.bot_group_history_read` 从当前 Account Profile 读取一页已提交的群聊日志。请求只接受逻辑 `room:<id>`、最多 32 KiB 的块大小及不透明游标。响应绑定已提交序号和摘要，页面小于 60 KiB，Host 控制帧小于 64 KiB。该方法本身不授权远程设备，也不会把旧群的不完整日志宣称为完整。
 
+`profile.bot_chat_read` 承载当前团队某个 Bot 私聊的纯文本分页。请求只指定逻辑 `bot:<id>` 和从零开始的聊天段编号，不接受原始 Session ID 或 Profile 路径。分页绑定团队修订、来源事件摘要、投影行摘要及字节偏移；单块最多 32 KiB，单页小于 60 KiB。编解码器只校验格式和大小，不授权远程设备，也不补齐尚未支持的附件。
+
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 
 `profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。

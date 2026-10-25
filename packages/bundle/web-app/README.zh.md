@@ -100,7 +100,9 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 `DSH_PROFILE_SOURCE_TOKEN` 也保护 `/internal/desktop-bot-identity`。入口在每次请求时通过 Profile 本地可选的 `dsBotSlarkExternalGroup` 服务解析准确 Bot ID。服务或 Bot 缺失时返回缺失；只有 Bot ID、派生的发言者引用和有界显示名可以离开 worker。浏览器 Cookie 不能调用此入口。
 
-同一私有 worker 令牌还保护 `/internal/desktop-bot-team-read`。它只接受有界团队目录分页，并调用当前 Profile 的可选 `dsBotSlarkRemoteRead` 服务。响应仅含 Bot 与群聊逻辑 ID、名称、角色、主 Bot 标记、群成员、团队修订号及游标。worker 拒绝额外字段；浏览器 Cookie 和任意 `api/bot` 请求不能调用该入口。父级 Host 尚未提供远程 Bot 读取控制方法。
+同一私有 worker 令牌还保护 `/internal/desktop-bot-team-read`。它只接受有界团队目录分页，并调用当前 Profile 的可选 `dsBotSlarkRemoteRead` 服务。响应仅含 Bot 与群聊逻辑 ID、名称、角色、主 Bot 标记、群成员、团队修订号及游标。worker 拒绝额外字段；浏览器 Cookie 和任意 `api/bot` 请求不能调用该入口。父级 Host 返回页面前会复核当前 Account 与 worker 代际。
+
+`/internal/desktop-bot-chat-read` 使用同一 worker 令牌和服务读取一段 Bot 私聊的纯文本分页。请求只接受逻辑 Bot ID、段编号和有界游标，返回前核对 Bot 与段编号。插件在附件传输可用前拒绝富媒体内容；浏览器 Cookie 不能调用该入口。
 
 `DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN` 单独启用仅供父 Host 调用的 `/internal/desktop-collaboration-archive-transition` POST。入口接受精确的账号、环境、工作区、Session、token 组合及一个有界阶段动作，再通过 Workspace Registry 串行化的持久写入执行。重复 `stage` 返回 token 的实际阶段。此入口不调用 Slark，也不授权浏览器归档请求；Main 或 Daemon 协调器必须按同一 token 对账不确定的写入结果。
 
