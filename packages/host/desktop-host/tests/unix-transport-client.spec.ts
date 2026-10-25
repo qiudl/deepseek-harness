@@ -44,6 +44,8 @@ const allCapabilities = [
   'profile.extensions',
   'profile.model_text',
 ].sort() as HostControlCapability[]
+const importCapabilities = [...allCapabilities, 'profile.import_preview', 'profile.import_status',
+  'profile.import_prepare', 'profile.import_commit', 'profile.import_abort'].sort() as HostControlCapability[]
 
 function inspection(
   request: HostInspectRequest,
@@ -682,6 +684,81 @@ describe('Unix Host client protocol projections', () => {
     await expect(client.extensions({ ...lease, command: { action: 'prepare', kind: 'plugin', payload: '{}' } }))
       .rejects.toMatchObject({ code: 'extension_refused' })
   })
+})
+
+it('keeps old Account import proof off the wire when import capabilities are absent', async () => {
+  const sent = vi.fn()
+  const { client } = await makeClient((frame) => { sent(frame); return result(frame, {}) })
+  const identity = { authority_environment_id: binding.authorityEnvironmentId as never,
+    account_binding_handle: binding.accountBindingHandle as never, authority_binding_version: 1,
+    account_issuer: 'https://accounts.example.com', account_subject: 'person',
+    source_account_issuer: 'https://accounts.example.com', source_account_subject: 'person',
+    source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43) }
+  const operation_id = installationId as never
+  try {
+    await expect(client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'a'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.commitProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.abortProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(sent).not.toHaveBeenCalled()
+  } finally { client.close() }
+})
+
+it('uses authenticated import capabilities for preview, status, prepare, commit, and abort', async () => {
+  const seen: HostControlFrame[] = []
+  const operation_id = installationId
+  const { client } = await makeClient((frame) => {
+    seen.push(frame)
+    switch (frame.method) {
+      case 'profile.import_preview':
+        return result(frame, { source_snapshot_digest: 'a'.repeat(64), target_snapshot_digest: 'b'.repeat(64),
+          preview_digest: 'c'.repeat(64), session_count: 0, plugin_count: 0,
+          next_session_offset: null, next_plugin_offset: null, sessions: [], plugins: [] })
+      case 'profile.import_status':
+        return result(frame, { next_operation_offset: null, operations: [] })
+      case 'profile.import_prepare':
+        return result(frame, { operation_id, phase: 'staged' })
+      case 'profile.import_commit':
+        return result(frame, { operation_id, phase: 'committed' })
+      case 'profile.import_abort':
+        return result(frame, { operation_id, phase: 'aborted' })
+      default: throw Error('unexpected_request')
+    }
+  }, importCapabilities)
+  const identity = { authority_environment_id: binding.authorityEnvironmentId as never,
+    account_binding_handle: binding.accountBindingHandle as never, authority_binding_version: 1,
+    account_issuer: 'https://accounts.example.com', account_subject: 'person',
+    source_account_issuer: 'https://accounts.example.com', source_account_subject: 'person',
+    source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43) }
+  try {
+    await expect(client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .resolves.toMatchObject({ session_count: 0, next_session_offset: null })
+    await expect(client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .resolves.toEqual({ next_operation_offset: null, operations: [] })
+    await expect(client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'c'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .resolves.toEqual({ operation_id, phase: 'staged' })
+    await expect(client.commitProfileImport({ ...identity, operation_id }))
+      .resolves.toEqual({ operation_id, phase: 'committed' })
+    await expect(client.abortProfileImport({ ...identity, operation_id }))
+      .resolves.toEqual({ operation_id, phase: 'aborted' })
+    expect(seen.map(frame => frame.method)).toEqual([
+      'profile.import_preview', 'profile.import_status', 'profile.import_prepare',
+      'profile.import_commit', 'profile.import_abort',
+    ])
+    expect(seen.every(frame => frame.type === 'request' && 'params' in frame
+      && 'source_unlock_material' in frame.params
+      && frame.params.source_unlock_material === identity.source_unlock_material)).toBe(true)
+  } finally { client.close() }
 })
 
 it('requires explicit recovery-material capabilities without sending secrets to an older Host', async () => {
