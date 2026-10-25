@@ -496,6 +496,27 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_target_plan_changed')
   })
 
+  it('rejects target resolver settings and undeclared dependency classes before plugin installation', async () => {
+    const value = await pluginPlanFixture()
+    const path = join(value.target.web, 'package.json')
+    const baseline = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    const unsafeFields: Record<string, unknown>[] = [
+      { devDependencies: { extra: 'file:../../outside' } },
+      { optionalDependencies: { extra: 'file:../../outside' } },
+      { peerDependencies: { extra: 'file:../../outside' } },
+      { pnpm: { overrides: { extra: 'file:../../outside' } } },
+      { resolutions: { extra: 'file:../../outside' } },
+      { overrides: { extra: 'file:../../outside' } },
+    ]
+    for (const unsafe of unsafeFields) {
+      await writeFile(path, JSON.stringify({ ...baseline, ...unsafe }))
+      const input = { ...value.input, expectedPreviewDigest: (await value.inspect()).previewDigest }
+      const plan = await planSelectedProfileImportPlugins(input)
+      await expect(planProfileImportPluginTargetManifest({ ...input, plan }))
+        .rejects.toThrow('profile_import_plugin_target_policy_unsupported')
+    }
+  })
+
   it.skipIf(process.platform === 'win32')('resolves selected plugins beside an existing catalog-backed target plugin without changing live files', async () => {
     const value = await pluginPlanFixture(true)
     const baselineSource = join(value.target.hostRoot, 'baseline-source')

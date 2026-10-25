@@ -57,6 +57,14 @@ export async function planProfileImportPluginTargetManifest(input: Readonly<{
   try { parsed = JSON.parse(currentManifest) } catch { throw Error('profile_import_plugin_target_manifest_invalid') }
   const manifest = record(parsed)
   const dependencies = record(manifest.dependencies)
+  for (const field of ['devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    if (manifest[field] !== undefined && Object.keys(record(manifest[field])).length > 0) {
+      throw Error('profile_import_plugin_target_policy_unsupported')
+    }
+  }
+  if (['pnpm', 'resolutions', 'overrides'].some(field => manifest[field] !== undefined)) {
+    throw Error('profile_import_plugin_target_policy_unsupported')
+  }
   const dsh = record(manifest.dsh)
   const profile = record(dsh.profile)
   const bundles = profile.bundles
