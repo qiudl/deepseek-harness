@@ -7,18 +7,21 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
-import type { SingleHostLock } from '../src/single-instance.ts'
+import { acquireSingleHostLock, type SingleHostLock } from '../src/single-instance.ts'
 import { HostAuthorityError } from '../src/types.ts'
 import { UnixHostClient, UnixHostServer } from '../src/unix-transport.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 
 it('round-trips Account-bound memory over the Unix socket and rejects a stale Profile reader', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-unix-'))
-  const resources: { client?: UnixHostClient; server?: UnixHostServer } = {}
+  const resources: { client?: UnixHostClient; server?: UnixHostServer; lock?: SingleHostLock } = {}
   onTestFinished(async () => {
     resources.client?.close()
     try { await resources.server?.close() }
-    finally { rmSync(root, { recursive: true, force: true }) }
+    finally {
+      try { await resources.lock?.release() }
+      finally { rmSync(root, { recursive: true, force: true }) }
+    }
   })
   const socketPath = join(root, 'host.sock')
   const now = 1_000
@@ -65,8 +68,10 @@ it('round-trips Account-bound memory over the Unix socket and rejects a stale Pr
     read: vi.fn(async () => ({ sessionId: 'session-one', revision: 'r1',
       text: `${sessionRows.map(row => JSON.stringify(row)).join('\n')}\n` })) }
   const peer = async () => ({ uid, executableSignatureDigest: executableDigest })
+  const lock = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce })
+  resources.lock = lock
   const server = new UnixHostServer({ socketPath,
-    ownership: { assertOwner: vi.fn() } as unknown as SingleHostLock,
+    ownership: lock,
     expectedUid: uid, allowedDesktopExecutableDigests: new Set([executableDigest]), attestPeer: peer,
     identity: { hostInstanceId, installationId, installationPublicKey,
       installationPrivateKey: hostKeys.privateKey, processNonce,
