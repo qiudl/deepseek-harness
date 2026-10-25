@@ -688,11 +688,29 @@ describe('offline Profile existing-only inspector', () => {
       assertSessionPointerOld: async () => {},
     }
     await expect(publishProfileImportPluginLayer({ ...publishOperation,
+      profileRoot: 'relative-profile-root' }))
+      .rejects.toThrow('profile_import_plugin_publish_invalid')
+    let releaseInspection: (() => void) | undefined
+    let inspectionStarted: (() => void) | undefined
+    const blockedInspection = new Promise<void>((resolve) => { releaseInspection = resolve })
+    const inspectionEntered = new Promise<void>((resolve) => { inspectionStarted = resolve })
+    const pendingPublish = publishProfileImportPluginLayer({ ...publishOperation,
+      assertQuiescent: async () => { inspectionStarted?.(); await blockedInspection },
+      assertSessionPointerOld: async () => { throw Error('session_pointer_changed') },
+    })
+    await inspectionEntered
+    try {
+      await expect(publishProfileImportPluginLayer(publishOperation))
+        .rejects.toThrow('profile_import_plugin_publish_busy')
+    } finally { releaseInspection?.() }
+    await expect(pendingPublish).rejects.toThrow('session_pointer_changed')
+    await expect(publishProfileImportPluginLayer({ ...publishOperation,
       assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
       .rejects.toThrow('session_pointer_changed')
     expect(await directoryState()).toBe('prepared')
     const published = await publishProfileImportPluginLayer(publishOperation)
     expect(published.phase).toBe('published')
+    expect((await publishProfileImportPluginLayer(publishOperation)).phase).toBe('published')
     expect(await directoryState()).toBe('candidate_published')
     expect((await recovery()).action).toBe('published')
     expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction)
@@ -708,6 +726,7 @@ describe('offline Profile existing-only inspector', () => {
     expect(await directoryState()).toBe('candidate_published')
     const rolledBack = await rollbackProfileImportPluginLayer(publishOperation)
     expect(rolledBack.phase).toBe('rolled_back')
+    expect((await rollbackProfileImportPluginLayer(publishOperation)).phase).toBe('rolled_back')
     expect(await directoryState()).toBe('prepared')
     expect((await recovery()).action).toBe('rolled_back')
     expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction)
