@@ -149,6 +149,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 私有索引可按顺序解析最多十个外部排序的 `{sourceRef, sourceVersion}` 候选。搜索返回随机索引 epoch；索引重建后该值会改变。候选解析同时要求匹配 epoch 和当前数字代际，因此即使重建后的代际与来源引用相同，旧结果也会被拒绝。未知、重复或来源版本不符的引用也会被拒绝，缓存会在解析前后核对完整的当前 Session 清单。控制器使用这项内部解析前，要求与查询绑定的新签名搜索指令。HY worker、IPC 来源及 `profile.memory_query` 语义检索动作尚未接入；后续 IPC 还须绑定当前 worker 进程身份。
 
+Host 内部已有 HY socket 帧解码器与事务顺序器。解码器只接受至多 512 KiB 的精确长度前缀 JSON 帧，最多缓存一帧，并拒绝截断的流结束。投影页最多包含 16 条脱敏记录和合计 256 KiB 的 UTF-8 文本。顺序器要求逐页收到匹配的确认后才继续，最后一页确认后才允许查询；候选响应必须匹配当前请求、worker nonce、索引 epoch 和代际。这些模块尚无 socket 所有者或 worker 调用方；启用语义检索前，正式通道还须核验内核 peer UID/PID、控制 socket ACL、停止过期 worker，并强制操作时限。
+
 ### 远端工作区目录
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
