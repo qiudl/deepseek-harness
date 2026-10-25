@@ -89,6 +89,24 @@ describe('Host memory signed read controller', () => {
     expect(f.current).toHaveBeenCalledTimes(6)
   })
 
+  it('requires a fresh signed search to resolve semantic candidate references', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const found = await f.controller.search(directive('search', 'private'), 'private', 1, signal)
+    const item = found.items[0]!
+    const candidate = { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }
+    const signed = directive('search', 'private', 'M')
+    await expect(f.controller.resolveCandidates(signed, 'private', 1,
+      found.generation, [candidate], signal)).resolves.toMatchObject([{ sourceRef: item.sourceRef }])
+    await expect(f.controller.resolveCandidates(signed, 'private', 1,
+      found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'replayed' })
+    await expect(f.controller.resolveCandidates(directive('search', 'wrong', 'Q'), 'private', 1,
+      found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(f.controller.resolveCandidates(directive('search', 'private', 'R'), 'private', 1,
+      found.generation, [{ ...candidate, sourceVersion: 'f'.repeat(64) }], signal))
+      .rejects.toMatchObject({ code: 'stale' })
+  })
+
   it('refuses a directive for another computer and an offline identity', async () => {
     const f = fixture()
     await f.controller.warm(signal)

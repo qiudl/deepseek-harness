@@ -1,5 +1,5 @@
 /** REQ-20261021-0013: Host-local signed reads of a warmed, scoped memory index. */
-import type { HostMemoryProfileReader, HostMemoryScope,
+import type { HostMemoryCandidateRef, HostMemoryProfileReader, HostMemoryScope,
   HostMemorySearchItem } from './memory-evidence-index.ts'
 import { chunkHostMemoryEvidence, type HostMemoryEvidenceChunk } from './memory-evidence-chunk.ts'
 import { HostMemoryIndexCache } from './memory-index-cache.ts'
@@ -90,6 +90,13 @@ export class HostMemoryReadController {
   }> {
     return this.read(directive, 'search', query, limit, signal,
       (scope, reader) => this.cache.search(scope, reader, query, limit, signal))
+  }
+
+  /** Resolve untrusted semantic references only under a signed search directive. */
+  resolveCandidates(directive: unknown, query: string, limit: number, generation: number,
+    candidates: readonly HostMemoryCandidateRef[], signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
+    return this.read(directive, 'search', query, limit, signal,
+      (scope, reader) => this.cache.resolveCandidates(scope, reader, generation, candidates, limit, signal))
   }
 
   evidenceChunk(directive: unknown, sourceRef: string, offset: number,
