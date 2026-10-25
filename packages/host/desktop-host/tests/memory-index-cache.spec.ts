@@ -77,6 +77,26 @@ describe('Host memory index cache', () => {
     await expect(cache.search(scope, active, 'private', 1, signal)).rejects.toMatchObject({ code: 'unavailable' })
   })
 
+  it('withholds ranked candidates when the source inventory changes during resolution', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader()
+    await cache.warm(scope, active, signal)
+    const found = await cache.search(scope, active, 'private', 1, signal)
+    const item = found.items[0]!
+    const candidate = { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }
+    expect(await cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+      .toMatchObject([{ sourceRef: candidate.sourceRef }])
+    active.list.mockImplementationOnce(async () => ({
+      items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null,
+    })).mockImplementationOnce(async () => ({
+      items: [{ sessionId: 'session-one', revision: 'r2' }], nextAfter: null,
+    }))
+    await expect(cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('discards the slot on Account or worker change and on Session deletion', async () => {
     const cache = new HostMemoryIndexCache()
     const active = reader()

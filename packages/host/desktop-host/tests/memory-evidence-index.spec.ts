@@ -95,6 +95,36 @@ describe('Host local memory Evidence index', () => {
     }
   })
 
+  it('resolves ranked candidate references only from the current scoped source version', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, snapshot('private plan'), 0)
+    const found = index.search(scope, 'private', 1)
+    const candidate = { sourceRef: found.items[0]!.sourceRef,
+      sourceVersion: found.items[0]!.sourceVersion }
+    expect(index.resolveCandidates(scope, found.generation, [candidate], 1))
+      .toMatchObject([{ sourceRef: candidate.sourceRef, snippet: 'private plan' }])
+    const answer = index.search(scope, 'answer', 1).items[0]!
+    expect(index.resolveCandidates(scope, found.generation, [candidate,
+      { sourceRef: answer.sourceRef, sourceVersion: answer.sourceVersion }], 1))
+      .toHaveLength(1)
+    expect(() => index.resolveCandidates({ ...scope, profileId: 'other' }, found.generation,
+      [candidate], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation, [candidate, candidate], 1))
+      .toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation,
+      [{ ...candidate, sourceRef: 'f'.repeat(64) }], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation,
+      [{ ...candidate, sourceVersion: 'f'.repeat(64) }], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation,
+      [{ ...candidate, extra: 'untrusted' } as never], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation,
+      Array.from({ length: 11 }, () => candidate), 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation, [candidate], 0)).toThrow()
+    index.replace(scope, snapshot('revised plan', 'r2'), found.generation)
+    expect(() => index.resolveCandidates(scope, found.generation, [candidate], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.generation + 1, [candidate], 1)).toThrow()
+  })
+
   it('copies the exact scope and keeps returned Evidence immutable', () => {
     const mutable = { ...scope }
     const index = new HostMemoryEvidenceIndex(mutable)

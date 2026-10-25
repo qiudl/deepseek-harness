@@ -1,6 +1,6 @@
 /** REQ-20261021-0013: one process-local, generation-pinned memory index slot. */
 import { buildHostMemoryEvidenceIndex, type HostMemoryEvidence,
-  type HostMemoryEvidenceIndex, type HostMemoryProfileReader, type HostMemoryScope,
+  type HostMemoryCandidateRef, type HostMemoryEvidenceIndex, type HostMemoryProfileReader, type HostMemoryScope,
   type HostMemorySearchItem } from './memory-evidence-index.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -104,5 +104,13 @@ export class HostMemoryIndexCache {
   evidence(scope: HostMemoryScope, reader: HostMemoryProfileReader, sourceRef: string,
     signal: AbortSignal): Promise<HostMemoryEvidence | null> {
     return this.withCurrent(scope, reader, signal, index => index.evidence(scope, sourceRef))
+  }
+
+  /** Recheck the current inventory around externally ranked references. */
+  resolveCandidates(scope: HostMemoryScope, reader: HostMemoryProfileReader, generation: number,
+    candidates: readonly HostMemoryCandidateRef[], limit: number,
+    signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
+    return this.withCurrent(scope, reader, signal,
+      index => index.resolveCandidates(scope, generation, candidates, limit))
   }
 }

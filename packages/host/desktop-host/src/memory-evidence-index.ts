@@ -36,6 +36,21 @@ export interface HostMemoryEvidence {
 }
 export type HostMemorySearchItem = Omit<HostMemoryEvidence, 'text'> & { readonly snippet: string }
 
+/** Untrusted semantic-search reference; it carries no authority or display text. */
+export interface HostMemoryCandidateRef {
+  readonly sourceRef: string
+  readonly sourceVersion: string
+}
+
+function parseCandidate(value: unknown): HostMemoryCandidateRef {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).sort().join(',') !== 'sourceRef,sourceVersion'
+    || !('sourceRef' in value) || typeof value.sourceRef !== 'string' || !HASH.test(value.sourceRef)
+    || !('sourceVersion' in value) || typeof value.sourceVersion !== 'string'
+    || !HASH.test(value.sourceVersion)) throw new HostAuthorityError('invalid_input')
+  return { sourceRef: value.sourceRef, sourceVersion: value.sourceVersion }
+}
+
 interface IndexedSession {
   readonly version: string
   readonly records: readonly HostMemoryEvidence[]
@@ -177,6 +192,31 @@ export class HostMemoryEvidenceIndex {
       if (found) return found
     }
     return null
+  }
+
+  /** Resolve ranked external references against the current redacted index. */
+  resolveCandidates(scope: HostMemoryScope, generation: number,
+    candidates: readonly HostMemoryCandidateRef[], limit: number): readonly HostMemorySearchItem[] {
+    this.checkScope(scope)
+    if (generation !== this.generation) throw new HostAuthorityError('stale')
+    if (!Array.isArray(candidates) || candidates.length > 10
+      || !Number.isSafeInteger(limit) || limit < 1 || limit > 10)
+      throw new HostAuthorityError('invalid_input')
+    const seen = new Set<string>()
+    const items: HostMemorySearchItem[] = []
+    for (const candidate of candidates) {
+      const checked = parseCandidate(candidate)
+      if (seen.has(checked.sourceRef)) throw new HostAuthorityError('invalid_input')
+      seen.add(checked.sourceRef)
+      const record = this.evidence(scope, checked.sourceRef)
+      if (!record || record.sourceVersion !== checked.sourceVersion)
+        throw new HostAuthorityError('stale')
+      if (items.length < limit) {
+        const { text, ...metadata } = record
+        items.push({ ...metadata, snippet: text.slice(0, 500) })
+      }
+    }
+    return items
   }
 
   /** Reject cached results if any Session was added, removed or revised in the current worker. */
