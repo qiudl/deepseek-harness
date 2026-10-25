@@ -67,7 +67,7 @@ describe('Slark Account Profile admission', () => {
       .rejects.toMatchObject({ code: 'profile_mismatch' })
     const missingScope = new DesktopHost({ registry, clock, runtimeGeneration: 5,
       verifySlarkAccountAccessToken: () => ({ issuer, subject,
-        bindingScope: undefined as unknown as string }),
+        bindingScope: undefined as never }),
       ensureProfileWorker: async () => {},
     })
     await expect(missingScope.ensureSlarkAccountProfile(input))
