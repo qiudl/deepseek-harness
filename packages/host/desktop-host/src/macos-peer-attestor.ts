@@ -176,6 +176,15 @@ async function nativeBindings(): Promise<MacOSPeerBindings> {
   }
 }
 
+/** Read the kernel UID/PID of a connected macOS Unix peer without accepting caller-supplied identity. */
+export async function readConnectedMacOSPeerIdentity(socket: Socket): Promise<{
+  readonly uid: number
+  readonly pid: number
+}> {
+  const bindings = await nativeBindings()
+  return bindings.peerIdentity(socketFd(socket))
+}
+
 /**
  * Create a fail-closed macOS UDS peer attestor for a signed Slark daemon.
  * Overlapping checks of identical app executable snapshots share only their pending signature verification.

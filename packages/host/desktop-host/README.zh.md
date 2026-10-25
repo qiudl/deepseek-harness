@@ -149,7 +149,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 私有索引可按顺序解析最多十个外部排序的 `{sourceRef, sourceVersion}` 候选。搜索返回随机索引 epoch；索引重建后该值会改变。候选解析同时要求匹配 epoch 和当前数字代际，因此即使重建后的代际与来源引用相同，旧结果也会被拒绝。未知、重复或来源版本不符的引用也会被拒绝，缓存会在解析前后核对完整的当前 Session 清单。控制器使用这项内部解析前，要求与查询绑定的新签名搜索指令。HY worker、IPC 来源及 `profile.memory_query` 语义检索动作尚未接入；后续 IPC 还须绑定当前 worker 进程身份。
 
-Host 内部已有 HY socket 帧解码器与事务顺序器。解码器只接受至多 512 KiB 的精确长度前缀 JSON 帧，最多缓存一帧，并拒绝截断的流结束。投影页最多包含 16 条脱敏记录和合计 256 KiB 的 UTF-8 文本。顺序器要求逐页收到匹配的确认后才继续，最后一页确认后才允许查询；候选响应必须匹配当前请求、worker nonce、索引 epoch 和代际。这些模块尚无 socket 所有者或 worker 调用方；启用语义检索前，正式通道还须核验内核 peer UID/PID、控制 socket ACL、停止过期 worker，并强制操作时限。
+Host 内部已有 HY socket 帧解码器与事务顺序器。解码器只接受至多 512 KiB 的精确长度前缀 JSON 帧，最多缓存一帧，并拒绝截断的流结束。投影页最多包含 16 条脱敏记录和合计 256 KiB 的 UTF-8 文本。顺序器要求逐页收到匹配的确认后才继续，最后一页确认后才允许查询；候选响应必须匹配当前请求、worker nonce、索引 epoch 和代际。Host 侧通道仅在 macOS 内核报告的 peer UID/PID 与预期 worker 匹配后接管已连接的 Unix socket；每次只允许一个请求在途，响应异常、取消或投影 45 秒与查询 10 秒时限届满即关闭连接。socket 绑定、ACL 安装、worker 启动与语义检索路由尚未接入该通道。
 
 ### 远端工作区目录
 

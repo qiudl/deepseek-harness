@@ -141,6 +141,9 @@ export class MemoryWorkerFrameAssembler {
   private expected = 4
   private closed = false
 
+  /** Report whether the current stream ends inside a frame. */
+  hasPartialFrame(): boolean { return this.used !== 0 }
+
   push(chunk: Buffer): MemoryWorkerFrame[] {
     if (this.closed) return reject()
     try {
