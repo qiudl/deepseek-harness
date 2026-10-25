@@ -214,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       settleExtensions: async () => undefined,
       settleHostOperations: async () => undefined,
     })
-    const staged = await coordinator.prepare(base)
+    const staged = await coordinator.prepare({ ...base, signal: new AbortController().signal })
     expect(staged.phase).toBe('staged')
     expect(staged.revision).toBe(3)
     expect(calls).toEqual([`revoke:${source.profileId}`, `revoke:${target.profileId}`,
@@ -232,6 +232,27 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect(await coordinator.abort({ operationId: base.operationId, target, assertAuthority: async () => {} }))
       .toEqual(aborted)
     expect(await readdir(join(root, 'control', 'profile-import-operations'))).toHaveLength(4)
+  })
+
+  it('retains durable intent and both fences when cancellation arrives during worker shutdown', async () => {
+    const { source, target, journal, fence, base } = await fixture()
+    const controller = new AbortController()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {},
+      stop: async (id) => { if (id === target.profileId) controller.abort() },
+      settleExtensions: async () => {}, settleHostOperations: async () => {},
+    })
+    await expect(coordinator.prepare({ ...base, signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect((await journal.load(base.operationId))?.phase).toBe('prepared')
+    expect(fence.hasPendingPair(source.profileId, target.profileId, base.operationId)).toBe(true)
+    expect(() => { fence.assertOpen(source.profileId) }).toThrow()
+    expect(() => { fence.assertOpen(target.profileId) }).toThrow()
+    expect(await target.target.activeGeneration()).toBe(1)
+    expect((await coordinator.abort({ operationId: base.operationId, target,
+      assertAuthority: async () => {} })).phase).toBe('aborted')
+    fence.assertOpen(source.profileId)
+    fence.assertOpen(target.profileId)
   })
 
   it('leaves a failed stop fenced and recoverable from its prepared intent', async () => {

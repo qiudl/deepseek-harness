@@ -3,13 +3,15 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import type { HostControlFrame, ProfileImportPrepareRequest, ProfileImportStatusRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlFrame, ProfileImportPrepareRequest, ProfileImportPreviewRequest,
+  ProfileImportStatusRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
+import type { ProfileImportPreview } from '../src/profile-import-preview.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { HostControlAuthority } from '../src/unix-transport.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 
-async function fixture() {
+async function fixture(importCapabilities = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-import-transport-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const clock = { now: () => 1000 }
@@ -53,8 +55,28 @@ async function fixture() {
     return { nextOperationOffset: null, operations: [{ operationId: randomUUID(), phase: 'staged' as const,
       revision: 3, sessionCount: 1, pluginCount: 0 }] }
   })
-  const authority = new HostControlAuthority({ identity, host, prepareProfileImport: prepare,
-    commitProfileImport: commit, abortProfileImport: abort, listProfileImportStatus: status,
+  const preview: ProfileImportPreview = {
+    sourceSnapshotDigest: 'a'.repeat(64), targetSnapshotDigest: 'b'.repeat(64),
+    previewDigest: 'c'.repeat(64),
+    sessions: Array.from({ length: 33 }, (_, index) => ({
+      source: { id: `session-${index}`, createdAt: index + 1, eventCount: 2,
+        semanticDigest: 'd'.repeat(64), revision: 'v1',
+        ...(index === 0 ? { parentSession: 'parent-session' } : {}) },
+      ...(index === 0 ? { target: { id: 'session-0', createdAt: 1, eventCount: 2,
+        semanticDigest: 'e'.repeat(64), revision: 'v2' } } : {}),
+      state: index === 0 ? 'conflict' as const : 'new' as const,
+    })),
+    plugins: Array.from({ length: 33 }, (_, index) => ({
+      source: { name: `plugin-${index}`, version: '1.0.0', sourceDigest: 'f'.repeat(64) },
+      ...(index === 0 ? { target: { name: 'plugin-0', version: '2.0.0',
+        sourceDigest: '0'.repeat(64) } } : {}),
+      state: index === 0 ? 'conflict' as const : 'new' as const,
+    })),
+  }
+  const inspect = vi.fn(async () => preview)
+  const authority = new HostControlAuthority({ identity, host,
+    ...(importCapabilities ? { prepareProfileImport: prepare, commitProfileImport: commit,
+      abortProfileImport: abort, listProfileImportStatus: status, inspectProfileImport: inspect } : {}),
     profilePersistenceGeneration: () => 1, now: clock.now })
   const session = authority.openSession(ownerId, new AbortController().signal)
   onTestFinished(() => { session.close() })
@@ -77,7 +99,7 @@ async function fixture() {
   const grant = () => host.ensureSlarkAccountProfile({ ...binding, issuer, subject,
     accountAccessToken: 'slark-token', keyHandle: 'keychain:slark',
     unlockMaterial: Buffer.alloc(32, 5).toString('base64url'), ownerId, expected })
-  return { session, request, grant, prepare, commit, abort, status, host, old, ownerId }
+  return { session, request, grant, prepare, commit, abort, status, inspect, preview, host, old, ownerId }
 }
 
 it('requires both current Slark grant and old Account unlock proof before preparing an import', async () => {
@@ -164,4 +186,99 @@ it('returns import status only while both identities remain authorized', async (
   })
   expect(await f.session.handleRequest(request()))
     .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+})
+
+it('pages a verified preview without exposing content and rejects stale or revoked authority', async () => {
+  const f = await fixture()
+  const prepare = f.request()
+  const { operation_id: _operation, expected_preview_digest: _digest,
+    selected_session_ids: _sessions, selected_plugin_names: _plugins, ...base } = prepare.params
+  const request = (sessionOffset: number, pluginOffset: number,
+    expectedDigest?: string): ProfileImportPreviewRequest => ({
+    version: 1, type: 'request', request_id: randomUUID() as never, method: 'profile.import_preview',
+    params: { ...base, jti: randomUUID() as never, session_offset: sessionOffset,
+      plugin_offset: pluginOffset,
+      ...(expectedDigest ? { expected_preview_digest: expectedDigest as never } : {}) },
+  })
+  expect(await f.session.handleRequest(request(0, 0)))
+    .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+  expect(f.inspect).not.toHaveBeenCalled()
+  await f.grant()
+  const first = await f.session.handleRequest(request(0, 0))
+  expect(first).toMatchObject({ type: 'result', method: 'profile.import_preview', result: {
+    session_count: 33, plugin_count: 33, next_session_offset: 32, next_plugin_offset: 32,
+  } })
+  if (first.type !== 'result' || first.method !== 'profile.import_preview') throw Error('preview_missing')
+  expect(first.result.sessions).toHaveLength(32)
+  expect(first.result.plugins).toHaveLength(32)
+  expect(first.result.sessions[0]).toMatchObject({ id: 'session-0', parent_session: 'parent-session',
+    state: 'conflict', target_digest: 'e'.repeat(64) })
+  expect(first.result.plugins[0]).toMatchObject({ name: 'plugin-0', state: 'conflict',
+    target_version: '2.0.0', target_digest: '0'.repeat(64) })
+  expect(JSON.stringify(first)).not.toContain(prepare.params.source_unlock_material)
+  const last = await f.session.handleRequest(request(32, 32, f.preview.previewDigest))
+  expect(last).toMatchObject({ type: 'result', result: {
+    next_session_offset: null, next_plugin_offset: null,
+  } })
+  if (last.type !== 'result' || last.method !== 'profile.import_preview') throw Error('preview_missing')
+  expect(last.result.sessions).toEqual([expect.objectContaining({ id: 'session-32', state: 'new' })])
+  expect(last.result.plugins).toEqual([expect.objectContaining({ name: 'plugin-32', state: 'new' })])
+  expect(await f.session.handleRequest(request(0, 0, '1'.repeat(64))))
+    .toMatchObject({ type: 'error', error: { code: 'stale' } })
+  expect(await f.session.handleRequest(request(34, 0)))
+    .toMatchObject({ type: 'error', error: { code: 'invalid_frame' } })
+  f.inspect.mockImplementationOnce(async () => {
+    f.host.revokeOwner(f.ownerId)
+    return f.preview
+  })
+  expect(await f.session.handleRequest(request(0, 0)))
+    .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+})
+
+it('maps changed and unreadable old inventory to distinct preview errors', async () => {
+  const f = await fixture()
+  const { operation_id: _operation, expected_preview_digest: _digest,
+    selected_session_ids: _sessions, selected_plugin_names: _plugins, ...base } = f.request().params
+  await f.grant()
+  const cases = [
+    ['profile_import_inventory_changed', 'stale'],
+    ['profile_import_schema_unsupported', 'schema_unsupported'],
+    ['profile_import_inventory_invalid', 'profile_integrity_failed'],
+  ] as const
+  for (const [failure, code] of cases) {
+    f.inspect.mockRejectedValueOnce(Error(failure))
+    const request: ProfileImportPreviewRequest = { version: 1, type: 'request',
+      request_id: randomUUID() as never, method: 'profile.import_preview',
+      params: { ...base, jti: randomUUID() as never, session_offset: 0, plugin_offset: 0 } }
+    expect(await f.session.handleRequest(request)).toMatchObject({ type: 'error', error: { code } })
+  }
+  expect(f.inspect).toHaveBeenCalledTimes(cases.length)
+})
+
+it('reports upgrade_required for every import command on a Host without import capabilities', async () => {
+  const f = await fixture(false)
+  await f.grant()
+  const prepare = f.request()
+  const { operation_id: _operation, expected_preview_digest: _digest,
+    selected_session_ids: _sessions, selected_plugin_names: _plugins, ...base } = prepare.params
+  const requests: HostControlFrame[] = [
+    prepare,
+    { ...prepare, request_id: randomUUID() as never, method: 'profile.import_commit',
+      params: { ...base, jti: randomUUID() as never, operation_id: prepare.params.operation_id } },
+    { ...prepare, request_id: randomUUID() as never, method: 'profile.import_abort',
+      params: { ...base, jti: randomUUID() as never, operation_id: prepare.params.operation_id } },
+    { ...prepare, request_id: randomUUID() as never, method: 'profile.import_status',
+      params: { ...base, jti: randomUUID() as never, operation_offset: 0 } },
+    { ...prepare, request_id: randomUUID() as never, method: 'profile.import_preview',
+      params: { ...base, jti: randomUUID() as never, session_offset: 0, plugin_offset: 0 } },
+  ]
+  for (const request of requests) {
+    expect(await f.session.handleRequest(request))
+      .toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
+  }
+  expect(f.prepare).not.toHaveBeenCalled()
+  expect(f.commit).not.toHaveBeenCalled()
+  expect(f.abort).not.toHaveBeenCalled()
+  expect(f.status).not.toHaveBeenCalled()
+  expect(f.inspect).not.toHaveBeenCalled()
 })
