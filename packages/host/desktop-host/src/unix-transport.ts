@@ -13,6 +13,9 @@ import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest,
 import { parseHostBotChatPage, parseHostBotChatReadRequest,
   type HostBotChatPage, type HostBotChatReadRequest, type ProfileBotChatReadRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest,
+  type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest,
+  type ProfileBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
   encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
@@ -32,6 +35,7 @@ import { readAccountBotTeam } from './account-bot-team-read.ts'
 import { readAccountBotMemory } from './account-bot-memory-read.ts'
 import { readAccountBotGroupHistory } from './account-bot-group-history-read.ts'
 import { readAccountBotChat } from './account-bot-chat-read.ts'
+import { readAccountBotChatAttachments } from './account-bot-chat-attachments-read.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -335,6 +339,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupHistoryPage>
   readonly readBotChat?: (profileId: string, request: HostBotChatReadRequest,
     signal: AbortSignal) => Promise<HostBotChatPage>
+  readonly readBotChatAttachments?: (profileId: string, request: HostBotChatAttachmentsReadRequest,
+    signal: AbortSignal) => Promise<HostBotChatAttachmentsPage>
   /** Prepare a native room Source in the current Account Profile. */
   readonly prepareNativeRoom?: (profileId: string, roomId: string,
     signal: AbortSignal) => Promise<HostNativeRoomSource | null>
@@ -614,6 +620,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'readBotGroupHistory'
     | 'readBotChat'
+    | 'readBotChatAttachments'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2467,6 +2474,14 @@ export class HostControlAuthority {
             { readBotChat: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_chat_attachments_read') {
+          const read = this.options.readBotChatAttachments
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const page = await readAccountBotChatAttachments(this.options.host,
+            { readBotChatAttachments: read }, account, frame.params.read, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { page } })
         } else if (frame.method === 'profile.native_room') {
           const prepare = this.options.prepareNativeRoom
           if (!prepare) throw new HostAuthorityError('upgrade_required')
@@ -2725,6 +2740,7 @@ export class HostControlAuthority {
           ...(this.options.readBotMemory ? ['profile.bot_memory_read'] : []),
           ...(this.options.readBotGroupHistory ? ['profile.bot_group_history_read'] : []),
           ...(this.options.readBotChat ? ['profile.bot_chat_read'] : []),
+          ...(this.options.readBotChatAttachments ? ['profile.bot_chat_attachments_read'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
           ...(this.options.operateNativeRoom && this.options.trustedBotGroupKeyrings?.length
@@ -4747,6 +4763,33 @@ export class UnixHostClient {
     return page
   }
 
+  /** Read one visible private Bot attachment manifest page from the current Account Profile. */
+  async readBotChatAttachments(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly request: HostBotChatAttachmentsReadRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotChatAttachmentsPage> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_chat_attachments_read' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileBotChatAttachmentsReadRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_chat_attachments_read',
+      params: { ...this.collaborationAccountRequestParams(input),
+        read: parseHostBotChatAttachmentsReadRequest(input.request) },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const page = parseHostBotChatAttachmentsPage(frame.result.page)
+    if (page.logical_id !== input.request.logical_id || page.part !== input.request.part)
+      throw new HostAuthorityError('profile_mismatch')
+    return page
+  }
+
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest |
   ProfileBotGroupResultAckRequest | ProfileBotGroupStopRequest,
@@ -5760,6 +5803,7 @@ export class UnixHostClient {
       | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest
       | ProfileBotGroupHistoryReadRequest
       | ProfileBotChatReadRequest
+      | ProfileBotChatAttachmentsReadRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest

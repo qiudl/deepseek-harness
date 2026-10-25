@@ -108,6 +108,11 @@ export interface ProfileWorkerHandle {
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatReadRequest,
     signal: AbortSignal,
   ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatPage>
+  /** Read a visible attachment manifest from this worker's private Bot chat. */
+  readonly readBotChatAttachments?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsReadRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsPage>
   /** Read a committed group journal page from this worker's exclusive-writer DS Bot plugin. */
   readonly readBotGroupHistory?: (
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryReadRequest,

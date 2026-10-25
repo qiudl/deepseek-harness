@@ -31,7 +31,12 @@ export class ProfileWorkerSupervisor {
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
-  /** Read only a committed page from the selected live Profile worker generation. */
+  /** Read only a committed page from the selected live Profile worker generation.
+   * @param profileId Current Profile identifier.
+   * @param request Bounded logical group selector.
+   * @param signal Cancellation signal.
+   * @returns Current worker's journal page.
+   */
   async readBotGroupHistory(profileId: string,
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryReadRequest,
     signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryPage> {
@@ -44,7 +49,12 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Read one private Bot chat page from the same live worker generation. */
+  /** Read one private Bot chat page from the same live worker generation.
+   * @param profileId Current Profile identifier.
+   * @param request Bounded logical Bot and part selector.
+   * @param signal Cancellation signal.
+   * @returns Current worker's text page.
+   */
   async readBotChat(profileId: string,
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatReadRequest,
     signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatPage> {
@@ -52,6 +62,24 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.readBotChat) throw new HostAuthorityError('unavailable')
     const result = await worker.readBotChat(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /** Read one visible attachment manifest from the same live worker generation.
+   * @param profileId Current Profile identifier.
+   * @param request Bounded logical Bot and part selector.
+   * @param signal Cancellation signal.
+   * @returns Current worker's metadata page.
+   */
+  async readBotChatAttachments(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsReadRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotChatAttachments) throw new HostAuthorityError('unavailable')
+    const result = await worker.readBotChatAttachments(request, signal)
     signal.throwIfAborted()
     this.assertCurrentWorker(profileId, worker)
     return result

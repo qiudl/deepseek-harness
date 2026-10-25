@@ -999,6 +999,31 @@ export interface ProfileBotChatReadResult {
   readonly result: { readonly page: import('./bot-chat-read.ts').HostBotChatPage }
 }
 
+/** Account-bound visible attachment manifest for a private Bot chat part. */
+export interface ProfileBotChatAttachmentsReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachments_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-chat-attachments-read.ts').HostBotChatAttachmentsReadRequest
+  }
+}
+
+/** One bounded visible attachment manifest page. */
+export interface ProfileBotChatAttachmentsReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachments_read'
+  readonly result: { readonly page: import('./bot-chat-attachments-read.ts').HostBotChatAttachmentsPage }
+}
+
 /** Current Account Profile prepares a Slark Source for one existing native room. */
 export interface ProfileNativeRoomRequest {
   readonly version: 1
@@ -2472,6 +2497,8 @@ export type HostControlFrame =
   | ProfileBotGroupHistoryReadResult
   | ProfileBotChatReadRequest
   | ProfileBotChatReadResult
+  | ProfileBotChatAttachmentsReadRequest
+  | ProfileBotChatAttachmentsReadResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

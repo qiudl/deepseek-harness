@@ -7,6 +7,7 @@ const MAX_BYTES = 60 * 1024
 const CHUNK_BYTES = 32 * 1024
 const MAX_PARTS = 10_000
 
+/** Select a bounded byte page of one logical Bot chat part. */
 export interface HostBotChatReadRequest {
   readonly schema_version: 'dsh-remote-bot-read/v1'
   readonly kind: 'bot-chat'
@@ -16,6 +17,7 @@ export interface HostBotChatReadRequest {
   readonly cursor?: string
 }
 
+/** Text projection page bound to the source event and row digests. */
 export interface HostBotChatPage {
   readonly logical_id: string
   readonly part: number
@@ -37,7 +39,10 @@ const row = (value: unknown): value is Record<string, unknown> =>
 const exact = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
-/** Reject raw Session IDs, Profile paths and transport overrides. */
+/** Reject raw Session IDs, Profile paths and transport overrides.
+ * @param value Untrusted request payload.
+ * @returns Validated logical request.
+ */
 export function parseHostBotChatReadRequest(value: unknown): HostBotChatReadRequest {
   if (!row(value) || value.schema_version !== 'dsh-remote-bot-read/v1' || value.kind !== 'bot-chat' ||
     typeof value.logical_id !== 'string' || !ID.test(value.logical_id) ||
@@ -52,7 +57,10 @@ export function parseHostBotChatReadRequest(value: unknown): HostBotChatReadRequ
     ...(value.cursor === undefined ? {} : { cursor: value.cursor as string }) }
 }
 
-/** Validate the plugin page before it enters a Host control frame. */
+/** Validate the plugin page before it enters a Host control frame.
+ * @param value Untrusted worker response.
+ * @returns Validated text page.
+ */
 export function parseHostBotChatPage(value: unknown): HostBotChatPage {
   if (!row(value) || !exact(value, ['logical_id', 'part', 'part_count', 'team_revision',
     'event_digest', 'rows_digest', 'complete', 'total_bytes', 'offset', 'content_base64',
