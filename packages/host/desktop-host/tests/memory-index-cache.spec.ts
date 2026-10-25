@@ -97,6 +97,28 @@ describe('Host memory index cache', () => {
       .rejects.toMatchObject({ code: 'unavailable' })
   })
 
+  it('withholds a projected page after its Session is revised', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader('private plan')
+    await cache.warm(scope, active, signal)
+    const found = await cache.search(scope, active, 'private', 1, signal)
+    const page = await cache.projectedPage(scope, active, found.indexEpoch, found.generation, 0, signal)
+    expect(page.items).toMatchObject([{ text: 'private plan' }])
+    active.setRevision('r2')
+    await expect(cache.projectedPage(scope, active, found.indexEpoch, found.generation, 0, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(cache.projectedPage(scope, active, found.indexEpoch, found.generation, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+
+    const switched = new HostMemoryIndexCache()
+    const current = reader('other plan')
+    await switched.warm(scope, current, signal)
+    const pageState = await switched.search(scope, current, 'other', 1, signal)
+    await expect(switched.projectedPage({ ...scope, ownerUserId: 'other-owner' }, current,
+      pageState.indexEpoch, pageState.generation, 0, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
   it('refuses old candidates after rebuilding the same source at the same numeric generation', async () => {
     const cache = new HostMemoryIndexCache()
     const active = reader()

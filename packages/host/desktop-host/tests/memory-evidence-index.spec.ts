@@ -83,6 +83,61 @@ describe('Host local memory Evidence index', () => {
     expect(JSON.stringify(evidence)).not.toContain(secret)
   })
 
+  it('pages only redacted text and opaque references for one index generation', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    let generation = 0
+    const secret = `sk-${'a'.repeat(32)}`
+    for (let number = 8; number >= 0; number--) {
+      generation = index.replace(scope, snapshot(`token=${secret} plan ${number}`,
+        'r1', `session-${number}`), generation)
+    }
+    const current = index.search(scope, 'answer', 1)
+    const first = index.projectedPage(scope, current.indexEpoch, current.generation, 0)
+    expect(first.items).toHaveLength(16)
+    expect(first.nextOffset).toBe(16)
+    expect(Object.keys(first.items[0]!).sort()).toEqual(['sourceRef', 'sourceVersion', 'text'])
+    expect(JSON.stringify(first)).not.toContain(secret)
+    expect(first.items[0]!.text).toContain('[REDACTED]')
+    expect(first.items[0]!.text).toContain('plan 0')
+    const last = index.projectedPage(scope, current.indexEpoch, current.generation, first.nextOffset!)
+    expect(last.items).toHaveLength(2)
+    expect(last.nextOffset).toBeNull()
+    expect(() => index.projectedPage(scope, '0'.repeat(32), current.generation, 0)).toThrow()
+    expect(() => index.projectedPage(scope, current.indexEpoch, current.generation + 1, 0)).toThrow()
+    expect(() => index.projectedPage({ ...scope, profileId: 'other' },
+      current.indexEpoch, current.generation, 0)).toThrow()
+    expect(() => index.projectedPage(scope, current.indexEpoch, current.generation, 18)).toThrow()
+    for (const [epoch, offset] of [[0, 0], ['bad', 0], [current.indexEpoch, 0.5],
+      [current.indexEpoch, -1], [current.indexEpoch, 19]] as const) {
+      expect(() => index.projectedPage(scope, epoch as string, current.generation, offset)).toThrow()
+    }
+    const empty = new HostMemoryEvidenceIndex(scope)
+    const emptyState = empty.search(scope, 'missing', 1)
+    expect(empty.projectedPage(scope, emptyState.indexEpoch, emptyState.generation, 0))
+      .toMatchObject({ items: [], nextOffset: null })
+    index.delete(scope, 'session-0', current.generation)
+    expect(() => index.projectedPage(scope, current.indexEpoch, current.generation, 0)).toThrow()
+  })
+
+  it('limits a page by UTF-8 bytes and rejects an unpageable corrupted record', () => {
+    const index = new HostMemoryEvidenceIndex(scope)
+    let generation = 0
+    for (let number = 0; number < 5; number++) {
+      generation = index.replace(scope, snapshot('数'.repeat(20_000), 'r1', `session-${number}`), generation)
+    }
+    const state = index.search(scope, 'answer', 1)
+    const first = index.projectedPage(scope, state.indexEpoch, state.generation, 0)
+    expect(first.items).toHaveLength(8)
+    expect(first.nextOffset).toBe(8)
+    expect(index.projectedPage(scope, state.indexEpoch, state.generation, 8).nextOffset).toBeNull()
+
+    const sessions = Reflect.get(index, 'sessions') as Map<string, { records: { text: string }[] }>
+    const records = sessions.get('session-0')!.records
+    records[0] = { ...records[0]!, text: 'x'.repeat(256 * 1024 + 1) }
+    expect(() => index.projectedPage(scope, state.indexEpoch, state.generation, 0))
+      .toThrow(expect.objectContaining({ code: 'busy' }))
+  })
+
   it('fences Account, installation and Profile on every operation', () => {
     const index = new HostMemoryEvidenceIndex(scope)
     index.replace(scope, snapshot('private plan'), 0)

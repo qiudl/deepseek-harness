@@ -12,6 +12,8 @@ const MAX_TEXT_BYTES = 32 * 1024 * 1024
 const MAX_RECORDS = 20_000
 const MAX_GRAMS = 200_000
 const MAX_SESSIONS = 10_000
+const MAX_PROJECTED_PAGE_ITEMS = 16
+const MAX_PROJECTED_PAGE_TEXT_BYTES = 256 * 1024
 
 /** Identity that must match the active Account and Profile at each read. */
 export interface HostMemoryScope {
@@ -41,6 +43,14 @@ export type HostMemorySearchItem = Omit<HostMemoryEvidence, 'text'> & { readonly
 export interface HostMemoryCandidateRef {
   readonly sourceRef: string
   readonly sourceVersion: string
+}
+
+/** One bounded page of redacted text for a generation-pinned semantic worker. */
+export interface HostMemoryProjectedPage {
+  readonly indexEpoch: string
+  readonly generation: number
+  readonly items: readonly (HostMemoryCandidateRef & { readonly text: string })[]
+  readonly nextOffset: number | null
 }
 
 function parseCandidate(value: unknown): HostMemoryCandidateRef {
@@ -195,6 +205,34 @@ export class HostMemoryEvidenceIndex {
       if (found) return found
     }
     return null
+  }
+
+  /** Copy only redacted text and opaque references from this exact index generation. */
+  projectedPage(scope: HostMemoryScope, indexEpoch: string, generation: number,
+    offset: number): HostMemoryProjectedPage {
+    this.checkScope(scope)
+    if (typeof indexEpoch !== 'string' || !EPOCH.test(indexEpoch)
+      || !Number.isSafeInteger(offset) || offset < 0) throw new HostAuthorityError('invalid_input')
+    if (indexEpoch !== this.indexEpoch || generation !== this.generation) throw new HostAuthorityError('stale')
+    const records = [...this.sessions].sort(([left], [right]) => left < right ? -1 : 1)
+      .flatMap(([, session]) => session.records)
+    if (offset >= records.length && (offset !== 0 || records.length !== 0))
+      throw new HostAuthorityError('invalid_input')
+    const items: (HostMemoryCandidateRef & { readonly text: string })[] = []
+    let bytes = 0
+    for (let index = offset; index < records.length && items.length < MAX_PROJECTED_PAGE_ITEMS; index++) {
+      const record = records[index] as HostMemoryEvidence
+      const nextBytes = Buffer.byteLength(record.text, 'utf8')
+      if (bytes + nextBytes > MAX_PROJECTED_PAGE_TEXT_BYTES) {
+        if (items.length === 0) throw new HostAuthorityError('busy')
+        break
+      }
+      items.push({ sourceRef: record.sourceRef, sourceVersion: record.sourceVersion, text: record.text })
+      bytes += nextBytes
+    }
+    const next = offset + items.length
+    return { indexEpoch: this.indexEpoch, generation: this.generation, items,
+      nextOffset: next < records.length ? next : null }
   }
 
   /** Resolve ranked external references only for this instance's epoch and current numeric generation. */
