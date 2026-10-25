@@ -128,4 +128,6 @@ it.skipIf(process.platform === 'win32')('round-trips Account-bound memory over t
   reader.assertCurrent.mockImplementation(() => { throw new HostAuthorityError('stale') })
   await expect(query({ action: 'search', directive: directive('search', 'synthetic'),
     query: 'synthetic', limit: 1 })).rejects.toMatchObject({ code: 'stale' })
+  host.revokeOwner(connectionOwnerId)
+  await expect(query({ action: 'warm' })).rejects.toMatchObject({ code: 'unauthorized' })
 })
