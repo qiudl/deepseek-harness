@@ -107,6 +107,69 @@ describe('Host memory signed read controller', () => {
       .rejects.toMatchObject({ code: 'stale' })
   })
 
+  it('consumes the signed search before asking a semantic worker for candidates', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const found = await f.controller.search(directive('search', 'private'), 'private', 1, signal)
+    const item = found.items[0]!
+    const rank = vi.fn(async () => ({ indexEpoch: found.indexEpoch, generation: found.generation,
+      candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }))
+    const signed = directive('search', 'private', 'M')
+    await expect(f.controller.semanticSearch(signed, 'private', 1, rank, signal))
+      .resolves.toMatchObject([{ sourceRef: item.sourceRef }])
+    await expect(f.controller.semanticSearch(signed, 'private', 1, rank, signal))
+      .rejects.toMatchObject({ code: 'replayed' })
+    await expect(f.controller.semanticSearch(directive('search', 'wrong', 'Q'), 'private', 1, rank, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(rank).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not forward an oversized signed query to a semantic worker', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const query = 'x'.repeat(501)
+    const rank = vi.fn()
+    await expect(f.controller.semanticSearch(directive('search', query), query, 1, rank, signal))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    expect(rank).not.toHaveBeenCalled()
+  })
+
+  it('drops semantic candidates when identity changes during worker ranking', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const found = await f.controller.search(directive('search', 'private'), 'private', 1, signal)
+    const item = found.items[0]!
+    const rank = vi.fn(async () => {
+      f.setOwner('other-owner')
+      return { indexEpoch: found.indexEpoch, generation: found.generation,
+        candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }
+    })
+    await expect(f.controller.semanticSearch(directive('search', 'private', 'M'), 'private', 1, rank, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('rejects a semantic result after its directive expires or index epoch changes', async () => {
+    const expired = fixture()
+    await expired.controller.warm(signal)
+    const found = await expired.controller.search(directive('search', 'private'), 'private', 1, signal)
+    const item = found.items[0]!
+    await expect(expired.controller.semanticSearch(directive('search', 'private', 'M'), 'private', 1,
+      async () => {
+        expired.setTime(baseTime + 15_000)
+        return { indexEpoch: found.indexEpoch, generation: found.generation,
+          candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }
+      }, signal)).rejects.toMatchObject({ code: 'stale' })
+
+    const stale = fixture()
+    await stale.controller.warm(signal)
+    const current = await stale.controller.search(directive('search', 'private', 'R'), 'private', 1, signal)
+    await expect(stale.controller.semanticSearch(directive('search', 'private', 'S'), 'private', 1,
+      async () => ({ indexEpoch: '0'.repeat(32), generation: current.generation,
+        candidates: [{ sourceRef: current.items[0]!.sourceRef,
+          sourceVersion: current.items[0]!.sourceVersion }] }), signal))
+      .rejects.toMatchObject({ code: 'stale' })
+  })
+
   it('refuses a directive for another computer and an offline identity', async () => {
     const f = fixture()
     await f.controller.warm(signal)

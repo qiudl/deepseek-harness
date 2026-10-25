@@ -100,6 +100,22 @@ export class HostMemoryReadController {
       (scope, reader) => this.cache.resolveCandidates(scope, reader, indexEpoch, generation, candidates, limit, signal))
   }
 
+  /** Consume one signed search before invoking a semantic worker; resolve its untrusted refs under that same read. */
+  semanticSearch(directive: unknown, query: string, limit: number,
+    rank: (query: string, limit: number, signal: AbortSignal) => Promise<{
+      readonly indexEpoch: string
+      readonly generation: number
+      readonly candidates: readonly HostMemoryCandidateRef[]
+    }>, signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
+    return this.read(directive, 'search', query, limit, signal, async (scope, reader) => {
+      if (typeof query !== 'string' || query.length < 1 || query.length > 500
+        || /[\u0000-\u001f]/u.test(query)) throw new HostAuthorityError('invalid_input')
+      const ranked = await rank(query, limit, signal)
+      return this.cache.resolveCandidates(scope, reader, ranked.indexEpoch, ranked.generation,
+        ranked.candidates, limit, signal)
+    })
+  }
+
   evidenceChunk(directive: unknown, sourceRef: string, offset: number,
     signal: AbortSignal): Promise<HostMemoryEvidenceChunk | null> {
     return this.read(directive, 'evidence', sourceRef, 1, signal,
