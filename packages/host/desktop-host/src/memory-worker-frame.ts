@@ -43,7 +43,20 @@ interface CandidatesFrame extends FrameBase {
   readonly candidates: readonly { readonly sourceRef: string; readonly sourceVersion: string }[]
 }
 
+interface EmbedFrame extends FrameBase {
+  readonly type: 'embed'
+  readonly embedId: number
+  readonly values: readonly string[]
+}
+
+interface EmbeddingFrame extends FrameBase {
+  readonly type: 'embedding'
+  readonly embedId: number
+  readonly vectors: readonly (readonly number[])[]
+}
+
 export type MemoryWorkerFrame = ProjectionFrame | ProjectedFrame | QueryFrame | CandidatesFrame
+  | EmbedFrame | EmbeddingFrame
 
 function reject(): never { throw new HostAuthorityError('invalid_input') }
 
@@ -127,6 +140,31 @@ function parse(value: unknown): MemoryWorkerFrame {
       candidates.push({ sourceRef: row.sourceRef as string, sourceVersion: row.sourceVersion as string })
     }
     return { ...base, type: 'candidates', requestId: frame.requestId as number, candidates }
+  } else if (frame.type === 'embed') {
+    record(frame, [...BASE, 'embedId', 'values'])
+    if (!integer(frame.embedId, 1) || (frame.embedId as number) > 64
+      || !Array.isArray(frame.values) || frame.values.length < 1 || frame.values.length > 8) return reject()
+    let bytes = 0
+    const values: string[] = []
+    for (const value of frame.values) {
+      if (typeof value !== 'string' || value.length < 1 || value.length > 4096
+        || Buffer.from(value, 'utf8').toString('utf8') !== value) return reject()
+      bytes += Buffer.byteLength(value, 'utf8')
+      if (bytes > 16 * 1024) return reject()
+      values.push(value)
+    }
+    return { ...base, type: 'embed', embedId: frame.embedId as number, values }
+  } else if (frame.type === 'embedding') {
+    record(frame, [...BASE, 'embedId', 'vectors'])
+    if (!integer(frame.embedId, 1) || (frame.embedId as number) > 64
+      || !Array.isArray(frame.vectors) || frame.vectors.length < 1 || frame.vectors.length > 8) return reject()
+    const vectors: number[][] = []
+    for (const value of frame.vectors) {
+      if (!Array.isArray(value) || value.length !== 1024
+        || value.some(part => typeof part !== 'number' || !Number.isFinite(part))) return reject()
+      vectors.push(value as number[])
+    }
+    return { ...base, type: 'embedding', embedId: frame.embedId as number, vectors }
   } else return reject()
 }
 

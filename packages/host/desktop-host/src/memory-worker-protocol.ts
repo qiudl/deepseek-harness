@@ -26,6 +26,8 @@ export class MemoryWorkerProtocol {
   private projectionHash = createHash('sha256')
   private totalItems = 0
   private finalDigest: string | undefined
+  private embedId = 0
+  private pendingEmbed: { id: number; count: number } | undefined
 
   constructor(private readonly workerNonce: string, private readonly indexEpoch: string,
     private readonly generation: number) {
@@ -73,10 +75,33 @@ export class MemoryWorkerProtocol {
     return frame
   }
 
+  /** Admit one sequential worker embedding request during an active projection or query. */
+  acceptEmbed(frame: MemoryWorkerFrame): readonly string[] {
+    if (this.closed || frame.type !== 'embed' || frame.workerNonce !== this.workerNonce
+      || frame.indexEpoch !== this.indexEpoch || frame.generation !== this.generation
+      || (this.pendingPage === null && this.pendingQuery === null)
+      || this.pendingEmbed !== undefined || frame.embedId !== this.embedId + 1
+      || frame.embedId > 64) return this.reject()
+    this.embedId = frame.embedId
+    this.pendingEmbed = { id: frame.embedId, count: frame.values.length }
+    return frame.values
+  }
+
+  /** Validate the model result before releasing vectors to the worker. */
+  replyEmbedding(vectors: readonly (readonly number[])[]): Buffer {
+    const pending = this.pendingEmbed
+    if (this.closed || !pending || vectors.length !== pending.count) return this.reject()
+    const result = encodeMemoryWorkerFrame({ ...this.base(), type: 'embedding',
+      embedId: pending.id, vectors })
+    this.pendingEmbed = undefined
+    return result
+  }
+
   /** Accept only the response expected by the current Host-owned transaction. */
   receive(frame: MemoryWorkerFrame): readonly Candidate[] | null {
     if (this.closed || frame.workerNonce !== this.workerNonce
-      || frame.indexEpoch !== this.indexEpoch || frame.generation !== this.generation) return this.reject()
+      || frame.indexEpoch !== this.indexEpoch || frame.generation !== this.generation
+      || this.pendingEmbed !== undefined) return this.reject()
     if (frame.type === 'projected' && this.pendingPage === frame.pageNo) {
       if (this.finalPage && (frame.totalItems !== this.totalItems
         || frame.projectionDigest !== this.finalDigest)) return this.reject()

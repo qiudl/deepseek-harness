@@ -1,7 +1,7 @@
 /** REQ-20261021-0013: one authenticated Host-side HY worker socket connection. */
 import type { Socket } from 'node:net'
 import { readConnectedMacOSPeerIdentity } from './macos-peer-attestor.ts'
-import { MemoryWorkerFrameAssembler } from './memory-worker-frame.ts'
+import { MemoryWorkerFrameAssembler, type MemoryWorkerFrame } from './memory-worker-frame.ts'
 import { MemoryWorkerProtocol } from './memory-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -21,8 +21,10 @@ export class MemoryWorkerChannel {
   private readonly assembler = new MemoryWorkerFrameAssembler()
   private pending: Pending | undefined
   private closed = false
+  private embeddingInFlight = false
 
-  private constructor(private readonly socket: Socket, private readonly protocol: MemoryWorkerProtocol) {
+  private constructor(private readonly socket: Socket, private readonly protocol: MemoryWorkerProtocol,
+    private readonly embed: (values: readonly string[], signal: AbortSignal) => Promise<readonly (readonly number[])[]>) {
     socket.on('data', (chunk) => { this.onData(chunk) })
     socket.on('error', () => { this.close() })
     socket.on('end', () => { this.close() })
@@ -32,7 +34,8 @@ export class MemoryWorkerChannel {
 
   /** Verify the macOS kernel peer UID/PID before attaching any frame reader. */
   static async accept(socket: Socket, protocol: MemoryWorkerProtocol,
-    expectedUid: number, expectedPid: number): Promise<MemoryWorkerChannel> {
+    expectedUid: number, expectedPid: number,
+    embed: (values: readonly string[], signal: AbortSignal) => Promise<readonly (readonly number[])[]>): Promise<MemoryWorkerChannel> {
     socket.pause()
     try {
       if (!Number.isSafeInteger(expectedUid) || expectedUid < 0
@@ -41,7 +44,7 @@ export class MemoryWorkerChannel {
       if (socket.destroyed || peer.uid !== expectedUid || peer.pid !== expectedPid) {
         throw new HostAuthorityError('unauthorized')
       }
-      return new MemoryWorkerChannel(socket, protocol)
+      return new MemoryWorkerChannel(socket, protocol, embed)
     } catch (error) {
       socket.destroy()
       protocol.close()
@@ -61,18 +64,40 @@ export class MemoryWorkerChannel {
   private onData(chunk: Buffer): void {
     if (this.closed) return
     try {
-      if (!this.pending) throw new HostAuthorityError('invalid_input')
+      if (!this.pending || this.embeddingInFlight) throw new HostAuthorityError('invalid_input')
       const expectedKind = this.pending.kind
       const frames = this.assembler.push(chunk)
       if (frames.length > 1 || frames.length === 1 && this.assembler.hasPartialFrame()) {
         throw new HostAuthorityError('invalid_input')
       }
       for (const frame of frames) {
+        if (frame.type === 'embed') {
+          this.embeddingInFlight = true
+          this.socket.pause()
+          void this.answerEmbed(frame)
+          return
+        }
         const result = this.protocol.receive(frame)
         if ((expectedKind === 'projected' && result !== null)
           || (expectedKind === 'candidates' && result === null)) throw new HostAuthorityError('invalid_input')
         this.settle(undefined, result)
       }
+    } catch { this.close() }
+  }
+
+  private async answerEmbed(frame: MemoryWorkerFrame): Promise<void> {
+    const pending = this.pending
+    if (!pending) { this.close(); return }
+    try {
+      const values = this.protocol.acceptEmbed(frame)
+      const signal = AbortSignal.any([pending.signal, AbortSignal.timeout(30_000)])
+      const vectors = await this.embed(values, signal)
+      signal.throwIfAborted()
+      if (this.closed || this.pending !== pending) throw new HostAuthorityError('stale')
+      const response = this.protocol.replyEmbedding(vectors)
+      this.socket.write(response, (error) => { if (error) this.close() })
+      this.embeddingInFlight = false
+      this.socket.resume()
     } catch { this.close() }
   }
 

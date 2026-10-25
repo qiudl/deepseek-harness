@@ -12,6 +12,10 @@ describe('HY worker transaction ordering', () => {
   it('requires each page ACK before query and matches the outstanding request', () => {
     const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
     expect(decodeMemoryWorkerFrame(protocol.project([item], 1))).toMatchObject({ type: 'projection', pageNo: 0 })
+    expect(protocol.acceptEmbed({ ...base, type: 'embed', embedId: 1,
+      values: ['synthetic'] })).toEqual(['synthetic'])
+    expect(decodeMemoryWorkerFrame(protocol.replyEmbedding([Array<number>(1024).fill(0)])))
+      .toMatchObject({ type: 'embedding', embedId: 1 })
     expect(protocol.receive({ ...base, type: 'projected', pageNo: 0 })).toBeNull()
     const last = decodeMemoryWorkerFrame(protocol.project([], null))
     if (last.type !== 'projection' || last.totalItems === undefined
@@ -44,6 +48,19 @@ describe('HY worker transaction ordering', () => {
     missingDigest.project([item], null)
     expect(() => missingDigest.receive({ ...base, type: 'projected', pageNo: 0 })).toThrow()
 
+    const wrongEmbed = new MemoryWorkerProtocol(nonce, epoch, 1)
+    wrongEmbed.project([item], null)
+    expect(() => wrongEmbed.acceptEmbed({ ...base, type: 'embed', embedId: 2,
+      values: ['synthetic'] })).toThrow()
+    const idle = new MemoryWorkerProtocol(nonce, epoch, 1)
+    expect(() => idle.acceptEmbed({ ...base, type: 'embed', embedId: 1,
+      values: ['synthetic'] })).toThrow()
+
+    const prematureAck = new MemoryWorkerProtocol(nonce, epoch, 1)
+    prematureAck.project([item], null)
+    prematureAck.acceptEmbed({ ...base, type: 'embed', embedId: 1, values: ['synthetic'] })
+    expect(() => prematureAck.receive({ ...base, type: 'projected', pageNo: 0 })).toThrow()
+
     const over = new MemoryWorkerProtocol(nonce, epoch, 1)
     const last = decodeMemoryWorkerFrame(over.project([item], null))
     if (last.type !== 'projection' || last.totalItems === undefined
@@ -53,5 +70,18 @@ describe('HY worker transaction ordering', () => {
     over.query('one', 1)
     expect(() => over.receive({ ...base, type: 'candidates', requestId: 1,
       candidates: [candidate, { ...candidate, sourceRef: 'f'.repeat(64) }] })).toThrow()
+  })
+
+  it('limits one worker connection to 64 sequential embedding requests', () => {
+    const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
+    protocol.project([item], null)
+    const vector = Array<number>(1024).fill(0)
+    for (let embedId = 1; embedId <= 64; embedId++) {
+      expect(protocol.acceptEmbed({ ...base, type: 'embed', embedId,
+        values: ['synthetic'] })).toEqual(['synthetic'])
+      protocol.replyEmbedding([vector])
+    }
+    expect(() => protocol.acceptEmbed({ ...base, type: 'embed', embedId: 65,
+      values: ['synthetic'] })).toThrow()
   })
 })

@@ -44,6 +44,11 @@ describe('HY worker IPC frames', () => {
     expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(query))).toEqual(query)
     const found = { ...base, type: 'candidates', requestId: 1, candidates: [ref] } as const
     expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(found))).toEqual(found)
+    const request = { ...base, type: 'embed', embedId: 1, values: ['redacted plan'] } as const
+    expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(request))).toEqual(request)
+    const answer = { ...base, type: 'embedding', embedId: 1,
+      vectors: [Array<number>(1024).fill(0)] } as const
+    expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(answer))).toEqual(answer)
   })
 
   it('rejects malformed lengths, identity, extra fields and raw Session content', () => {
@@ -79,6 +84,9 @@ describe('HY worker IPC frames', () => {
     const ack = { ...base, type: 'projected', pageNo: 0 } as const
     const query = { ...base, type: 'query', requestId: 1, query: 'plan', limit: 1 } as const
     const found = { ...base, type: 'candidates', requestId: 1, candidates: [ref] } as const
+    const embed = { ...base, type: 'embed', embedId: 1, values: ['redacted'] } as const
+    const embedding = { ...base, type: 'embedding', embedId: 1,
+      vectors: [Array<number>(1024).fill(0)] } as const
     for (const invalid of [null, [], 1,
       { ...base, type: 'unknown' }, { ...page, version: 2 },
       { ...page, indexEpoch: 'wrong' }, { ...page, generation: -1 },
@@ -94,6 +102,12 @@ describe('HY worker IPC frames', () => {
       { ...query, query: 3 }, { ...query, query: '' }, { ...query, query: 'x'.repeat(501) },
       { ...query, query: 'bad\nquery' }, { ...query, query: '\ud800' },
       { ...found, candidates: 'bad' }, { ...found, candidates: Array.from({ length: 11 }, () => ref) },
+      { ...embed, embedId: 0 }, { ...embed, embedId: 65 },
+      { ...embed, values: [] }, { ...embed, values: ['x'.repeat(4097)] },
+      { ...embed, values: ['\ud800'] }, { ...embed, values: Array(9).fill('x') },
+      { ...embedding, vectors: [] }, { ...embedding, vectors: [[0]] },
+      { ...embedding, vectors: [Array<number>(1024).fill(Infinity)] },
+      { ...embedding, values: ['private'] },
     ]) expect(() => encodeMemoryWorkerFrame(invalid)).toThrow()
   })
 

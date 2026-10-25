@@ -11,6 +11,7 @@ import { MemoryWorkerProtocol } from '../src/memory-worker-protocol.ts'
 const base = { version: 1 as const, workerNonce: 'a'.repeat(32),
   indexEpoch: 'b'.repeat(32), generation: 1 }
 const item = { sourceRef: 'c'.repeat(64), sourceVersion: 'd'.repeat(64), text: 'synthetic' }
+const embed = (values: readonly string[]) => Promise.resolve(values.map(() => Array<number>(1024).fill(0)))
 
 async function sockets(): Promise<{ host: Socket; worker: Socket }> {
   const root = mkdtempSync(join(tmpdir(), 'dsh-hy-wire-'))
@@ -34,23 +35,38 @@ async function sockets(): Promise<{ host: Socket; worker: Socket }> {
 
 it.skipIf(process.platform !== 'darwin')('checks the kernel peer before one-page and query exchange', async () => {
   const { host, worker } = await sockets()
+  const embedded: string[][] = []
   const channel = await MemoryWorkerChannel.accept(host,
     new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
-    process.getuid!(), process.pid)
+    process.getuid!(), process.pid, (values) => {
+      embedded.push([...values])
+      return embed(values)
+    })
   onTestFinished(() => { channel.close() })
   const assembler = new MemoryWorkerFrameAssembler()
+  let finalPage: { pageNo: number; totalItems: number; projectionDigest: string } | undefined
+  let sawEmbedding = false
   worker.on('data', (chunk) => {
     for (const frame of assembler.push(chunk)) {
-      if (frame.type === 'projection') worker.write(encodeMemoryWorkerFrame({ ...base,
-        type: 'projected', pageNo: frame.pageNo,
-        ...(frame.nextOffset === null ? { totalItems: frame.totalItems,
-          projectionDigest: frame.projectionDigest } : {}) }))
+      if (frame.type === 'projection') {
+        if (frame.totalItems === undefined || frame.projectionDigest === undefined) return
+        finalPage = { pageNo: frame.pageNo, totalItems: frame.totalItems,
+          projectionDigest: frame.projectionDigest }
+        worker.write(encodeMemoryWorkerFrame({ ...base, type: 'embed', embedId: 1,
+          values: [item.text] }))
+      }
+      if (frame.type === 'embedding' && finalPage) {
+        sawEmbedding = true
+        worker.write(encodeMemoryWorkerFrame({ ...base, type: 'projected', ...finalPage }))
+      }
       if (frame.type === 'query') worker.write(encodeMemoryWorkerFrame({ ...base,
         type: 'candidates', requestId: frame.requestId,
         candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }))
     }
   })
   await channel.project([item], null, AbortSignal.timeout(5_000))
+  expect(embedded).toEqual([[item.text]])
+  expect(sawEmbedding).toBe(true)
   await expect(channel.query('synthetic', 1, AbortSignal.timeout(5_000))).resolves.toEqual([
     { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion },
   ])
@@ -60,7 +76,7 @@ it.skipIf(process.platform !== 'darwin')('rejects a mismatched expected peer PID
   const { host } = await sockets()
   await expect(MemoryWorkerChannel.accept(host,
     new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
-    process.getuid!(), process.pid + 1)).rejects.toThrow()
+    process.getuid!(), process.pid + 1, embed)).rejects.toThrow()
   expect(host.destroyed).toBe(true)
 })
 
@@ -68,7 +84,7 @@ it.skipIf(process.platform !== 'darwin')('destroys the socket on a wrong ACK or 
   const { host, worker } = await sockets()
   const channel = await MemoryWorkerChannel.accept(host,
     new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
-    process.getuid!(), process.pid)
+    process.getuid!(), process.pid, embed)
   worker.once('data', () => { worker.write(encodeMemoryWorkerFrame({ ...base,
     type: 'projected', pageNo: 1 })) })
   await expect(channel.project([item], null, AbortSignal.timeout(5_000))).rejects.toThrow()
@@ -77,7 +93,7 @@ it.skipIf(process.platform !== 'darwin')('destroys the socket on a wrong ACK or 
   const second = await sockets()
   const other = await MemoryWorkerChannel.accept(second.host,
     new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
-    process.getuid!(), process.pid)
+    process.getuid!(), process.pid, embed)
   const abort = new AbortController()
   const waiting = other.project([item], null, abort.signal)
   abort.abort()
@@ -89,11 +105,22 @@ it.skipIf(process.platform !== 'darwin')('rejects a reply followed by a speculat
   const { host, worker } = await sockets()
   const channel = await MemoryWorkerChannel.accept(host,
     new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
-    process.getuid!(), process.pid)
+    process.getuid!(), process.pid, embed)
   worker.once('data', () => { worker.write(Buffer.concat([
     encodeMemoryWorkerFrame({ ...base, type: 'projected', pageNo: 0 }),
     Buffer.from([0, 0]),
   ])) })
+  await expect(channel.project([item], null, AbortSignal.timeout(5_000))).rejects.toThrow()
+  expect(host.destroyed).toBe(true)
+})
+
+it.skipIf(process.platform !== 'darwin')('closes on model failure without returning partial projection success', async () => {
+  const { host, worker } = await sockets()
+  const channel = await MemoryWorkerChannel.accept(host,
+    new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
+    process.getuid!(), process.pid, () => Promise.reject(Error('synthetic model failure')))
+  worker.once('data', () => { worker.write(encodeMemoryWorkerFrame({ ...base,
+    type: 'embed', embedId: 1, values: [item.text] })) })
   await expect(channel.project([item], null, AbortSignal.timeout(5_000))).rejects.toThrow()
   expect(host.destroyed).toBe(true)
 })
