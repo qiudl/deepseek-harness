@@ -151,6 +151,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 Host 内部已有 HY socket 帧解码器与事务顺序器。解码器只接受至多 512 KiB 的精确长度前缀 JSON 帧，最多缓存一帧，并拒绝截断的流结束。投影页最多包含 16 条脱敏记录和合计 256 KiB 的 UTF-8 文本。顺序器要求逐页收到匹配的确认后才继续；最后一页确认必须回显总记录数及带长度前缀的 UTF-8 投影字段 SHA-256，之后才允许查询。候选响应必须匹配当前请求、worker nonce、索引 epoch 和代际。Host 侧通道仅在 macOS 内核报告的 peer UID/PID 与预期 worker 匹配后接管已连接的 Unix socket；每次只允许一个请求在途，响应异常、取消或投影 45 秒与查询 10 秒时限届满即关闭连接。独立监听器先创建 `0700` 目录，在绑定 socket 前清除继承的 macOS ACL，再设置 socket `0600` 模式和 `slark-memory` 读写 ACL；核对 inode 后才将目录改为可遍历的 `0711`。调用方仍须核验每个连接的对端；worker 启动与语义检索路由尚未接入。
 
+帧解码器和事务顺序器在各 CI 平台继续接受逐文件覆盖率门禁。macOS 对端身份核验器、通道和 ACL 监听器从 Linux/Windows 覆盖率中排除，因为内核对端身份和 ACL 行为需要 macOS；聚焦测试和 m5max 上独立的 UID501/UID505 合成往返提供运行证据。该往返使用 Python Host 探针，尚不能证明 Desktop Host 已将 worker 接入语义检索。
+
 投影或查询期间，通道允许每条连接最多 64 次顺序 embedding 子请求。每次包含 1 至 8 个有效 UTF-8 字符串，单个不超过 4,096 字符、合计不超过 16 KiB；响应须包含相同数量、每条 1,024 维且数值有限的向量。Host 调用方提供模型 broker；broker 失败即关闭连接，不发布部分结果。真实 Session 内容进入前还需完成模型调用授权与留存检查、UID505 HY 适配器及 worker 生命周期。
 
 ### 远端工作区目录

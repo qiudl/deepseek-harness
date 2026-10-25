@@ -14,10 +14,13 @@ describe('HY worker IPC frames', () => {
     const two = encodeMemoryWorkerFrame(second)
     const assembler = new MemoryWorkerFrameAssembler()
     expect(assembler.push(one.subarray(0, 2))).toEqual([])
+    expect(assembler.hasPartialFrame()).toBe(true)
     expect(assembler.push(one.subarray(2, 4))).toEqual([])
     expect(assembler.push(Buffer.concat([one.subarray(4), two]))).toEqual([first, second])
+    expect(assembler.hasPartialFrame()).toBe(false)
     expect(() => { assembler.finish() }).not.toThrow()
     expect(() => { assembler.push(one) }).toThrow()
+    expect(() => { assembler.finish() }).toThrow()
     const truncated = new MemoryWorkerFrameAssembler()
     expect(truncated.push(one.subarray(0, one.length - 1))).toEqual([])
     expect(() => { truncated.finish() }).toThrow()
@@ -97,6 +100,7 @@ describe('HY worker IPC frames', () => {
       { ...page, totalItems: -1 },
       { ...page, items: [{ ...ref, text: '\ud800' }] },
       { ...ack, projectionDigest: final.projectionDigest },
+      { ...ack, totalItems: 1, projectionDigest: 'wrong' },
       { ...ack, pageNo: -1 },
       { ...query, requestId: 0 }, { ...query, limit: 0 }, { ...query, limit: 11 },
       { ...query, query: 3 }, { ...query, query: '' }, { ...query, query: 'x'.repeat(501) },
@@ -105,6 +109,7 @@ describe('HY worker IPC frames', () => {
       { ...embed, embedId: 0 }, { ...embed, embedId: 65 },
       { ...embed, values: [] }, { ...embed, values: ['x'.repeat(4097)] },
       { ...embed, values: ['\ud800'] }, { ...embed, values: Array(9).fill('x') },
+      { ...embed, values: Array(8).fill('文'.repeat(2_000)) },
       { ...embedding, vectors: [] }, { ...embedding, vectors: [[0]] },
       { ...embedding, vectors: [Array<number>(1024).fill(Infinity)] },
       { ...embedding, values: ['private'] },

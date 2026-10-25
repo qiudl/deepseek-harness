@@ -172,6 +172,7 @@ function parse(value: unknown): MemoryWorkerFrame {
 export function encodeMemoryWorkerFrame(value: unknown): Buffer {
   const frame = parse(value)
   const body = Buffer.from(JSON.stringify(frame), 'utf8')
+  /* v8 ignore next -- every admitted frame shape is smaller than MAX_FRAME; retain a final serialization guard. */
   if (body.byteLength < 1 || body.byteLength > MAX_FRAME) return reject()
   const output = Buffer.allocUnsafe(4 + body.byteLength)
   output.writeUInt32BE(body.byteLength, 0)

@@ -55,6 +55,17 @@ describe('HY worker transaction ordering', () => {
     const idle = new MemoryWorkerProtocol(nonce, epoch, 1)
     expect(() => idle.acceptEmbed({ ...base, type: 'embed', embedId: 1,
       values: ['synthetic'] })).toThrow()
+    const missingEmbedding = new MemoryWorkerProtocol(nonce, epoch, 1)
+    expect(() => missingEmbedding.replyEmbedding([Array<number>(1024).fill(0)])).toThrow()
+
+    const unexpectedFinal = new MemoryWorkerProtocol(nonce, epoch, 1)
+    unexpectedFinal.project([item], 1)
+    expect(() => unexpectedFinal.receive({ ...base, type: 'projected', pageNo: 0,
+      totalItems: 1, projectionDigest: 'e'.repeat(64) })).toThrow()
+
+    const disposed = new MemoryWorkerProtocol(nonce, epoch, 1)
+    disposed.close()
+    expect(() => disposed.project([item], null)).toThrow()
 
     const prematureAck = new MemoryWorkerProtocol(nonce, epoch, 1)
     prematureAck.project([item], null)
@@ -83,5 +94,15 @@ describe('HY worker transaction ordering', () => {
     }
     expect(() => protocol.acceptEmbed({ ...base, type: 'embed', embedId: 65,
       values: ['synthetic'] })).toThrow()
+  })
+
+  it('rejects an accumulated projection above 20,000 items', () => {
+    const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
+    const page = Array.from({ length: 16 }, () => item)
+    for (let pageNo = 0; pageNo < 1_250; pageNo++) {
+      protocol.project(page, (pageNo + 1) * 16)
+      protocol.receive({ ...base, type: 'projected', pageNo })
+    }
+    expect(() => protocol.project([item], null)).toThrow()
   })
 })
