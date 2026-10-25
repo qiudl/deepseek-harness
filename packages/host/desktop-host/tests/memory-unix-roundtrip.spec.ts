@@ -12,7 +12,8 @@ import { HostAuthorityError } from '../src/types.ts'
 import { UnixHostClient, UnixHostServer } from '../src/unix-transport.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 
-it('round-trips Account-bound memory over the Unix socket and rejects a stale Profile reader', async () => {
+// The Unix socket, process UID and SingleHostLock are POSIX-only; Windows uses a named pipe.
+it.skipIf(process.platform === 'win32')('round-trips Account-bound memory over the Unix socket and rejects a stale Profile reader', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-memory-unix-'))
   const resources: { client?: UnixHostClient; server?: UnixHostServer; lock?: SingleHostLock } = {}
   onTestFinished(async () => {
