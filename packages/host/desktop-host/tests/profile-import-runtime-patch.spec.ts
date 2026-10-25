@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
@@ -30,8 +30,9 @@ async function fixture() {
   await writeFile(patchPath, oldPatch, { mode: 0o600 })
   await target.prepareEmptyGeneration(2)
   await target.importOwnerState(2, ownerState)
-  const runtime = new FileProfileImportRuntimePatch(profileRoot, randomUUID(), target, applicator, uid)
-  return { target, runtime, patchPath, oldPatch, profileRoot }
+  const operationId = randomUUID()
+  const runtime = new FileProfileImportRuntimePatch(profileRoot, operationId, target, applicator, uid)
+  return { target, runtime, patchPath, oldPatch, profileRoot, operationId }
 }
 
 it.skipIf(process.platform === 'win32')('switches candidate patch idempotently and restores original bytes after rollback', async () => {
@@ -75,4 +76,22 @@ it.skipIf(process.platform === 'win32')('refuses an unexpected live patch withou
   await writeFile(patchPath, 'unexpected\n', { mode: 0o600 })
   await expect(runtime.publishCandidate(1, 2)).rejects.toThrow('profile_import_runtime_patch_changed')
   expect(await readFile(patchPath, 'utf8')).toBe('unexpected\n')
+})
+
+it.skipIf(process.platform === 'win32')('refuses a writable live patch before publishing', async () => {
+  const { target, runtime, patchPath } = await fixture()
+  await target.commitGeneration(1, 2)
+  await chmod(patchPath, 0o666)
+  await expect(runtime.publishCandidate(1, 2)).rejects.toThrow('profile_import_runtime_patch_unsafe')
+})
+
+it.skipIf(process.platform === 'win32')('refuses a changed backup after pointer rollback', async () => {
+  const { target, runtime, patchPath, profileRoot, operationId } = await fixture()
+  await target.commitGeneration(1, 2)
+  await runtime.publishCandidate(1, 2)
+  const candidatePatch = await readFile(patchPath, 'utf8')
+  await target.commitGeneration(2, 1)
+  await writeFile(join(profileRoot, 'profile-import-runtime-patches', `${operationId}.patch`), 'tampered')
+  await expect(runtime.restoreOld(1, 2)).rejects.toThrow('profile_import_runtime_patch_changed')
+  expect(await readFile(patchPath, 'utf8')).toBe(candidatePatch)
 })
