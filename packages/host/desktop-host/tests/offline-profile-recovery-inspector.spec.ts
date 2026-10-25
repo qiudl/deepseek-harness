@@ -600,6 +600,13 @@ describe('offline Profile existing-only inspector', () => {
       lockfileDigest: createHash('sha256').update(extraResolution).digest('hex') })}\n`)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_changed')
+    const extraImporter = lock.replace('importers:\n', 'importers:\n  rogue:\n    dependencies: {}\n')
+    expect(extraImporter).not.toBe(lock)
+    await writeFile(mergedLockPath, extraImporter)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(extraImporter).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
     await writeFile(mergedLockPath, lock)
     await writeFile(receiptPath, receipt)
     const copiedBaselineArchive = join(resolved.resolutionRoot, '.bundled-plugins', `${baselineDigest}.tgz`)
