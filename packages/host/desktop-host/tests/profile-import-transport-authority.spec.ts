@@ -282,3 +282,25 @@ it('reports upgrade_required for every import command on a Host without import c
   expect(f.status).not.toHaveBeenCalled()
   expect(f.inspect).not.toHaveBeenCalled()
 })
+
+it('rejects import status, preparation, and preview when the authorized Profile pair changes', async () => {
+  for (const method of ['profile.import_status', 'profile.import_prepare', 'profile.import_preview'] as const) {
+    const f = await fixture()
+    await f.grant()
+    const authorize = f.host.authorizeSlarkImportPreview.bind(f.host)
+    const spy = vi.spyOn(f.host, 'authorizeSlarkImportPreview')
+      .mockImplementationOnce(input => authorize(input))
+      .mockImplementationOnce(input => ({ ...authorize(input), targetProfileId: f.old.profileId }))
+    const prepare = f.request()
+    const { operation_id: _operation, expected_preview_digest: _digest,
+      selected_session_ids: _sessions, selected_plugin_names: _plugins, ...base } = prepare.params
+    const request: HostControlFrame = method === 'profile.import_prepare' ? prepare
+      : method === 'profile.import_status'
+        ? { ...prepare, method, params: { ...base, jti: randomUUID() as never, operation_offset: 0 } }
+        : { ...prepare, method, params: { ...base, jti: randomUUID() as never,
+          session_offset: 0, plugin_offset: 0 } }
+    expect(await f.session.handleRequest(request))
+      .toMatchObject({ type: 'error', error: { code: 'stale' } })
+    spy.mockRestore()
+  }
+})

@@ -759,6 +759,23 @@ it('uses authenticated import capabilities for preview, status, prepare, commit,
       && 'source_unlock_material' in frame.params
       && frame.params.source_unlock_material === identity.source_unlock_material)).toBe(true)
   } finally { client.close() }
+  const mismatched = await makeClient(frame => ({ version: 1, type: 'result',
+    request_id: frame.request_id, method: 'profile.status', result: { state: 'locked' } }),
+  importCapabilities)
+  try {
+    await expect(mismatched.client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'c'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.commitProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.abortProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  } finally { mismatched.client.close() }
 })
 
 it('requires explicit recovery-material capabilities without sending secrets to an older Host', async () => {
