@@ -260,7 +260,7 @@ it.skipIf(process.platform === 'win32')('rejects plugin import before durable in
     const config = value.config
     Reflect.deleteProperty(config, missing === 'installer' ? 'pnpmEntrypointPath' : 'bundledPluginsRoot')
     let options: UnixHostServerOptions | undefined
-    const server = { start: async () => {}, close: async () => {} } as unknown as UnixHostServer
+    const server = { start: async () => {}, close: async () => {} } as UnixHostServer
     const { startDesktopHostApplication } = await import('../src/startup.ts')
     const application = await startDesktopHostApplication(config, { now: () => NOW }, {
       platform: 'darwin', createServer: (captured) => { options = captured; return server },
