@@ -1,4 +1,5 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { spawnSync } from 'node:child_process'
@@ -395,6 +396,44 @@ describe('offline Profile existing-only inspector', () => {
     expect(await treeInventory(value.profileRoot)).toEqual(before)
     await writeFile(join(value.installed, 'index.js'), 'tampered', { mode: 0o600 })
     await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32').each(['hardlink', 'symlink', 'group-writable', 'empty'] as const)
+  ('rejects an unsafe historical plugin archive before import: %s', async (fault) => {
+    const value = await bundledFixture()
+    const archive = join(value.web, '.bundled-plugins', `${value.digest}.tgz`)
+    if (fault === 'hardlink' || fault === 'symlink') {
+      const retained = join(value.hostRoot, 'retained-archive.tgz')
+      await rename(archive, retained)
+      if (fault === 'hardlink') await link(retained, archive)
+      else await symlink(retained, archive)
+    }
+    if (fault === 'group-writable') await chmod(archive, 0o666)
+    if (fault === 'empty') await writeFile(archive, Buffer.alloc(0))
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot,
+      target: value.target, uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }))
+      .rejects.toThrow('profile_import_plugin_archive_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a historical archive changed between initial proof and final recheck', async () => {
+    const value = await bundledFixture()
+    await rm(value.installed, { recursive: true })
+    const archive = join(value.web, '.bundled-plugins', `${value.digest}.tgz`)
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const readArchive = value.catalog.readArchive.bind(value.catalog)
+    vi.spyOn(value.catalog, 'readArchive').mockImplementationOnce((plugin) => {
+      const bytes = readArchive(plugin)
+      writeFileSync(archive, 'changed after proof')
+      return bytes
+    })
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot,
+      target: value.target, uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }))
+      .rejects.toThrow('profile_import_plugin_archive_changed')
   })
 
   it('plans only an installed archive with a matching direct lockfile resolution without writing either Profile', async () => {
