@@ -709,6 +709,10 @@ describe('offline Profile existing-only inspector', () => {
       assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
       .rejects.toThrow('session_pointer_changed')
     expect(await directoryState()).toBe('prepared')
+    const durablePrepared = await publishJournal.load(input.operationId)
+    if (!durablePrepared) throw Error('missing_publish_record')
+    await publishJournal.advance(durablePrepared, 'switching')
+    expect((await recovery()).action).toBe('ready')
     const published = await publishProfileImportPluginLayerAndCommitSession(publishOperation,
       async (record) => {
         await expect(publishProfileImportPluginLayer(publishOperation))
@@ -740,6 +744,8 @@ describe('offline Profile existing-only inspector', () => {
     expect(beforeRollbackCalled).toBe(true)
     expect(rolledBack.phase).toBe('rolled_back')
     expect((await rollbackProfileImportPluginLayer(publishOperation)).phase).toBe('rolled_back')
+    expect((await rollbackProfileImportPluginLayerAndAbortSession(publishOperation,
+      async record => record)).phase).toBe('rolled_back')
     expect(await directoryState()).toBe('prepared')
     expect((await recovery()).action).toBe('rolled_back')
     expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction)
