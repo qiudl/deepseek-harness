@@ -1,0 +1,135 @@
+/** REQ-20261021-0013: exact, bounded frames for the private Host-to-HY worker socket. */
+import { HostAuthorityError } from './types.ts'
+
+const MAX_FRAME = 512 * 1024
+const MAX_PAGE_TEXT_BYTES = 256 * 1024
+const NONCE = /^[0-9a-f]{32}$/u
+const HASH = /^[0-9a-f]{64}$/u
+const BASE = ['version', 'type', 'workerNonce', 'indexEpoch', 'generation'] as const
+
+interface FrameBase {
+  readonly version: 1
+  readonly workerNonce: string
+  readonly indexEpoch: string
+  readonly generation: number
+}
+
+interface ProjectionFrame extends FrameBase {
+  readonly type: 'projection'
+  readonly pageNo: number
+  readonly nextOffset: number | null
+  readonly items: readonly { readonly sourceRef: string; readonly sourceVersion: string; readonly text: string }[]
+}
+
+interface ProjectedFrame extends FrameBase {
+  readonly type: 'projected'
+  readonly pageNo: number
+}
+
+interface QueryFrame extends FrameBase {
+  readonly type: 'query'
+  readonly requestId: number
+  readonly query: string
+  readonly limit: number
+}
+
+interface CandidatesFrame extends FrameBase {
+  readonly type: 'candidates'
+  readonly requestId: number
+  readonly candidates: readonly { readonly sourceRef: string; readonly sourceVersion: string }[]
+}
+
+export type MemoryWorkerFrame = ProjectionFrame | ProjectedFrame | QueryFrame | CandidatesFrame
+
+function reject(): never { throw new HostAuthorityError('invalid_input') }
+
+function record(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return reject()
+  const row = value as Record<string, unknown>
+  if (Object.keys(row).length !== keys.length || Object.keys(row).some(key => !keys.includes(key))) return reject()
+  return row
+}
+
+function integer(value: unknown, minimum: number): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= minimum
+}
+
+function reference(value: unknown, text: boolean): Record<string, unknown> {
+  const row = record(value, text ? ['sourceRef', 'sourceVersion', 'text'] : ['sourceRef', 'sourceVersion'])
+  if (typeof row.sourceRef !== 'string' || !HASH.test(row.sourceRef)
+    || typeof row.sourceVersion !== 'string' || !HASH.test(row.sourceVersion)
+    || (text && typeof row.text !== 'string')) return reject()
+  return row
+}
+
+function parse(value: unknown): MemoryWorkerFrame {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return reject()
+  const frame = value as Record<string, unknown>
+  if (frame.version !== 1 || typeof frame.workerNonce !== 'string' || !NONCE.test(frame.workerNonce)
+    || typeof frame.indexEpoch !== 'string' || !NONCE.test(frame.indexEpoch)
+    || !integer(frame.generation, 0)) return reject()
+  const base = { version: 1 as const, workerNonce: frame.workerNonce,
+    indexEpoch: frame.indexEpoch, generation: frame.generation as number }
+  if (frame.type === 'projection') {
+    record(frame, [...BASE, 'pageNo', 'nextOffset', 'items'])
+    if (!integer(frame.pageNo, 0) || frame.nextOffset !== null && !integer(frame.nextOffset, 0)
+      || !Array.isArray(frame.items) || frame.items.length > 16) return reject()
+    let bytes = 0
+    const items: { sourceRef: string; sourceVersion: string; text: string }[] = []
+    for (const value of frame.items) {
+      const row = reference(value, true)
+      bytes += Buffer.byteLength(row.text as string, 'utf8')
+      if (bytes > MAX_PAGE_TEXT_BYTES) return reject()
+      items.push({ sourceRef: row.sourceRef as string, sourceVersion: row.sourceVersion as string,
+        text: row.text as string })
+    }
+    return { ...base, type: 'projection', pageNo: frame.pageNo as number,
+      nextOffset: frame.nextOffset as number | null, items }
+  } else if (frame.type === 'projected') {
+    record(frame, [...BASE, 'pageNo'])
+    if (!integer(frame.pageNo, 0)) return reject()
+    return { ...base, type: 'projected', pageNo: frame.pageNo as number }
+  } else if (frame.type === 'query') {
+    record(frame, [...BASE, 'requestId', 'query', 'limit'])
+    if (!integer(frame.requestId, 1) || !integer(frame.limit, 1) || (frame.limit as number) > 10
+      || typeof frame.query !== 'string' || frame.query.length < 1 || frame.query.length > 500
+      || /[\u0000-\u001f]/u.test(frame.query)) return reject()
+    return { ...base, type: 'query', requestId: frame.requestId as number,
+      query: frame.query, limit: frame.limit as number }
+  } else if (frame.type === 'candidates') {
+    record(frame, [...BASE, 'requestId', 'candidates'])
+    if (!integer(frame.requestId, 1) || !Array.isArray(frame.candidates)
+      || frame.candidates.length > 10) return reject()
+    const seen = new Set<string>()
+    const candidates: { sourceRef: string; sourceVersion: string }[] = []
+    for (const value of frame.candidates) {
+      const row = reference(value, false)
+      if (seen.has(row.sourceRef as string)) return reject()
+      seen.add(row.sourceRef as string)
+      candidates.push({ sourceRef: row.sourceRef as string, sourceVersion: row.sourceVersion as string })
+    }
+    return { ...base, type: 'candidates', requestId: frame.requestId as number, candidates }
+  } else return reject()
+}
+
+/** Serialize one validated JSON frame with a four-byte network-order length prefix. */
+export function encodeMemoryWorkerFrame(value: unknown): Buffer {
+  const frame = parse(value)
+  const body = Buffer.from(JSON.stringify(frame), 'utf8')
+  if (body.byteLength < 1 || body.byteLength > MAX_FRAME) return reject()
+  const output = Buffer.allocUnsafe(4 + body.byteLength)
+  output.writeUInt32BE(body.byteLength, 0)
+  body.copy(output, 4)
+  return output
+}
+
+/** Decode exactly one complete frame; a stream owner must apply its own deadline and peer check. */
+export function decodeMemoryWorkerFrame(bytes: Buffer): MemoryWorkerFrame {
+  if (!Buffer.isBuffer(bytes) || bytes.byteLength < 5) return reject()
+  const length = bytes.readUInt32BE(0)
+  if (length < 1 || length > MAX_FRAME || bytes.byteLength !== length + 4) return reject()
+  let value: unknown
+  try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(4))) }
+  catch { return reject() }
+  return parse(value)
+}
