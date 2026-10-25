@@ -101,28 +101,47 @@ describe('Host local memory Evidence index', () => {
     const found = index.search(scope, 'private', 1)
     const candidate = { sourceRef: found.items[0]!.sourceRef,
       sourceVersion: found.items[0]!.sourceVersion }
-    expect(index.resolveCandidates(scope, found.generation, [candidate], 1))
+    expect(index.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate], 1))
       .toMatchObject([{ sourceRef: candidate.sourceRef, snippet: 'private plan' }])
     const answer = index.search(scope, 'answer', 1).items[0]!
-    expect(index.resolveCandidates(scope, found.generation, [candidate,
+    expect(index.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate,
       { sourceRef: answer.sourceRef, sourceVersion: answer.sourceVersion }], 1))
       .toHaveLength(1)
-    expect(() => index.resolveCandidates({ ...scope, profileId: 'other' }, found.generation,
+    expect(() => index.resolveCandidates({ ...scope, profileId: 'other' }, found.indexEpoch, found.generation,
       [candidate], 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation, [candidate, candidate], 1))
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate, candidate], 1))
       .toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation,
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation,
       [{ ...candidate, sourceRef: 'f'.repeat(64) }], 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation,
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation,
       [{ ...candidate, sourceVersion: 'f'.repeat(64) }], 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation,
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation,
       [{ ...candidate, extra: 'untrusted' } as never], 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation,
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation,
       Array.from({ length: 11 }, () => candidate), 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation, [candidate], 0)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate], 0)).toThrow()
+    expect(() => index.resolveCandidates(scope, 'bad', found.generation, [candidate], 1)).toThrow()
     index.replace(scope, snapshot('revised plan', 'r2'), found.generation)
-    expect(() => index.resolveCandidates(scope, found.generation, [candidate], 1)).toThrow()
-    expect(() => index.resolveCandidates(scope, found.generation + 1, [candidate], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate], 1)).toThrow()
+    expect(() => index.resolveCandidates(scope, found.indexEpoch, found.generation + 1, [candidate], 1)).toThrow()
+  })
+
+  it('rejects a previous index instance even when generation and source match', () => {
+    const old = new HostMemoryEvidenceIndex(scope)
+    old.replace(scope, snapshot('private plan'), 0)
+    const found = old.search(scope, 'private', 1)
+    const candidate = { sourceRef: found.items[0]!.sourceRef,
+      sourceVersion: found.items[0]!.sourceVersion }
+    const rebuilt = new HostMemoryEvidenceIndex(scope)
+    rebuilt.replace(scope, snapshot('private plan'), 0)
+    const current = rebuilt.search(scope, 'private', 1)
+    expect(current.generation).toBe(found.generation)
+    expect(current.items[0]!.sourceRef).toBe(candidate.sourceRef)
+    expect(current.indexEpoch).not.toBe(found.indexEpoch)
+    expect(() => rebuilt.resolveCandidates(scope, found.indexEpoch, found.generation, [candidate], 1))
+      .toThrow()
+    expect(rebuilt.resolveCandidates(scope, current.indexEpoch, current.generation, [candidate], 1))
+      .toHaveLength(1)
   })
 
   it('copies the exact scope and keeps returned Evidence immutable', () => {

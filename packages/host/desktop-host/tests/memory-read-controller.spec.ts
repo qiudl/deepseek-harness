@@ -97,13 +97,13 @@ describe('Host memory signed read controller', () => {
     const candidate = { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }
     const signed = directive('search', 'private', 'M')
     await expect(f.controller.resolveCandidates(signed, 'private', 1,
-      found.generation, [candidate], signal)).resolves.toMatchObject([{ sourceRef: item.sourceRef }])
+      found.indexEpoch, found.generation, [candidate], signal)).resolves.toMatchObject([{ sourceRef: item.sourceRef }])
     await expect(f.controller.resolveCandidates(signed, 'private', 1,
-      found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'replayed' })
+      found.indexEpoch, found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'replayed' })
     await expect(f.controller.resolveCandidates(directive('search', 'wrong', 'Q'), 'private', 1,
-      found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'unauthorized' })
+      found.indexEpoch, found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(f.controller.resolveCandidates(directive('search', 'private', 'R'), 'private', 1,
-      found.generation, [{ ...candidate, sourceVersion: 'f'.repeat(64) }], signal))
+      found.indexEpoch, found.generation, [{ ...candidate, sourceVersion: 'f'.repeat(64) }], signal))
       .rejects.toMatchObject({ code: 'stale' })
   })
 

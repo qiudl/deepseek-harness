@@ -147,7 +147,7 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。每条签名指令只读取一段至多 8 KiB 的脱敏 Evidence 文本字节，并返回精确来源、总字节数和全文 SHA-256。已认证的 `profile.memory_query` 处理器提供当前权限；grant 撤销由 Slark Server 单独复核。
 
-私有索引可按顺序解析最多十个外部排序的 `{sourceRef, sourceVersion}` 候选。未知、重复、旧代际或来源版本不符的引用会被拒绝，缓存会在解析前后核对完整的当前 Session 清单。控制器使用这项内部解析前，要求与查询绑定的新签名搜索指令。HY worker、IPC 来源及 `profile.memory_query` 语义检索动作尚未接入。
+私有索引可按顺序解析最多十个外部排序的 `{sourceRef, sourceVersion}` 候选。搜索返回随机索引 epoch；索引重建后该值会改变。候选解析同时要求匹配 epoch 和当前数字代际，因此即使重建后的代际与来源引用相同，旧结果也会被拒绝。未知、重复或来源版本不符的引用也会被拒绝，缓存会在解析前后核对完整的当前 Session 清单。控制器使用这项内部解析前，要求与查询绑定的新签名搜索指令。HY worker、IPC 来源及 `profile.memory_query` 语义检索动作尚未接入；后续 IPC 还须绑定当前 worker 进程身份。
 
 ### 远端工作区目录
 

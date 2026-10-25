@@ -97,7 +97,11 @@ export class HostMemoryIndexCache {
   }
 
   search(scope: HostMemoryScope, reader: HostMemoryProfileReader, query: string, limit: number,
-    signal: AbortSignal): Promise<{ readonly generation: number; readonly items: readonly HostMemorySearchItem[] }> {
+    signal: AbortSignal): Promise<{
+    readonly indexEpoch: string
+    readonly generation: number
+    readonly items: readonly HostMemorySearchItem[]
+  }> {
     return this.withCurrent(scope, reader, signal, index => index.search(scope, query, limit))
   }
 
@@ -107,10 +111,10 @@ export class HostMemoryIndexCache {
   }
 
   /** Recheck the current inventory around externally ranked references. */
-  resolveCandidates(scope: HostMemoryScope, reader: HostMemoryProfileReader, generation: number,
+  resolveCandidates(scope: HostMemoryScope, reader: HostMemoryProfileReader, indexEpoch: string, generation: number,
     candidates: readonly HostMemoryCandidateRef[], limit: number,
     signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
     return this.withCurrent(scope, reader, signal,
-      index => index.resolveCandidates(scope, generation, candidates, limit))
+      index => index.resolveCandidates(scope, indexEpoch, generation, candidates, limit))
   }
 }

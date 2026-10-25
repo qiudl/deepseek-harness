@@ -85,6 +85,7 @@ export class HostMemoryReadController {
   }
 
   search(directive: unknown, query: string, limit: number, signal: AbortSignal): Promise<{
+    readonly indexEpoch: string
     readonly generation: number
     readonly items: readonly HostMemorySearchItem[]
   }> {
@@ -92,11 +93,11 @@ export class HostMemoryReadController {
       (scope, reader) => this.cache.search(scope, reader, query, limit, signal))
   }
 
-  /** Resolve untrusted semantic references only under a signed search directive. */
-  resolveCandidates(directive: unknown, query: string, limit: number, generation: number,
+  /** Resolve untrusted semantic references only under a signed search directive and matching index epoch. */
+  resolveCandidates(directive: unknown, query: string, limit: number, indexEpoch: string, generation: number,
     candidates: readonly HostMemoryCandidateRef[], signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
     return this.read(directive, 'search', query, limit, signal,
-      (scope, reader) => this.cache.resolveCandidates(scope, reader, generation, candidates, limit, signal))
+      (scope, reader) => this.cache.resolveCandidates(scope, reader, indexEpoch, generation, candidates, limit, signal))
   }
 
   evidenceChunk(directive: unknown, sourceRef: string, offset: number,

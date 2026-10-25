@@ -1,11 +1,12 @@
 /** REQ-20261021-0013: process-local index of redacted Profile Session evidence. */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { projectMemorySession, type MemoryProjectedRecord } from './memory-session-projection.ts'
 import type { HostMemorySessionPage, HostMemorySessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
 const HASH = /^[0-9a-f]{64}$/u
+const EPOCH = /^[0-9a-f]{32}$/u
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
 const MAX_TEXT_BYTES = 32 * 1024 * 1024
 const MAX_RECORDS = 20_000
@@ -99,6 +100,7 @@ function indexSession(scope: HostMemoryScope, records: readonly MemoryProjectedR
 export class HostMemoryEvidenceIndex {
   private readonly sessions = new Map<string, IndexedSession>()
   private readonly scope: HostMemoryScope
+  private readonly indexEpoch = randomBytes(16).toString('hex')
   private generation = 0
 
   constructor(scope: HostMemoryScope) {
@@ -150,8 +152,9 @@ export class HostMemoryEvidenceIndex {
     return this.generation
   }
 
-  /** Return bounded literal matches from the current Account, installation and Profile. */
+  /** Return bounded literal matches and this index instance's random epoch for later candidate resolution. */
   search(scope: HostMemoryScope, query: string, limit: number): {
+    readonly indexEpoch: string
     readonly generation: number
     readonly items: readonly HostMemorySearchItem[]
   } {
@@ -177,10 +180,10 @@ export class HostMemoryEvidenceIndex {
         const { text, ...metadata } = record
         const start = Math.max(0, position - 150)
         items.push({ ...metadata, snippet: text.slice(start, start + 500) })
-        if (items.length >= limit) return { generation: this.generation, items }
+        if (items.length >= limit) return { indexEpoch: this.indexEpoch, generation: this.generation, items }
       }
     }
-    return { generation: this.generation, items }
+    return { indexEpoch: this.indexEpoch, generation: this.generation, items }
   }
 
   /** Read one exact redacted record; a replaced source version has no old reference. */
@@ -194,11 +197,14 @@ export class HostMemoryEvidenceIndex {
     return null
   }
 
-  /** Resolve ranked external references against the current redacted index. */
-  resolveCandidates(scope: HostMemoryScope, generation: number,
+  /** Resolve ranked external references only for this instance's epoch and current numeric generation. */
+  resolveCandidates(scope: HostMemoryScope, indexEpoch: string, generation: number,
     candidates: readonly HostMemoryCandidateRef[], limit: number): readonly HostMemorySearchItem[] {
     this.checkScope(scope)
-    if (generation !== this.generation) throw new HostAuthorityError('stale')
+    if (typeof indexEpoch !== 'string' || !EPOCH.test(indexEpoch))
+      throw new HostAuthorityError('invalid_input')
+    if (indexEpoch !== this.indexEpoch || generation !== this.generation)
+      throw new HostAuthorityError('stale')
     if (!Array.isArray(candidates) || candidates.length > 10
       || !Number.isSafeInteger(limit) || limit < 1 || limit > 10)
       throw new HostAuthorityError('invalid_input')

@@ -84,17 +84,34 @@ describe('Host memory index cache', () => {
     const found = await cache.search(scope, active, 'private', 1, signal)
     const item = found.items[0]!
     const candidate = { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }
-    expect(await cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+    expect(await cache.resolveCandidates(scope, active, found.indexEpoch, found.generation, [candidate], 1, signal))
       .toMatchObject([{ sourceRef: candidate.sourceRef }])
     active.list.mockImplementationOnce(async () => ({
       items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null,
     })).mockImplementationOnce(async () => ({
       items: [{ sessionId: 'session-one', revision: 'r2' }], nextAfter: null,
     }))
-    await expect(cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+    await expect(cache.resolveCandidates(scope, active, found.indexEpoch, found.generation, [candidate], 1, signal))
       .rejects.toMatchObject({ code: 'stale' })
-    await expect(cache.resolveCandidates(scope, active, found.generation, [candidate], 1, signal))
+    await expect(cache.resolveCandidates(scope, active, found.indexEpoch, found.generation, [candidate], 1, signal))
       .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('refuses old candidates after rebuilding the same source at the same numeric generation', async () => {
+    const cache = new HostMemoryIndexCache()
+    const active = reader()
+    await cache.warm(scope, active, signal)
+    const old = await cache.search(scope, active, 'private', 1, signal)
+    const candidate = { sourceRef: old.items[0]!.sourceRef,
+      sourceVersion: old.items[0]!.sourceVersion }
+    cache.clear()
+    await cache.warm(scope, active, signal)
+    const current = await cache.search(scope, active, 'private', 1, signal)
+    expect(current.generation).toBe(old.generation)
+    expect(current.items[0]!.sourceRef).toBe(candidate.sourceRef)
+    expect(current.indexEpoch).not.toBe(old.indexEpoch)
+    await expect(cache.resolveCandidates(scope, active, old.indexEpoch, old.generation,
+      [candidate], 1, signal)).rejects.toMatchObject({ code: 'stale' })
   })
 
   it('discards the slot on Account or worker change and on Session deletion', async () => {
