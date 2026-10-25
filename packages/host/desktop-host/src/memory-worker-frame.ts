@@ -133,3 +133,54 @@ export function decodeMemoryWorkerFrame(bytes: Buffer): MemoryWorkerFrame {
   catch { return reject() }
   return parse(value)
 }
+
+/** Assemble complete frames from a socket stream without buffering beyond one bounded frame. */
+export class MemoryWorkerFrameAssembler {
+  private readonly buffer = Buffer.alloc(4 + MAX_FRAME)
+  private used = 0
+  private expected = 4
+  private closed = false
+
+  push(chunk: Buffer): MemoryWorkerFrame[] {
+    if (this.closed) return reject()
+    try {
+      if (!Buffer.isBuffer(chunk)) return reject()
+      const frames: MemoryWorkerFrame[] = []
+      let offset = 0
+      while (offset < chunk.byteLength) {
+        const take = Math.min(this.expected - this.used, chunk.byteLength - offset)
+        chunk.copy(this.buffer, this.used, offset, offset + take)
+        this.used += take
+        offset += take
+        if (this.used === 4 && this.expected === 4) {
+          const length = this.buffer.readUInt32BE(0)
+          if (length < 1 || length > MAX_FRAME) return reject()
+          this.expected = length + 4
+        }
+        if (this.used === this.expected && this.expected > 4) {
+          frames.push(decodeMemoryWorkerFrame(this.buffer.subarray(0, this.used)))
+          this.buffer.fill(0, 0, this.used)
+          this.used = 0
+          this.expected = 4
+        }
+      }
+      return frames
+    } catch (error) {
+      this.closed = true
+      this.buffer.fill(0, 0, this.used)
+      this.used = 0
+      throw error
+    }
+  }
+
+  /** A clean stream end must not leave a partial header or body. */
+  finish(): void {
+    if (this.closed) return reject()
+    this.closed = true
+    if (this.used !== 0) {
+      this.buffer.fill(0, 0, this.used)
+      this.used = 0
+      return reject()
+    }
+  }
+}

@@ -1,10 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import { decodeMemoryWorkerFrame, encodeMemoryWorkerFrame } from '../src/memory-worker-frame.ts'
+import { decodeMemoryWorkerFrame, encodeMemoryWorkerFrame,
+  MemoryWorkerFrameAssembler } from '../src/memory-worker-frame.ts'
 
 const base = { version: 1, workerNonce: 'a'.repeat(32), indexEpoch: 'b'.repeat(32), generation: 1 }
 const ref = { sourceRef: 'c'.repeat(64), sourceVersion: 'd'.repeat(64) }
 
 describe('HY worker IPC frames', () => {
+  it('assembles split and adjacent frames and rejects truncated stream ends', () => {
+    const first = { ...base, type: 'query', requestId: 1, query: 'plan', limit: 1 } as const
+    const second = { ...base, type: 'candidates', requestId: 1, candidates: [ref] } as const
+    const one = encodeMemoryWorkerFrame(first)
+    const two = encodeMemoryWorkerFrame(second)
+    const assembler = new MemoryWorkerFrameAssembler()
+    expect(assembler.push(one.subarray(0, 2))).toEqual([])
+    expect(assembler.push(one.subarray(2, 4))).toEqual([])
+    expect(assembler.push(Buffer.concat([one.subarray(4), two]))).toEqual([first, second])
+    expect(() => { assembler.finish() }).not.toThrow()
+    expect(() => { assembler.push(one) }).toThrow()
+    const truncated = new MemoryWorkerFrameAssembler()
+    expect(truncated.push(one.subarray(0, one.length - 1))).toEqual([])
+    expect(() => { truncated.finish() }).toThrow()
+  })
+
+  it('rejects invalid stream chunks and oversized length before reading the body', () => {
+    const assembler = new MemoryWorkerFrameAssembler()
+    expect(() => assembler.push(Buffer.from([0, 8, 0, 1]))).toThrow()
+    expect(() => assembler.push(encodeMemoryWorkerFrame({ ...base, type: 'query',
+      requestId: 1, query: 'plan', limit: 1 }))).toThrow()
+    expect(() => new MemoryWorkerFrameAssembler().push(Buffer.alloc(4))).toThrow()
+    expect(() => new MemoryWorkerFrameAssembler().push('not bytes' as never)).toThrow()
+  })
+
   it('round-trips a bounded redacted projection and candidate response', () => {
     const page = { ...base, type: 'projection', pageNo: 0, nextOffset: 1,
       items: [{ ...ref, text: 'redacted plan' }] } as const
