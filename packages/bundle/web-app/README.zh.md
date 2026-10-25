@@ -104,6 +104,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 `/internal/desktop-bot-chat-read` 使用同一 worker 令牌和服务读取一段 Bot 私聊的纯文本分页。请求只接受逻辑 Bot ID、段编号和有界游标，返回前核对 Bot 与段编号。插件在附件传输可用前拒绝富媒体内容；浏览器 Cookie 不能调用该入口。
 
+`/internal/desktop-bot-chat-attachments-read` 使用 worker 令牌读取同一逻辑 Bot 和段的可见图片与文件元数据分页。返回前拒绝不匹配的作用域，不提供附件字节或本机路径；浏览器 Cookie 不能调用该入口。
+
 `DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN` 单独启用仅供父 Host 调用的 `/internal/desktop-collaboration-archive-transition` POST。入口接受精确的账号、环境、工作区、Session、token 组合及一个有界阶段动作，再通过 Workspace Registry 串行化的持久写入执行。重复 `stage` 返回 token 的实际阶段。此入口不调用 Slark，也不授权浏览器归档请求；Main 或 Daemon 协调器必须按同一 token 对账不确定的写入结果。
 
 同一仅供父 Host 使用的令牌还保护 `/internal/desktop-group-input-fence`。入口先校验精确的 Slark 群挑战，再由 Workspace Registry 串行持久写入；响应只回传已保存的 Workspace、Session、群 ID 和版本。结果不匹配时拒绝。浏览器 cookie 不能调用该入口，该入口也不激活云端群。

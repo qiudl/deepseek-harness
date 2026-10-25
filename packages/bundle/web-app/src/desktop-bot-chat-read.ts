@@ -1,9 +1,15 @@
-/** Private worker-token route for one text-only DS Bot chat page. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { parseHostBotChatPage, parseHostBotChatReadRequest,
   type HostBotChatReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 
+/** Private worker-token route for one text-only DS Bot chat page.
+ * @param req Incoming private worker request.
+ * @param res Private worker response.
+ * @param token Current worker token.
+ * @param read Profile-local chat reader.
+ * @returns Completion after the response is sent.
+ */
 export async function handleDesktopBotChatReadRequest(
   req: IncomingMessage, res: ServerResponse, token: string,
   read: (request: HostBotChatReadRequest, signal: AbortSignal) => Promise<unknown>,

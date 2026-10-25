@@ -4,6 +4,7 @@ import { parseHostBotTeamPage, parseHostBotTeamReadRequest } from './bot-team-re
 import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest } from './bot-memory-read.ts'
 import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest } from './bot-group-history-read.ts'
 import { parseHostBotChatPage, parseHostBotChatReadRequest } from './bot-chat-read.ts'
+import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest } from './bot-chat-attachments-read.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
@@ -112,6 +113,7 @@ import type {
   ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
   ProfileBotChatReadRequest, ProfileBotChatReadResult,
+  ProfileBotChatAttachmentsReadRequest, ProfileBotChatAttachmentsReadResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
@@ -1816,6 +1818,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBotMemoryReadRequest
   | ProfileBotGroupHistoryReadRequest
   | ProfileBotChatReadRequest
+  | ProfileBotChatAttachmentsReadRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
@@ -2536,6 +2539,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), read: parseHostBotChatReadRequest(params.read),
     } } satisfies ProfileBotChatReadRequest
   }
+  if (frame.method === 'profile.bot_chat_attachments_read') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'read'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), read: parseHostBotChatAttachmentsReadRequest(params.read),
+    } } satisfies ProfileBotChatAttachmentsReadRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2615,6 +2625,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBotMemoryReadResult
   | ProfileBotGroupHistoryReadResult
   | ProfileBotChatReadResult
+  | ProfileBotChatAttachmentsReadResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
@@ -3044,6 +3055,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['page'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { page: parseHostBotChatPage(result.page) } } satisfies ProfileBotChatReadResult
+  }
+  if (frame.method === 'profile.bot_chat_attachments_read') {
+    exactKeys(result, ['page'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { page: parseHostBotChatAttachmentsPage(result.page) } } satisfies ProfileBotChatAttachmentsReadResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])

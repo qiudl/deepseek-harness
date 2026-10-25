@@ -104,6 +104,8 @@ The same private worker token protects `/internal/desktop-bot-team-read`. It acc
 
 `/internal/desktop-bot-chat-read` uses that worker token and service for one text-only private Bot chat part. It accepts a logical Bot ID, part number and bounded cursor, then checks the returned Bot and part before replying. Rich content is rejected by the plugin until attachment transport exists. Browser cookies cannot call the route.
 
+`/internal/desktop-bot-chat-attachments-read` uses the worker token for one bounded page of visible image and file metadata for the same logical Bot and part. It rejects a mismatched response and never serves attachment bytes or local paths. Browser cookies cannot call the route.
+
 `DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN` enables a separate parent-only `/internal/desktop-collaboration-archive-transition` POST. It accepts an exact Account/environment/workspace/Session/token tuple and one bounded phase action, then uses the Workspace Registry's serialized durable write. A repeated `stage` returns the token's actual phase. The endpoint does not contact Slark or authorize a browser archive request; the Main or Daemon coordinator must reconcile uncertain writes against the same token.
 
 The same parent-only token protects `/internal/desktop-group-input-fence`. Its exact Slark group challenge is checked before a serialized Workspace Registry write; the response echoes only the persisted Workspace, Session, group ID and version. Mismatched results fail closed. Browser cookies cannot invoke this route, and the route does not activate a cloud group.

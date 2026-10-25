@@ -6,6 +6,7 @@ const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
 const MAX_BYTES = 60 * 1024
 const CHUNK_BYTES = 32 * 1024
 
+/** Select one bounded page of a logical group's committed journal. */
 export interface HostBotGroupHistoryReadRequest {
   readonly schema_version: 'dsh-remote-bot-read/v1'
   readonly kind: 'group-history'
@@ -14,6 +15,7 @@ export interface HostBotGroupHistoryReadRequest {
   readonly cursor?: string
 }
 
+/** Committed group journal page bound to its sequence and digest. */
 export interface HostBotGroupHistoryPage {
   readonly logical_id: string
   readonly seq: number
@@ -32,7 +34,10 @@ const row = (value: unknown): value is Record<string, unknown> =>
 const exact = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
   Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
-/** Parse a selector with no Profile path or transport override. */
+/** Parse a selector with no Profile path or transport override.
+ * @param value Untrusted request payload.
+ * @returns Validated logical request.
+ */
 export function parseHostBotGroupHistoryReadRequest(value: unknown): HostBotGroupHistoryReadRequest {
   if (!row(value) || value.schema_version !== 'dsh-remote-bot-read/v1' || value.kind !== 'group-history' ||
     typeof value.logical_id !== 'string' || !ID.test(value.logical_id) ||
@@ -47,7 +52,10 @@ export function parseHostBotGroupHistoryReadRequest(value: unknown): HostBotGrou
     ...(value.cursor === undefined ? {} : { cursor: value.cursor as string }) }
 }
 
-/** Validate the private plugin page before it enters a Host control frame. */
+/** Validate the private plugin page before it enters a Host control frame.
+ * @param value Untrusted worker response.
+ * @returns Validated journal page.
+ */
 export function parseHostBotGroupHistoryPage(value: unknown): HostBotGroupHistoryPage {
   if (!row(value) || !exact(value, ['logical_id', 'seq', 'digest', 'complete', 'total_bytes', 'offset',
     'content_base64', 'next_cursor', 'source', 'last_confirmed_at']) ||

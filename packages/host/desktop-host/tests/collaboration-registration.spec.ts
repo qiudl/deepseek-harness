@@ -8,7 +8,7 @@ import { encodeHostCollaborationRegistrationSignaturePayload,
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotMemoryReadRequest, HostBotGroupHistoryReadRequest,
-  HostBotChatReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotChatReadRequest, HostBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -63,6 +63,12 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     source: 'authority' as const, last_confirmed_at: '2026-10-23T17:00:00.000Z' }
   const readBotChat = vi.fn(async (_profileId: string, _request: HostBotChatReadRequest,
     _signal: AbortSignal) => chatPage)
+  const attachmentsPage = { logical_id: 'bot:bot_1', part: 0, part_count: 1,
+    team_revision: 1, event_digest: 'a'.repeat(64), manifest_digest: 'b'.repeat(64),
+    items: [], next_cursor: null, source: 'authority' as const,
+    last_confirmed_at: '2026-10-26T12:00:00.000Z' }
+  const readBotChatAttachments = vi.fn(async (_profileId: string,
+    _request: HostBotChatAttachmentsReadRequest, _signal: AbortSignal) => attachmentsPage)
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -71,7 +77,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
   })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
-    readBotTeam, readBotMemory, readBotGroupHistory, readBotChat,
+    readBotTeam, readBotMemory, readBotGroupHistory, readBotChat, readBotChatAttachments,
     ...(supportBot ? {
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
     } : {}),
@@ -94,6 +100,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
     bot, botGroupSigner, botGroupKeyring, operateBotGroup, readBotTeam, teamPage,
     readBotMemory, memoryPage, readBotGroupHistory, historyPage, readBotChat, chatPage,
+    readBotChatAttachments, attachmentsPage,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -171,6 +178,33 @@ it('reads private Bot chat only for the current Account, Bot and part', async ()
   await expect(f.client.readBotChat(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
   f.readBotChat.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.chatPage })
   await expect(f.client.readBotChat(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('reads visible Bot attachment manifests only for the current Account, Bot and part', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    request: { schema_version: 'dsh-remote-bot-read/v1' as const,
+      kind: 'bot-chat-attachments' as const, logical_id: 'bot:bot_1', part: 0, limit: 10 } }
+  await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.readBotChatAttachments(input)).toEqual(f.attachmentsPage)
+  expect(f.readBotChatAttachments).toHaveBeenCalledWith(f.profile.profileId,
+    input.request, expect.any(AbortSignal))
+  for (const change of [{ issuer: 'https://other.example.test' }, { subject: randomUUID() },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.readBotChatAttachments({ ...input, ...change })).rejects.toThrow()
+  }
+  f.readBotChatAttachments.mockImplementationOnce(async () =>
+    ({ ...f.attachmentsPage, logical_id: 'bot:other' }))
+  await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.readBotChatAttachments.mockImplementationOnce(async () =>
+    ({ ...f.attachmentsPage, part: 1, part_count: 2 }))
+  await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.readBotChatAttachments.mockImplementationOnce(async () => {
+    f.host.revokeOwner(f.ownerId)
+    return f.attachmentsPage
+  })
+  await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'unauthorized' })
 })
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {

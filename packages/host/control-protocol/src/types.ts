@@ -973,6 +973,31 @@ export interface ProfileBotChatReadResult {
   readonly result: { readonly page: import('./bot-chat-read.ts').HostBotChatPage }
 }
 
+/** Account-bound visible attachment manifest for a private Bot chat part. */
+export interface ProfileBotChatAttachmentsReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachments_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-chat-attachments-read.ts').HostBotChatAttachmentsReadRequest
+  }
+}
+
+/** One bounded visible attachment manifest page. */
+export interface ProfileBotChatAttachmentsReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachments_read'
+  readonly result: { readonly page: import('./bot-chat-attachments-read.ts').HostBotChatAttachmentsPage }
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2350,8 +2375,10 @@ export type HostControlFrame =
   | ProfileBotMemoryReadResult
   | ProfileBotGroupHistoryReadRequest
   | ProfileBotChatReadRequest
+  | ProfileBotChatAttachmentsReadRequest
   | ProfileBotGroupHistoryReadResult
   | ProfileBotChatReadResult
+  | ProfileBotChatAttachmentsReadResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest
