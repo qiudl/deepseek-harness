@@ -1,13 +1,15 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { FileJsonlMigrationExportSource } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 import type { MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
-import { compareProfileImportInventory, inspectProfileImportInventory } from '../src/profile-import-preview.ts'
+import { compareProfileImportInventory, inspectProfileImportInventory,
+  type ProfileImportInventory } from '../src/profile-import-preview.ts'
 import { stageSelectedProfileImportSessions } from '../src/profile-import-stage.ts'
 import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
 import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
@@ -55,6 +57,19 @@ async function profile(root: string, name: string, dependencies: Record<string, 
 }
 
 describe.skipIf(process.platform === 'win32')('Slark Profile import preview inventory', () => {
+  it('keeps equal existing sessions and plugins out of the conflict set', () => {
+    const source: ProfileImportInventory = { generation: 1, snapshotDigest: 'a'.repeat(64),
+      sessions: [{ id: 'same-session', createdAt: 1, eventCount: 2,
+        semanticDigest: 'c'.repeat(64), revision: 'v1' }],
+      plugins: [{ name: 'same-plugin', sourceDigest: 'd'.repeat(64), version: '1.0.0' }] }
+    const target: ProfileImportInventory = { ...source, snapshotDigest: 'b'.repeat(64) }
+    const preview = compareProfileImportInventory(source, target)
+    expect(preview.sessions.map(row => row.state)).toEqual(['same'])
+    expect(preview.plugins.map(row => row.state)).toEqual(['same'])
+    expect(() => compareProfileImportInventory({ ...source, snapshotDigest: 'invalid' }, target))
+      .toThrow('profile_import_inventory_invalid')
+  })
+
   it('verifies only catalog-matched source archives and refuses changed or linked bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-import-plugin-trust-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
@@ -196,6 +211,74 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
     await expect(inspectProfileImportInventory({ ...source, uid }))
       .rejects.toThrow('profile_import_inventory_invalid')
     expect(await readdir(active.root)).toEqual(before)
+  })
+
+  it('rejects malformed old manifests and unsafe roots without changing their bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-preview-invalid-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [])
+    const invalid = [
+      '{', 'null', '[]', '{}',
+      JSON.stringify({ dependencies: [] }),
+      JSON.stringify({ dependencies: {}, dsh: [] }),
+      JSON.stringify({ dependencies: {}, dsh: { profile: [] } }),
+      JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: 'alpha' } } }),
+      JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [42] } } }),
+    ]
+    for (const manifest of invalid) {
+      await writeFile(source.manifestPath, manifest, { mode: 0o600 })
+      await expect(inspectProfileImportInventory({ ...source, uid }))
+        .rejects.toThrow('profile_import_manifest_invalid')
+      expect(await readFile(source.manifestPath, 'utf8')).toBe(manifest)
+    }
+    await writeFile(source.manifestPath, JSON.stringify({ dependencies: {}, dsh: {} }), { mode: 0o600 })
+    expect((await inspectProfileImportInventory({ ...source, uid })).plugins).toEqual([])
+    await unlink(source.manifestPath)
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+    await writeFile(source.manifestPath, JSON.stringify({ dependencies: Object.fromEntries(
+      Array.from({ length: 129 }, (_, index) => [`plugin-${index}`, '1.0.0'])) }), { mode: 0o600 })
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_inventory_too_large')
+    await writeFile(join(source.profileRoot, 'profiles', 'web', 'pnpm-lock.yaml'),
+      'lockfileVersion: 9\n', { mode: 0o600 })
+    for (const dependencies of [{ 'INVALID!': '1.0.0' }, { alpha: 42 }]) {
+      await writeFile(source.manifestPath, JSON.stringify({ dependencies }), { mode: 0o600 })
+      await expect(inspectProfileImportInventory({ ...source, uid }))
+        .rejects.toThrow('profile_import_manifest_invalid')
+    }
+    await writeFile(source.manifestPath, JSON.stringify({ dependencies: {} }), { mode: 0o600 })
+    await expect(inspectProfileImportInventory({ ...source, profileRoot: 'relative', uid }))
+      .rejects.toThrow('profile_import_inventory_invalid')
+    await chmod(source.profileRoot, 0o777)
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_inventory_unsafe')
+    await chmod(source.profileRoot, 0o700)
+    const inspect = vi.spyOn(source.target, 'inspectExistingPersistence')
+    inspect.mockRejectedValueOnce(Error('migration_generation_corrupt'))
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_inventory_invalid')
+    inspect.mockRejectedValueOnce(Error('unexpected_inventory_failure'))
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('unexpected_inventory_failure')
+    expect(await source.target.activeGeneration()).toBe(1)
+  })
+
+  it('bounds a decoded historical Session inventory before returning any preview', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-preview-limit-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [])
+    const before = await readFile(source.manifestPath)
+    const scan = vi.spyOn(FileJsonlMigrationExportSource.prototype, 'listImportInventory')
+      .mockResolvedValueOnce(Array.from({ length: 10_001 }, (_, index) => ({
+        id: `session-${index}`, createdAt: index, eventCount: 0,
+        semanticDigest: 'a'.repeat(64), revision: 'v1',
+      })))
+    onTestFinished(() => { scan.mockRestore() })
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_inventory_too_large')
+    expect(await readFile(source.manifestPath)).toEqual(before)
+    expect(await source.target.activeGeneration()).toBe(1)
   })
 
   it('previews a released V3 compressed generation without modifying its bytes', async () => {
