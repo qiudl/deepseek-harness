@@ -23,7 +23,8 @@ import { inspectProfileImportPluginDirectoryState, inspectStagedProfileImportPlu
   stageProfileImportPluginPublishCandidate } from '../src/profile-import-plugin-publish-plan.ts'
 import { FileProfileImportPluginPublishJournal,
   inspectProfileImportPluginPublishRecovery } from '../src/profile-import-plugin-publish-journal.ts'
-import { publishProfileImportPluginLayer, rollbackProfileImportPluginLayer } from '../src/profile-import-plugin-publisher.ts'
+import { publishProfileImportPluginLayer, publishProfileImportPluginLayerAndCommitSession,
+  rollbackProfileImportPluginLayer, rollbackProfileImportPluginLayerAndAbortSession } from '../src/profile-import-plugin-publisher.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { inspectPreparedProfileImportPlugins,
   prepareSelectedProfileImportPlugins } from '../src/profile-import-plugin-preparation.ts'
@@ -708,7 +709,12 @@ describe('offline Profile existing-only inspector', () => {
       assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
       .rejects.toThrow('session_pointer_changed')
     expect(await directoryState()).toBe('prepared')
-    const published = await publishProfileImportPluginLayer(publishOperation)
+    const published = await publishProfileImportPluginLayerAndCommitSession(publishOperation,
+      async (record) => {
+        await expect(publishProfileImportPluginLayer(publishOperation))
+          .rejects.toThrow('profile_import_plugin_publish_busy')
+        return record
+      })
     expect(published.phase).toBe('published')
     expect((await publishProfileImportPluginLayer(publishOperation)).phase).toBe('published')
     expect(await directoryState()).toBe('candidate_published')
@@ -724,7 +730,14 @@ describe('offline Profile existing-only inspector', () => {
       assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
       .rejects.toThrow('session_pointer_changed')
     expect(await directoryState()).toBe('candidate_published')
-    const rolledBack = await rollbackProfileImportPluginLayer(publishOperation)
+    let beforeRollbackCalled = false
+    const rolledBack = await rollbackProfileImportPluginLayerAndAbortSession(publishOperation,
+      async (record) => {
+        await expect(rollbackProfileImportPluginLayer(publishOperation))
+          .rejects.toThrow('profile_import_plugin_publish_busy')
+        return record
+      }, async () => { beforeRollbackCalled = true })
+    expect(beforeRollbackCalled).toBe(true)
     expect(rolledBack.phase).toBe('rolled_back')
     expect((await rollbackProfileImportPluginLayer(publishOperation)).phase).toBe('rolled_back')
     expect(await directoryState()).toBe('prepared')
