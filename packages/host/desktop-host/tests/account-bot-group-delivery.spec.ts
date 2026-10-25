@@ -17,7 +17,7 @@ function fixture() {
     groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
     payloadDigest: digest, sessionId: 'isolated-bot-session' }
   const workers = { operateBotGroup: vi.fn(async () => result) }
-  const claim = { workspaceId: randomUUID(), sessionId: 'original',
+  const claim = { ownerUserId: 'slark-owner', workspaceId: randomUUID(), sessionId: 'original',
     messageId: randomUUID(), payloadDigest: digest, expiresAt: Date.now() + 60_000 }
   const confirm = vi.fn(async () => claim)
   const resultConfirm = vi.fn(async () => claim)
@@ -94,7 +94,7 @@ it('dispatches only after Account, live Slark claim and exact payload agree', as
   const f = fixture()
   expect(await deliverAccountBotGroup(f.input)).toEqual(f.result)
   expect(f.confirm).toHaveBeenCalledWith(f.input.ticket, f.input.keyring,
-    expect.objectContaining({ ownerUserId: 'alice', computerId: 'desktop-1',
+    expect.objectContaining({ computerId: 'desktop-1',
       accountBindingEpoch: 3, installationId: f.input.installationId,
       groupId: f.command.groupId, deliveryId: f.command.deliveryId,
       text: f.command.text }), f.input.signal)
@@ -152,7 +152,8 @@ it('reads Bot results only under result authority and a live Account', async () 
     botId: f.command.botId, memberCycle: f.command.memberCycle,
     seq: 1, status: 'completed' as const, text: 'done' }], next: 1 }
   f.workers.operateBotGroup.mockResolvedValueOnce(result as never)
-  expect(await readAccountBotGroupResultPage({ ...f.input, after: 0 })).toEqual(result)
+  expect(await readAccountBotGroupResultPage({ ...f.input, after: 0 }))
+    .toEqual({ reply: result, ownerUserId: 'slark-owner' })
   expect(f.resultConfirm).toHaveBeenCalledTimes(1)
   expect(f.resultAckConfirm).not.toHaveBeenCalled()
   expect(f.confirm).not.toHaveBeenCalled()

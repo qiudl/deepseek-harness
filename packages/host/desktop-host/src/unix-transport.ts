@@ -2710,15 +2710,19 @@ export class HostControlAuthority {
               // Scan a bounded page window; only the original delivery's result may cross this boundary.
               let after = frame.params.after
               let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              // A result page always carries the validated Slark owner from its result ticket.
+              let slarkOwnerUserId = ''
               for (let scan = 0; scan < 1000; scan++) {
                 const page = await readAccountBotGroupResultPage({ ...groupInput, after })
-                if (page.state !== 'ok' || page.results.length === 0) {
-                  reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                slarkOwnerUserId = page.ownerUserId
+                if (page.reply.state !== 'ok' || page.reply.results.length === 0) {
+                  reply = page.reply.state === 'ok' ?
+                    { state: 'ok', results: [], next: frame.params.after } : page.reply
                   break
                 }
                 // The worker parser bounds an `ok` page to one valid result, and
                 // the empty page returned above; this entry is present here.
-                const result = page.results[0] as (typeof page.results)[number]
+                const result = page.reply.results[0] as (typeof page.reply.results)[number]
                 if (result.deliveryId === frame.params.command.deliveryId) {
                   reply = { state: 'ok', results: [result], next: result.seq }
                   break
@@ -2735,7 +2739,7 @@ export class HostControlAuthority {
                   account_binding_handle: account.accountBindingHandle,
                   authority_binding_version: account.authorityBindingVersion,
                   account_issuer: account.issuer, account_subject: account.subject,
-                  owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                  owner_user_id: slarkOwnerUserId, computer_id: frame.params.computer_id,
                   slark_audience: frame.params.slark_audience,
                   installation_id: this.options.identity.installationId,
                   installation_public_key: this.options.identity.installationPublicKey,
