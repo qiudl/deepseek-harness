@@ -42,7 +42,9 @@ it.skipIf(process.platform !== 'darwin')('checks the kernel peer before one-page
   worker.on('data', (chunk) => {
     for (const frame of assembler.push(chunk)) {
       if (frame.type === 'projection') worker.write(encodeMemoryWorkerFrame({ ...base,
-        type: 'projected', pageNo: frame.pageNo }))
+        type: 'projected', pageNo: frame.pageNo,
+        ...(frame.nextOffset === null ? { totalItems: frame.totalItems,
+          projectionDigest: frame.projectionDigest } : {}) }))
       if (frame.type === 'query') worker.write(encodeMemoryWorkerFrame({ ...base,
         type: 'candidates', requestId: frame.requestId,
         candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }))

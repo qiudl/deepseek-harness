@@ -13,8 +13,12 @@ describe('HY worker transaction ordering', () => {
     const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
     expect(decodeMemoryWorkerFrame(protocol.project([item], 1))).toMatchObject({ type: 'projection', pageNo: 0 })
     expect(protocol.receive({ ...base, type: 'projected', pageNo: 0 })).toBeNull()
-    expect(decodeMemoryWorkerFrame(protocol.project([], null))).toMatchObject({ type: 'projection', pageNo: 1 })
-    expect(protocol.receive({ ...base, type: 'projected', pageNo: 1 })).toBeNull()
+    const last = decodeMemoryWorkerFrame(protocol.project([], null))
+    if (last.type !== 'projection' || last.totalItems === undefined
+      || last.projectionDigest === undefined) throw Error('missing final projection digest')
+    expect(last).toMatchObject({ type: 'projection', pageNo: 1, totalItems: 1 })
+    expect(protocol.receive({ ...base, type: 'projected', pageNo: 1,
+      totalItems: last.totalItems, projectionDigest: last.projectionDigest })).toBeNull()
     expect(decodeMemoryWorkerFrame(protocol.query('synthetic', 1))).toMatchObject({ type: 'query', requestId: 1 })
     expect(protocol.receive({ ...base, type: 'candidates', requestId: 1,
       candidates: [candidate] })).toEqual([candidate])
@@ -36,9 +40,16 @@ describe('HY worker transaction ordering', () => {
     extra.project([item], null)
     expect(() => extra.project([], null)).toThrow()
 
+    const missingDigest = new MemoryWorkerProtocol(nonce, epoch, 1)
+    missingDigest.project([item], null)
+    expect(() => missingDigest.receive({ ...base, type: 'projected', pageNo: 0 })).toThrow()
+
     const over = new MemoryWorkerProtocol(nonce, epoch, 1)
-    over.project([item], null)
-    over.receive({ ...base, type: 'projected', pageNo: 0 })
+    const last = decodeMemoryWorkerFrame(over.project([item], null))
+    if (last.type !== 'projection' || last.totalItems === undefined
+      || last.projectionDigest === undefined) throw Error('missing final projection digest')
+    over.receive({ ...base, type: 'projected', pageNo: 0,
+      totalItems: last.totalItems, projectionDigest: last.projectionDigest })
     over.query('one', 1)
     expect(() => over.receive({ ...base, type: 'candidates', requestId: 1,
       candidates: [candidate, { ...candidate, sourceRef: 'f'.repeat(64) }] })).toThrow()

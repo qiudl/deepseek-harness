@@ -19,11 +19,15 @@ interface ProjectionFrame extends FrameBase {
   readonly pageNo: number
   readonly nextOffset: number | null
   readonly items: readonly { readonly sourceRef: string; readonly sourceVersion: string; readonly text: string }[]
+  readonly totalItems?: number
+  readonly projectionDigest?: string
 }
 
 interface ProjectedFrame extends FrameBase {
   readonly type: 'projected'
   readonly pageNo: number
+  readonly totalItems?: number
+  readonly projectionDigest?: string
 }
 
 interface QueryFrame extends FrameBase {
@@ -58,7 +62,8 @@ function reference(value: unknown, text: boolean): Record<string, unknown> {
   const row = record(value, text ? ['sourceRef', 'sourceVersion', 'text'] : ['sourceRef', 'sourceVersion'])
   if (typeof row.sourceRef !== 'string' || !HASH.test(row.sourceRef)
     || typeof row.sourceVersion !== 'string' || !HASH.test(row.sourceVersion)
-    || (text && typeof row.text !== 'string')) return reject()
+    || (text && (typeof row.text !== 'string'
+      || Buffer.from(row.text, 'utf8').toString('utf8') !== row.text))) return reject()
   return row
 }
 
@@ -71,9 +76,14 @@ function parse(value: unknown): MemoryWorkerFrame {
   const base = { version: 1 as const, workerNonce: frame.workerNonce,
     indexEpoch: frame.indexEpoch, generation: frame.generation as number }
   if (frame.type === 'projection') {
-    record(frame, [...BASE, 'pageNo', 'nextOffset', 'items'])
     if (!integer(frame.pageNo, 0) || frame.nextOffset !== null && !integer(frame.nextOffset, 0)
       || !Array.isArray(frame.items) || frame.items.length > 16) return reject()
+    const final = frame.nextOffset === null
+    record(frame, final
+      ? [...BASE, 'pageNo', 'nextOffset', 'items', 'totalItems', 'projectionDigest']
+      : [...BASE, 'pageNo', 'nextOffset', 'items'])
+    if (final && (!integer(frame.totalItems, 0) || (frame.totalItems as number) > 20_000
+      || typeof frame.projectionDigest !== 'string' || !HASH.test(frame.projectionDigest))) return reject()
     let bytes = 0
     const items: { sourceRef: string; sourceVersion: string; text: string }[] = []
     for (const value of frame.items) {
@@ -84,16 +94,24 @@ function parse(value: unknown): MemoryWorkerFrame {
         text: row.text as string })
     }
     return { ...base, type: 'projection', pageNo: frame.pageNo as number,
-      nextOffset: frame.nextOffset as number | null, items }
+      nextOffset: frame.nextOffset as number | null, items,
+      ...(final ? { totalItems: frame.totalItems as number,
+        projectionDigest: frame.projectionDigest as string } : {}) }
   } else if (frame.type === 'projected') {
-    record(frame, [...BASE, 'pageNo'])
+    const final = Object.hasOwn(frame, 'totalItems') || Object.hasOwn(frame, 'projectionDigest')
+    record(frame, final ? [...BASE, 'pageNo', 'totalItems', 'projectionDigest'] : [...BASE, 'pageNo'])
     if (!integer(frame.pageNo, 0)) return reject()
-    return { ...base, type: 'projected', pageNo: frame.pageNo as number }
+    if (final && (!integer(frame.totalItems, 0) || (frame.totalItems as number) > 20_000
+      || typeof frame.projectionDigest !== 'string' || !HASH.test(frame.projectionDigest))) return reject()
+    return { ...base, type: 'projected', pageNo: frame.pageNo as number,
+      ...(final ? { totalItems: frame.totalItems as number,
+        projectionDigest: frame.projectionDigest as string } : {}) }
   } else if (frame.type === 'query') {
     record(frame, [...BASE, 'requestId', 'query', 'limit'])
     if (!integer(frame.requestId, 1) || !integer(frame.limit, 1) || (frame.limit as number) > 10
       || typeof frame.query !== 'string' || frame.query.length < 1 || frame.query.length > 500
-      || /[\u0000-\u001f]/u.test(frame.query)) return reject()
+      || /[\u0000-\u001f]/u.test(frame.query)
+      || Buffer.from(frame.query, 'utf8').toString('utf8') !== frame.query) return reject()
     return { ...base, type: 'query', requestId: frame.requestId as number,
       query: frame.query, limit: frame.limit as number }
   } else if (frame.type === 'candidates') {

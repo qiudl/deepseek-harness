@@ -4,6 +4,7 @@ import { decodeMemoryWorkerFrame, encodeMemoryWorkerFrame,
 
 const base = { version: 1, workerNonce: 'a'.repeat(32), indexEpoch: 'b'.repeat(32), generation: 1 }
 const ref = { sourceRef: 'c'.repeat(64), sourceVersion: 'd'.repeat(64) }
+const final = { totalItems: 1, projectionDigest: 'e'.repeat(64) }
 
 describe('HY worker IPC frames', () => {
   it('assembles split and adjacent frames and rejects truncated stream ends', () => {
@@ -37,6 +38,8 @@ describe('HY worker IPC frames', () => {
     expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(page))).toEqual(page)
     const ack = { ...base, type: 'projected', pageNo: 0 } as const
     expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(ack))).toEqual(ack)
+    const finalAck = { ...base, type: 'projected', pageNo: 1, ...final } as const
+    expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(finalAck))).toEqual(finalAck)
     const query = { ...base, type: 'query', requestId: 1, query: 'plan', limit: 1 } as const
     expect(decodeMemoryWorkerFrame(encodeMemoryWorkerFrame(query))).toEqual(query)
     const found = { ...base, type: 'candidates', requestId: 1, candidates: [ref] } as const
@@ -45,7 +48,7 @@ describe('HY worker IPC frames', () => {
 
   it('rejects malformed lengths, identity, extra fields and raw Session content', () => {
     const page = { ...base, type: 'projection', pageNo: 0, nextOffset: null,
-      items: [{ ...ref, text: 'redacted plan' }] } as const
+      items: [{ ...ref, text: 'redacted plan' }], ...final } as const
     const encoded = encodeMemoryWorkerFrame(page)
     for (const invalid of [encoded.subarray(0, encoded.length - 1),
       Buffer.from([0, 0, 0, 0]), Buffer.from([0, 8, 0, 0])]) {
@@ -72,7 +75,7 @@ describe('HY worker IPC frames', () => {
 
   it('rejects every malformed worker message shape before business handling', () => {
     const page = { ...base, type: 'projection', pageNo: 0, nextOffset: null,
-      items: [{ ...ref, text: 'redacted' }] } as const
+      items: [{ ...ref, text: 'redacted' }], ...final } as const
     const ack = { ...base, type: 'projected', pageNo: 0 } as const
     const query = { ...base, type: 'query', requestId: 1, query: 'plan', limit: 1 } as const
     const found = { ...base, type: 'candidates', requestId: 1, candidates: [ref] } as const
@@ -82,17 +85,21 @@ describe('HY worker IPC frames', () => {
       { ...page, pageNo: -1 }, { ...page, nextOffset: -1 },
       { ...page, items: 'bad' }, { ...page, items: [null] },
       { ...page, items: [{ ...ref, text: 3 }] },
+      { ...page, projectionDigest: 'wrong' },
+      { ...page, totalItems: -1 },
+      { ...page, items: [{ ...ref, text: '\ud800' }] },
+      { ...ack, projectionDigest: final.projectionDigest },
       { ...ack, pageNo: -1 },
       { ...query, requestId: 0 }, { ...query, limit: 0 }, { ...query, limit: 11 },
       { ...query, query: 3 }, { ...query, query: '' }, { ...query, query: 'x'.repeat(501) },
-      { ...query, query: 'bad\nquery' },
+      { ...query, query: 'bad\nquery' }, { ...query, query: '\ud800' },
       { ...found, candidates: 'bad' }, { ...found, candidates: Array.from({ length: 11 }, () => ref) },
     ]) expect(() => encodeMemoryWorkerFrame(invalid)).toThrow()
   })
 
-  it('rejects a frame whose JSON encoding exceeds its byte limit and damaged JSON or UTF-8', () => {
+  it('rejects overlong multibyte projection and damaged JSON or UTF-8', () => {
     const page = { ...base, type: 'projection', pageNo: 0, nextOffset: null,
-      items: [{ ...ref, text: '\ud800'.repeat(87_380) }] }
+      items: [{ ...ref, text: '文'.repeat(87_382) }], ...final }
     expect(() => encodeMemoryWorkerFrame(page)).toThrow()
     for (const body of [Buffer.from('{!'), Buffer.from([0xff])]) {
       const header = Buffer.alloc(4)
