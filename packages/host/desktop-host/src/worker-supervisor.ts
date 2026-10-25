@@ -44,6 +44,19 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /** Read one private Bot chat page from the same live worker generation. */
+  async readBotChat(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatReadRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotChat) throw new HostAuthorityError('unavailable')
+    const result = await worker.readBotChat(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
   /**
    * Read one chunk from the same live Profile worker generation.
    * @param profileId - Selected Account Profile.

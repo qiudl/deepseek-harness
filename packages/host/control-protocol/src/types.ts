@@ -974,6 +974,31 @@ export interface ProfileBotGroupHistoryReadResult {
   readonly result: { readonly page: import('./bot-group-history-read.ts').HostBotGroupHistoryPage }
 }
 
+/** Account-bound text-only private Bot chat read from the selected Profile. */
+export interface ProfileBotChatReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_read'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-chat-read.ts').HostBotChatReadRequest
+  }
+}
+
+/** One bounded private chat text page. */
+export interface ProfileBotChatReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_read'
+  readonly result: { readonly page: import('./bot-chat-read.ts').HostBotChatPage }
+}
+
 /** Current Account Profile prepares a Slark Source for one existing native room. */
 export interface ProfileNativeRoomRequest {
   readonly version: 1
@@ -2445,6 +2470,8 @@ export type HostControlFrame =
   | ProfileBotMemoryReadResult
   | ProfileBotGroupHistoryReadRequest
   | ProfileBotGroupHistoryReadResult
+  | ProfileBotChatReadRequest
+  | ProfileBotChatReadResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

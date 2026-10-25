@@ -4,6 +4,7 @@ import { parseHostBotIdentity, parseHostBotIdentityTarget,
 import { parseHostBotTeamPage, parseHostBotTeamReadRequest } from './bot-team-read.ts'
 import { parseHostBotMemoryPage, parseHostBotMemoryReadRequest } from './bot-memory-read.ts'
 import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest } from './bot-group-history-read.ts'
+import { parseHostBotChatPage, parseHostBotChatReadRequest } from './bot-chat-read.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply } from './native-room-operations.ts'
 import { parseHostNativeAgentResultInput } from './native-agent-result.ts'
@@ -116,6 +117,7 @@ import type {
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
+  ProfileBotChatReadRequest, ProfileBotChatReadResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
   ProfileNativeAgentResultRequest, ProfileNativeAgentResultResult,
@@ -1833,6 +1835,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBotTeamReadRequest
   | ProfileBotMemoryReadRequest
   | ProfileBotGroupHistoryReadRequest
+  | ProfileBotChatReadRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2550,6 +2553,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), read: parseHostBotGroupHistoryReadRequest(params.read),
     } } satisfies ProfileBotGroupHistoryReadRequest
   }
+  if (frame.method === 'profile.bot_chat_read') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'read'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), read: parseHostBotChatReadRequest(params.read),
+    } } satisfies ProfileBotChatReadRequest
+  }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'after_bot_id', 'limit'])
@@ -2670,6 +2680,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBotTeamReadResult
   | ProfileBotMemoryReadResult
   | ProfileBotGroupHistoryReadResult
+  | ProfileBotChatReadResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3098,6 +3109,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['page'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { page: parseHostBotGroupHistoryPage(result.page) } } satisfies ProfileBotGroupHistoryReadResult
+  }
+  if (frame.method === 'profile.bot_chat_read') {
+    exactKeys(result, ['page'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { page: parseHostBotChatPage(result.page) } } satisfies ProfileBotChatReadResult
   }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(result, ['page'])
