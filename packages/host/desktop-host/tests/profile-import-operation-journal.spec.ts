@@ -2,8 +2,35 @@ import { createHash, randomUUID } from 'node:crypto'
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
+
+const faults = vi.hoisted(() => ({ manyEntries: false, missingRoot: false, linkError: false, unlinkError: false }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readdir: async (...args: Parameters<typeof actual.readdir>) => faults.manyEntries
+      ? Array.from({ length: 100_001 }, () => 'invalid') : actual.readdir(...args),
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      if (faults.missingRoot && String(args[0]).endsWith('/profile-import-operations')) {
+        throw Object.assign(new Error('journal root disappeared'), { code: 'ENOENT' })
+      }
+      return actual.lstat(...args)
+    },
+    link: async (...args: Parameters<typeof actual.link>) => {
+      if (faults.linkError) throw Object.assign(new Error('link failed'), { code: 'EIO' })
+      return actual.link(...args)
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (faults.unlinkError && String(args[0]).endsWith('.tmp')) {
+        throw Object.assign(new Error('temporary cleanup failed'), { code: 'EACCES' })
+      }
+      return actual.unlink(...args)
+    },
+  }
+})
 
 const uid = process.getuid?.() ?? 0
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -26,6 +53,39 @@ async function fixture() {
 }
 
 describe.skipIf(process.platform === 'win32')('Profile import operation journal', () => {
+  it('rejects an oversized directory without reading an operation', async () => {
+    const { journal, input } = await fixture()
+    await journal.create(input)
+    faults.manyEntries = true
+    onTestFinished(() => { faults.manyEntries = false })
+    await expect(journal.listForPair(input.sourceProfileId, input.targetProfileId))
+      .rejects.toThrow('profile_import_journal_too_large')
+  })
+
+  it('ignores a filename with an invalid operation UUID', async () => {
+    const { directory, journal, input } = await fixture()
+    const record = await journal.create(input)
+    await writeFile(join(directory, '00000000-0000-0000-0000-000000000000.1.json'), '{}', { mode: 0o600 })
+    expect(await journal.listForPair(input.sourceProfileId, input.targetProfileId)).toEqual([record])
+  })
+
+  it('rejects a journal root that disappears after creation', async () => {
+    const { journal, input } = await fixture()
+    faults.missingRoot = true
+    onTestFinished(() => { faults.missingRoot = false })
+    await expect(journal.create(input)).rejects.toThrow('profile_import_journal_unsafe')
+  })
+
+  it('propagates a failed immutable link and a failed temporary cleanup', async () => {
+    const { journal, input } = await fixture()
+    faults.linkError = true
+    onTestFinished(() => { faults.linkError = false; faults.unlinkError = false })
+    await expect(journal.create(input)).rejects.toThrow('link failed')
+    faults.unlinkError = true
+    await expect(journal.create({ ...input, operationId: randomUUID() }))
+      .rejects.toThrow('temporary cleanup failed')
+  })
+
   it('rejects invalid authority and a record moved under another operation ID', async () => {
     const { directory, journal, input } = await fixture()
     expect(() => new FileProfileImportOperationJournal('relative', uid))
