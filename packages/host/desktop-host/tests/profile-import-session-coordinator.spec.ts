@@ -345,6 +345,20 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     fence.assertOpen(target.profileId)
   })
 
+  it('rejects a plugin publisher bound to a different Profile without switching Sessions', async () => {
+    const { source, target, journal, coordinator, input } = await stagedJointFixture()
+    await expect(coordinator.commitWithPlugins({ ...input,
+      pluginPublisher: { ...input.pluginPublisher, targetProfileId: randomUUID() } }))
+      .rejects.toThrow('profile_import_operation_not_recoverable')
+    await expect(coordinator.commitWithPlugins({ ...input,
+      pluginPublisher: { ...input.pluginPublisher,
+        journal: new FileProfileImportPluginPublishJournal(join(target.profileRoot, 'other-publish'), uid) } }))
+      .rejects.toThrow('profile_import_operation_not_recoverable')
+    expect((await journal.load(input.operationId))?.phase).toBe('staged')
+    expect(await target.target.activeGeneration()).toBe(1)
+    expect(await source.target.activeGeneration()).toBe(1)
+  })
+
   it('commits an already staged Session and plugin layer under one fenced operation', async () => {
     const { source, target, journal, fence, base, web, hostLock, coordinator, input } = await stagedJointFixture()
     const failedPointer = vi.spyOn(target.target, 'commitGeneration')
