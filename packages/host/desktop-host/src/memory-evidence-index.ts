@@ -208,12 +208,19 @@ export class HostMemoryEvidenceIndex {
   }
 
   /** Copy only redacted text and opaque references from this exact index generation. */
-  projectedPage(scope: HostMemoryScope, indexEpoch: string, generation: number,
+  projectedPage(scope: HostMemoryScope, indexEpoch: string | null, generation: number | null,
     offset: number): HostMemoryProjectedPage {
     this.checkScope(scope)
-    if (typeof indexEpoch !== 'string' || !EPOCH.test(indexEpoch)
-      || !Number.isSafeInteger(offset) || offset < 0) throw new HostAuthorityError('invalid_input')
-    if (indexEpoch !== this.indexEpoch || generation !== this.generation) throw new HostAuthorityError('stale')
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new HostAuthorityError('invalid_input')
+    if (indexEpoch === null || generation === null) {
+      if (indexEpoch !== null || generation !== null || offset !== 0)
+        throw new HostAuthorityError('invalid_input')
+    } else {
+      if (typeof indexEpoch !== 'string' || !EPOCH.test(indexEpoch))
+        throw new HostAuthorityError('invalid_input')
+      if (indexEpoch !== this.indexEpoch || generation !== this.generation)
+        throw new HostAuthorityError('stale')
+    }
     const records = [...this.sessions].sort(([left], [right]) => left < right ? -1 : 1)
       .flatMap(([, session]) => session.records)
     if (offset >= records.length && (offset !== 0 || records.length !== 0))

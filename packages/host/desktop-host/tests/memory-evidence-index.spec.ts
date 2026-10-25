@@ -92,6 +92,9 @@ describe('Host local memory Evidence index', () => {
         'r1', `session-${number}`), generation)
     }
     const current = index.search(scope, 'answer', 1)
+    const initial = index.projectedPage(scope, null, null, 0)
+    expect(initial.indexEpoch).toBe(current.indexEpoch)
+    expect(initial.generation).toBe(current.generation)
     const first = index.projectedPage(scope, current.indexEpoch, current.generation, 0)
     expect(first.items).toHaveLength(16)
     expect(first.nextOffset).toBe(16)
@@ -107,6 +110,9 @@ describe('Host local memory Evidence index', () => {
     expect(() => index.projectedPage({ ...scope, profileId: 'other' },
       current.indexEpoch, current.generation, 0)).toThrow()
     expect(() => index.projectedPage(scope, current.indexEpoch, current.generation, 18)).toThrow()
+    expect(() => index.projectedPage(scope, null, null, 1)).toThrow()
+    expect(() => index.projectedPage(scope, null, current.generation, 0)).toThrow()
+    expect(() => index.projectedPage(scope, current.indexEpoch, null, 0)).toThrow()
     for (const [epoch, offset] of [[0, 0], ['bad', 0], [current.indexEpoch, 0.5],
       [current.indexEpoch, -1], [current.indexEpoch, 19]] as const) {
       expect(() => index.projectedPage(scope, epoch as string, current.generation, offset)).toThrow()

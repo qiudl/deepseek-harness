@@ -110,8 +110,8 @@ export class HostMemoryIndexCache {
     return this.withCurrent(scope, reader, signal, index => index.evidence(scope, sourceRef))
   }
 
-  projectedPage(scope: HostMemoryScope, reader: HostMemoryProfileReader, indexEpoch: string,
-    generation: number, offset: number, signal: AbortSignal): Promise<HostMemoryProjectedPage> {
+  projectedPage(scope: HostMemoryScope, reader: HostMemoryProfileReader, indexEpoch: string | null,
+    generation: number | null, offset: number, signal: AbortSignal): Promise<HostMemoryProjectedPage> {
     return this.withCurrent(scope, reader, signal,
       index => index.projectedPage(scope, indexEpoch, generation, offset))
   }
