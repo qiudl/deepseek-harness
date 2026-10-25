@@ -618,8 +618,21 @@ describe('offline Profile existing-only inspector', () => {
       sourceProfileId: input.source.profileId, uid, operationId: input.operationId,
       fence: input.fence, journal, catalog, plan, nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     const resolutionInput = { ...input, journal, plan, manifestPlan }
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toBeNull()
     const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    const resolvedArchives = join(resolved.resolutionRoot, '.bundled-plugins')
+    await chmod(resolvedArchives, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_unsafe')
+    await chmod(resolvedArchives, 0o700)
+    const resolvedNpmrcPath = join(resolved.resolutionRoot, '.npmrc')
+    const resolvedNpmrc = await readFile(resolvedNpmrcPath)
+    await writeFile(resolvedNpmrcPath, 'ignore-scripts=false\n')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    await writeFile(resolvedNpmrcPath, resolvedNpmrc)
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
     const lock = await readFile(join(resolved.resolutionRoot, 'pnpm-lock.yaml'), 'utf8')
     expect(lock).toContain(`baseline-plugin@${baselineSpec}`)
