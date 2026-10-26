@@ -866,7 +866,7 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
     const entries = result.entries.map((value: unknown) => {
       const entry = record(value)
       const invocation = 'model_invocable' in entry || 'user_invocable' in entry
-      exactKeys(entry, ['id', 'name', 'transport', ...(invocation ? ['model_invocable', 'user_invocable'] : []), ...('plugin_state' in entry ? ['plugin_state'] : []), ...('skill_source' in entry ? ['skill_source', 'skill_status'] : []), ...('effective_source' in entry ? ['effective_source'] : [])])
+      exactKeys(entry, ['id', 'name', 'transport', ...(invocation ? ['model_invocable', 'user_invocable'] : []), ...('plugin_state' in entry ? ['plugin_state'] : []), ...('plugin_archive_sha256' in entry ? ['plugin_archive_sha256'] : []), ...('skill_source' in entry ? ['skill_source', 'skill_status'] : []), ...('effective_source' in entry ? ['effective_source'] : [])])
       if ('skill_source' in entry && (result.kind !== 'skill' || !invocation
         || typeof entry.skill_source !== 'string' || !['user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(entry.skill_source)
         || typeof entry.skill_status !== 'string' || !['effective', 'shadowed', 'not_visible'].includes(entry.skill_status))) reject()
@@ -875,6 +875,8 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
       if (entry.skill_status === 'shadowed' && !('effective_source' in entry)) reject()
       if ('plugin_state' in entry && (result.kind !== 'plugin' || typeof entry.plugin_state !== 'string'
         || !['enabled', 'disabled', 'mixed', 'unsupported'].includes(entry.plugin_state))) reject()
+      if ('plugin_archive_sha256' in entry && (result.kind !== 'plugin' || typeof entry.plugin_archive_sha256 !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(entry.plugin_archive_sha256))) reject()
       if (invocation && (result.kind !== 'skill' || typeof entry.model_invocable !== 'boolean' || typeof entry.user_invocable !== 'boolean')) reject()
       for (const key of ['id', 'name', 'transport']) {
         const pattern = result.kind === 'plugin' && key === 'name'
@@ -884,6 +886,7 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
       return { id: entry.id as string, name: entry.name as string, transport: entry.transport as string,
         ...(invocation ? { model_invocable: entry.model_invocable as boolean, user_invocable: entry.user_invocable as boolean } : {}),
         ...('plugin_state' in entry ? { plugin_state: entry.plugin_state as 'enabled' | 'disabled' | 'mixed' | 'unsupported' } : {}),
+        ...('plugin_archive_sha256' in entry ? { plugin_archive_sha256: entry.plugin_archive_sha256 as string } : {}),
         ...('skill_source' in entry ? { skill_source: entry.skill_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other', skill_status: entry.skill_status as 'effective' | 'shadowed' | 'not_visible' } : {}),
         ...('effective_source' in entry ? { effective_source: entry.effective_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other' } : {}) }
     })
