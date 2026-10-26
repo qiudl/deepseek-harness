@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises'
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, truncate, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
@@ -46,4 +46,16 @@ it.skipIf(process.platform === 'win32')('rejects linked, writable, and oversized
   await truncate(oversized, 256 * 1024 * 1024 + 1)
   await expect(fingerprintProfileImportPluginWeb(root, uid))
     .rejects.toThrow('profile_import_plugin_publish_unsafe')
+})
+
+it.skipIf(process.platform === 'win32')('rejects a hard link to a file outside the plugin tree', async () => {
+  const { root, modules } = await fixture()
+  const outside = await mkdtemp(join(tmpdir(), 'dsh-import-publish-private-'))
+  onTestFinished(() => rm(outside, { recursive: true, force: true }))
+  const privateFile = join(outside, 'private.txt')
+  await writeFile(privateFile, 'keep outside the imported plugin', { mode: 0o600 })
+  await link(privateFile, join(modules, 'linked.txt'))
+  await expect(fingerprintProfileImportPluginWeb(root, uid))
+    .rejects.toThrow('profile_import_plugin_publish_unsafe')
+  expect(await readFile(privateFile, 'utf8')).toBe('keep outside the imported plugin')
 })
