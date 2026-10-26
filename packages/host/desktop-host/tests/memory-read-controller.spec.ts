@@ -104,6 +104,44 @@ describe('Host memory signed read controller', () => {
       .rejects.toMatchObject({ code: 'unavailable' })
   })
 
+  it('clears a projection when Account authority disappears before or during inventory checks', async () => {
+    const before = fixture()
+    await before.controller.warm(signal)
+    before.setOnline(false)
+    await expect(before.controller.projectedPage(null, null, 0, signal))
+      .rejects.toThrow('online identity required')
+    before.setOnline(true)
+    await expect(before.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+
+    const during = fixture()
+    await during.controller.warm(signal)
+    const inventory = await during.reader.list()
+    during.reader.list.mockImplementationOnce(async () => {
+      during.setOwner('other-owner')
+      return inventory
+    })
+    await expect(during.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+    during.setOwner(identity.ownerUserId)
+    await expect(during.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('does not publish a projection page after concurrent cache invalidation', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const inventory = await f.reader.list()
+    f.reader.list.mockImplementationOnce(async () => {
+      f.controller.clear()
+      return inventory
+    })
+    await expect(f.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(f.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('requires a fresh signed search to resolve semantic candidate references', async () => {
     const f = fixture()
     await f.controller.warm(signal)
