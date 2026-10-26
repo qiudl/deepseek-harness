@@ -149,9 +149,11 @@ describe('Host memory signed read controller', () => {
     const worker = { project: vi.fn(async (items: unknown) => { projected.push(items) }),
       query: vi.fn(async () => [] as { sourceRef: string; sourceVersion: string }[]),
       close: vi.fn() }
-    const stamp = await projectHostMemoryToWorker(f.controller, worker, signal)
+    const open = vi.fn(async () => worker)
+    const { stamp } = await projectHostMemoryToWorker(f.controller, open, signal)
     expect(projected).toHaveLength(1)
     expect(projected[0]).toMatchObject([{ text: 'private plan' }])
+    expect(open).toHaveBeenCalledWith(stamp, signal)
     const source = (projected[0] as { sourceRef: string; sourceVersion: string }[])[0]!
     worker.query.mockResolvedValue([{ sourceRef: source.sourceRef, sourceVersion: source.sourceVersion }])
     await expect(searchHostMemoryWithWorker(f.controller, worker, stamp,
@@ -165,9 +167,18 @@ describe('Host memory signed read controller', () => {
     const f = fixture()
     const worker = { project: vi.fn(async () => { throw Error('worker disconnected') }),
       query: vi.fn(), close: vi.fn() }
-    await expect(projectHostMemoryToWorker(f.controller, worker, signal))
+    await expect(projectHostMemoryToWorker(f.controller, async () => worker, signal))
       .rejects.toThrow('worker disconnected')
     expect(worker.close).toHaveBeenCalledOnce()
+    await expect(f.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('clears the index when opening the peer-attested channel fails', async () => {
+    const f = fixture()
+    await expect(projectHostMemoryToWorker(f.controller,
+      async () => { throw Error('peer attestation failed') }, signal))
+      .rejects.toThrow('peer attestation failed')
     await expect(f.controller.projectedPage(null, null, 0, signal))
       .rejects.toMatchObject({ code: 'unavailable' })
   })
@@ -185,8 +196,12 @@ describe('Host memory signed read controller', () => {
     const worker = { project: vi.fn(async (items: readonly { text: string }[]) => {
       pages.push(items[0]!.text)
     }), query: vi.fn(), close: vi.fn() }
-    await expect(projectHostMemoryToWorker(controller, worker, signal))
-      .resolves.toEqual({ indexEpoch: first.indexEpoch, generation: first.generation })
+    await expect(projectHostMemoryToWorker(controller, async (stamp) => {
+      expect(stamp).toEqual({ indexEpoch: first.indexEpoch, generation: first.generation })
+      return worker
+    }, signal)).resolves.toMatchObject({
+      stamp: { indexEpoch: first.indexEpoch, generation: first.generation },
+    })
     expect(pages).toEqual(['first', 'last'])
     expect(projectedPage).toHaveBeenNthCalledWith(2,
       first.indexEpoch, first.generation, 1, signal)
@@ -199,7 +214,7 @@ describe('Host memory signed read controller', () => {
     const f = fixture()
     const worker = { project: vi.fn(async () => {}),
       query: vi.fn(async () => []), close: vi.fn() }
-    const stamp = await projectHostMemoryToWorker(f.controller, worker, signal)
+    const { stamp } = await projectHostMemoryToWorker(f.controller, async () => worker, signal)
     await expect(searchHostMemoryWithWorker(f.controller, worker,
       { ...stamp, indexEpoch: '0'.repeat(32) }, directive('search', 'private'),
       'private', 1, signal)).rejects.toMatchObject({ code: 'stale' })

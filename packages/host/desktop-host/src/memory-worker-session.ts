@@ -3,7 +3,8 @@ import type { HostMemorySearchItem } from './memory-evidence-index.ts'
 import type { HostMemoryReadController } from './memory-read-controller.ts'
 import type { MemoryWorkerChannel } from './memory-worker-channel.ts'
 
-type WorkerLink = Pick<MemoryWorkerChannel, 'project' | 'query' | 'close'>
+/** Accepted worker channel; its creator owns partial-launch cleanup before returning it. */
+export type MemoryWorkerLink = Pick<MemoryWorkerChannel, 'project' | 'query' | 'close'>
 
 /** Index identity pinned to one completed worker projection. */
 export interface MemoryWorkerStamp {
@@ -13,26 +14,30 @@ export interface MemoryWorkerStamp {
 
 /** Send every current redacted page, then recheck the index after the final acknowledgement.
  * @param controller Current Account Profile's Host-owned index controller.
- * @param worker Peer-attested channel for one worker process.
+ * @param openWorker Open and attest one channel using this exact index identity.
  * @param signal Cancellation of this projection.
- * @returns Index identity accepted by the worker.
+ * @returns The channel and index identity accepted by the worker.
  */
 export async function projectHostMemoryToWorker(controller: HostMemoryReadController,
-  worker: WorkerLink, signal: AbortSignal): Promise<MemoryWorkerStamp> {
+  openWorker: (stamp: MemoryWorkerStamp, signal: AbortSignal) => Promise<MemoryWorkerLink>,
+  signal: AbortSignal): Promise<{ readonly stamp: MemoryWorkerStamp; readonly worker: MemoryWorkerLink }> {
+  let worker: MemoryWorkerLink | undefined
   try {
     await controller.warm(signal)
     let page = await controller.projectedPage(null, null, 0, signal)
     const stamp = { indexEpoch: page.indexEpoch, generation: page.generation }
+    worker = await openWorker(stamp, signal)
+    signal.throwIfAborted()
     for (;;) {
       await worker.project(page.items, page.nextOffset, signal)
       if (page.nextOffset === null) {
         await controller.projectedPage(stamp.indexEpoch, stamp.generation, 0, signal)
-        return stamp
+        return { stamp, worker }
       }
       page = await controller.projectedPage(stamp.indexEpoch, stamp.generation, page.nextOffset, signal)
     }
   } catch (error) {
-    worker.close()
+    worker?.close()
     controller.clear()
     throw error
   }
@@ -49,7 +54,7 @@ export async function projectHostMemoryToWorker(controller: HostMemoryReadContro
  * @returns Host-verified result metadata and current generation.
  */
 export async function searchHostMemoryWithWorker(controller: HostMemoryReadController,
-  worker: WorkerLink, stamp: MemoryWorkerStamp, directive: unknown,
+  worker: MemoryWorkerLink, stamp: MemoryWorkerStamp, directive: unknown,
   query: string, limit: number, signal: AbortSignal): Promise<{
   readonly generation: number
   readonly items: readonly HostMemorySearchItem[]
