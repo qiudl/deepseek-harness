@@ -83,6 +83,24 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /** Transfer one visible attachment on the current worker generation.
+   * @param profileId Current Profile identifier.
+   * @param request Pinned logical attachment action.
+   * @param signal Cancellation signal.
+   * @returns Bounded transfer result.
+   */
+  async transferBotChatAttachment(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentTransferRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentTransferResult> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.transferBotChatAttachment) throw new HostAuthorityError('unavailable')
+    const result = await worker.transferBotChatAttachment(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
   /**
    * Read one chunk from the same live Profile worker generation.
    * @param profileId - Selected Account Profile.

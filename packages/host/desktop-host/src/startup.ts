@@ -767,6 +767,8 @@ export async function startDesktopHostApplication(
       readBotChat: (profileId, request, signal) => workers.readBotChat(profileId, request, signal),
       readBotChatAttachments: (profileId, request, signal) =>
         workers.readBotChatAttachments(profileId, request, signal),
+      transferBotChatAttachment: (profileId, request, signal) =>
+        workers.transferBotChatAttachment(profileId, request, signal),
       operateBotGroup: workers.operateBotGroup.bind(workers),
       trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),

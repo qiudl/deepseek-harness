@@ -22,6 +22,10 @@ import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest
   type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest,
   type ProfileBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { readAccountBotChatAttachments } from './account-bot-chat-attachments-read.ts'
+import { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult,
+  type HostBotChatAttachmentTransferRequest, type HostBotChatAttachmentTransferResult,
+  type ProfileBotChatAttachmentTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { transferAccountBotChatAttachment } from './account-bot-chat-attachment-transfer.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -308,6 +312,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotChatPage>
   readonly readBotChatAttachments?: (profileId: string, request: HostBotChatAttachmentsReadRequest,
     signal: AbortSignal) => Promise<HostBotChatAttachmentsPage>
+  readonly transferBotChatAttachment?: (profileId: string, request: HostBotChatAttachmentTransferRequest,
+    signal: AbortSignal) => Promise<HostBotChatAttachmentTransferResult>
   /** Private worker command after signed Slark and current Account authorization. */
   readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
     signal: AbortSignal) => Promise<HostBotGroupResponse>
@@ -577,7 +583,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'readBotTeam' | 'readBotMemory' | 'readBotGroupHistory' | 'readBotChat' | 'readBotChatAttachments' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'readBotTeam' | 'readBotMemory' | 'readBotGroupHistory' | 'readBotChat' | 'readBotChatAttachments' | 'transferBotChatAttachment' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2430,6 +2436,14 @@ export class HostControlAuthority {
             { readBotChatAttachments: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_chat_attachment_transfer') {
+          const transfer = this.options.transferBotChatAttachment
+          if (!transfer) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const value = await transferAccountBotChatAttachment(this.options.host,
+            { transferBotChatAttachment: transfer }, account, frame.params.transfer, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { value } })
         } else if (frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
           const operate = this.options.operateBotGroup
@@ -2612,6 +2626,7 @@ export class HostControlAuthority {
           ...(this.options.readBotGroupHistory ? ['profile.bot_group_history_read'] : []),
           ...(this.options.readBotChat ? ['profile.bot_chat_read'] : []),
           ...(this.options.readBotChatAttachments ? ['profile.bot_chat_attachments_read'] : []),
+          ...(this.options.transferBotChatAttachment ? ['profile.bot_chat_attachment_transfer'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
               'profile.bot_group_result_ack'] : []),
@@ -4485,6 +4500,33 @@ export class UnixHostClient {
     return page
   }
 
+  /** Transfer one Account-bound visible Bot attachment action.
+   * @param input Account binding and pinned attachment request.
+   * @returns Bounded descriptor, byte page or close acknowledgement.
+   */
+  async transferBotChatAttachment(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly request: HostBotChatAttachmentTransferRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotChatAttachmentTransferResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_chat_attachment_transfer' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotChatAttachmentTransferRequest(input.request)
+    const request: ProfileBotChatAttachmentTransferRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_chat_attachment_transfer',
+      params: { ...this.collaborationAccountRequestParams(input), transfer: target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return parseHostBotChatAttachmentTransferResult(frame.result.value, target)
+  }
+
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest | ProfileBotGroupResultAckRequest,
     signal?: AbortSignal): Promise<HostBotGroupResponse> {
@@ -5463,6 +5505,7 @@ export class UnixHostClient {
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest
       | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest
       | ProfileBotGroupHistoryReadRequest | ProfileBotChatReadRequest | ProfileBotChatAttachmentsReadRequest
+      | ProfileBotChatAttachmentTransferRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest

@@ -44,12 +44,16 @@ export { parseHostBotChatReadRequest, parseHostBotChatPage } from './bot-chat-re
 export type { HostBotChatReadRequest, HostBotChatPage } from './bot-chat-read.js'
 export { parseHostBotChatAttachmentsReadRequest, parseHostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export type { HostBotChatAttachmentsReadRequest, HostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
+export { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.js'
+export type { HostBotChatAttachmentScope, HostBotChatAttachmentTransferRequest,
+  HostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotTeamReadRequest, ProfileBotTeamReadResult,
   ProfileBotMemoryReadRequest, ProfileBotMemoryReadResult,
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
   ProfileBotChatReadRequest, ProfileBotChatReadResult,
   ProfileBotChatAttachmentsReadRequest, ProfileBotChatAttachmentsReadResult,
+  ProfileBotChatAttachmentTransferRequest, ProfileBotChatAttachmentTransferResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

@@ -8,7 +8,8 @@ import { encodeHostCollaborationRegistrationSignaturePayload,
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotMemoryReadRequest, HostBotGroupHistoryReadRequest,
-  HostBotChatReadRequest, HostBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotChatReadRequest, HostBotChatAttachmentsReadRequest,
+  HostBotChatAttachmentTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -69,6 +70,14 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     last_confirmed_at: '2026-10-26T12:00:00.000Z' }
   const readBotChatAttachments = vi.fn(async (_profileId: string,
     _request: HostBotChatAttachmentsReadRequest, _signal: AbortSignal) => attachmentsPage)
+  const attachmentScope = { logical_id: 'bot:bot_1', part: 0, team_revision: 1,
+    event_digest: 'a'.repeat(64), manifest_digest: 'b'.repeat(64), eventSeq: 1, blockIndex: 0 }
+  const attachmentTransferPage = { ...attachmentScope,
+    transfer_id: '10000000-0000-4000-8000-000000000001', attachment_id: `sha256:${'c'.repeat(64)}`,
+    total_bytes: 3, offset: 0, chunk_base64: Buffer.from('abc').toString('base64'),
+    final: true, source: 'authority' as const }
+  const transferBotChatAttachment = vi.fn(async (_profileId: string,
+    _request: HostBotChatAttachmentTransferRequest, _signal: AbortSignal) => attachmentTransferPage)
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -78,6 +87,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     readBotTeam, readBotMemory, readBotGroupHistory, readBotChat, readBotChatAttachments,
+    transferBotChatAttachment,
     ...(supportBot ? {
       resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
     } : {}),
@@ -100,7 +110,8 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
     bot, botGroupSigner, botGroupKeyring, operateBotGroup, readBotTeam, teamPage,
     readBotMemory, memoryPage, readBotGroupHistory, historyPage, readBotChat, chatPage,
-    readBotChatAttachments, attachmentsPage,
+    readBotChatAttachments, attachmentsPage, transferBotChatAttachment,
+    attachmentScope, attachmentTransferPage,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -205,6 +216,27 @@ it('reads visible Bot attachment manifests only for the current Account, Bot and
     return f.attachmentsPage
   })
   await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('transfers Bot attachment bytes only for the current Account and exact scope', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    request: { schema_version: 'dsh-remote-bot-attachment/v1' as const,
+      kind: 'next' as const, ...f.attachmentScope,
+      transfer_id: f.attachmentTransferPage.transfer_id, offset: 0 } }
+  await expect(f.client.transferBotChatAttachment(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.transferBotChatAttachment(input)).toEqual(f.attachmentTransferPage)
+  expect(f.transferBotChatAttachment).toHaveBeenCalledWith(f.profile.profileId,
+    input.request, expect.any(AbortSignal))
+  f.transferBotChatAttachment.mockImplementationOnce(async () =>
+    ({ ...f.attachmentTransferPage, manifest_digest: 'd'.repeat(64) }))
+  await expect(f.client.transferBotChatAttachment(input)).rejects.toThrow()
+  f.transferBotChatAttachment.mockImplementationOnce(async () => {
+    f.host.revokeOwner(f.ownerId)
+    return f.attachmentTransferPage
+  })
+  await expect(f.client.transferBotChatAttachment(input)).rejects.toMatchObject({ code: 'unauthorized' })
 })
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {
