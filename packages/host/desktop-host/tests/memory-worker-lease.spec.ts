@@ -62,3 +62,34 @@ it('does not start a second teardown when channel closure reenters close', async
   expect(listener.close).toHaveBeenCalledOnce()
   expect(process.stop).toHaveBeenCalledOnce()
 })
+
+it('closes idle ingress when its worker exits without a Host request', async () => {
+  let finishProcess: (() => void) | undefined
+  const done = new Promise<void>((resolve) => { finishProcess = resolve })
+  const channel = { project: vi.fn(), query: vi.fn(), close: vi.fn() }
+  const listener = { close: vi.fn(async () => {}) }
+  const process = { stop: vi.fn(), done }
+  const lease = new MemoryWorkerLease(channel, listener, process)
+  finishProcess?.()
+  await lease.done
+  expect(channel.close).toHaveBeenCalledOnce()
+  expect(listener.close).toHaveBeenCalledOnce()
+  expect(process.stop).toHaveBeenCalledOnce()
+  await expect(lease.query('synthetic', 1, AbortSignal.timeout(1_000)))
+    .rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('reports unexpected process failure after closing idle ingress', async () => {
+  let failProcess: ((error: Error) => void) | undefined
+  const done = new Promise<void>((_resolve, reject) => { failProcess = reject })
+  const channel = { project: vi.fn(), query: vi.fn(), close: vi.fn() }
+  const listener = { close: vi.fn(async () => {}) }
+  const process = { stop: vi.fn(), done }
+  const lease = new MemoryWorkerLease(channel, listener, process)
+  failProcess?.(Error('worker exited unexpectedly'))
+  await expect(lease.done).rejects.toMatchObject({ errors: [
+    expect.objectContaining({ message: 'worker exited unexpectedly' }),
+  ] })
+  expect(channel.close).toHaveBeenCalledOnce()
+  expect(listener.close).toHaveBeenCalledOnce()
+})

@@ -16,9 +16,16 @@ interface ProcessTermination {
 /** Owns a peer-attested channel, its private listener, and a bounded process stop. */
 export class MemoryWorkerLease implements MemoryWorkerLink {
   private closing: Promise<void> | undefined
+  /** Process settlement after ingress cleanup; the owner must observe failures. */
+  readonly done: Promise<void>
 
   constructor(private readonly channel: Channel, private readonly listener: Listener,
-    private readonly process: ProcessTermination) {}
+    private readonly process: ProcessTermination) {
+    this.done = process.done.then(() => this.close(), () => this.close())
+    void this.done.catch((_error: unknown) => {
+      // The owner observes done; this handler prevents a premature unhandled rejection.
+    })
+  }
 
   async project(items: Parameters<MemoryWorkerLink['project']>[0], nextOffset: number | null,
     signal: AbortSignal): Promise<void> {
