@@ -89,6 +89,21 @@ describe('Host memory signed read controller', () => {
     expect(f.current).toHaveBeenCalledTimes(6)
   })
 
+  it('pages the warmed redacted projection only for the current Account worker', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const page = await f.controller.projectedPage(null, null, 0, signal)
+    expect(page.items).toHaveLength(1)
+    expect(page.items[0]).toMatchObject({ text: 'private plan' })
+    expect(page.nextOffset).toBeNull()
+    f.setOwner('other-owner')
+    await expect(f.controller.projectedPage(page.indexEpoch, page.generation, 0, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    f.setOwner(identity.ownerUserId)
+    await expect(f.controller.projectedPage(page.indexEpoch, page.generation, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('requires a fresh signed search to resolve semantic candidate references', async () => {
     const f = fixture()
     await f.controller.warm(signal)

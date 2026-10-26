@@ -1,6 +1,6 @@
 /** REQ-20261021-0013: Host-local signed reads of a warmed, scoped memory index. */
 import type { HostMemoryCandidateRef, HostMemoryProfileReader, HostMemoryScope,
-  HostMemorySearchItem } from './memory-evidence-index.ts'
+  HostMemoryProjectedPage, HostMemorySearchItem } from './memory-evidence-index.ts'
 import { chunkHostMemoryEvidence, type HostMemoryEvidenceChunk } from './memory-evidence-chunk.ts'
 import { HostMemoryIndexCache } from './memory-index-cache.ts'
 import { MemoryDirectiveVerifier, type MemoryDirectiveContext } from './memory-directive-verifier.ts'
@@ -58,6 +58,25 @@ export class HostMemoryReadController {
       await this.cache.warm(scopeOf(before), before.reader, signal)
       if (epoch !== this.epoch || !same(before, capture(this.current))) throw new HostAuthorityError('stale')
       signal.throwIfAborted()
+    } catch (error) {
+      if (epoch === this.epoch) this.clear()
+      throw error
+    }
+  }
+
+  /** Supply only redacted pages to the current Host-owned worker; no Desktop control method exposes this read. */
+  async projectedPage(indexEpoch: string | null, generation: number | null, offset: number,
+    signal: AbortSignal): Promise<HostMemoryProjectedPage> {
+    signal.throwIfAborted()
+    let before: HostMemoryCurrentAuthority
+    try { before = capture(this.current) } catch (error) { this.clear(); throw error }
+    const epoch = this.epoch
+    try {
+      const page = await this.cache.projectedPage(scopeOf(before), before.reader,
+        indexEpoch, generation, offset, signal)
+      if (epoch !== this.epoch || !same(before, capture(this.current))) throw new HostAuthorityError('stale')
+      signal.throwIfAborted()
+      return page
     } catch (error) {
       if (epoch === this.epoch) this.clear()
       throw error
