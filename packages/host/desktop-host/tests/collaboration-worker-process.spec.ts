@@ -75,6 +75,13 @@ const botChatAttachmentsPage = { logical_id: botChatPage.logical_id,
   part: 0, part_count: 1, team_revision: 7, event_digest: 'a'.repeat(64),
   manifest_digest: 'b'.repeat(64), items: [], next_cursor: null,
   source: 'authority', last_confirmed_at: '2026-10-23T17:00:00.000Z' }
+const botAttachmentScope = { logical_id: botChatPage.logical_id, part: 0,
+  team_revision: 7, event_digest: 'a'.repeat(64), manifest_digest: 'b'.repeat(64),
+  eventSeq: 1, blockIndex: 0 }
+const botAttachmentPage = { ...botAttachmentScope,
+  transfer_id: '10000000-0000-4000-8000-000000000001',
+  attachment_id: `sha256:${'c'.repeat(64)}`, total_bytes: 3, offset: 0,
+  chunk_base64: Buffer.from('abc').toString('base64'), final: true, source: 'authority' }
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
@@ -109,6 +116,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-bot-group-history-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-chat-read': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-chat-attachments-read': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-chat-attachment-transfer': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -160,6 +168,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('bot-group-history-read') ? ${JSON.stringify(botGroupHistoryPage)}
           : url.pathname.endsWith('bot-chat-read') ? ${JSON.stringify(botChatPage)}
           : url.pathname.endsWith('bot-chat-attachments-read') ? ${JSON.stringify(botChatAttachmentsPage)}
+          : url.pathname.endsWith('bot-chat-attachment-transfer') ? ${JSON.stringify(botAttachmentPage)}
           : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
@@ -197,21 +206,22 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
     prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam, readBotMemory,
-    readBotGroupHistory, readBotChat, readBotChatAttachments } = worker
+    readBotGroupHistory, readBotChat, readBotChatAttachments, transferBotChatAttachment } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
     || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup
-    || !readBotTeam || !readBotMemory || !readBotGroupHistory || !readBotChat || !readBotChatAttachments)
+    || !readBotTeam || !readBotMemory || !readBotGroupHistory || !readBotChat || !readBotChatAttachments
+    || !transferBotChatAttachment)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
     prepareNativeRoom, operateNativeRoom, operateBotGroup, readBotTeam, readBotMemory, readBotGroupHistory,
-    readBotChat, readBotChatAttachments }
+    readBotChat, readBotChatAttachments, transferBotChatAttachment }
 }
 
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
@@ -308,6 +318,19 @@ it('reads a private Bot attachment manifest only through the live worker capabil
   expect(await h.readBotChatAttachments(request, signal)).toEqual(botChatAttachmentsPage)
   h.worker.abort()
   await expect(h.readBotChatAttachments(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('transfers a private Bot attachment page only through the live worker capability', async () => {
+  const h = await harness()
+  const request = { schema_version: 'dsh-remote-bot-attachment/v1', kind: 'next',
+    ...botAttachmentScope, transfer_id: botAttachmentPage.transfer_id, offset: 0 } as const
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-chat-attachment-transfer`, {
+    method: 'POST', body: JSON.stringify(request),
+  })).status).toBe(403)
+  expect(await h.transferBotChatAttachment(request, signal)).toEqual(botAttachmentPage)
+  h.worker.abort()
+  await expect(h.transferBotChatAttachment(request, signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
 it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {

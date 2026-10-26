@@ -1024,6 +1024,31 @@ export interface ProfileBotChatAttachmentsReadResult {
   readonly result: { readonly page: import('./bot-chat-attachments-read.ts').HostBotChatAttachmentsPage }
 }
 
+/** Account-bound sequential transfer of one visible private Bot attachment. */
+export interface ProfileBotChatAttachmentTransferRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachment_transfer'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly transfer: import('./bot-chat-attachment-transfer.ts').HostBotChatAttachmentTransferRequest
+  }
+}
+
+/** One bounded descriptor, byte page or close acknowledgement. */
+export interface ProfileBotChatAttachmentTransferResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_chat_attachment_transfer'
+  readonly result: { readonly value: import('./bot-chat-attachment-transfer.ts').HostBotChatAttachmentTransferResult }
+}
+
 /** Current Account Profile prepares a Slark Source for one existing native room. */
 export interface ProfileNativeRoomRequest {
   readonly version: 1
@@ -2499,6 +2524,8 @@ export type HostControlFrame =
   | ProfileBotChatReadResult
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentsReadResult
+  | ProfileBotChatAttachmentTransferRequest
+  | ProfileBotChatAttachmentTransferResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

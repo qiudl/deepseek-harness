@@ -113,6 +113,11 @@ export interface ProfileWorkerHandle {
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsReadRequest,
     signal: AbortSignal,
   ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentsPage>
+  /** Transfer one bounded visible attachment from the exclusive writer. */
+  readonly transferBotChatAttachment?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentTransferRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotChatAttachmentTransferResult>
   /** Read a committed group journal page from this worker's exclusive-writer DS Bot plugin. */
   readonly readBotGroupHistory?: (
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupHistoryReadRequest,

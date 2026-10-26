@@ -767,6 +767,8 @@ export async function startDesktopHostApplication(
       readBotChat: (profileId, request, signal) => workers.readBotChat(profileId, request, signal),
       readBotChatAttachments: (profileId, request, signal) =>
         workers.readBotChatAttachments(profileId, request, signal),
+      transferBotChatAttachment: (profileId, request, signal) =>
+        workers.transferBotChatAttachment(profileId, request, signal),
       listBotRoster: (profileId, afterBotId, limit, signal) =>
         workers.listBotRoster(profileId, afterBotId, limit, signal),
       prepareNativeRoom: (profileId, roomId, signal) => workers.prepareNativeRoom(profileId, roomId, signal),
