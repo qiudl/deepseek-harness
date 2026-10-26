@@ -17,6 +17,7 @@ vi.mock('node:fs', async (importOriginal) => {
 import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, bundledDependencySpec, parseBundledPluginSpec } from '../src/bundled-plugins.ts'
 import { isPinnedPluginSpec, runProfilePluginCommand } from '../src/plugin-command.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
+import { FileExtensionReceipts, ProfileExtensionOperations } from '../src/extension-operations.ts'
 
 // POSIX uid evidence; on Windows the uid is only consulted behind platform gates.
 const uid = process.getuid?.() ?? 0
@@ -274,4 +275,67 @@ it.runIf(process.platform !== 'win32')('allows bundled updates only for archives
   const update = (version: string) => JSON.stringify({ action: 'update', packageName: 'dsh-duet', spec: `bundled:dsh-duet@${version}` })
   expect(() => { executor.validate(randomUUID(), 'plugin', update('0.3.0')) }).not.toThrow()
   expect(() => { executor.validate(randomUUID(), 'plugin', update('0.3.1')) }).toThrow('bundled_plugin_unavailable')
+})
+
+it.runIf(process.platform !== 'win32')('keeps a temporary Bot team intact across interrupted bundled update and explicit completion', async () => {
+  const oldBytes = Buffer.from('historical ds-bot archive')
+  const nextBytes = Buffer.from('candidate ds-bot archive')
+  const oldDigest = createHash('sha256').update(oldBytes).digest('hex')
+  const nextDigest = createHash('sha256').update(nextBytes).digest('hex')
+  const old = { ...row, name: 'ds-bot', version: '0.2.0', file: 'ds-bot-0.2.0.tgz', sha256: oldDigest, entryIds: ['bot'] }
+  const next = { ...old, version: '0.2.3', file: 'ds-bot-0.2.3.tgz', sha256: nextDigest }
+  const embeddingRoot = join(temp('bot-upgrade-embedding-'), 'dsh-default-plugins')
+  mkdirSync(embeddingRoot, { mode: 0o755 })
+  writeFileSync(join(embeddingRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [next, old] }), { mode: 0o644 })
+  writeFileSync(join(embeddingRoot, old.file), oldBytes, { mode: 0o644 })
+  writeFileSync(join(embeddingRoot, next.file), nextBytes, { mode: 0o644 })
+  const catalog = BundledPluginCatalog.load(embeddingRoot, uid)
+  const { profile, web } = webRoot()
+  catalog.materialize(catalog.get('ds-bot', '0.2.0')!, web)
+  const manifest = join(web, 'package.json')
+  const team = join(web, 'bot-team.fixture.json')
+  const teamBytes = '{"bots":["Thanos"],"memory":"keep"}'
+  writeFileSync(team, teamBytes, { mode: 0o600 })
+  const original = { dependencies: { 'ds-bot': bundledDependencySpec(oldDigest), keep: '1.0.0' },
+    dsh: { profile: { bundles: ['ds-bot', 'keep'] } } }
+  writeFileSync(manifest, JSON.stringify(original), { mode: 0o600 })
+  const control = join(profile, 'control'); mkdirSync(control, { mode: 0o700 })
+  const profileId = randomUUID(); const authority = () => profileId
+  let commands = 0; let ready = false
+  const executor = new ProfilePluginExecutor({ resolve: () => profile, uid,
+    install: async () => {
+      commands++
+      catalog.materialize(catalog.get('ds-bot', '0.2.3')!, web)
+      writeFileSync(manifest, JSON.stringify({ ...original, dependencies: { ...original.dependencies,
+        'ds-bot': bundledDependencySpec(nextDigest) } }), { mode: 0o600 })
+      if (commands === 1) throw Error('interrupted after package write')
+    },
+    acknowledge: async () => { if (!ready) throw Error('worker not confirmed') },
+    togglePlan: () => ({ patch: '', expected: [], disabled: [], previousExpected: [], previousDisabled: [] }),
+    acknowledgeToggle: async () => {},
+    bundledPlugin: (name, version) => {
+      const plugin = catalog.get(name, version)
+      return plugin ? { entryIds: plugin.entryIds, dependency: bundledDependencySpec(plugin.sha256) } : undefined
+    },
+  })
+  const operations = new ProfileExtensionOperations(new FileExtensionReceipts(join(control, 'extension-receipts'), uid),
+    executor, { now: Date.now })
+  onTestFinished(async () => { await operations.dispose() })
+  const payload = JSON.stringify({ action: 'update', packageName: 'ds-bot', spec: 'bundled:ds-bot@0.2.3' })
+  const plan = await operations.prepare(authority, 'plugin', payload)
+  const id = randomUUID()
+  operations.commit(authority, plan.planId, id); await operations.settled()
+  expect(operations.status(authority, id)).toMatchObject({ state: 'unknown', canComplete: true,
+    pluginPackage: { action: 'update', spec: 'bundled:ds-bot@0.2.3' } })
+  expect(readFileSync(team, 'utf8')).toBe(teamBytes)
+  expect(readdirSync(join(web, BUNDLED_ARCHIVE_DIRECTORY)).sort()).toEqual([`${oldDigest}.tgz`, `${nextDigest}.tgz`].sort())
+  ready = true
+  const completion = await operations.prepare(authority, 'plugin', JSON.stringify({ action: 'complete-package', operationId: id }))
+  const completionId = randomUUID()
+  operations.commit(authority, completion.planId, completionId); await operations.settled()
+  expect(operations.status(authority, completionId)).toMatchObject({ state: 'succeeded', restores: id })
+  expect(operations.status(authority, id)).toMatchObject({ state: 'unknown', completedBy: completionId })
+  expect((await executor.inventory(profileId)).find(entry => entry.name === 'ds-bot')?.plugin_archive_sha256).toBe(nextDigest)
+  expect(readFileSync(team, 'utf8')).toBe(teamBytes)
+  expect(JSON.parse(readFileSync(manifest, 'utf8')).dependencies.keep).toBe('1.0.0')
 })
