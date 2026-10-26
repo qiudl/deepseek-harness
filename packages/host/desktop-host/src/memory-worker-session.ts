@@ -3,8 +3,9 @@ import type { HostMemorySearchItem } from './memory-evidence-index.ts'
 import type { HostMemoryReadController } from './memory-read-controller.ts'
 import type { MemoryWorkerChannel } from './memory-worker-channel.ts'
 
-/** Accepted worker lease; close must wait until its child process and listener have stopped. */
+/** Accepted worker lease; done reports idle exit and close waits for process quiescence. */
 export interface MemoryWorkerLink extends Pick<MemoryWorkerChannel, 'project' | 'query'> {
+  readonly done: Promise<void>
   close(): Promise<void>
 }
 

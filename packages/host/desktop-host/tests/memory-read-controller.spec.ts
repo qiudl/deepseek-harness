@@ -17,6 +17,7 @@ const ring = JSON.stringify({ version: 1, environmentId: identity.environmentId,
     publicKeyPem: keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     validFrom: 1, validUntil: baseTime + 60_000 }] })
 const signal = new AbortController().signal
+const idleWorkerDone = new Promise<void>(() => undefined)
 
 function snapshot() {
   const rows = [
@@ -148,7 +149,7 @@ describe('Host memory signed read controller', () => {
     const projected: unknown[] = []
     const worker = { project: vi.fn(async (items: unknown) => { projected.push(items) }),
       query: vi.fn(async () => [] as { sourceRef: string; sourceVersion: string }[]),
-      close: vi.fn(async () => {}) }
+      close: vi.fn(async () => {}), done: idleWorkerDone }
     const open = vi.fn(async () => worker)
     const { stamp } = await projectHostMemoryToWorker(f.controller, open, signal)
     expect(projected).toHaveLength(1)
@@ -166,7 +167,7 @@ describe('Host memory signed read controller', () => {
   it('closes the worker and clears the index after a projection failure', async () => {
     const f = fixture()
     const worker = { project: vi.fn(async () => { throw Error('worker disconnected') }),
-      query: vi.fn(), close: vi.fn(async () => {}) }
+      query: vi.fn(), close: vi.fn(async () => {}), done: idleWorkerDone }
     await expect(projectHostMemoryToWorker(f.controller, async () => worker, signal))
       .rejects.toThrow('worker disconnected')
     expect(worker.close).toHaveBeenCalledOnce()
@@ -188,7 +189,7 @@ describe('Host memory signed read controller', () => {
     let finishClose: (() => void) | undefined
     const stopped = new Promise<void>((resolve) => { finishClose = resolve })
     const worker = { project: vi.fn(async () => { throw Error('projection failed') }),
-      query: vi.fn(), close: vi.fn(() => stopped) }
+      query: vi.fn(), close: vi.fn(() => stopped), done: idleWorkerDone }
     let settled = false
     const pending = projectHostMemoryToWorker(f.controller, async () => worker, signal)
     void pending.then(() => { settled = true }, () => { settled = true })
@@ -211,7 +212,7 @@ describe('Host memory signed read controller', () => {
     const pages: string[] = []
     const worker = { project: vi.fn(async (items: readonly { text: string }[]) => {
       pages.push(items[0]!.text)
-    }), query: vi.fn(), close: vi.fn(async () => {}) }
+    }), query: vi.fn(), close: vi.fn(async () => {}), done: idleWorkerDone }
     await expect(projectHostMemoryToWorker(controller, async (stamp) => {
       expect(stamp).toEqual({ indexEpoch: first.indexEpoch, generation: first.generation })
       return worker
@@ -229,7 +230,7 @@ describe('Host memory signed read controller', () => {
   it('rejects an old worker generation without releasing its candidate result', async () => {
     const f = fixture()
     const worker = { project: vi.fn(async () => {}),
-      query: vi.fn(async () => []), close: vi.fn(async () => {}) }
+      query: vi.fn(async () => []), close: vi.fn(async () => {}), done: idleWorkerDone }
     const { stamp } = await projectHostMemoryToWorker(f.controller, async () => worker, signal)
     await expect(searchHostMemoryWithWorker(f.controller, worker,
       { ...stamp, indexEpoch: '0'.repeat(32) }, directive('search', 'private'),
