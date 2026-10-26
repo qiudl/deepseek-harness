@@ -3,8 +3,10 @@ import type { HostMemorySearchItem } from './memory-evidence-index.ts'
 import type { HostMemoryReadController } from './memory-read-controller.ts'
 import type { MemoryWorkerChannel } from './memory-worker-channel.ts'
 
-/** Accepted worker channel; its creator owns partial-launch cleanup before returning it. */
-export type MemoryWorkerLink = Pick<MemoryWorkerChannel, 'project' | 'query' | 'close'>
+/** Accepted worker lease; close must wait until its child process and listener have stopped. */
+export interface MemoryWorkerLink extends Pick<MemoryWorkerChannel, 'project' | 'query'> {
+  close(): Promise<void>
+}
 
 /** Index identity pinned to one completed worker projection. */
 export interface MemoryWorkerStamp {
@@ -37,8 +39,8 @@ export async function projectHostMemoryToWorker(controller: HostMemoryReadContro
       page = await controller.projectedPage(stamp.indexEpoch, stamp.generation, page.nextOffset, signal)
     }
   } catch (error) {
-    worker?.close()
     controller.clear()
+    if (worker) await worker.close()
     throw error
   }
 }
@@ -65,8 +67,8 @@ export async function searchHostMemoryWithWorker(controller: HostMemoryReadContr
         candidates: await worker.query(text, count, requestSignal) }), signal)
     return { generation: stamp.generation, items }
   } catch (error) {
-    worker.close()
     controller.clear()
+    await worker.close()
     throw error
   }
 }
