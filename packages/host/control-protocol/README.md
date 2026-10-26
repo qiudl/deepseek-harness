@@ -178,6 +178,8 @@ Plugin inventory may advertise boolean `plugin_toggle` and optional per-entry `p
 
 Plugin inventory additionally advertises optional boolean `plugin_update` and `plugin_remove`; both are invalid on other markets. Desktop update requires an enabled managed row and an immutable same-name preflight result. Removal accepts enabled, disabled or mixed independently managed rows. Absence of either capability keeps its control disabled. These actions use the existing Profile-bound prepare/commit/receipt contract.
 
+Plugin entries may include `plugin_archive_sha256` only when the current managed dependency points to a content-addressed bundled archive and Host has verified the archive bytes and private file evidence. Its absence means provenance is unproven; it cannot be inferred from a Desktop installation ledger or package name.
+
 Plugin inventory entries use opaque package IDs and bounded npm package names, including scoped names; MCP and Skill inventory labels retain their restricted character set.
 
 Skill entries may carry paired `skill_source` and `skill_status` fields after invocation fields, followed by `effective_source` only for `shadowed` entries. Sources are restricted to `user-dsh`, `user-agents`, `custom`, `bundled`, `runtime`, and `other`; status is `effective`, `shadowed`, or `not_visible`. These fields are exclusive to Skill inventory, contain no paths, and are distinct from the completion-time source on a removal receipt.

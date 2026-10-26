@@ -232,6 +232,16 @@ it('validates plugin-only toggle capability and bounded configuration states', (
   }
 })
 
+it('round-trips verified bundled archive digests only on Plugin inventory entries', () => {
+  const entry = { id: 'fixture', name: 'ds-bot', transport: 'bundle', plugin_archive_sha256: 'a'.repeat(64) }
+  const result = { state: 'inventory', kind: 'plugin', entries: [entry] }
+  const frame = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result }
+  expect(decode(frame)).toMatchObject({ result })
+  for (const bad of [{ ...result, kind: 'skill' }, { ...result, entries: [{ ...entry, plugin_archive_sha256: 'bad' }] }]) {
+    expect(() => decode({ ...frame, result: bad })).toThrow()
+  }
+})
+
 it.each(['plugin_update', 'plugin_remove'])('restricts %s to boolean Plugin inventory capability', (key) => {
   const result = { state: 'inventory', kind: 'plugin', entries: [], [key]: true }
   const frame = { version: 1, type: 'result', request_id: randomUUID(), method: 'profile.extensions', result }

@@ -6,14 +6,15 @@ import {
   writeWindowsExtensionStateFile,
   type WindowsExtensionFiles,
 } from './windows-extension-files.ts'
+import { assertWindowsWorkerMutableFileEvidence } from './windows-isolated-profile.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, PluginToggleRecovery } from './extension-operations.ts'
 import { removePluginToggleOverrides, type PluginTogglePlan } from './plugin-toggle-plan.ts'
 import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
 import { isPinnedPluginSpec, pinnedSpecPackageName } from './plugin-command.ts'
-import { parseBundledPluginSpec } from './bundled-plugins.ts'
+import { BUNDLED_ARCHIVE_DIRECTORY, parseBundledPluginSpec } from './bundled-plugins.ts'
 import type { PluginScriptApproval } from './plugin-script-preflight.ts'
 import { parse } from 'yaml'
 
@@ -43,6 +44,7 @@ interface ProfilePluginExecutorOptions {
   acknowledge(profileId: string, packageName: string, context: Lifetime): Promise<void>
 }
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
+const bundledDependency = /^file:\.bundled-plugins\/([a-f0-9]{64})\.tgz$/u
 function input(payload: string): PluginInput | PluginToggleInput | PluginUpdateInput | PluginRemoveInput {
   const raw: unknown = JSON.parse(payload)
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_plugin_input')
@@ -99,6 +101,32 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
 
   private manifest(profileId: string): Record<string, unknown> {
     return record(JSON.parse(this.read(this.root(profileId), 'profiles/web/package.json') ?? 'null'))
+  }
+  /** Return provenance only when the managed Profile archive bytes match its content-addressed dependency. */
+  private installedArchiveDigest(profileId: string, dependency: unknown): string | undefined {
+    const claimed = typeof dependency === 'string' ? bundledDependency.exec(dependency)?.[1] : undefined
+    if (!claimed) return undefined
+    const directory = join(this.root(profileId), 'profiles/web', BUNDLED_ARCHIVE_DIRECTORY)
+    const archive = join(directory, `${claimed}.tgz`)
+    try {
+      if (this.options.windows) {
+        assertWindowsExtensionDirectory(this.options.windows, directory)
+        const file = this.options.windows.bindings.readPrivateFile(archive, 33_554_432)
+        if (!file || file.contents.length < 1 || file.contents.length > 33_554_432) return undefined
+        assertWindowsWorkerMutableFileEvidence(file.evidence, this.options.windows.userSid)
+        return createHash('sha256').update(file.contents).digest('hex') === claimed ? claimed : undefined
+      }
+      const parent = lstatSync(directory)
+      if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== this.options.uid
+        || (parent.mode & 0o022) !== 0) return undefined
+      const fd = openSync(archive, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      try {
+        const stat = fstatSync(fd)
+        if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== this.options.uid || (stat.mode & 0o022) !== 0
+          || stat.size < 1 || stat.size > 33_554_432) return undefined
+        return createHash('sha256').update(readFileSync(fd)).digest('hex') === claimed ? claimed : undefined
+      } finally { closeSync(fd) }
+    } catch { return undefined }
   }
   /** @param profileId Selected Profile. @param kind Market kind. @param payload Immutable source and expected package name. */
   validate(profileId: string, kind: ExtensionKind, payload: string): void {
@@ -160,7 +188,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     return createHash('sha256').update(JSON.stringify(values)).digest('hex')
   }
   /** @param profileId Selected Profile. @returns Declared bundle names with opaque IDs, without filesystem paths. */
-  inventory(profileId: string): Promise<{ id: string; name: string; transport: string; plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported' }[]> {
+  inventory(profileId: string): Promise<{ id: string; name: string; transport: string; plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported'; plugin_archive_sha256?: string }[]> {
     return Promise.resolve().then(() => {
       const manifest = this.manifest(profileId)
       const bundles: unknown = record(record(manifest.dsh).profile).bundles
@@ -178,7 +206,13 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
             state = !plan.previousDisabled.length ? 'enabled' : !plan.previousExpected.length ? 'disabled' : 'mixed'
           } catch { /* Unsupported composition is visible but cannot be toggled. */ }
         }
+        const dependencies = manifest.dependencies
+        const dependency = dependencies && typeof dependencies === 'object' && !Array.isArray(dependencies)
+          ? (dependencies as Record<string, unknown>)[name] : undefined
+        // The DS Bot migration is the only current consumer; avoid hashing every plugin on routine inventory.
+        const digest = name === 'ds-bot' ? this.installedArchiveDigest(profileId, dependency) : undefined
         return { id: createHash('sha256').update(name).digest('hex'), name, transport: 'bundle',
+          ...(digest ? { plugin_archive_sha256: digest } : {}),
           ...(state === undefined ? {} : { plugin_state: state }) }
       })
     })

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -100,6 +100,29 @@ it('reports enabled, disabled, mixed, unsupported, and unavailable plugin toggle
     acknowledge: async () => {} })
   expect((await withoutToggle.inventory(f.authority())).map(({ name, plugin_state }) => ({ name, plugin_state })))
     .toEqual([...names, 'unmanaged'].map(name => ({ name, plugin_state: undefined })))
+})
+
+it('reports bundled archive provenance only when the managed bytes match the declared digest', async () => {
+  const f = fixture()
+  const contents = Buffer.from('released ds-bot archive')
+  const digest = createHash('sha256').update(contents).digest('hex')
+  const directory = join(f.web, '.bundled-plugins')
+  mkdirSync(directory, { mode: 0o700 })
+  const archive = join(directory, `${digest}.tgz`)
+  writeFileSync(archive, contents, { mode: 0o600 })
+  const manifest = (dependency: string) => writeFileSync(f.manifest, JSON.stringify({
+    dependencies: { 'ds-bot': dependency }, dsh: { profile: { bundles: ['ds-bot'] } },
+  }), { mode: 0o600 })
+  manifest(`file:.bundled-plugins/${digest}.tgz`)
+  expect(await f.executor.inventory(f.authority())).toEqual([expect.objectContaining({ name: 'ds-bot', plugin_archive_sha256: digest })])
+  writeFileSync(archive, 'tampered', { mode: 0o600 })
+  expect((await f.executor.inventory(f.authority()))[0]).not.toHaveProperty('plugin_archive_sha256')
+  writeFileSync(archive, contents, { mode: 0o600 })
+  manifest('npm:ds-bot@0.2.0')
+  expect((await f.executor.inventory(f.authority()))[0]).not.toHaveProperty('plugin_archive_sha256')
+  manifest(`file:.bundled-plugins/${digest}.tgz`)
+  chmodSync(directory, 0o777)
+  expect((await f.executor.inventory(f.authority()))[0]).not.toHaveProperty('plugin_archive_sha256')
 })
 
 it('rejects malformed and oversized plugin inventory entries', async () => {

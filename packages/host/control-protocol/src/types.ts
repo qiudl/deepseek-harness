@@ -1835,6 +1835,8 @@ export type HostExtensionResponse =
       readonly skill_status?: 'effective' | 'shadowed' | 'not_visible'
       readonly effective_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
       readonly plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported'
+      /** Verified content digest of the current managed bundled archive; absent for other sources. */
+      readonly plugin_archive_sha256?: string
     }[]
   }
   | {
