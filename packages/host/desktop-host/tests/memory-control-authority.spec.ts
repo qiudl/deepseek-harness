@@ -123,13 +123,50 @@ it('requires current Account authority for warmup and every signed Host memory r
     .toMatchObject({ type: 'error', error: { code: 'busy' } })
   released.resolve(undefined)
   expect(await pendingWarm).toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
-  const options = Reflect.get(authority, 'options') as { memoryProfileReader?: unknown }
+  const options = Reflect.get(authority, 'options') as {
+    memoryProfileReader?: unknown
+    openMemoryWorker?: unknown
+  }
   const originalReader = options.memoryProfileReader
   options.memoryProfileReader = undefined
   try {
     expect(await session.handleRequest(request({ action: 'warm' })))
       .toMatchObject({ type: 'error', error: { code: 'upgrade_required' } })
   } finally { options.memoryProfileReader = originalReader }
+  const exited = Promise.withResolvers<undefined>()
+  const projected: { sourceRef: string; sourceVersion: string }[] = []
+  const worker = { done: exited.promise,
+    project: vi.fn(async (items: readonly { sourceRef: string; sourceVersion: string }[]) => {
+      projected.push(...items.map(({ sourceRef, sourceVersion }) => ({ sourceRef, sourceVersion })))
+    }),
+    query: vi.fn(async () => projected),
+    close: vi.fn(async () => { exited.resolve(undefined) }) }
+  options.openMemoryWorker = vi.fn(async () => worker)
+  expect(await session.handleRequest(request({ action: 'search',
+    directive: directive('search', 'private'), query: 'private', limit: 1 })))
+    .toMatchObject({ type: 'error', error: { code: 'stale' } })
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
+  expect(worker.project).toHaveBeenCalled()
+  expect(await session.handleRequest(request({ action: 'search',
+    directive: directive('search', 'private'), query: 'private', limit: 1 })))
+    .toMatchObject({ type: 'result', result: { action: 'search', items: [{ snippet: 'private plan' }] } })
+  expect(worker.query).toHaveBeenCalledWith('private', 1, expect.any(AbortSignal))
+  await authority.closeMemoryWorkers()
+  expect(worker.close).toHaveBeenCalledTimes(1)
+  const idleExit = Promise.withResolvers<undefined>()
+  const idleWorker = { ...worker, done: idleExit.promise, close: vi.fn(async () => { idleExit.resolve(undefined) }) }
+  options.openMemoryWorker = vi.fn(async () => idleWorker)
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
+  idleExit.resolve(undefined)
+  await idleWorker.done
+  await Promise.resolve()
+  expect(await session.handleRequest(request({ action: 'search',
+    directive: directive('search', 'private'), query: 'private', limit: 1 })))
+    .toMatchObject({ type: 'error', error: { code: 'stale' } })
+  await authority.closeMemoryWorkers()
+  options.openMemoryWorker = undefined
   host.revokeOwner(ownerId)
   expect(await session.handleRequest(request({ action: 'search',
     directive: directive('search', 'private'), query: 'private', limit: 1 })))

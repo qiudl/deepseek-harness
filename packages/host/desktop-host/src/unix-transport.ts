@@ -126,6 +126,8 @@ import { HostAuthorityError } from './types.ts'
 import type { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
 import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
 import { HostMemoryReadController } from './memory-read-controller.ts'
+import { projectHostMemoryToWorker, searchHostMemoryWithWorker,
+  type MemoryWorkerLink, type MemoryWorkerStamp } from './memory-worker-session.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
@@ -243,6 +245,8 @@ export interface UnixHostServerOptions {
   readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
   /** Capture the current Account worker generation without exposing raw Sessions to Desktop. */
   readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
+  /** Open an attested, process-owned semantic worker for one current Host index. */
+  readonly openMemoryWorker?: (stamp: MemoryWorkerStamp, signal: AbortSignal) => Promise<MemoryWorkerLink>
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -505,7 +509,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
-    | 'memoryDirectiveVerifier' | 'memoryProfileReader'
+    | 'memoryDirectiveVerifier' | 'memoryProfileReader' | 'openMemoryWorker'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -957,14 +961,29 @@ class FrameChannel implements HostClientFrameTransport {
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
+  private readonly memoryWorkers = new Set<MemoryWorkerLink>()
+  private readonly memoryWorkerFailures = new Set<unknown>()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
-    let memorySlot: { key: string; controller: HostMemoryReadController } | undefined
+    let memorySlot: { key: string
+      controller: HostMemoryReadController
+      worker?: MemoryWorkerLink
+      stamp?: MemoryWorkerStamp } | undefined
     let memoryBusy = false
-    signal.addEventListener('abort', () => { memorySlot?.controller.clear(); memorySlot = undefined }, { once: true })
+    const clearMemorySlot = async (): Promise<void> => {
+      const slot = memorySlot
+      memorySlot = undefined
+      slot?.controller.clear()
+      if (slot?.worker) {
+        try { await slot.worker.close() }
+        catch (error) { this.memoryWorkerFailures.add(error); throw error }
+        finally { this.memoryWorkers.delete(slot.worker) }
+      }
+    }
+    signal.addEventListener('abort', () => { void clearMemorySlot().catch(() => undefined) }, { once: true })
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -1057,7 +1076,7 @@ export class HostControlAuthority {
               params.authority_binding_version, params.account_issuer, params.account_subject,
               params.owner_user_id, params.computer_id])
             if (memorySlot?.key !== key) {
-              memorySlot?.controller.clear()
+              await clearMemorySlot()
               const current = () => {
                 context.signal.throwIfAborted()
                 const account = { authorityEnvironmentId: params.authority_environment_id,
@@ -1077,11 +1096,39 @@ export class HostControlAuthority {
             const controller = memorySlot.controller
             let result: ProfileMemoryQueryResult['result']
             if (params.command.action === 'warm') {
-              await controller.warm(context.signal)
+              if (this.options.openMemoryWorker) {
+                if (memorySlot.worker) await clearMemorySlot()
+                const slot: NonNullable<typeof memorySlot> = { key, controller }
+                memorySlot = slot
+                const started = await projectHostMemoryToWorker(controller,
+                  this.options.openMemoryWorker, context.signal)
+                if (memorySlot !== slot || context.signal.aborted) {
+                  await started.worker.close()
+                  throw new HostAuthorityError('stale')
+                }
+                slot.worker = started.worker
+                slot.stamp = started.stamp
+                this.memoryWorkers.add(started.worker)
+                void started.worker.done.then(() => {
+                  if (memorySlot === slot) { slot.controller.clear(); memorySlot = undefined }
+                  this.memoryWorkers.delete(started.worker)
+                }, (error: unknown) => {
+                  if (memorySlot === slot) { slot.controller.clear(); memorySlot = undefined }
+                  this.memoryWorkers.delete(started.worker)
+                  this.memoryWorkerFailures.add(error)
+                })
+              } else await controller.warm(context.signal)
               result = { action: 'warm', state: 'ready' }
             } else if (params.command.action === 'search') {
-              const found = await controller.search(params.command.directive, params.command.query,
-                params.command.limit, context.signal)
+              let found: { generation: number; items: readonly unknown[] }
+              if (this.options.openMemoryWorker) {
+                if (!memorySlot.worker || !memorySlot.stamp) throw new HostAuthorityError('stale')
+                found = await searchHostMemoryWithWorker(controller, memorySlot.worker, memorySlot.stamp,
+                  params.command.directive, params.command.query, params.command.limit, context.signal)
+              } else {
+                found = await controller.search(params.command.directive, params.command.query,
+                  params.command.limit, context.signal)
+              }
               result = { action: 'search', generation: found.generation, items: found.items as never }
             } else {
               const chunk = await controller.evidenceChunk(params.command.directive,
@@ -1091,6 +1138,9 @@ export class HostControlAuthority {
             }
             channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
               request_id: frame.request_id, method: frame.method, result })))
+          } catch (error) {
+            if (this.options.openMemoryWorker) await clearMemorySlot()
+            throw error
           } finally { memoryBusy = false }
           return
         }
@@ -2200,12 +2250,22 @@ export class HostControlAuthority {
       },
       errorResponse: (frame, error) => safeError(authorityCode(error), frame),
       revokeOwner: (connectionOwnerId) => {
-        memorySlot?.controller.clear()
-        memorySlot = undefined
+        void clearMemorySlot().catch(() => undefined)
         this.options.host.revokeOwner(connectionOwnerId)
       },
     })
     return session
+  }
+
+  /** Stop every accepted semantic worker before Host shutdown reports completion. */
+  async closeMemoryWorkers(): Promise<void> {
+    const workers = [...this.memoryWorkers]
+    const results = await Promise.allSettled(workers.map(worker => worker.close()))
+    for (const worker of workers) this.memoryWorkers.delete(worker)
+    const errors = new Set<unknown>(this.memoryWorkerFailures)
+    for (const result of results) if (result.status === 'rejected') errors.add(result.reason)
+    this.memoryWorkerFailures.clear()
+    if (errors.size > 0) throw new AggregateError([...errors], 'HY worker shutdown failed')
   }
 
   private inspect(
@@ -2355,15 +2415,22 @@ export class UnixHostServer {
     const server = this.server
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
-    await Promise.all([...this.channels].map(channel => channel.drain()))
-    await this.options.extensions?.operations.dispose()
+    const failures: unknown[] = []
+    try { await Promise.all([...this.channels].map(channel => channel.drain())) }
+    catch (error) { failures.push(error) }
+    try { await this.authority.closeMemoryWorkers() }
+    catch (error) { failures.push(error) }
+    try { await this.options.extensions?.operations.dispose() }
+    catch (error) { failures.push(error) }
     if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error)
-          else resolve()
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error)
+            else resolve()
+          })
         })
-      })
+      } catch (error) { failures.push(error) }
     }
     try {
       const stat = lstatSync(this.options.socketPath)
@@ -2372,8 +2439,10 @@ export class UnixHostServer {
         unlinkSync(this.options.socketPath)
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failures.push(error)
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Unix Host shutdown failed')
   }
 
   private async accept(socket: Socket): Promise<void> {

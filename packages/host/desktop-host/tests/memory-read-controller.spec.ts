@@ -207,8 +207,10 @@ describe('Host memory signed read controller', () => {
     const last = { ...first, items: [{ ...first.items[0]!, text: 'last' }], nextOffset: null }
     const projectedPage = vi.fn(async (_epoch: string | null, _generation: number | null, offset: number) =>
       offset === 1 ? last : first)
-    const controller = { warm: vi.fn(async () => {}), projectedPage,
-      clear: vi.fn() } as unknown as HostMemoryReadController
+    const controller = fixture().controller
+    vi.spyOn(controller, 'warm').mockResolvedValue(undefined)
+    vi.spyOn(controller, 'projectedPage').mockImplementation(projectedPage)
+    vi.spyOn(controller, 'clear').mockImplementation(() => undefined)
     const pages: string[] = []
     const worker = { project: vi.fn(async (items: readonly { text: string }[]) => {
       pages.push(items[0]!.text)
