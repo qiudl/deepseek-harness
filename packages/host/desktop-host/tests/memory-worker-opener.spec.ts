@@ -1,5 +1,10 @@
-import { Socket } from 'node:net'
-import { describe, expect, it, vi } from 'vitest'
+import { once } from 'node:events'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { createConnection, Socket } from 'node:net'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { MemoryWorkerChannel } from '../src/memory-worker-channel.ts'
+import { encodeMemoryWorkerFrame, MemoryWorkerFrameAssembler } from '../src/memory-worker-frame.ts'
+import { MemoryWorkerListener } from '../src/memory-worker-listener.ts'
 import { openMemoryWorkerLease, type MemoryWorkerOpenerOptions } from '../src/memory-worker-opener.ts'
 
 const stamp = { indexEpoch: 'a'.repeat(32), generation: 1 }
@@ -169,4 +174,49 @@ describe('Host-owned HY worker admission', () => {
     expect(f.stop).toHaveBeenCalledTimes(1)
     expect(f.closeListener).toHaveBeenCalledTimes(1)
   })
+})
+
+it.skipIf(process.platform !== 'darwin')('joins a real private socket, native peer check and synthetic worker lease', async () => {
+  const root = mkdtempSync('/private/tmp/dsh-hy-opener-')
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  const uid = process.getuid!()
+  const item = { sourceRef: 'b'.repeat(64), sourceVersion: 'c'.repeat(64), text: 'synthetic' }
+  let workerSocket: Socket | undefined
+  const options: MemoryWorkerOpenerOptions = {
+    expectedUid: uid,
+    listener: onSocket => new MemoryWorkerListener(root, async (socket) => { onSocket(socket) }, async () => undefined),
+    launch: async ({ socketPath, workerNonce, indexEpoch, generation }) => {
+      const worker = createConnection(socketPath)
+      workerSocket = worker
+      worker.on('error', () => undefined)
+      await once(worker, 'connect')
+      const assembler = new MemoryWorkerFrameAssembler()
+      const base = { version: 1 as const, workerNonce, indexEpoch, generation }
+      worker.on('data', (chunk) => {
+        for (const frame of assembler.push(chunk)) {
+          if (frame.type === 'projection' && frame.totalItems !== undefined
+            && frame.projectionDigest !== undefined) {
+            worker.write(encodeMemoryWorkerFrame({ ...base, type: 'projected', pageNo: frame.pageNo,
+              totalItems: frame.totalItems, projectionDigest: frame.projectionDigest }))
+          } else if (frame.type === 'query') {
+            worker.write(encodeMemoryWorkerFrame({ ...base, type: 'candidates', requestId: frame.requestId,
+              candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }))
+          }
+        }
+      })
+      return { uid, pid: process.pid, stop: () => { worker.destroy() },
+        done: new Promise<undefined>((resolve) => { worker.once('close', () => { resolve(undefined) }) }) }
+    },
+    accept: (socket, protocol, expectedUid, expectedPid) =>
+      MemoryWorkerChannel.accept(socket, protocol, expectedUid, expectedPid,
+        async values => values.map(() => Array<number>(1024).fill(0))),
+  }
+  const lease = await openMemoryWorkerLease(stamp, AbortSignal.timeout(5_000), options)
+  onTestFinished(async () => { await lease.close() })
+  await lease.project([item], null, AbortSignal.timeout(5_000))
+  await expect(lease.query('synthetic', 1, AbortSignal.timeout(5_000)))
+    .resolves.toEqual([{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }])
+  await lease.close()
+  expect(workerSocket?.destroyed).toBe(true)
+  expect(readdirSync(root)).toEqual([])
 })
