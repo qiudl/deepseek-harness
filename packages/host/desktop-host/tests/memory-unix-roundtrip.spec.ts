@@ -130,4 +130,27 @@ it.skipIf(process.platform === 'win32')('round-trips Account-bound memory over t
     query: 'synthetic', limit: 1 })).rejects.toMatchObject({ code: 'stale' })
   host.revokeOwner(connectionOwnerId)
   await expect(query({ action: 'warm' })).rejects.toMatchObject({ code: 'unauthorized' })
+
+  await host.ensureAccountProfile({ issuer: input.issuer, subject: input.subject,
+    accountAccessToken: 'valid-token', keyHandle: 'keychain:memory',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding,
+    ownerId: connectionOwnerId })
+  reader.assertCurrent.mockImplementation(() => undefined)
+  const entered = Promise.withResolvers<undefined>()
+  const released = Promise.withResolvers<undefined>()
+  reader.list.mockImplementationOnce(async () => {
+    entered.resolve(undefined)
+    await released.promise
+    return { items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }
+  })
+  const pendingRead = query({ action: 'warm' }).catch(() => undefined)
+  await entered.promise
+  let closed = false
+  const closing = server.close().then(() => { closed = true })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  expect(closed).toBe(false)
+  released.resolve(undefined)
+  await closing
+  await pendingRead
+  expect(closed).toBe(true)
 })

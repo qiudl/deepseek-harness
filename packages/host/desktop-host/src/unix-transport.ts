@@ -898,6 +898,9 @@ class FrameChannel implements HostClientFrameTransport {
 
   close(): void { this.socket.destroy() }
 
+  /** Wait for every frame already received on this transport to settle. */
+  drain(): Promise<void> { return this.requestTail }
+
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
     const id = frame.request_id
@@ -2307,6 +2310,7 @@ export class UnixHostServer {
   private server: Server | undefined
   private socketIdentity?: { dev: number; ino: number }
   private readonly connections = new Set<Socket>()
+  private readonly channels = new Set<FrameChannel>()
   private readonly authority: HostControlAuthority
   constructor(private readonly options: UnixHostServerOptions) {
     this.authority = new HostControlAuthority(options)
@@ -2351,6 +2355,7 @@ export class UnixHostServer {
     const server = this.server
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
+    await Promise.all([...this.channels].map(channel => channel.drain()))
     await this.options.extensions?.operations.dispose()
     if (server) {
       await new Promise<void>((resolve, reject) => {
@@ -2387,9 +2392,14 @@ export class UnixHostServer {
         throw new HostAuthorityError('unauthorized')
       }
     } catch { socket.destroy(); return }
+    if (socket.destroyed || !this.server) { socket.destroy(); return }
     const session = this.authority.openSession(ownerId, transportLifetime.signal)
     const channel = new FrameChannel(socket, async (frame) => {
       channel.send(await session.handleRequest(frame))
+    })
+    this.channels.add(channel)
+    socket.once('close', () => {
+      void channel.drain().then(() => { this.channels.delete(channel) })
     })
     socket.resume()
   }
