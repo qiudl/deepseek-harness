@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
 import { HostMemoryReadController } from '../src/memory-read-controller.ts'
+import { projectHostMemoryToWorker, searchHostMemoryWithWorker } from '../src/memory-worker-session.ts'
 
 const keys = generateKeyPairSync('ed25519')
 const baseTime = 1_800_000_000_000
@@ -140,6 +141,69 @@ describe('Host memory signed read controller', () => {
       .rejects.toMatchObject({ code: 'stale' })
     await expect(f.controller.projectedPage(null, null, 0, signal))
       .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('sends redacted pages and resolves worker references through the signed Host read', async () => {
+    const f = fixture()
+    const projected: unknown[] = []
+    const worker = { project: vi.fn(async (items: unknown) => { projected.push(items) }),
+      query: vi.fn(async () => [] as { sourceRef: string; sourceVersion: string }[]),
+      close: vi.fn() }
+    const stamp = await projectHostMemoryToWorker(f.controller, worker, signal)
+    expect(projected).toHaveLength(1)
+    expect(projected[0]).toMatchObject([{ text: 'private plan' }])
+    const source = (projected[0] as { sourceRef: string; sourceVersion: string }[])[0]!
+    worker.query.mockResolvedValue([{ sourceRef: source.sourceRef, sourceVersion: source.sourceVersion }])
+    await expect(searchHostMemoryWithWorker(f.controller, worker, stamp,
+      directive('search', 'private'), 'private', 1, signal)).resolves.toMatchObject({
+      generation: stamp.generation, items: [{ sourceRef: source.sourceRef, snippet: 'private plan' }],
+    })
+    expect(worker.close).not.toHaveBeenCalled()
+  })
+
+  it('closes the worker and clears the index after a projection failure', async () => {
+    const f = fixture()
+    const worker = { project: vi.fn(async () => { throw Error('worker disconnected') }),
+      query: vi.fn(), close: vi.fn() }
+    await expect(projectHostMemoryToWorker(f.controller, worker, signal))
+      .rejects.toThrow('worker disconnected')
+    expect(worker.close).toHaveBeenCalledOnce()
+    await expect(f.controller.projectedPage(null, null, 0, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('keeps every projection page on one index generation and rechecks after final ACK', async () => {
+    const first = { indexEpoch: 'a'.repeat(32), generation: 2,
+      items: [{ sourceRef: 'b'.repeat(64), sourceVersion: 'c'.repeat(64), text: 'first' }],
+      nextOffset: 1 }
+    const last = { ...first, items: [{ ...first.items[0]!, text: 'last' }], nextOffset: null }
+    const projectedPage = vi.fn(async (_epoch: string | null, _generation: number | null, offset: number) =>
+      offset === 1 ? last : first)
+    const controller = { warm: vi.fn(async () => {}), projectedPage,
+      clear: vi.fn() } as unknown as HostMemoryReadController
+    const pages: string[] = []
+    const worker = { project: vi.fn(async (items: readonly { text: string }[]) => {
+      pages.push(items[0]!.text)
+    }), query: vi.fn(), close: vi.fn() }
+    await expect(projectHostMemoryToWorker(controller, worker, signal))
+      .resolves.toEqual({ indexEpoch: first.indexEpoch, generation: first.generation })
+    expect(pages).toEqual(['first', 'last'])
+    expect(projectedPage).toHaveBeenNthCalledWith(2,
+      first.indexEpoch, first.generation, 1, signal)
+    expect(projectedPage).toHaveBeenNthCalledWith(3,
+      first.indexEpoch, first.generation, 0, signal)
+    expect(worker.close).not.toHaveBeenCalled()
+  })
+
+  it('rejects an old worker generation without releasing its candidate result', async () => {
+    const f = fixture()
+    const worker = { project: vi.fn(async () => {}),
+      query: vi.fn(async () => []), close: vi.fn() }
+    const stamp = await projectHostMemoryToWorker(f.controller, worker, signal)
+    await expect(searchHostMemoryWithWorker(f.controller, worker,
+      { ...stamp, indexEpoch: '0'.repeat(32) }, directive('search', 'private'),
+      'private', 1, signal)).rejects.toMatchObject({ code: 'stale' })
+    expect(worker.close).toHaveBeenCalledOnce()
   })
 
   it('requires a fresh signed search to resolve semantic candidate references', async () => {
