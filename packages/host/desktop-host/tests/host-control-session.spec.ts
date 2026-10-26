@@ -105,6 +105,7 @@ function fixture(signal?: AbortSignal, overrides: Partial<HostControlServerSessi
       },
     })}\n`),
     revokeOwner,
+    diagnostics: undefined,
     ...overrides,
   })
   const workerSession: WindowsHostWorkerSession = session
@@ -173,6 +174,7 @@ describe('Host control server session', () => {
       },
       errorResponse,
       revokeOwner: () => undefined,
+      diagnostics: undefined,
     })
     await session.handleRequest(inspectRequest())
     await expect(session.handleRequest(statusRequest())).rejects.toBeInstanceOf(HostAuthorityError)
@@ -242,5 +244,64 @@ describe('Host control server session', () => {
     })
     await closing.session.handleRequest(inspectRequest(), new AbortController().signal)
     await expect(closing.session.handleRequest(statusRequest(), requestAbort.signal)).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('records the finer local step reason while the broker still receives the authority code', async () => {
+    const record = vi.fn()
+    const authority = fixture(undefined, {
+      dispatchAuthorized: () => {
+        throw new HostAuthorityError('unavailable', 'restore_profile_rejected')
+      },
+      diagnostics: { record },
+    })
+    await authority.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(authority.session.handleRequest(statusRequest(), new AbortController().signal))
+      .resolves.toMatchObject({ type: 'error' })
+    expect(record).toHaveBeenCalledWith({
+      event: 'control-session',
+      reason: 'restore_profile_rejected',
+      method: 'profile.status',
+    })
+  })
+
+  it('records one control-session diagnostic for a rejected authorized request', async () => {
+    const record = vi.fn()
+    const authority = fixture(undefined, {
+      dispatchAuthorized: () => { throw new HostAuthorityError('profile_locked') },
+      diagnostics: { record },
+    })
+    await authority.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(authority.session.handleRequest(statusRequest(), new AbortController().signal))
+      .resolves.toMatchObject({ type: 'error', method: 'profile.status', request_id: statusRequest().request_id })
+    expect(record).toHaveBeenCalledOnce()
+    expect(record).toHaveBeenCalledWith({
+      event: 'control-session',
+      reason: 'profile_locked',
+      method: 'profile.status',
+    })
+
+    const carrier = vi.fn()
+    const untyped = fixture(undefined, {
+      dispatchAuthorized: () => { throw new TypeError('worker thread unavailable at C:\\Users\\alice') },
+      diagnostics: { record: carrier },
+    })
+    await untyped.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(untyped.session.handleRequest(statusRequest(), new AbortController().signal))
+      .resolves.toMatchObject({ type: 'error' })
+    expect(carrier).toHaveBeenCalledWith({
+      event: 'control-session',
+      reason: 'TypeError',
+      method: 'profile.status',
+    })
+
+    const correlation = vi.fn()
+    const uncorrelated = fixture(undefined, {
+      dispatchAuthorized: () => undefined,
+      diagnostics: { record: correlation },
+    })
+    await uncorrelated.session.handleRequest(inspectRequest(), new AbortController().signal)
+    await expect(uncorrelated.session.handleRequest(statusRequest(), new AbortController().signal))
+      .rejects.toBeInstanceOf(HostAuthorityError)
+    expect(correlation).not.toHaveBeenCalled()
   })
 })

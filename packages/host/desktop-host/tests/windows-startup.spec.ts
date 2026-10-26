@@ -680,3 +680,22 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   await noCatalogOptions.install(profile, 'fixture@1.0.0', context)
   expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('archivePath')
 })
+
+it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalizer', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  const canonicalize = (token: string): string =>
+    ({ LA: 'S-1-5-21-1-2-3-500', SY: 'S-1-5-18', BA: 'S-1-5-32-544' })[token] ?? token
+  const decoded = decodeEvidenceSddl(
+    'O:LAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)',
+    canonicalize,
+  )
+  expect(decoded.ownerSid).toBe('S-1-5-21-1-2-3-500')
+  expect(decoded.daclProtected).toBe(true)
+  expect(decoded.access.map(entry => entry.sid)).toEqual([
+    'S-1-5-18',
+    'S-1-5-32-544',
+    'S-1-5-21-1-2-3-500',
+  ])
+  const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
+  expect(passthrough.ownerSid).toBe('LA')
+})
