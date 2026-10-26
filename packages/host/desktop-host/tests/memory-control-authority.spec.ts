@@ -58,7 +58,8 @@ it('requires current Account authority for warmup and every signed Host memory r
     memoryDirectiveVerifier: new MemoryDirectiveVerifier(ring, () => now),
     memoryProfileReader: () => reader,
   })
-  const session = authority.openSession(ownerId, new AbortController().signal)
+  const transport = new AbortController()
+  const session = authority.openSession(ownerId, transport.signal)
   const inspect = await session.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
     method: 'host.inspect', params: { challenge: randomBytes(32).toString('base64url') as never,
       client_instance_id: clientInstanceId as never, supported_versions: [1] } })
@@ -152,8 +153,15 @@ it('requires current Account authority for warmup and every signed Host memory r
     directive: directive('search', 'private'), query: 'private', limit: 1 })))
     .toMatchObject({ type: 'result', result: { action: 'search', items: [{ snippet: 'private plan' }] } })
   expect(worker.query).toHaveBeenCalledWith('private', 1, expect.any(AbortSignal))
-  await authority.closeMemoryWorkers()
+  const replacementExit = Promise.withResolvers<undefined>()
+  const replacement = { ...worker, done: replacementExit.promise,
+    close: vi.fn(async () => { replacementExit.resolve(undefined) }) }
+  options.openMemoryWorker = vi.fn(async () => replacement)
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
   expect(worker.close).toHaveBeenCalledTimes(1)
+  await authority.closeMemoryWorkers()
+  expect(replacement.close).toHaveBeenCalledTimes(1)
   const idleExit = Promise.withResolvers<undefined>()
   const idleWorker = { ...worker, done: idleExit.promise, close: vi.fn(async () => { idleExit.resolve(undefined) }) }
   options.openMemoryWorker = vi.fn(async () => idleWorker)
@@ -166,10 +174,55 @@ it('requires current Account authority for warmup and every signed Host memory r
     directive: directive('search', 'private'), query: 'private', limit: 1 })))
     .toMatchObject({ type: 'error', error: { code: 'stale' } })
   await authority.closeMemoryWorkers()
+  const crashed = Promise.withResolvers<undefined>()
+  const crash = new Error('worker exited unexpectedly')
+  const crashedWorker = { ...worker, done: crashed.promise,
+    close: vi.fn(async () => { crashed.resolve(undefined) }) }
+  options.openMemoryWorker = vi.fn(async () => crashedWorker)
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
+  crashed.reject(crash)
+  await expect(crashed.promise).rejects.toBe(crash)
+  await Promise.resolve()
+  expect(await session.handleRequest(request({ action: 'search',
+    directive: directive('search', 'private'), query: 'private', limit: 1 })))
+    .toMatchObject({ type: 'error', error: { code: 'stale' } })
+  await expect(authority.closeMemoryWorkers()).rejects.toBeInstanceOf(AggregateError)
   options.openMemoryWorker = undefined
   host.revokeOwner(ownerId)
   expect(await session.handleRequest(request({ action: 'search',
     directive: directive('search', 'private'), query: 'private', limit: 1 })))
     .toMatchObject({ type: 'error', error: { code: 'unauthorized' } })
+  await host.ensureAccountProfile({ issuer: 'https://accounts.example.test', subject: 'owner',
+    accountAccessToken: 'valid-token', keyHandle: 'keychain:memory',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding, ownerId })
+  const failure = new Error('worker cleanup failed')
+  const failedExit = Promise.withResolvers<undefined>()
+  const failingWorker = { ...worker, done: failedExit.promise,
+    close: vi.fn(async () => { failedExit.reject(failure); throw failure }) }
+  options.openMemoryWorker = vi.fn(async () => failingWorker)
+  expect(await session.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
   session.close()
+  await expect(authority.closeMemoryWorkers()).rejects.toBeInstanceOf(AggregateError)
+  expect(failingWorker.close).toHaveBeenCalled()
+
+  await host.ensureAccountProfile({ issuer: 'https://accounts.example.test', subject: 'owner',
+    accountAccessToken: 'valid-token', keyHandle: 'keychain:memory',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ...binding, ownerId })
+  const anotherTransport = new AbortController()
+  const anotherSession = authority.openSession(ownerId, anotherTransport.signal)
+  expect(await anotherSession.handleRequest({ version: 1, type: 'request', request_id: randomUUID() as never,
+    method: 'host.inspect', params: { challenge: randomBytes(32).toString('base64url') as never,
+      client_instance_id: clientInstanceId as never, supported_versions: [1] } }))
+    .toMatchObject({ type: 'result', method: 'host.inspect' })
+  const anotherExit = Promise.withResolvers<undefined>()
+  const anotherWorker = { ...worker, done: anotherExit.promise,
+    close: vi.fn(async () => { anotherExit.resolve(undefined); throw failure }) }
+  options.openMemoryWorker = vi.fn(async () => anotherWorker)
+  expect(await anotherSession.handleRequest(request({ action: 'warm' })))
+    .toMatchObject({ type: 'result', result: { action: 'warm', state: 'ready' } })
+  anotherTransport.abort()
+  await expect(authority.closeMemoryWorkers()).rejects.toBeInstanceOf(AggregateError)
+  transport.abort()
 })

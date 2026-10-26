@@ -1102,6 +1102,7 @@ export class HostControlAuthority {
                 memorySlot = slot
                 const started = await projectHostMemoryToWorker(controller,
                   this.options.openMemoryWorker, context.signal)
+                /* v8 ignore next 4 -- transport abort can race the final projection check and this continuation. */
                 if (memorySlot !== slot || context.signal.aborted) {
                   await started.worker.close()
                   throw new HostAuthorityError('stale')
