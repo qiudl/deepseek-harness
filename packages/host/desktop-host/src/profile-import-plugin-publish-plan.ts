@@ -37,7 +37,7 @@ async function fingerprint(root: string, uid: number, exactRoot: boolean): Promi
       }
       return
     }
-    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || ++count > MAX_FILES) {
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES || ++count > MAX_FILES) {
       throw Error('profile_import_plugin_publish_unsafe')
     }
     total += stat.size
@@ -45,12 +45,14 @@ async function fingerprint(root: string, uid: number, exactRoot: boolean): Promi
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const before = await handle.stat({ bigint: true })
-      if (!before.isFile() || before.uid !== BigInt(uid) || before.size !== BigInt(stat.size)) {
+      if (!before.isFile() || before.nlink !== 1n || before.uid !== BigInt(uid)
+        || before.size !== BigInt(stat.size)) {
         throw Error('profile_import_plugin_publish_unsafe')
       }
       const bytes = await handle.readFile()
       const after = await handle.stat({ bigint: true })
       if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+        || after.nlink !== 1n
         || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
         throw Error('profile_import_plugin_publish_changed')
       }
@@ -83,6 +85,7 @@ export async function fingerprintProfileImportPluginWeb(root: string, uid: numbe
 async function syncTree(path: string, uid: number): Promise<void> {
   const stat = await lstat(path)
   if (stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0
+    || (stat.isFile() && stat.nlink !== 1)
     || (!stat.isDirectory() && !stat.isFile())) throw Error('profile_import_plugin_publish_unsafe')
   if (stat.isDirectory()) {
     for (const child of (await readdir(path)).sort()) await syncTree(join(path, child), uid)
