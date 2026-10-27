@@ -159,6 +159,33 @@ describe('Windows Host pipe Worker runner', () => {
     expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'disconnected', 'stopped'])
   })
 
+  it('keeps the Worker generation when the Desktop peer hangs up mid-connection', async () => {
+    const state = fixture([])
+    const peerGone = Object.assign(new Error('WriteFile failed with Win32 code 232'), { win32Code: 232 })
+    state.options.createChannel = () => ({
+      readFrame: vi.fn(async () => { throw peerGone }),
+      send: vi.fn(async () => { throw peerGone }),
+    })
+    state.options.port.send.mockImplementation((message: WindowsHostWorkerMessage) => {
+      state.sent.push(message)
+      if (message.type === 'disconnected') state.flag.request()
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).resolves.toEqual({
+      connectionsServed: 1,
+      requestsHandled: 0,
+    })
+    expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'disconnected', 'stopped'])
+  })
+
+  it('fails the Worker generation when a connection fails for another reason', async () => {
+    const state = fixture([])
+    state.options.createChannel = () => ({
+      readFrame: vi.fn(async () => { throw new Error('ReadFile failed with Win32 code 87') }),
+      send: vi.fn(async () => {}),
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('fails the Worker generation after malformed parent input and unsubscribes', async () => {
     const state = fixture([request])
     state.options.port.send.mockImplementation((message: WindowsHostWorkerMessage) => {

@@ -47,6 +47,14 @@ function errorReason(error: unknown): Error {
  * Native handles never cross into Host business logic: canonical requests travel through
  * the generation-bound bridge, while the parent retains the shared Host session.
  */
+/** Client-side closes while the Worker is writing are a finished connection, not a host failure. */
+function isPeerDisconnected(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const code = (error as { win32Code?: unknown }).win32Code
+  // 232 ERROR_NO_DATA, 109 ERROR_BROKEN_PIPE, 233 ERROR_PIPE_NOT_CONNECTED
+  return code === 232 || code === 109 || code === 233
+}
+
 export async function runWindowsHostPipeWorker<Evidence>(
   options: WindowsHostPipeWorkerRunnerOptions<Evidence>,
 ): Promise<WindowsHostPipeWorkerRunResult> {
@@ -90,13 +98,25 @@ export async function runWindowsHostPipeWorker<Evidence>(
           attest: options.attest,
           serve: async (handle) => {
             await bridge.openConnection(options.createConnectionId())
-            const result = await runWindowsNamedPipeRequestLoop({
-              channel: options.createChannel(handle),
-              stopRequested: () => options.stopFlag.requested(),
-              handleRequest: (request: HostControlFrame) => bridge.handleRequest(request),
-            })
-            if (!result.stopped) await bridge.closeConnection(result.requestsHandled)
-            return result
+            try {
+              const result = await runWindowsNamedPipeRequestLoop({
+                channel: options.createChannel(handle),
+                stopRequested: () => options.stopFlag.requested(),
+                handleRequest: (request: HostControlFrame) => bridge.handleRequest(request),
+              })
+              if (!result.stopped) await bridge.closeConnection(result.requestsHandled)
+              return result
+            } catch (error) {
+              // REQ-20261026-0023: a Desktop probe that hangs up mid-write (Win32 232) used to abort
+              // the whole Worker, so the account Profile never started. Close the generation and keep
+              // accepting instead of turning a client disconnect into a host failure.
+              if (!isPeerDisconnected(error)) throw error
+              console.error(`[dsh-host] connection closed by the Desktop peer: ${
+                (error as Error).message
+              }`)
+              try { await bridge.closeConnection(0) } catch { /* the peer is already gone */ }
+              return { requestsHandled: 0, stopped: false }
+            }
           },
         })
         if (outcome.state === 'stopped') break
