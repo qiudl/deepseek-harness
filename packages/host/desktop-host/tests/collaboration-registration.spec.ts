@@ -1,11 +1,12 @@
-import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostCollaborationRegistrationSignaturePayload,
   encodeHostBotGroupResultProofPayload,
-  encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  encodeHostNativeRoomTurnAssertionPayload,
+  encodeHostBotImportGrantPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotMemoryReadRequest, HostBotGroupHistoryReadRequest,
@@ -18,7 +19,6 @@ import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
-import { HostAuthorityError } from '../src/types.ts'
 
 const slarkOwnerUserId = 'slark-owner'
 
@@ -94,10 +94,9 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const importOpened = { version: 1 as const, transferId: importTransferId,
     operationId: importOperationId, sessionId: importSessionId,
     eventDigest: 'b'.repeat(64), eventCount: 0, totalBytes: 2 }
-  let importAllowed = false
-  const authorizeBotImportSource = vi.fn(async () => {
-    if (!importAllowed) throw new HostAuthorityError('unauthorized')
-  })
+  const importKeys = generateKeyPairSync('ed25519')
+  const importPublicKey = (importKeys.publicKey.export({ type: 'spki', format: 'der' }) as Buffer)
+    .subarray(-32).toString('base64url')
   const transferBotImportSource = vi.fn(async (_profileId: string,
     request: HostBotImportSourceRequest, _signal: AbortSignal): Promise<HostBotImportSourceResult> =>
     request.kind === 'open' ? importOpened : request.kind === 'next'
@@ -121,7 +120,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     readBotTeam, readBotMemory, readBotGroupHistory, readBotChat, readBotChatAttachments,
     transferBotChatAttachment,
-    ...(supportImport ? { authorizeBotImportSource, transferBotImportSource } : {}),
+    ...(supportImport ? { botImportGrantPublicKey: importPublicKey, transferBotImportSource } : {}),
     ...(supportBot ? {
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -148,6 +147,22 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   { call: async (frame) => { seen.push(frame); const answer = await session.handleRequest(frame); return alter ? alter(answer) : answer },
     isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort(); session.close() } })
   onTestFinished(() => { client.close() })
+  const makeImportGrant = () => {
+    const claims = { schema_version: 'dsh-bot-import-grant/v1' as const,
+      operation_id: importOperationId, source_digest: importScope.source_digest,
+      target_device_id: importScope.target_device_id,
+      authority_environment_id: binding.authorityEnvironmentId,
+      account_binding_handle: binding.accountBindingHandle,
+      authority_binding_version: binding.authorityBindingVersion,
+      account_issuer: account.issuer, account_subject: account.subject,
+      host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce,
+      boot_nonce: client.inspection.boot_nonce,
+      issued_at: time.value - 1, expires_at: time.value + 1000,
+      nonce: randomBytes(32).toString('base64url') }
+    return { ...claims,
+      signature: sign(null, encodeHostBotImportGrantPayload(claims), importKeys.privateKey)
+        .toString('base64url') }
+  }
   const challenge = { registration_request_id: randomUUID() as never, challenge_id: randomUUID() as never,
     challenge_nonce: 'A'.repeat(43) as never, expires_at: 2000, audience: 'https://slark.example.test',
     environment_id: binding.authorityEnvironmentId as never, account_issuer: account.issuer, account_subject: account.subject as never }
@@ -159,8 +174,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     readBotChatAttachments, attachmentsPage, transferBotChatAttachment,
     attachmentScope, attachmentTransferPage,
     importScope, importOperationId, importTransferId, importOpened,
-    authorizeBotImportSource, transferBotImportSource,
-    allowImport: (value: boolean) => { importAllowed = value },
+    transferBotImportSource, makeImportGrant,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -262,7 +276,10 @@ it('keeps raw Bot import transfer separate from Account read authorization', asy
   await expect(f.client.transferBotImportSource(input))
     .rejects.toMatchObject({ code: 'unauthorized' })
   expect(f.transferBotImportSource).not.toHaveBeenCalled()
-  f.allowImport(true)
+  const grant = f.makeImportGrant()
+  expect(await f.client.grantBotImportSource({ ...input, grant })).toEqual({
+    operationId: f.importOperationId, expiresAt: grant.expires_at,
+  })
   expect(await f.client.transferBotImportSource(input)).toEqual(f.importOpened)
   const next = { kind: 'next' as const, operationId: f.importOperationId,
     transferId: f.importTransferId, offset: 0 }
@@ -273,7 +290,8 @@ it('keeps raw Bot import transfer separate from Account read authorization', asy
     contentBase64: 'W10=', nextOffset: null,
   })
   expect(f.transferBotImportSource).toHaveBeenCalledTimes(2)
-  expect(f.authorizeBotImportSource).toHaveBeenCalledTimes(5)
+  await expect(f.client.grantBotImportSource({ ...input, grant }))
+    .rejects.toMatchObject({ code: 'replayed' })
 })
 
 it('reads visible Bot attachment manifests only for the current Account, Bot and part', async () => {

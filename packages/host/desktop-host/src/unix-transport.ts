@@ -17,6 +17,8 @@ import { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
   parseHostBotImportSourceScope, type HostBotImportSourceRequest,
   type HostBotImportSourceResult, type HostBotImportSourceScope,
   type ProfileBotImportSourceTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotImportGrant, type HostBotImportGrant,
+  type ProfileBotImportGrantRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest,
   type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest,
   type ProfileBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -43,6 +45,7 @@ import { readAccountBotMemory } from './account-bot-memory-read.ts'
 import { readAccountBotGroupHistory } from './account-bot-group-history-read.ts'
 import { readAccountBotChat } from './account-bot-chat-read.ts'
 import { AccountBotImportSourceTransfers } from './account-bot-import-source.ts'
+import { BotImportGrantRegistry } from './bot-import-grants.ts'
 import { readAccountBotChatAttachments } from './account-bot-chat-attachments-read.ts'
 import { transferAccountBotChatAttachment } from './account-bot-chat-attachment-transfer.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
@@ -349,14 +352,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupHistoryPage>
   readonly readBotChat?: (profileId: string, request: HostBotChatReadRequest,
     signal: AbortSignal) => Promise<HostBotChatPage>
-  /** Absent unless the embedding supplies an operation-level import grant checker. */
-  readonly authorizeBotImportSource?: (input: {
-    readonly profileId: string
-    readonly ownerId: string
-    readonly scope: HostBotImportSourceScope
-    readonly transfer: HostBotImportSourceRequest
-    readonly signal: AbortSignal
-  }) => void | Promise<void>
+  /** Distinct Main-only public key, pinned by the signed embedding at Host startup. */
+  readonly botImportGrantPublicKey?: string
   readonly transferBotImportSource?: (profileId: string, request: HostBotImportSourceRequest,
     signal: AbortSignal) => Promise<HostBotImportSourceResult>
   readonly readBotChatAttachments?: (profileId: string, request: HostBotChatAttachmentsReadRequest,
@@ -644,7 +641,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'readBotGroupHistory'
     | 'readBotChat'
-    | 'authorizeBotImportSource' | 'transferBotImportSource'
+    | 'botImportGrantPublicKey' | 'transferBotImportSource'
     | 'readBotChatAttachments'
     | 'transferBotChatAttachment'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -1099,12 +1096,19 @@ class FrameChannel implements HostClientFrameTransport {
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
+  private readonly botImportGrants?: BotImportGrantRegistry
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
   private readonly packageUploads = new SkillHubPackageUploads()
   private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
   private readonly clockWitnesses = new SkillHubClockWitnesses()
   private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
-  constructor(private readonly options: HostControlAuthorityOptions) {}
+  constructor(private readonly options: HostControlAuthorityOptions) {
+    if (options.botImportGrantPublicKey && options.transferBotImportSource)
+      this.botImportGrants = new BotImportGrantRegistry(options.botImportGrantPublicKey, {
+        hostInstanceId: options.identity.hostInstanceId,
+        processNonce: options.identity.processNonce, bootNonce: this.bootNonce,
+      }, options.now ?? Date.now)
+  }
 
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
     const selector = verifyProfileSelector(this.options.identity, profileSelector)
@@ -1140,9 +1144,9 @@ export class HostControlAuthority {
     const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
     const botImportSourceTransfers = this.options.transferBotImportSource &&
-      this.options.authorizeBotImportSource
+      this.botImportGrants
       ? new AccountBotImportSourceTransfers(this.options.host, this.options.transferBotImportSource,
-        this.options.authorizeBotImportSource) : undefined
+        input => this.botImportGrants?.check(input)) : undefined
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
       readonly expiresAt: number
@@ -2521,6 +2525,25 @@ export class HostControlAuthority {
             { readBotChat: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_import_grant') {
+          if (!this.botImportGrants || !botImportSourceTransfers)
+            throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          this.options.host.authorizeCollaborationRegistration(account)
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          const grant = this.botImportGrants.register(frame.params.grant, account, profileId)
+          try {
+            context.signal.throwIfAborted()
+            this.options.host.authorizeCollaborationRegistration(account)
+            if (this.options.host.authorizeAccountModelText(account) !== profileId)
+              throw new HostAuthorityError('stale')
+          } catch (error) {
+            this.botImportGrants.revoke(grant.operation_id)
+            throw error
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { operation_id: grant.operation_id,
+              expires_at: grant.expires_at } })
         } else if (frame.method === 'profile.bot_import_source_transfer') {
           if (!botImportSourceTransfers) throw new HostAuthorityError('upgrade_required')
           const account = commandReadAccount(frame.params, ownerId)
@@ -2802,8 +2825,8 @@ export class HostControlAuthority {
           ...(this.options.readBotMemory ? ['profile.bot_memory_read'] : []),
           ...(this.options.readBotGroupHistory ? ['profile.bot_group_history_read'] : []),
           ...(this.options.readBotChat ? ['profile.bot_chat_read'] : []),
-          ...(this.options.transferBotImportSource && this.options.authorizeBotImportSource
-            ? ['profile.bot_import_source_transfer'] : []),
+          ...(this.botImportGrants
+            ? ['profile.bot_import_grant', 'profile.bot_import_source_transfer'] : []),
           ...(this.options.readBotChatAttachments ? ['profile.bot_chat_attachments_read'] : []),
           ...(this.options.transferBotChatAttachment ? ['profile.bot_chat_attachment_transfer'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
@@ -4844,7 +4867,10 @@ export class UnixHostClient {
     return page
   }
 
-  /** Transfer one operation-granted raw Session page from the current Account Profile. */
+  /** Transfer one operation-granted raw Session page from the current Account Profile.
+   * @param input Current Account, signed operation scope and transfer command.
+   * @returns One bounded result from the current Profile.
+   */
   async transferBotImportSource(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4868,6 +4894,35 @@ export class UnixHostClient {
     input.signal?.throwIfAborted()
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return parseHostBotImportSourceResult(frame.result.value, request.params.transfer)
+  }
+
+  /** Register one locally confirmed Main signature for this exact Account and Host boot.
+   * @param input Current Account and Main-signed grant.
+   * @returns Accepted operation and expiry.
+   */
+  async grantBotImportSource(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly grant: HostBotImportGrant
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly operationId: string; readonly expiresAt: number }> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_import_grant' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const grant = parseHostBotImportGrant(input.grant)
+    const request: ProfileBotImportGrantRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_import_grant',
+      params: { ...this.collaborationAccountRequestParams(input), grant },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method ||
+        frame.result.operation_id !== grant.operation_id ||
+        frame.result.expires_at !== grant.expires_at) throw new HostAuthorityError('unavailable')
+    return { operationId: frame.result.operation_id, expiresAt: frame.result.expires_at }
   }
 
   /**
@@ -5943,6 +5998,7 @@ export class UnixHostClient {
       | ProfileBotGroupHistoryReadRequest
       | ProfileBotChatReadRequest
       | ProfileBotImportSourceTransferRequest
+      | ProfileBotImportGrantRequest
       | ProfileBotChatAttachmentsReadRequest
       | ProfileBotChatAttachmentTransferRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest

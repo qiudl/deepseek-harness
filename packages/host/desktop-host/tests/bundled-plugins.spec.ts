@@ -337,5 +337,5 @@ it.runIf(process.platform !== 'win32')('keeps a temporary Bot team intact across
   expect(operations.status(authority, id)).toMatchObject({ state: 'unknown', completedBy: completionId })
   expect((await executor.inventory(profileId)).find(entry => entry.name === 'ds-bot')?.plugin_archive_sha256).toBe(nextDigest)
   expect(readFileSync(team, 'utf8')).toBe(teamBytes)
-  expect(JSON.parse(readFileSync(manifest, 'utf8')) as unknown).toMatchObject({ dependencies: { keep: '1.0.0' } })
+  expect(JSON.parse(readFileSync(manifest, 'utf8'))).toMatchObject({ dependencies: { keep: '1.0.0' } })
 })

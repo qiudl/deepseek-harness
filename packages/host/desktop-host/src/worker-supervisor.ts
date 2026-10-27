@@ -67,7 +67,12 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
-  /** Keep raw Session transfer inside one live worker generation; caller must supply a separate import grant. */
+  /** Keep raw Session transfer inside one live worker generation; caller supplies a separate import grant.
+   * @param profileId Selected Account Profile.
+   * @param request Bounded transfer command.
+   * @param signal Caller cancellation.
+   * @returns Result from the same live worker generation.
+   */
   async transferBotImportSource(profileId: string,
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRequest,
     signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceResult> {

@@ -12,6 +12,7 @@ const exact = (value: Record<string, unknown>, keys: string[]): boolean =>
 const integer = (value: unknown, min: number, max: number): value is number =>
   Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max
 
+/** Open, advance or close one raw Session transfer. */
 export type HostBotImportSourceRequest =
   | { readonly kind: 'open'; readonly operationId: string; readonly sourceDigest: string; readonly sessionId: string }
   | { readonly kind: 'next'; readonly operationId: string; readonly transferId: string; readonly offset: number }
@@ -24,15 +25,21 @@ export interface HostBotImportSourceScope {
   readonly target_device_id: string
 }
 
+/** Validate the repeated operation scope.
+ * @param value Untrusted Host frame scope.
+ * @returns Bounded source and target selector.
+ */
 export function parseHostBotImportSourceScope(value: unknown): HostBotImportSourceScope {
   if (!row(value) || !exact(value, ['source_digest', 'session_id', 'target_device_id']) ||
       typeof value.source_digest !== 'string' || !DIGEST.test(value.source_digest) ||
       typeof value.session_id !== 'string' || !SESSION.test(value.session_id) ||
       typeof value.target_device_id !== 'string' || !DEVICE.test(value.target_device_id))
     throw Error('invalid_bot_import_source_scope')
-  return value as unknown as HostBotImportSourceScope
+  return { source_digest: value.source_digest,
+    session_id: value.session_id, target_device_id: value.target_device_id }
 }
 
+/** Bounded transfer metadata, event bytes or close receipt. */
 export type HostBotImportSourceResult =
   | {
     readonly version: 1
@@ -57,6 +64,10 @@ export type HostBotImportSourceResult =
   }
   | { readonly version: 1; readonly closed: true }
 
+/** Validate a private raw Session transfer command.
+ * @param value Untrusted command.
+ * @returns Strict transfer command.
+ */
 export function parseHostBotImportSourceRequest(value: unknown): HostBotImportSourceRequest {
   if (!row(value) || !UUID.test(String(value.operationId))) throw Error('invalid_bot_import_source_request')
   if (value.kind === 'open' && exact(value, ['kind', 'operationId', 'sourceDigest', 'sessionId']) &&
@@ -72,6 +83,11 @@ export function parseHostBotImportSourceRequest(value: unknown): HostBotImportSo
   throw Error('invalid_bot_import_source_request')
 }
 
+/** Validate a bounded worker result and optionally match its request.
+ * @param value Untrusted worker result.
+ * @param request Original transfer command, when available.
+ * @returns Strict transfer result.
+ */
 export function parseHostBotImportSourceResult(value: unknown,
   request?: HostBotImportSourceRequest): HostBotImportSourceResult {
   if (!row(value) || value.version !== 1) throw Error('invalid_bot_import_source_result')

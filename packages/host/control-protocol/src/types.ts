@@ -1016,12 +1016,38 @@ export interface ProfileBotImportSourceTransferRequest {
   }
 }
 
+/** One raw Session transfer result, validated before it leaves the Host. */
 export interface ProfileBotImportSourceTransferResult {
   readonly version: 1
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.bot_import_source_transfer'
   readonly result: { readonly value: import('./bot-import-source.ts').HostBotImportSourceResult }
+}
+
+/** Main-signed local confirmation; a normal Account read cannot mint this grant. */
+export interface ProfileBotImportGrantRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_grant'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly grant: import('./bot-import-grant.ts').HostBotImportGrant
+  }
+}
+
+/** Receipt for an accepted Main-signed import approval. */
+export interface ProfileBotImportGrantResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_grant'
+  readonly result: { readonly operation_id: string; readonly expires_at: number }
 }
 
 /** Account-bound visible attachment manifest for a private Bot chat part. */
@@ -2549,6 +2575,8 @@ export type HostControlFrame =
   | ProfileBotChatReadResult
   | ProfileBotImportSourceTransferRequest
   | ProfileBotImportSourceTransferResult
+  | ProfileBotImportGrantRequest
+  | ProfileBotImportGrantResult
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentsReadResult
   | ProfileBotChatAttachmentTransferRequest

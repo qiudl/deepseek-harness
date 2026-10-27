@@ -41,7 +41,8 @@ it('keeps one signed import approval bound to its owner, Profile, target and Hos
       sourceDigest: claims.source_digest, sessionId },
     signal: new AbortController().signal }
   expect(() => registry.check(input)).not.toThrow()
-  for (const changed of [{ ownerId: 'other' }, { profileId: 'other' },
+  expect(() => registry.check({ ...input, ownerId: 'another-account-verified-connection' })).not.toThrow()
+  for (const changed of [{ profileId: 'other' },
     { scope: { ...input.scope, target_device_id: 'boston' } }])
     expect(() => registry.check({ ...input, ...changed })).toThrow()
   expect(() => registry.register(grant, account, 'profile')).toThrow()

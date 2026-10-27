@@ -7,7 +7,6 @@ import { HostAuthorityError } from './types.ts'
 interface ActiveGrant {
   readonly grant: HostBotImportGrant
   readonly profileId: string
-  readonly ownerId: string
 }
 
 /** In-memory, single-Host approvals. Signed claims cannot be replayed after boot or revocation. */
@@ -42,14 +41,14 @@ export class BotImportGrantRegistry {
     if (this.used.has(grant.operation_id) || this.active.size >= 8 || this.used.size >= 10_000)
       throw new HostAuthorityError('replayed')
     this.used.add(grant.operation_id)
-    this.active.set(grant.operation_id, { grant, profileId, ownerId: account.ownerId })
+    this.active.set(grant.operation_id, { grant, profileId })
     return grant
   }
 
   check(input: BotImportSourceGrantInput): void {
     input.signal.throwIfAborted()
     const entry = this.active.get(input.transfer.operationId)
-    if (!entry || entry.profileId !== input.profileId || entry.ownerId !== input.ownerId ||
+    if (!entry || entry.profileId !== input.profileId ||
         entry.grant.source_digest !== input.scope.source_digest ||
         entry.grant.target_device_id !== input.scope.target_device_id ||
         entry.grant.expires_at <= this.now()) {
@@ -59,14 +58,9 @@ export class BotImportGrantRegistry {
     }
   }
 
-  revoke(operationId: string, ownerId: string): void {
+  revoke(operationId: string): void {
     const entry = this.active.get(operationId)
-    if (!entry || entry.ownerId !== ownerId) throw new HostAuthorityError('unauthorized')
+    if (!entry) throw new HostAuthorityError('unauthorized')
     this.active.delete(operationId)
-  }
-
-  closeOwner(ownerId: string): void {
-    for (const [operationId, entry] of this.active)
-      if (entry.ownerId === ownerId) this.active.delete(operationId)
   }
 }

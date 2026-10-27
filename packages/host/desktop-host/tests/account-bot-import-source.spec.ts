@@ -1,5 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import type { DesktopHost } from '../src/desktop-host.ts'
+import type { PersonProfileId } from '../src/types.ts'
 import type { BotIdentityAccount } from '../src/account-bot-identity.ts'
 import { AccountBotImportSourceTransfers } from '../src/account-bot-import-source.ts'
 import type { HostBotImportSourceRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -21,9 +22,11 @@ const page = { ...opened, offset: 0, contentBase64: 'W10=', nextOffset: null }
 const signal = new AbortController().signal
 
 function host() {
-  return { authorizeCollaborationRegistration: vi.fn(),
-    authorizeAccountModelText: vi.fn(() => 'profile'),
-  } as unknown as Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
+  const value: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'> = {
+    authorizeCollaborationRegistration: vi.fn(),
+    authorizeAccountModelText: vi.fn(() => 'profile' as PersonProfileId),
+  }
+  return value
 }
 
 it('rechecks the independent grant after the Worker read and releases no revoked page', async () => {

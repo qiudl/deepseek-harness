@@ -7,6 +7,7 @@ import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest } fro
 import { parseHostBotChatPage, parseHostBotChatReadRequest } from './bot-chat-read.ts'
 import { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
   parseHostBotImportSourceScope } from './bot-import-source.ts'
+import { parseHostBotImportGrant } from './bot-import-grant.ts'
 import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest } from './bot-chat-attachments-read.ts'
 import { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
@@ -123,6 +124,7 @@ import type {
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
   ProfileBotChatReadRequest, ProfileBotChatReadResult,
   ProfileBotImportSourceTransferRequest, ProfileBotImportSourceTransferResult,
+  ProfileBotImportGrantRequest, ProfileBotImportGrantResult,
   ProfileBotChatAttachmentsReadRequest, ProfileBotChatAttachmentsReadResult,
   ProfileBotChatAttachmentTransferRequest, ProfileBotChatAttachmentTransferResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
@@ -1844,6 +1846,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBotGroupHistoryReadRequest
   | ProfileBotChatReadRequest
   | ProfileBotImportSourceTransferRequest
+  | ProfileBotImportGrantRequest
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentTransferRequest
   | ProfileNativeRoomRequest
@@ -2578,6 +2581,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       transfer: parseHostBotImportSourceRequest(params.transfer),
     } } satisfies ProfileBotImportSourceTransferRequest
   }
+  if (frame.method === 'profile.bot_import_grant') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'grant'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), grant: parseHostBotImportGrant(params.grant),
+    } } satisfies ProfileBotImportGrantRequest
+  }
   if (frame.method === 'profile.bot_chat_attachments_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'read'])
@@ -2714,6 +2724,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBotGroupHistoryReadResult
   | ProfileBotChatReadResult
   | ProfileBotImportSourceTransferResult
+  | ProfileBotImportGrantResult
   | ProfileBotChatAttachmentsReadResult
   | ProfileBotChatAttachmentTransferResult
   | ProfileNativeRoomResult
@@ -3155,6 +3166,16 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { value: parseHostBotImportSourceResult(result.value) },
     } satisfies ProfileBotImportSourceTransferResult
+  }
+  if (frame.method === 'profile.bot_import_grant') {
+    exactKeys(result, ['operation_id', 'expires_at'])
+    if (typeof result.operation_id !== 'string' ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(result.operation_id) ||
+        !Number.isSafeInteger(result.expires_at) || (result.expires_at as number) < 1)
+      return reject('invalid_frame')
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { operation_id: result.operation_id, expires_at: result.expires_at as number },
+    } satisfies ProfileBotImportGrantResult
   }
   if (frame.method === 'profile.bot_chat_attachments_read') {
     exactKeys(result, ['page'])

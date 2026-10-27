@@ -115,6 +115,8 @@ export interface Config {
   readonly accountKeyringSha256: string
   /** Public assertion keys projected from the embedding's signed Slark environment profile. */
   readonly botGroupPublicKeyringsJson?: string
+  /** Separate ephemeral Main approval key; absent keeps raw import transfer disabled. */
+  readonly botImportGrantPublicKey?: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -156,6 +158,7 @@ export const Config: z<Config> = z.object({
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
   botGroupPublicKeyringsJson: z.string(),
+  botImportGrantPublicKey: z.string(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -777,6 +780,8 @@ export async function startDesktopHostApplication(
       readBotChat: (profileId, request, signal) => workers.readBotChat(profileId, request, signal),
       transferBotImportSource: (profileId, request, signal) =>
         workers.transferBotImportSource(profileId, request, signal),
+      ...(config.botImportGrantPublicKey === undefined ? {} :
+        { botImportGrantPublicKey: config.botImportGrantPublicKey }),
       readBotChatAttachments: (profileId, request, signal) =>
         workers.readBotChatAttachments(profileId, request, signal),
       transferBotChatAttachment: (profileId, request, signal) =>
