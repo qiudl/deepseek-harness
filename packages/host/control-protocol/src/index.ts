@@ -46,6 +46,10 @@ export { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
   parseHostBotImportSourceScope } from './bot-import-source.js'
 export type { HostBotImportSourceRequest, HostBotImportSourceResult,
   HostBotImportSourceScope } from './bot-import-source.js'
+export { parseHostBotImportGrant, encodeHostBotImportGrantPayload,
+  verifyHostBotImportGrant } from './bot-import-grant.js'
+export type { HostBotImportGrant, HostBotImportGrantClaims,
+  HostBotImportGrantExpected } from './bot-import-grant.js'
 export { parseHostBotChatAttachmentsReadRequest, parseHostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export type { HostBotChatAttachmentsReadRequest, HostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.js'
