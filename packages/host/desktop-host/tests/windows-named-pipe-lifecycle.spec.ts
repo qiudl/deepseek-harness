@@ -180,7 +180,7 @@ describe('Windows named-pipe native lifecycle', () => {
     expect(fixture.native.disconnectNamedPipe).not.toHaveBeenCalled()
   })
 
-  it('fails closed when pre-connect stop cleanup fails', async () => {
+  it('treats a failed cleanup during a requested stop as a completed stop', async () => {
     let stopped = false
     const fixture = bindings({
       createNamedPipe: vi.fn(() => { stopped = true; return 91n }),
@@ -189,7 +189,7 @@ describe('Windows named-pipe native lifecycle', () => {
     await expect(withCancellableAcceptedWindowsNamedPipe({
       policy, bindings: fixture.native, stopRequested: () => stopped,
       attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
-    })).rejects.toBeInstanceOf(HostAuthorityError)
+    })).resolves.toEqual({ state: 'stopped' })
   })
 
   it('rejects undocumented connect results', async () => {

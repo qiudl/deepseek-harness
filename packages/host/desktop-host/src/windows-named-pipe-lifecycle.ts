@@ -49,6 +49,15 @@ function isCancelledNativeIo(error: unknown): boolean {
     && (native.api === 'ConnectNamedPipe' || native.api === 'ReadFile' || native.api === 'WriteFile')
 }
 
+/**
+ * A stop request can release the same handle first; Windows then reports ERROR_INVALID_HANDLE,
+ * which is a completed teardown rather than a failure.
+ */
+function isAlreadyClosed(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  return (error as { win32Code?: unknown }).win32Code === 6
+}
+
 async function closePipe(
   bindings: WindowsNamedPipeLifecycleBindings,
   handle: bigint,
@@ -58,7 +67,9 @@ async function closePipe(
   if (connected) {
     try { await bindings.disconnectNamedPipe(handle) } catch (error) { failure = error }
   }
-  try { await bindings.closeHandle(handle) } catch (error) { failure ??= error }
+  try { await bindings.closeHandle(handle) } catch (error) {
+    if (!isAlreadyClosed(error)) failure ??= error
+  }
   return failure
 }
 
@@ -99,7 +110,13 @@ async function runAcceptedWindowsNamedPipe<Evidence, Result>(
   }
   if (stopRequested()) {
     const cleanupFailure = await closePipe(options.bindings, pipe, false)
-    if (cleanupFailure !== undefined) throw authorityError(cleanupFailure)
+    if (cleanupFailure !== undefined) {
+      // REQ-20261026-0023: a stop during provisioning must not surface as an authority error; the
+      // Worker treats an uncaught throw as a runtime failure and the carrier then dies.
+      console.error(`[dsh-host] stop requested during pipe provisioning; cleanup reported ${
+        cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)
+      }`)
+    }
     return { state: 'stopped' }
   }
 
