@@ -999,6 +999,31 @@ export interface ProfileBotChatReadResult {
   readonly result: { readonly page: import('./bot-chat-read.ts').HostBotChatPage }
 }
 
+/** Raw Bot Session transfer; requires a separate operation grant in the Host. */
+export interface ProfileBotImportSourceTransferRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_source_transfer'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly scope: import('./bot-import-source.ts').HostBotImportSourceScope
+    readonly transfer: import('./bot-import-source.ts').HostBotImportSourceRequest
+  }
+}
+
+export interface ProfileBotImportSourceTransferResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_source_transfer'
+  readonly result: { readonly value: import('./bot-import-source.ts').HostBotImportSourceResult }
+}
+
 /** Account-bound visible attachment manifest for a private Bot chat part. */
 export interface ProfileBotChatAttachmentsReadRequest {
   readonly version: 1
@@ -2522,6 +2547,8 @@ export type HostControlFrame =
   | ProfileBotGroupHistoryReadResult
   | ProfileBotChatReadRequest
   | ProfileBotChatReadResult
+  | ProfileBotImportSourceTransferRequest
+  | ProfileBotImportSourceTransferResult
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentsReadResult
   | ProfileBotChatAttachmentTransferRequest

@@ -13,6 +13,10 @@ import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest,
 import { parseHostBotChatPage, parseHostBotChatReadRequest,
   type HostBotChatPage, type HostBotChatReadRequest, type ProfileBotChatReadRequest,
 } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
+  parseHostBotImportSourceScope, type HostBotImportSourceRequest,
+  type HostBotImportSourceResult, type HostBotImportSourceScope,
+  type ProfileBotImportSourceTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest,
   type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest,
   type ProfileBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -38,6 +42,7 @@ import { readAccountBotTeam } from './account-bot-team-read.ts'
 import { readAccountBotMemory } from './account-bot-memory-read.ts'
 import { readAccountBotGroupHistory } from './account-bot-group-history-read.ts'
 import { readAccountBotChat } from './account-bot-chat-read.ts'
+import { AccountBotImportSourceTransfers } from './account-bot-import-source.ts'
 import { readAccountBotChatAttachments } from './account-bot-chat-attachments-read.ts'
 import { transferAccountBotChatAttachment } from './account-bot-chat-attachment-transfer.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
@@ -344,6 +349,16 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupHistoryPage>
   readonly readBotChat?: (profileId: string, request: HostBotChatReadRequest,
     signal: AbortSignal) => Promise<HostBotChatPage>
+  /** Absent unless the embedding supplies an operation-level import grant checker. */
+  readonly authorizeBotImportSource?: (input: {
+    readonly profileId: string
+    readonly ownerId: string
+    readonly scope: HostBotImportSourceScope
+    readonly transfer: HostBotImportSourceRequest
+    readonly signal: AbortSignal
+  }) => void | Promise<void>
+  readonly transferBotImportSource?: (profileId: string, request: HostBotImportSourceRequest,
+    signal: AbortSignal) => Promise<HostBotImportSourceResult>
   readonly readBotChatAttachments?: (profileId: string, request: HostBotChatAttachmentsReadRequest,
     signal: AbortSignal) => Promise<HostBotChatAttachmentsPage>
   readonly transferBotChatAttachment?: (profileId: string, request: HostBotChatAttachmentTransferRequest,
@@ -629,6 +644,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'readBotGroupHistory'
     | 'readBotChat'
+    | 'authorizeBotImportSource' | 'transferBotImportSource'
     | 'readBotChatAttachments'
     | 'transferBotChatAttachment'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -1123,6 +1139,10 @@ export class HostControlAuthority {
     const clock = this.options.now ?? Date.now
     const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
+    const botImportSourceTransfers = this.options.transferBotImportSource &&
+      this.options.authorizeBotImportSource
+      ? new AccountBotImportSourceTransfers(this.options.host, this.options.transferBotImportSource,
+        this.options.authorizeBotImportSource) : undefined
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
       readonly expiresAt: number
@@ -1147,6 +1167,7 @@ export class HostControlAuthority {
       readonly runtimeGeneration: number
     }>()
     signal.addEventListener('abort', () => {
+      botImportSourceTransfers?.clear()
       packageTransferSnapshot.clear()
       for (const entry of remoteUiStreams.values()) void entry.cursor.close()
       remoteUiStreams.clear()
@@ -2500,6 +2521,13 @@ export class HostControlAuthority {
             { readBotChat: read }, account, frame.params.read, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.bot_import_source_transfer') {
+          if (!botImportSourceTransfers) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const value = await botImportSourceTransfers.run(account, frame.params.scope,
+            frame.params.transfer, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { value } })
         } else if (frame.method === 'profile.bot_chat_attachments_read') {
           const read = this.options.readBotChatAttachments
           if (!read) throw new HostAuthorityError('upgrade_required')
@@ -2774,6 +2802,8 @@ export class HostControlAuthority {
           ...(this.options.readBotMemory ? ['profile.bot_memory_read'] : []),
           ...(this.options.readBotGroupHistory ? ['profile.bot_group_history_read'] : []),
           ...(this.options.readBotChat ? ['profile.bot_chat_read'] : []),
+          ...(this.options.transferBotImportSource && this.options.authorizeBotImportSource
+            ? ['profile.bot_import_source_transfer'] : []),
           ...(this.options.readBotChatAttachments ? ['profile.bot_chat_attachments_read'] : []),
           ...(this.options.transferBotChatAttachment ? ['profile.bot_chat_attachment_transfer'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
@@ -4814,6 +4844,32 @@ export class UnixHostClient {
     return page
   }
 
+  /** Transfer one operation-granted raw Session page from the current Account Profile. */
+  async transferBotImportSource(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly scope: HostBotImportSourceScope
+    readonly request: HostBotImportSourceRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotImportSourceResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_import_source_transfer' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileBotImportSourceTransferRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_import_source_transfer',
+      params: { ...this.collaborationAccountRequestParams(input),
+        scope: parseHostBotImportSourceScope(input.scope),
+        transfer: parseHostBotImportSourceRequest(input.request) },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return parseHostBotImportSourceResult(frame.result.value, request.params.transfer)
+  }
+
   /**
    * Read one visible private Bot attachment manifest page from the current Account Profile.
    * @param input - account binding, attachment request, and optional cancellation signal.
@@ -5886,6 +5942,7 @@ export class UnixHostClient {
       | ProfileBotTeamReadRequest | ProfileBotMemoryReadRequest
       | ProfileBotGroupHistoryReadRequest
       | ProfileBotChatReadRequest
+      | ProfileBotImportSourceTransferRequest
       | ProfileBotChatAttachmentsReadRequest
       | ProfileBotChatAttachmentTransferRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest

@@ -775,6 +775,8 @@ export async function startDesktopHostApplication(
       readBotMemory: (profileId, request, signal) => workers.readBotMemory(profileId, request, signal),
       readBotGroupHistory: (profileId, request, signal) => workers.readBotGroupHistory(profileId, request, signal),
       readBotChat: (profileId, request, signal) => workers.readBotChat(profileId, request, signal),
+      transferBotImportSource: (profileId, request, signal) =>
+        workers.transferBotImportSource(profileId, request, signal),
       readBotChatAttachments: (profileId, request, signal) =>
         workers.readBotChatAttachments(profileId, request, signal),
       transferBotChatAttachment: (profileId, request, signal) =>
