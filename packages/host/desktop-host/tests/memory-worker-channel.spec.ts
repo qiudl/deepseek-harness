@@ -72,6 +72,30 @@ it.skipIf(process.platform !== 'darwin')('checks the kernel peer before one-page
   ])
 })
 
+it.skipIf(process.platform !== 'darwin')('rejects a pending query and future work when the projected worker disconnects', async () => {
+  const { host, worker } = await sockets()
+  const channel = await MemoryWorkerChannel.accept(host,
+    new MemoryWorkerProtocol(base.workerNonce, base.indexEpoch, base.generation),
+    process.getuid!(), process.pid, embed)
+  const assembler = new MemoryWorkerFrameAssembler()
+  worker.on('data', (chunk) => {
+    for (const frame of assembler.push(chunk)) {
+      if (frame.type === 'projection' && frame.totalItems !== undefined
+        && frame.projectionDigest !== undefined) {
+        worker.write(encodeMemoryWorkerFrame({ ...base, type: 'projected',
+          pageNo: frame.pageNo, totalItems: frame.totalItems,
+          projectionDigest: frame.projectionDigest }))
+      } else if (frame.type === 'query') worker.destroy()
+    }
+  })
+  await channel.project([item], null, AbortSignal.timeout(5_000))
+  await expect(channel.query('synthetic', 1, AbortSignal.timeout(5_000)))
+    .rejects.toMatchObject({ code: 'stale' })
+  expect(host.destroyed).toBe(true)
+  await expect(channel.query('synthetic', 1, AbortSignal.timeout(5_000)))
+    .rejects.toMatchObject({ code: 'unavailable' })
+})
+
 it.skipIf(process.platform !== 'darwin')('rejects a mismatched expected peer PID before reading frames', async () => {
   const { host } = await sockets()
   await expect(MemoryWorkerChannel.accept(host,
