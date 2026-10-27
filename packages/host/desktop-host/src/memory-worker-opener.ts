@@ -55,6 +55,7 @@ export async function openMemoryWorkerLease(stamp: MemoryWorkerStamp, signal: Ab
     accepted.resolve(socket)
   })
   let launched: MemoryWorkerLaunchHandle | undefined
+  let accepting: Promise<Channel> | undefined
   let cancelWait: (() => void) | undefined
   const admission = new AbortController()
   const onAbort = (): void => { admission.abort(signal.reason) }
@@ -75,12 +76,14 @@ export async function openMemoryWorkerLease(stamp: MemoryWorkerStamp, signal: Ab
       () => { throw new HostAuthorityError('unavailable') })
     const socket = await Promise.race([accepted.promise, exited, cancelled])
     assertAdmissionActive(admission.signal)
-    const channel = await options.accept(socket,
+    accepting = options.accept(socket,
       new MemoryWorkerProtocol(workerNonce, stamp.indexEpoch, stamp.generation),
       launched.uid, launched.pid)
+    const channel = await Promise.race([accepting, exited, cancelled])
     assertAdmissionActive(admission.signal)
     return new MemoryWorkerLease(channel, listener, launched)
   } catch (error) {
+    if (accepting) void accepting.then((channel) => { channel.close() }, () => undefined)
     const failures: unknown[] = [error]
     try { await listener.close() } catch (failure) { failures.push(failure) }
     if (launched) {

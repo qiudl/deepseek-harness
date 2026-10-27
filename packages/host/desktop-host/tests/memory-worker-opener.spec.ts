@@ -174,6 +174,23 @@ describe('Host-owned HY worker admission', () => {
     expect(f.stop).toHaveBeenCalledTimes(1)
     expect(f.closeListener).toHaveBeenCalledTimes(1)
   })
+
+  it('times out a stalled peer admission and closes a late channel', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fixture()
+      const late = Promise.withResolvers<typeof f.channel>()
+      f.options.accept = vi.fn(() => late.promise)
+      const pending = openMemoryWorkerLease(stamp, new AbortController().signal, f.options)
+      const rejected = expect(pending).rejects.toMatchObject({ code: 'unavailable' })
+      await vi.advanceTimersByTimeAsync(10_000)
+      await rejected
+      expect(f.stop).toHaveBeenCalledTimes(1)
+      expect(f.closeListener).toHaveBeenCalledTimes(1)
+      late.resolve(f.channel)
+      await vi.waitFor(() => { expect(f.channel.close).toHaveBeenCalledTimes(1) })
+    } finally { vi.useRealTimers() }
+  })
 })
 
 it.skipIf(process.platform !== 'darwin')('joins a real private socket, native peer check and synthetic worker lease', async () => {
