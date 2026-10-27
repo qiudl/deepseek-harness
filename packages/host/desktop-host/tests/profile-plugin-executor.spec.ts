@@ -102,7 +102,7 @@ it('reports enabled, disabled, mixed, unsupported, and unavailable plugin toggle
     .toEqual([...names, 'unmanaged'].map(name => ({ name, plugin_state: undefined })))
 })
 
-it('reports bundled archive provenance only when the managed bytes match the declared digest', async () => {
+it('reports a bundled archive digest only when the managed bytes match it', async () => {
   const f = fixture()
   const contents = Buffer.from('released ds-bot archive')
   const digest = createHash('sha256').update(contents).digest('hex')
@@ -110,9 +110,9 @@ it('reports bundled archive provenance only when the managed bytes match the dec
   mkdirSync(directory, { mode: 0o700 })
   const archive = join(directory, `${digest}.tgz`)
   writeFileSync(archive, contents, { mode: 0o600 })
-  const manifest = (dependency: string) => writeFileSync(f.manifest, JSON.stringify({
+  const manifest = (dependency: string) => { writeFileSync(f.manifest, JSON.stringify({
     dependencies: { 'ds-bot': dependency }, dsh: { profile: { bundles: ['ds-bot'] } },
-  }), { mode: 0o600 })
+  }), { mode: 0o600 }) }
   manifest(`file:.bundled-plugins/${digest}.tgz`)
   expect(await f.executor.inventory(f.authority())).toEqual([expect.objectContaining({ name: 'ds-bot', plugin_archive_sha256: digest })])
   writeFileSync(archive, 'tampered', { mode: 0o600 })

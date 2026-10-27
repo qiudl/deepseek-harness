@@ -188,6 +188,8 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 
 插件清单另可声明可选布尔字段 `plugin_update` 和 `plugin_remove`，其他市场不允许这两个字段。Desktop 更新要求受管条目已启用，并通过不可变同名来源预检；卸载接受可独立管理的启用、停用或混合条目。相应能力缺失时控件保持禁用。两种操作复用现有绑定 Profile 的准备/提交/回执合同。
 
+插件条目仅在当前受管依赖指向按内容寻址的内置归档，且 Host 已验证归档字节及私有文件属性时，才可包含 `plugin_archive_sha256`。缺少该字段表示已安装归档的摘要未经验证；不能从 Desktop 安装记录或包名推断摘要。
+
 插件清单条目使用不透明包 ID 和有长度限制的 npm 包名，支持带作用域的名称；MCP 和 Skill 清单标签保留原有字符集限制。
 
 技能条目可在调用开关之后成对携带 `skill_source` 与 `skill_status`，仅 `shadowed` 条目随后携带 `effective_source`。来源限定为 `user-dsh`、`user-agents`、`custom`、`bundled`、`runtime` 和 `other`；状态为 `effective`、`shadowed` 或 `not_visible`。这些字段仅适用于技能列表，不包含路径，区别于删除回执在完成时记录的来源。

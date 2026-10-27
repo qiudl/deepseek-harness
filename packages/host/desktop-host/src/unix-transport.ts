@@ -4695,7 +4695,11 @@ export class UnixHostClient {
     return reply
   }
 
-  /** Read a bounded directory page from this connection's current Account Profile. */
+  /**
+   * Read a bounded directory page from this connection's current Account Profile.
+   * @param input - account binding, page request, and optional cancellation signal.
+   * @returns the validated team directory page.
+   */
   async readBotTeam(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4719,7 +4723,11 @@ export class UnixHostClient {
     return parseHostBotTeamPage(frame.result.page)
   }
 
-  /** Read one bounded memory chunk from the current Account Profile. */
+  /**
+   * Read one bounded memory chunk from the current Account Profile.
+   * @param input - account binding, memory request, and optional cancellation signal.
+   * @returns the validated memory page for the requested logical ID.
+   */
   async readBotMemory(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4745,7 +4753,11 @@ export class UnixHostClient {
     return page
   }
 
-  /** Read one committed group journal page from the current Account Profile. */
+  /**
+   * Read one committed group journal page from the current Account Profile.
+   * @param input - account binding, group request, and optional cancellation signal.
+   * @returns the validated group history page for the requested logical ID.
+   */
   async readBotGroupHistory(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4771,7 +4783,11 @@ export class UnixHostClient {
     return page
   }
 
-  /** Read one private Bot chat text page from the current Account Profile. */
+  /**
+   * Read one private Bot chat text page from the current Account Profile.
+   * @param input - account binding, chat request, and optional cancellation signal.
+   * @returns the validated chat page for the requested part.
+   */
   async readBotChat(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4798,7 +4814,11 @@ export class UnixHostClient {
     return page
   }
 
-  /** Read one visible private Bot attachment manifest page from the current Account Profile. */
+  /**
+   * Read one visible private Bot attachment manifest page from the current Account Profile.
+   * @param input - account binding, attachment request, and optional cancellation signal.
+   * @returns the validated attachment manifest page for the requested part.
+   */
   async readBotChatAttachments(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4825,7 +4845,11 @@ export class UnixHostClient {
     return page
   }
 
-  /** Transfer one Account-bound visible Bot attachment action. */
+  /**
+   * Transfer one Account-bound visible Bot attachment action.
+   * @param input - account binding, transfer request, and optional cancellation signal.
+   * @returns the validated attachment transfer result.
+   */
   async transferBotChatAttachment(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

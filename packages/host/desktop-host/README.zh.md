@@ -22,6 +22,8 @@ kind: "package-bundle"
 <a id="desktop-adapter"></a>
 ## Desktop adapter
 
+在 macOS 上，离线 Bot 导入会先用 `bot-import-maintenance.pending.json` 占用私有 Host 根目录，再修改 Profile 数据。`acquireSingleHostLock` 创建 `host.lock` 后检查该路径；只要标记存在，就释放自己的锁并拒绝启动，不解析标记内容。离线写入方以独占方式创建标记，同步文件和 Host 目录，然后再次确认 `host.lock` 不存在，才可修改数据。导入中断时保留标记；只有恢复流程或已验证未使用的预约可以清除它。标记未解决前，该 Host 根目录下所有 Profile 均无法启动。
+
 远程 UI 启动读取只在返回的注入表中将 worker 的文档相对路径 `plugins/` 投影为 Host 根路由 `/plugins/`。worker 本机 Web 文档仍使用相对路径；远程资源读取仍要求当前启动表列出的精确 URL 和有效视图租约。
 
 固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。

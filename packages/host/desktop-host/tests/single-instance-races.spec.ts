@@ -33,7 +33,11 @@ vi.mock('node:fs', async (importOriginal) => {
       dev: 1,
       ino: 1,
     })),
-    lstatSync: vi.fn(() => ({ dev: 1, ino: state.mode === 'exhaust' ? 1 : 2 })),
+    lstatSync: vi.fn((path: string) => {
+      if (path.endsWith('bot-import-maintenance.pending.json'))
+        throw Object.assign(new Error('missing'), { code: 'ENOENT' })
+      return { dev: 1, ino: state.mode === 'exhaust' ? 1 : 2 }
+    }),
   }
 })
 

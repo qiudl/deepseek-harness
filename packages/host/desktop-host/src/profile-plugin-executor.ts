@@ -102,7 +102,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private manifest(profileId: string): Record<string, unknown> {
     return record(JSON.parse(this.read(this.root(profileId), 'profiles/web/package.json') ?? 'null'))
   }
-  /** Return provenance only when the managed Profile archive bytes match its content-addressed dependency. */
+  /** Return the archive SHA-256 only when its bytes match the managed Profile dependency. */
   private installedArchiveDigest(profileId: string, dependency: unknown): string | undefined {
     const claimed = typeof dependency === 'string' ? bundledDependency.exec(dependency)?.[1] : undefined
     if (!claimed) return undefined

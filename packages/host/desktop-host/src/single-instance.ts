@@ -65,6 +65,16 @@ function readLock(path: string, uid: number): ReadLock {
   } finally { closeSync(fd) }
 }
 
+function assertNoOfflineBotImport(root: string): void {
+  try {
+    lstatSync(join(root, 'bot-import-maintenance.pending.json'))
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  throw new HostAuthorityError('conflict')
+}
+
 /**
  * Acquire the machine-user single Host lock, recovering only a proven stale regular file.
  * @param options - lock directory, process identity, and optional liveness probe.
@@ -92,7 +102,14 @@ export async function acquireSingleHostLock(options: SingleHostOptions): Promise
       continue
     }
     try { writeSync(fd, `${JSON.stringify(record)}\n`); fsyncSync(fd) } finally { closeSync(fd) }
-    return new SingleHostLock(path, record, LOCK_LEASE)
+    const ownership = new SingleHostLock(path, record, LOCK_LEASE)
+    try {
+      assertNoOfflineBotImport(options.root)
+    } catch (error) {
+      await ownership.release()
+      throw error
+    }
+    return ownership
   }
   throw new HostAuthorityError('conflict')
 }

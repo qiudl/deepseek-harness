@@ -3,7 +3,7 @@ import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
   SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
   SKILLHUB_EXECUTION_RECEIPT_DOMAIN,
   encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
-import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createConnection } from 'node:net'
@@ -1598,6 +1598,22 @@ describe('authenticated Unix transport', () => {
 })
 
 describe('single Host ownership', () => {
+  it('refuses startup while offline Bot import owns the Host root', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const marker = join(root, 'bot-import-maintenance.pending.json')
+    const options = { root, pid: process.pid, uid, processNonce: 'owner-0123456789abcdef' }
+    writeFileSync(marker, '{}\n', { mode: 0o600 })
+    await expect(acquireSingleHostLock(options)).rejects.toMatchObject({ code: 'conflict' })
+    expect(existsSync(join(root, 'host.lock'))).toBe(false)
+    unlinkSync(marker)
+    const ownership = await acquireSingleHostLock(options)
+    writeFileSync(marker, '{}\n', { mode: 0o600 })
+    await ownership.release()
+    expect(existsSync(marker)).toBe(true)
+  })
+
   it('rejects forged leases and validates every caller-owned identity field', async () => {
     expect(() => { new SingleHostLock('/tmp/forged', {
       pid: 1, uid: 1, processNonce: 'forged-0123456789', ownerId: 'forged',
