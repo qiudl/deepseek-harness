@@ -38,6 +38,20 @@ it.skipIf(process.platform === 'win32')('keeps the candidate lifetime lock throu
   await expect(lease.assertStopped()).resolves.toBeUndefined()
 })
 
+it.skipIf(process.platform === 'win32')('refuses a second candidate launch while its lifetime lease is held', async () => {
+  const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
+  onTestFinished(() => rm(profileRoot, { recursive: true, force: true }))
+  const lease = new FileProfileImportCandidateLease(profileRoot, randomUUID(), process.getuid!())
+  const first = await lease.acquireForSpawn()
+  try {
+    await expect(lease.acquireForSpawn()).rejects.toThrow('profile_import_candidate_running')
+  } finally {
+    await first.close()
+  }
+  const resumed = await lease.acquireForSpawn()
+  await resumed.close()
+})
+
 it.skipIf(process.platform === 'win32')('refuses a redirected candidate lease directory', async () => {
   const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-candidate-lease-'))
   onTestFinished(() => rm(profileRoot, { recursive: true, force: true }))
