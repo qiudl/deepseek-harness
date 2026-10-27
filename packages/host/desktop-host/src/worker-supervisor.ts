@@ -67,6 +67,19 @@ export class ProfileWorkerSupervisor {
     return result
   }
 
+  /** Keep raw Session transfer inside one live worker generation; caller must supply a separate import grant. */
+  async transferBotImportSource(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceResult> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.transferBotImportSource) throw new HostAuthorityError('unavailable')
+    const result = await worker.transferBotImportSource(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
   /** Read one visible attachment manifest from the same live worker generation.
    * @param profileId Current Profile identifier.
    * @param request Bounded logical Bot and part selector.

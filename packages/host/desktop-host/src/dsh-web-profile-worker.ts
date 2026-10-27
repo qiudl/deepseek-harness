@@ -17,6 +17,8 @@ import { parseHostBotGroupHistoryPage, parseHostBotGroupHistoryReadRequest,
   type HostBotGroupHistoryPage, type HostBotGroupHistoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatPage, parseHostBotChatReadRequest,
   type HostBotChatPage, type HostBotChatReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
+  type HostBotImportSourceRequest, type HostBotImportSourceResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest,
   type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult,
@@ -309,6 +311,8 @@ export class DshWebProfileWorkerFactory {
       readBotGroupHistory: (request, signal) => this.readBotGroupHistory(
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       readBotChat: (request, signal) => this.readBotChat(
+        viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
+      transferBotImportSource: (request, signal) => this.transferBotImportSource(
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
       readBotChatAttachments: (request, signal) => this.readBotChatAttachments(
         viewOrigin, sourceToken, request, signal, () => requestedStop || settled),
@@ -651,6 +655,23 @@ export class DshWebProfileWorkerFactory {
           throw new HostAuthorityError('profile_mismatch')
         return page
       }, 'await')
+  }
+
+  private async transferBotImportSource(
+    viewOrigin: string, token: string, request: HostBotImportSourceRequest,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotImportSourceResult> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(30_000)])
+    const target = parseHostBotImportSourceRequest(request)
+    const response = await fetch(`${viewOrigin}/internal/desktop-bot-import-source`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped, 64 * 1024,
+      bytes => parseHostBotImportSourceResult(JSON.parse(bytes.toString('utf8')), target), 'await')
   }
 
   private async readBotChatAttachments(

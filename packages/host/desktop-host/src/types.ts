@@ -111,6 +111,11 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Transfer one current-team raw Session page inside the private Host worker boundary. */
+  readonly transferBotImportSource?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceResult>
   /** Read a text-only private Bot chat part from this worker's exclusive-writer plugin. */
   readonly readBotChat?: (
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotChatReadRequest,
