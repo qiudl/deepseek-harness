@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -570,6 +570,20 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'retry-owner',
   })).rejects.toMatchObject({ code: 'unavailable' })
   marker.clear(pending)
+
+  const botHome = join(root, 'profiles', profile.profileId, 'bot')
+  mkdirSync(botHome, { mode: 0o700 })
+  const importMarker = join(botHome, 'import-activation.pending.json')
+  writeFileSync(importMarker, '{}\n', { mode: 0o600 })
+  const workerCount = workerSpecs.length
+  await expect(application.host.restoreLocalProfile({ ...profile,
+    keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'retry-owner',
+  })).rejects.toMatchObject({ code: 'unavailable' })
+  expect(workerSpecs).toHaveLength(workerCount)
+  unlinkSync(importMarker)
+  await expect(application.host.restoreLocalProfile({ ...profile,
+    keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'retry-owner',
+  })).resolves.toMatchObject({ profileId: profile.profileId })
 
   await application.close()
   await application.close()

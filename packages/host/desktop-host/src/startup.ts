@@ -486,7 +486,17 @@ export async function startDesktopHostApplication(
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
     const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
-    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId))
+    const botImportPending = (profileId: string): boolean => {
+      try {
+        lstatSync(join(root, 'profiles', profileId, 'bot', 'import-activation.pending.json'))
+        return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+        throw error
+      }
+    }
+    const claimWorkerGate = new LegacyClaimWorkerGate(profileId =>
+      claimMarker.pending(profileId) || botImportPending(profileId))
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing
