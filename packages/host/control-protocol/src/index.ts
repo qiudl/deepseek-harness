@@ -42,6 +42,8 @@ export { parseHostBotGroupHistoryReadRequest, parseHostBotGroupHistoryPage } fro
 export type { HostBotGroupHistoryReadRequest, HostBotGroupHistoryPage } from './bot-group-history-read.js'
 export { parseHostBotChatReadRequest, parseHostBotChatPage } from './bot-chat-read.js'
 export type { HostBotChatReadRequest, HostBotChatPage } from './bot-chat-read.js'
+export { parseHostBotImportSourceRequest, parseHostBotImportSourceResult } from './bot-import-source.js'
+export type { HostBotImportSourceRequest, HostBotImportSourceResult } from './bot-import-source.js'
 export { parseHostBotChatAttachmentsReadRequest, parseHostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export type { HostBotChatAttachmentsReadRequest, HostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.js'
