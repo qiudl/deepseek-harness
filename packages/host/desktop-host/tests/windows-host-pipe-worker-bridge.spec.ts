@@ -45,6 +45,12 @@ describe('Windows Host pipe Worker bridge', () => {
     })).toThrow('invalid Windows Host Worker generation')
   })
 
+  it('rejects a handled-count lookup for a connection that was never opened', () => {
+    const { bridge } = fixture()
+    expect(() => bridge.requestsHandledFor(connectionId)).toThrow(WindowsHostWorkerProtocolError)
+    expect(bridge.state).toBe('failed')
+  })
+
   it('announces the first slot handle as ready and later handles as thread handles', async () => {
     const early = fixture()
     await expect(early.bridge.openConnection(connectionId))

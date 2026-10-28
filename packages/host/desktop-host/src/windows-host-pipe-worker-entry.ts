@@ -17,5 +17,5 @@ const adapter: WindowsHostPipeWorkerPort = {
 const role = typeof workerData === 'object' && workerData !== null && !Array.isArray(workerData)
   ? (workerData as { role?: unknown }).role
   : undefined
-if (role === 'slot') await runWindowsHostPipeSlotMain(adapter, workerData as unknown)
-else await runWindowsHostPipeWorkerMain(adapter, workerData as unknown)
+if (role === 'slot') await runWindowsHostPipeSlotMain(adapter, workerData)
+else await runWindowsHostPipeWorkerMain(adapter, workerData)

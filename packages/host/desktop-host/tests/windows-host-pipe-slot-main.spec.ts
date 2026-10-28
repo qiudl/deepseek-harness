@@ -137,7 +137,7 @@ describe('Windows Host pipe slot composition root', () => {
 
   it('rejects a generation payload that lacks the slot role', async () => {
     const state = fixture()
-    const { role: _role, ...generationOnly } = state.boot as unknown as Record<string, unknown>
+    const { role: _role, ...generationOnly } = state.boot
     await expect(runWindowsHostPipeSlotMain(state.port, generationOnly, state.dependencies))
       .rejects.toThrow('Invalid Windows Host Worker boot data')
     expect(state.runWorker).not.toHaveBeenCalled()

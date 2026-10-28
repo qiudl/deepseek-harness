@@ -36,7 +36,16 @@ describe('Windows Host pipe connection bridge', () => {
 
   it('announces a valid cancellation handle before opening a connection', async () => {
     const { bridge, sent } = fixture()
+    expect(bridge.requestsHandled).toBe(0)
     await expect(bridge.openConnection(connectionId)).rejects.toBeInstanceOf(WindowsHostWorkerProtocolError)
+
+    const unopened = fixture()
+    await expect(unopened.bridge.handleRequest(request)).rejects
+      .toBeInstanceOf(WindowsHostWorkerProtocolError)
+
+    const unclosed = fixture()
+    await expect(unclosed.bridge.closeConnection(0)).rejects
+      .toBeInstanceOf(WindowsHostWorkerProtocolError)
 
     const valid = fixture()
     await valid.bridge.announceReady(91n)
@@ -81,6 +90,9 @@ describe('Windows Host pipe connection bridge', () => {
       frame: encodeHostControlFrame(result),
     })
     await expect(next).resolves.toEqual(result)
+    expect(bridge.requestsHandled).toBe(2)
+    await bridge.closeConnection(2)
+    expect(bridge.requestsHandled).toBe(2)
   })
 
   it('rejects pipelining and poisons malformed or uncorrelated responses', async () => {

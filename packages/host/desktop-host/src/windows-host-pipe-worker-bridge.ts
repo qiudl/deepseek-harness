@@ -44,7 +44,7 @@ function correlated(response: HostControlFrame, request: HostControlFrame): bool
 function stopSentinel(request: HostControlFrame): HostControlFrame {
   /* v8 ignore next -- pending responses are created only after handleRequest's request-type guard. */
   if (request.type !== 'request') throw protocolError()
-  return {
+  return decodeHostControlFrame(`${JSON.stringify({
     version: 1,
     type: 'error',
     request_id: request.request_id,
@@ -54,7 +54,7 @@ function stopSentinel(request: HostControlFrame): HostControlFrame {
       retryable: true,
       correlation_id: request.request_id,
     },
-  } as unknown as HostControlFrame
+  })}\n`)
 }
 
 function validHandle(value: unknown): value is bigint {
@@ -79,6 +79,13 @@ export class WindowsHostPipeWorkerBridge {
   }
 
   get state(): WorkerBridgeState { return this.workerState }
+
+  /** Completed request/response cycles for one open connection. */
+  requestsHandledFor(connectionId: string): number {
+    const connection = this.connections.get(connectionId)
+    if (connection === undefined) return this.fail()
+    return connection.nextSequence - 1
+  }
 
   /** First announced handle becomes the generation's ready handshake cancellation target. */
   async announceReady(threadHandle: bigint): Promise<void> {
