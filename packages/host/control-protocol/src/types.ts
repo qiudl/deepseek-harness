@@ -1075,6 +1075,29 @@ export interface ProfileBotImportGrantResult {
   readonly result: { readonly operation_id: string; readonly expires_at: number }
 }
 
+/** Host-signed, Account Profile-bound target ephemeral key for one import. */
+export interface ProfileBotImportRelayKeyRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_relay_key'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly relay: import('./bot-import-relay-key.ts').HostBotImportRelayKeyRequest
+  }
+}
+export interface ProfileBotImportRelayKeyResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_relay_key'
+  readonly result: { readonly assertion: import('./bot-import-relay-key.ts').HostBotImportRelayKeyAssertion }
+}
+
 /** Account-bound visible attachment manifest for a private Bot chat part. */
 export interface ProfileBotChatAttachmentsReadRequest {
   readonly version: 1
@@ -2604,6 +2627,8 @@ export type HostControlFrame =
   | ProfileBotImportInventoryResult
   | ProfileBotImportGrantRequest
   | ProfileBotImportGrantResult
+  | ProfileBotImportRelayKeyRequest
+  | ProfileBotImportRelayKeyResult
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentsReadResult
   | ProfileBotChatAttachmentTransferRequest

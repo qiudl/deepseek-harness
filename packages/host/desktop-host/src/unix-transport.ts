@@ -152,6 +152,7 @@ import type {
   ProfileWorkspaceModelSelectionRequest,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest,
+  ProfileBotImportRelayKeyRequest,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -194,6 +195,8 @@ import {
   encodeHostCollaborationRegistrationSignaturePayload,
   parseHostCollaborationRegistrationChallenge,
   parseHostCollaborationRegistrationAssertion,
+  parseHostBotImportRelayKeyRequest, parseHostBotImportRelayKeyAssertion,
+  encodeHostBotImportRelayKeyPayload,
   migrationProfileSelectorHash,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type {
@@ -204,6 +207,7 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { issueHostBotImportRelayKey } from './bot-import-relay-key.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
@@ -2549,6 +2553,22 @@ export class HostControlAuthority {
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { operation_id: grant.operation_id,
               expires_at: grant.expires_at } })
+        } else if (frame.method === 'profile.bot_import_relay_key') {
+          const account = commandReadAccount(frame.params, ownerId)
+          this.options.host.authorizeCollaborationRegistration(account)
+          const identity = this.options.identity
+          const assertion = issueHostBotImportRelayKey({
+            identity: { ...identity,
+              installationPrivateKey: privateKeyObject(identity.installationPrivateKey) },
+            currentProfileId: () => this.options.host.authorizeAccountModelText(account),
+            ...frame.params.relay, now: clock(),
+          })
+          context.signal.throwIfAborted()
+          this.options.host.authorizeCollaborationRegistration(account)
+          if (this.options.host.authorizeAccountModelText(account) !== assertion.targetProfileId)
+            throw new HostAuthorityError('profile_mismatch')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { assertion } })
         } else if (frame.method === 'profile.bot_import_source_transfer') {
           if (!botImportSourceTransfers) throw new HostAuthorityError('upgrade_required')
           const account = commandReadAccount(frame.params, ownerId)
@@ -2838,6 +2858,7 @@ export class HostControlAuthority {
             ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
               'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
+          'profile.bot_import_relay_key',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.readBotTeam ? ['profile.bot_team_read'] : []),
@@ -4973,6 +4994,46 @@ export class UnixHostClient {
     return { operationId: frame.result.operation_id, expiresAt: frame.result.expires_at }
   }
 
+  /** Obtain the current Account Host's signature over a recipient ephemeral key. */
+  async attestBotImportRelayKey(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly relay: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportRelayKeyRequest
+    readonly signal?: AbortSignal
+  }): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportRelayKeyAssertion> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_import_relay_key' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const relay = parseHostBotImportRelayKeyRequest(input.relay)
+    const request: ProfileBotImportRelayKeyRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_import_relay_key',
+      params: { ...this.collaborationAccountRequestParams(input), relay },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const assertion = parseHostBotImportRelayKeyAssertion(frame.result.assertion)
+    if (assertion.installationId !== this.inspection.installation_id ||
+        assertion.installationPublicKey !== this.inspection.installation_public_key ||
+        assertion.hostInstanceId !== this.inspection.host_instance_id ||
+        assertion.processNonce !== this.inspection.process_nonce ||
+        assertion.targetDeviceId !== relay.targetDeviceId ||
+        assertion.targetProfileId !== relay.targetProfileId ||
+        assertion.importOperationId !== relay.importOperationId ||
+        assertion.sourceDigest !== relay.sourceDigest ||
+        assertion.ephemeralPublicKey !== relay.ephemeralPublicKey ||
+        assertion.expiresAt <= this.now() ||
+        !verify(null, encodeHostBotImportRelayKeyPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+    return assertion
+  }
+
   /**
    * Read one visible private Bot attachment manifest page from the current Account Profile.
    * @param input - account binding, attachment request, and optional cancellation signal.
@@ -6048,6 +6109,7 @@ export class UnixHostClient {
       | ProfileBotImportSourceTransferRequest
       | ProfileBotImportInventoryRequest
       | ProfileBotImportGrantRequest
+      | ProfileBotImportRelayKeyRequest
       | ProfileBotChatAttachmentsReadRequest
       | ProfileBotChatAttachmentTransferRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
