@@ -112,6 +112,17 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
       { name: 'alpha', status: 'archive_verified', archiveDigest: sha, lockfileResolutionVerified: true },
       { name: 'beta', status: 'source_unverified' },
     ])
+    expect(await inspectProfileImportPluginArchives({ ...lockedInput,
+      catalog: undefined, selectedPluginNames: ['alpha'] })).toEqual([
+      { name: 'alpha', status: 'source_unverified' },
+    ])
+    await chmod(archiveDirectory, 0o722)
+    try {
+      await expect(inspectProfileImportPluginArchives(lockedInput))
+        .rejects.toThrow('profile_import_plugin_archive_unsafe')
+    } finally {
+      await chmod(archiveDirectory, 0o700)
+    }
     await expect(inspectProfileImportPluginArchives({ ...input, expectedSnapshotDigest: 'f'.repeat(64) }))
       .rejects.toThrow('profile_import_inventory_changed')
     await expect(inspectProfileImportPluginArchives({ ...lockedInput, selectedPluginNames: ['missing'] }))
