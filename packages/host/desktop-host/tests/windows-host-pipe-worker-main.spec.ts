@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createWindowsHostPipeWorkerBootData } from '../src/windows-host-pipe-worker-boot.ts'
-import type { WindowsHostPipeWorkerRunnerOptions } from '../src/windows-host-pipe-worker-runner.ts'
-import { runWindowsHostPipeWorkerMain, type WindowsHostPipeWorkerMainDependencies } from '../src/windows-host-pipe-worker-main.ts'
-import { WindowsNamedPipeFrameChannel } from '../src/windows-named-pipe-frame-channel.ts'
+import {
+  runWindowsHostPipeWorkerMain,
+} from '../src/windows-host-pipe-worker-main.ts'
+import type {
+  WindowsHostPipeWorkerRouterOptions,
+  WindowsHostPipeSlotHandle,
+} from '../src/windows-host-pipe-worker-router.ts'
 import { resolveWindowsNamedPipePolicy } from '../src/windows-named-pipe-policy.ts'
-import type { WindowsPeerEvidence } from '../src/windows-peer-attestor.ts'
 import { createWindowsWorkerStopFlag } from '../src/windows-worker-io-cancellation.ts'
 
 function fixture() {
@@ -25,106 +28,50 @@ function fixture() {
     },
     diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
   })
-  const cancellation = {
-    openCurrentThreadHandle: vi.fn(() => 91n),
-    abandonUnhandedThreadHandle: vi.fn(),
-    cancel: vi.fn(() => 'cancelled' as const),
-    close: vi.fn(),
-  }
-  const lifecycle = {
-    createSecurityDescriptor: vi.fn(() => 1n),
-    freeSecurityDescriptor: vi.fn(),
-    createNamedPipe: vi.fn(() => 2n),
-    connectNamedPipe: vi.fn(() => 'connected' as const),
-    disconnectNamedPipe: vi.fn(),
-    closeHandle: vi.fn(),
-  }
-  const io = { read: vi.fn(), writeFrame: vi.fn() }
-  const attest = vi.fn()
   const port = { send: vi.fn(), subscribe: vi.fn(() => () => undefined) }
-  let receivedRunnerOptions: WindowsHostPipeWorkerRunnerOptions<WindowsPeerEvidence> | undefined
-  const runWorker = vi.fn(async (options: WindowsHostPipeWorkerRunnerOptions<WindowsPeerEvidence>) => {
-    receivedRunnerOptions = options
-    return { connectionsServed: 0, requestsHandled: 0 }
+  const firstInstances: boolean[] = []
+  const spawnSlot = vi.fn((firstInstance: boolean): WindowsHostPipeSlotHandle => {
+    firstInstances.push(firstInstance)
+    return {
+      port: { send: vi.fn(), subscribe: vi.fn(() => () => undefined) },
+      exited: new Promise<void>(() => undefined),
+      terminate: vi.fn(),
+    }
   })
-  const dependencies = {
-    loadCancellation: vi.fn(async () => cancellation),
-    loadLifecycle: vi.fn(async () => lifecycle),
-    loadIo: vi.fn(async () => io),
-    loadAttestor: vi.fn<WindowsHostPipeWorkerMainDependencies['loadAttestor']>(async () => attest),
-    createConnectionId: vi.fn(() => '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122'),
-    runWorker,
-  }
-  return {
-    parentFlag,
-    boot,
-    cancellation,
-    lifecycle,
-    io,
-    attest,
-    port,
-    runWorker,
-    dependencies,
-    receivedRunnerOptions: () => receivedRunnerOptions,
-  }
+  const runRouter = vi.fn(async (_options: WindowsHostPipeWorkerRouterOptions) => ({
+    connectionsServed: 0,
+    requestsHandled: 0,
+  }))
+  const dependencies = { spawnSlot, runRouter }
+  return { parentFlag, boot, port, spawnSlot, runRouter, firstInstances, dependencies }
 }
 
 describe('Windows Host pipe Worker composition root', () => {
-  it('loads every native authority component and passes one shared stop generation to the runner', async () => {
+  it('enters the router with the shared stop generation and the slot spawn seam', async () => {
     const state = fixture()
-    await expect(runWindowsHostPipeWorkerMain(state.port, state.boot, state.dependencies)).resolves.toEqual({
-      connectionsServed: 0,
-      requestsHandled: 0,
-    })
-    expect(state.dependencies.loadCancellation).toHaveBeenCalledOnce()
-    expect(state.dependencies.loadLifecycle).toHaveBeenCalledOnce()
-    expect(state.dependencies.loadIo).toHaveBeenCalledOnce()
-    expect(state.dependencies.loadAttestor).toHaveBeenCalledOnce()
-    const attestorOptions = state.dependencies.loadAttestor.mock.calls[0]?.[0]
-    expect(attestorOptions).toMatchObject({
-      allowedPublisherThumbprints: new Set(['A'.repeat(64)]),
-      allowedExecutableDigests: new Set(['b'.repeat(64)]),
-    })
-    expect(typeof attestorOptions?.diagnostics?.record).toBe('function')
-    const options = state.receivedRunnerOptions()
-    expect(options).toBeDefined()
-    if (options === undefined) throw new Error('runner options missing')
-    expect(options).toMatchObject({ generation: 7, policy: state.boot.policy, port: state.port })
-    expect(options.stopFlag.requested()).toBe(false)
-    expect(options.cancellation).toBe(state.cancellation)
-    expect(options.lifecycleBindings).toBe(state.lifecycle)
-    expect(options.attest).toBe(state.attest)
-    expect(options.createChannel(55n)).toBeInstanceOf(WindowsNamedPipeFrameChannel)
+    await expect(runWindowsHostPipeWorkerMain(state.port, state.boot, state.dependencies))
+      .resolves.toEqual({ connectionsServed: 0, requestsHandled: 0 })
+    expect(state.runRouter).toHaveBeenCalledOnce()
+    const options = state.runRouter.mock.calls[0]?.[0]
+    expect(options).toMatchObject({ generation: 7, port: state.port })
+    expect(options?.stopFlag.requested()).toBe(false)
+    expect(options?.stopFlag.buffer).toBe(state.parentFlag.buffer)
+    expect(typeof options?.spawnSlot).toBe('function')
   })
 
-  it('reports a pre-start stop without loading any native component', async () => {
+  it('reports a pre-start stop without spawning any slot', async () => {
     const state = fixture()
     state.parentFlag.request()
-    await expect(runWindowsHostPipeWorkerMain(state.port, state.boot, state.dependencies)).resolves.toEqual({
-      connectionsServed: 0,
-      requestsHandled: 0,
-    })
+    await expect(runWindowsHostPipeWorkerMain(state.port, state.boot, state.dependencies))
+      .resolves.toEqual({ connectionsServed: 0, requestsHandled: 0 })
     expect(state.port.send).toHaveBeenCalledWith({ version: 1, type: 'stopped', generation: 7 })
-    expect(state.dependencies.loadCancellation).not.toHaveBeenCalled()
-    expect(state.dependencies.loadLifecycle).not.toHaveBeenCalled()
-    expect(state.dependencies.loadIo).not.toHaveBeenCalled()
-    expect(state.dependencies.loadAttestor).not.toHaveBeenCalled()
-    expect(state.runWorker).not.toHaveBeenCalled()
+    expect(state.runRouter).not.toHaveBeenCalled()
   })
 
-  it('rejects malformed boot data before loading any native library', async () => {
+  it('rejects malformed boot data before entering the router', async () => {
     const state = fixture()
     await expect(runWindowsHostPipeWorkerMain(state.port, { ...state.boot, extra: true }, state.dependencies))
       .rejects.toThrow('Invalid Windows Host Worker boot data')
-    expect(state.dependencies.loadCancellation).not.toHaveBeenCalled()
-    expect(state.runWorker).not.toHaveBeenCalled()
-  })
-
-  it('does not start the runner after any native loader fails', async () => {
-    const state = fixture()
-    state.dependencies.loadIo.mockRejectedValueOnce(new Error('ReadFile unavailable'))
-    await expect(runWindowsHostPipeWorkerMain(state.port, state.boot, state.dependencies))
-      .rejects.toThrow('ReadFile unavailable')
-    expect(state.runWorker).not.toHaveBeenCalled()
+    expect(state.runRouter).not.toHaveBeenCalled()
   })
 })
