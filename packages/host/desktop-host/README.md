@@ -21,6 +21,8 @@ The machine-local DSH Host serves Desktop Main. It keeps issuer-qualified Person
 
 ## Desktop adapter
 
+The source Bot relay key command checks the current Account registration and Profile before and after signing. It binds the source key to the target Host assertion digest, Account binding generation, and current installation/process identity. The client verifies the reply against its pinned Host inspection and requested fields. This signature alone grants no Bot data transfer.
+
 On macOS, an offline Bot import reserves the private Host root with `bot-import-maintenance.pending.json` before touching Profile data. `acquireSingleHostLock` checks this path after creating `host.lock` and releases its own lock if the marker exists, regardless of marker contents. The offline writer creates the marker exclusively, syncs the file and Host directory, then rechecks that `host.lock` is absent before changing data. It retains the marker across interrupted imports; only recovery or a verified unused reservation removes it. A marker blocks every Profile in that Host root until resolved.
 
 Remote UI boot reads project the worker's document-relative `plugins/` references to the Host root route `/plugins/` in the returned injection table. The worker's local Web document keeps its relative references; remote asset reads still require an exact boot-listed URL and the active view lease.

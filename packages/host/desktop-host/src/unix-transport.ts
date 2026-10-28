@@ -153,6 +153,7 @@ import type {
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest,
   ProfileBotImportRelayKeyRequest,
+  ProfileBotImportSourceRelayKeyRequest,
   ProfileModelTextRequest,
   ProfileModelTextResult,
   ProfileStatusRequest,
@@ -197,6 +198,8 @@ import {
   parseHostCollaborationRegistrationAssertion,
   parseHostBotImportRelayKeyRequest, parseHostBotImportRelayKeyAssertion,
   encodeHostBotImportRelayKeyPayload,
+  parseHostBotImportSourceRelayKeyRequest, parseHostBotImportSourceRelayKeyAssertion,
+  encodeHostBotImportSourceRelayKeyPayload,
   migrationProfileSelectorHash,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type {
@@ -208,6 +211,7 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { issueHostBotImportRelayKey } from './bot-import-relay-key.ts'
+import { issueHostBotImportSourceRelayKey } from './bot-import-source-relay-key.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
@@ -2569,6 +2573,29 @@ export class HostControlAuthority {
             throw new HostAuthorityError('profile_mismatch')
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { assertion } })
+        } else if (frame.method === 'profile.bot_import_source_relay_key') {
+          const account = commandReadAccount(frame.params, ownerId)
+          this.options.host.authorizeCollaborationRegistration(account)
+          const relay = frame.params.relay
+          if (relay.environmentId !== frame.params.authority_environment_id ||
+              relay.accountIssuer !== frame.params.account_issuer ||
+              relay.accountSubject !== frame.params.account_subject ||
+              relay.accountBindingHandle !== frame.params.account_binding_handle ||
+              relay.authGeneration !== frame.params.authority_binding_version)
+            throw new HostAuthorityError('profile_mismatch')
+          const identity = this.options.identity
+          const assertion = issueHostBotImportSourceRelayKey({
+            identity: { ...identity,
+              installationPrivateKey: privateKeyObject(identity.installationPrivateKey) },
+            currentProfileId: () => this.options.host.authorizeAccountModelText(account),
+            relay, now: clock(),
+          })
+          context.signal.throwIfAborted()
+          this.options.host.authorizeCollaborationRegistration(account)
+          if (this.options.host.authorizeAccountModelText(account) !== assertion.sourceProfileId)
+            throw new HostAuthorityError('profile_mismatch')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { assertion } })
         } else if (frame.method === 'profile.bot_import_source_transfer') {
           if (!botImportSourceTransfers) throw new HostAuthorityError('upgrade_required')
           const account = commandReadAccount(frame.params, ownerId)
@@ -2859,6 +2886,7 @@ export class HostControlAuthority {
               'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
           'profile.bot_import_relay_key',
+          'profile.bot_import_source_relay_key',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.readBotTeam ? ['profile.bot_team_read'] : []),
@@ -4994,7 +5022,10 @@ export class UnixHostClient {
     return { operationId: frame.result.operation_id, expiresAt: frame.result.expires_at }
   }
 
-  /** Obtain the current Account Host's signature over a recipient ephemeral key. */
+  /** Obtain the current Account Host's signature over a recipient ephemeral key.
+   * @param input - Current Account binding and recipient key request.
+   * @returns The signed target assertion from the pinned Host.
+   */
   async attestBotImportRelayKey(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -5028,6 +5059,52 @@ export class UnixHostClient {
         assertion.ephemeralPublicKey !== relay.ephemeralPublicKey ||
         assertion.expiresAt <= this.now() ||
         !verify(null, encodeHostBotImportRelayKeyPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+    return assertion
+  }
+
+  /** Obtain the current Account Host's signature over a source key and target assertion digest.
+   * @param input - Current Account binding and source key request.
+   * @returns The signed source assertion from the pinned Host.
+   */
+  async attestBotImportSourceRelayKey(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly relay: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRelayKeyRequest
+    readonly signal?: AbortSignal
+  }): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRelayKeyAssertion> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_import_source_relay_key' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const relay = parseHostBotImportSourceRelayKeyRequest(input.relay)
+    if (relay.environmentId !== input.authorityEnvironmentId ||
+        relay.accountIssuer !== input.issuer || relay.accountSubject !== input.subject ||
+        relay.accountBindingHandle !== input.accountBindingHandle ||
+        relay.authGeneration !== input.authorityBindingVersion)
+      throw new HostAuthorityError('unauthorized')
+    const request: ProfileBotImportSourceRelayKeyRequest = {
+      version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.bot_import_source_relay_key',
+      params: { ...this.collaborationAccountRequestParams(input), relay },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const assertion = parseHostBotImportSourceRelayKeyAssertion(frame.result.assertion)
+    if (assertion.installationId !== this.inspection.installation_id ||
+        assertion.installationPublicKey !== this.inspection.installation_public_key ||
+        assertion.hostInstanceId !== this.inspection.host_instance_id ||
+        assertion.processNonce !== this.inspection.process_nonce ||
+        Object.keys(relay).some(field => assertion[field as keyof typeof relay] !==
+          relay[field as keyof typeof relay]) ||
+        assertion.expiresAt <= this.now() ||
+        !verify(null, encodeHostBotImportSourceRelayKeyPayload(assertion),
           publicKeyObject(this.inspection.installation_public_key),
           Buffer.from(assertion.signature, 'base64url')))
       throw new HostAuthorityError('unauthorized')
@@ -6110,6 +6187,7 @@ export class UnixHostClient {
       | ProfileBotImportInventoryRequest
       | ProfileBotImportGrantRequest
       | ProfileBotImportRelayKeyRequest
+      | ProfileBotImportSourceRelayKeyRequest
       | ProfileBotChatAttachmentsReadRequest
       | ProfileBotChatAttachmentTransferRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest

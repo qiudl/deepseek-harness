@@ -26,6 +26,8 @@ kind: "package-reference"
 
 ## 线协议约定
 
+`profile.bot_import_source_relay_key` 携带当前 Account 的来源电脑与 Profile、绑定身份及代际、一次导入操作与来源摘要、目标 Host 声明摘要，以及未压缩的 P-256 公钥。Host 使用当前安装密钥和进程身份签署这些字段，有效期不超过五分钟。响应不含私钥或 Bot 内容。服务器接收中继页前，必须独立验证两端 Host 登记并消费目标 nonce。
+
 - 每帧恰好一个 UTF-8 JSON 对象和一个结尾 LF；拒绝 CRLF、多行、重复或乱序键、未知字段、非规范数字和尾随数据。
 - JSON 对象最多 65,536 个 UTF-8 字节，不含 LF。传输层必须在缓冲时执行同一上限；字符串编解码器无法收回调用方已经累积的字节。
 - UUID 使用小写 RFC 变体；nonce 与 Ed25519 材料使用规范无填充 base64url；SHA-256 摘要使用小写十六进制。

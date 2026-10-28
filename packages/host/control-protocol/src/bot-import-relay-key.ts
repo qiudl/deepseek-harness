@@ -15,6 +15,7 @@ const encoded = (value: unknown, length: number): value is string =>
   Buffer.from(value, 'base64url').length === length &&
   Buffer.from(value, 'base64url').toString('base64url') === value
 
+/** Target Profile and public key requested by the trusted Main broker. */
 export interface HostBotImportRelayKeyRequest {
   readonly targetDeviceId: string
   readonly targetProfileId: string
@@ -22,6 +23,7 @@ export interface HostBotImportRelayKeyRequest {
   readonly sourceDigest: string
   readonly ephemeralPublicKey: string
 }
+/** Target Host installation signature over the current Profile and ephemeral key. */
 export interface HostBotImportRelayKeyAssertion extends HostBotImportRelayKeyRequest {
   readonly version: 1
   readonly installationId: string
@@ -34,6 +36,10 @@ export interface HostBotImportRelayKeyAssertion extends HostBotImportRelayKeyReq
   readonly signature: string
 }
 
+/** Parse one target-key request.
+ * @param value - Untrusted wire value.
+ * @returns The exact request fields.
+ */
 export function parseHostBotImportRelayKeyRequest(value: unknown): HostBotImportRelayKeyRequest {
   if (!row(value)) throw Error('invalid_bot_import_relay_host_key')
   if (!exact(value, ['targetDeviceId', 'targetProfileId', 'importOperationId',
@@ -47,6 +53,10 @@ export function parseHostBotImportRelayKeyRequest(value: unknown): HostBotImport
   return value as unknown as HostBotImportRelayKeyRequest
 }
 
+/** Parse one target Host assertion.
+ * @param value - Untrusted wire value.
+ * @returns The signed fields.
+ */
 export function parseHostBotImportRelayKeyAssertion(value: unknown): HostBotImportRelayKeyAssertion {
   if (!row(value)) throw Error('invalid_bot_import_relay_host_key')
   if (!exact(value, ['version', 'installationId',
@@ -67,6 +77,10 @@ export function parseHostBotImportRelayKeyAssertion(value: unknown): HostBotImpo
   return value as unknown as HostBotImportRelayKeyAssertion
 }
 
+/** Encode the target signature transcript.
+ * @param value - Valid claims.
+ * @returns Canonical bytes.
+ */
 export function encodeHostBotImportRelayKeyPayload(
   value: Omit<HostBotImportRelayKeyAssertion, 'signature'>,
 ): Buffer {

@@ -55,6 +55,9 @@ export type { HostBotImportGrant, HostBotImportGrantClaims,
 export { parseHostBotImportRelayKeyRequest, parseHostBotImportRelayKeyAssertion,
   encodeHostBotImportRelayKeyPayload } from './bot-import-relay-key.js'
 export type { HostBotImportRelayKeyRequest, HostBotImportRelayKeyAssertion } from './bot-import-relay-key.js'
+export { parseHostBotImportSourceRelayKeyRequest, parseHostBotImportSourceRelayKeyAssertion,
+  encodeHostBotImportSourceRelayKeyPayload } from './bot-import-source-relay-key.js'
+export type { HostBotImportSourceRelayKeyRequest, HostBotImportSourceRelayKeyAssertion } from './bot-import-source-relay-key.js'
 export { parseHostBotChatAttachmentsReadRequest, parseHostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export type { HostBotChatAttachmentsReadRequest, HostBotChatAttachmentsPage } from './bot-chat-attachments-read.js'
 export { parseHostBotChatAttachmentTransferRequest, parseHostBotChatAttachmentTransferResult } from './bot-chat-attachment-transfer.js'
@@ -70,6 +73,7 @@ export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotImportInventoryRequest, ProfileBotImportInventoryResult,
   ProfileBotImportGrantRequest, ProfileBotImportGrantResult,
   ProfileBotImportRelayKeyRequest, ProfileBotImportRelayKeyResult,
+  ProfileBotImportSourceRelayKeyRequest, ProfileBotImportSourceRelayKeyResult,
   ProfileBotChatAttachmentsReadRequest, ProfileBotChatAttachmentsReadResult,
   ProfileBotChatAttachmentTransferRequest, ProfileBotChatAttachmentTransferResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,

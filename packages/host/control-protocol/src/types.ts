@@ -1090,12 +1090,37 @@ export interface ProfileBotImportRelayKeyRequest {
     readonly relay: import('./bot-import-relay-key.ts').HostBotImportRelayKeyRequest
   }
 }
+/** Target Host assertion returned to its authorized Main caller. */
 export interface ProfileBotImportRelayKeyResult {
   readonly version: 1
   readonly type: 'result'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.bot_import_relay_key'
   readonly result: { readonly assertion: import('./bot-import-relay-key.ts').HostBotImportRelayKeyAssertion }
+}
+
+/** Current Account Host signature over a source key and one target assertion. */
+export interface ProfileBotImportSourceRelayKeyRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_source_relay_key'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly relay: import('./bot-import-source-relay-key.ts').HostBotImportSourceRelayKeyRequest
+  }
+}
+/** Source Host assertion returned to its authorized Main caller. */
+export interface ProfileBotImportSourceRelayKeyResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_source_relay_key'
+  readonly result: { readonly assertion: import('./bot-import-source-relay-key.ts').HostBotImportSourceRelayKeyAssertion }
 }
 
 /** Account-bound visible attachment manifest for a private Bot chat part. */
@@ -2629,6 +2654,8 @@ export type HostControlFrame =
   | ProfileBotImportGrantResult
   | ProfileBotImportRelayKeyRequest
   | ProfileBotImportRelayKeyResult
+  | ProfileBotImportSourceRelayKeyRequest
+  | ProfileBotImportSourceRelayKeyResult
   | ProfileBotChatAttachmentsReadRequest
   | ProfileBotChatAttachmentsReadResult
   | ProfileBotChatAttachmentTransferRequest

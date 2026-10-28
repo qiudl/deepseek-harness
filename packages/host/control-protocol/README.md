@@ -24,6 +24,8 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 
 ## Wire contract
 
+`profile.bot_import_source_relay_key` carries the current Account's source computer/Profile, binding identity and generation, one import operation and source digest, the target Host assertion digest, and an uncompressed P-256 public key. The Host signs these fields with its current installation key and process identity for at most five minutes. The reply contains no private key or Bot content. A server must independently verify both Host registrations and consume the target nonce before accepting a relay page.
+
 - One UTF-8 JSON object and one final LF per frame; CRLF, extra lines, duplicate or reordered keys, unknown fields, non-canonical numbers, and trailing data are rejected.
 - The JSON object is at most 65,536 UTF-8 bytes, excluding LF. The transport must enforce the same cap while buffering; this string codec cannot undo bytes already accumulated by a caller.
 - UUIDs are lower-case RFC variants. Nonces and Ed25519 material use canonical unpadded base64url. SHA-256 digests use lower-case hexadecimal.

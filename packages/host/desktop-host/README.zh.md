@@ -22,6 +22,8 @@ kind: "package-bundle"
 <a id="desktop-adapter"></a>
 ## Desktop adapter
 
+来源 Bot 中继公钥命令在签名前后检查当前 Account 登记与 Profile。签名将来源公钥绑定到目标 Host 声明摘要、Account 绑定代际及当前安装和进程身份。客户端根据已固定的 Host 检查结果与请求字段验证响应。仅凭此签名不能传输 Bot 数据。
+
 在 macOS 上，离线 Bot 导入会先用 `bot-import-maintenance.pending.json` 占用私有 Host 根目录，再修改 Profile 数据。`acquireSingleHostLock` 创建 `host.lock` 后检查该路径；只要标记存在，就释放自己的锁并拒绝启动，不解析标记内容。离线写入方以独占方式创建标记，同步文件和 Host 目录，然后再次确认 `host.lock` 不存在，才可修改数据。导入中断时保留标记；只有恢复流程或已验证未使用的预约可以清除它。标记未解决前，该 Host 根目录下所有 Profile 均无法启动。
 
 远程 UI 启动读取只在返回的注入表中将 worker 的文档相对路径 `plugins/` 投影为 Host 根路由 `/plugins/`。worker 本机 Web 文档仍使用相对路径；远程资源读取仍要求当前启动表列出的精确 URL 和有效视图租约。
