@@ -557,6 +557,16 @@ describe('offline Profile existing-only inspector', () => {
     }
   })
 
+  it('rejects malformed target bundle declarations during inventory inspection', async () => {
+    const value = await pluginPlanFixture()
+    const path = join(value.target.web, 'package.json')
+    const invalidBundles: unknown[] = [null, ['baseline', 42], ['baseline', 'baseline']]
+    for (const bundles of invalidBundles) {
+      await writeFile(path, JSON.stringify({ dependencies: {}, dsh: { profile: { bundles } } }))
+      await expect(value.inspect()).rejects.toThrow('profile_import_manifest_invalid')
+    }
+  })
+
   it.skipIf(process.platform === 'win32')('resolves selected plugins beside an existing catalog-backed target plugin without changing live files', async () => {
     const value = await pluginPlanFixture(true)
     const baselineSource = join(value.target.hostRoot, 'baseline-source')
