@@ -44,6 +44,16 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>
 }
 
+/** Fail-closed record projection shared by the Worker and slot boot decoders. */
+export function windowsHostBootRecord(value: unknown): Record<string, unknown> {
+  return record(value)
+}
+
+/** Exact-key validation shared by the Worker and slot boot decoders. */
+export function assertWindowsHostBootExactKeys(value: Record<string, unknown>, expected: readonly string[]): void {
+  exactKeys(value, expected)
+}
+
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]): void {
   const actual = Object.keys(value).sort()
   const canonical = [...expected].sort()
@@ -59,7 +69,10 @@ function canonicalAnchors(value: unknown, pattern: RegExp): readonly string[] {
   return Object.freeze([...anchors])
 }
 
-function canonicalPolicy(value: unknown): WindowsNamedPipePolicy {
+const PIPE_UNLIMITED_INSTANCES = 255
+
+/** Strict field validators shared by the Worker and per-connection slot boot payloads. */
+export function canonicalWindowsPipePolicy(value: unknown): WindowsNamedPipePolicy {
   const policy = record(value)
   exactKeys(policy, ['path', 'securityDescriptor', 'openMode', 'pipeMode', 'maxInstances'])
   const descriptor = typeof policy.securityDescriptor === 'string'
@@ -69,17 +82,18 @@ function canonicalPolicy(value: unknown): WindowsNamedPipePolicy {
     || descriptor === null || descriptor[1] !== descriptor[2]
     || descriptor[1] === undefined || !isWindowsDshUserSid(descriptor[1])
     || policy.openMode !== PIPE_OPEN_MODE || policy.pipeMode !== PIPE_MODE
-    || policy.maxInstances !== 1) return invalid()
+    || policy.maxInstances !== PIPE_UNLIMITED_INSTANCES) return invalid()
   return Object.freeze({
     path: policy.path,
     securityDescriptor: policy.securityDescriptor as string,
     openMode: PIPE_OPEN_MODE,
     pipeMode: PIPE_MODE,
-    maxInstances: 1,
+    maxInstances: PIPE_UNLIMITED_INSTANCES,
   })
 }
 
-function canonicalNativeModule(value: unknown): WindowsVaultNativeModulePin {
+/** Strict pin validation shared by the Worker and slot boot payloads. */
+export function canonicalWindowsNativeModulePin(value: unknown): WindowsVaultNativeModulePin {
   const native = record(value)
   exactKeys(native, ['path', 'sha256'])
   if (typeof native.path !== 'string' || !win32.isAbsolute(native.path)
@@ -88,10 +102,21 @@ function canonicalNativeModule(value: unknown): WindowsVaultNativeModulePin {
   return Object.freeze({ path: native.path, sha256: native.sha256 })
 }
 
-function canonicalEnvironmentRoot(value: unknown): string {
+/** Strict environment-root validation shared by the Worker and slot boot payloads. */
+export function canonicalWindowsEnvironmentRoot(value: unknown): string {
   if (typeof value !== 'string' || !DRIVE_ROOTED_PATH.test(value) || CONTROL_CHARACTER.test(value)
     || value.slice(2).includes(':') || win32.normalize(value) !== value) return invalid()
   return value
+}
+
+/** Strict trust-anchor validation shared by the Worker and slot boot payloads. */
+export function canonicalWindowsPublisherThumbprints(value: unknown): readonly string[] {
+  return canonicalAnchors(value, PUBLISHER)
+}
+
+/** Strict digest-anchor validation shared by the Worker and slot boot payloads. */
+export function canonicalWindowsExecutableDigests(value: unknown): readonly string[] {
+  return canonicalAnchors(value, SHA256)
 }
 
 /** Strictly decode the only payload accepted by the native Windows Worker entry. */
@@ -114,12 +139,12 @@ export function decodeWindowsHostPipeWorkerBootData(input: unknown): WindowsHost
   return Object.freeze({
     version: 1,
     generation: value.generation as number,
-    policy: canonicalPolicy(value.policy),
+    policy: canonicalWindowsPipePolicy(value.policy),
     stopFlagBuffer: value.stopFlagBuffer,
-    allowedPublisherThumbprints: canonicalAnchors(value.allowedPublisherThumbprints, PUBLISHER),
-    allowedExecutableDigests: canonicalAnchors(value.allowedExecutableDigests, SHA256),
-    nativeModule: canonicalNativeModule(value.nativeModule),
-    diagnosticsRoot: canonicalEnvironmentRoot(value.diagnosticsRoot),
+    allowedPublisherThumbprints: canonicalWindowsPublisherThumbprints(value.allowedPublisherThumbprints),
+    allowedExecutableDigests: canonicalWindowsExecutableDigests(value.allowedExecutableDigests),
+    nativeModule: canonicalWindowsNativeModulePin(value.nativeModule),
+    diagnosticsRoot: canonicalWindowsEnvironmentRoot(value.diagnosticsRoot),
   })
 }
 

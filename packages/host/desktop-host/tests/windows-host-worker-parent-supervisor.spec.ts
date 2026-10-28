@@ -424,4 +424,42 @@ describe('Windows Host Worker parent supervisor', () => {
       sessionCleanup: 'closed',
     })
   })
+
+  it('cancels and closes every announced slot thread handle during a bounded stop', async () => {
+    const state = fixture()
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.deliver({ version: 1, type: 'thread_handle', generation: 7, threadHandle: 92n })
+    await Promise.resolve()
+    state.cancellation.cancel.mockImplementation(() => {
+      state.worker.resolve()
+      return 'cancelled'
+    })
+    const stopping = state.supervisor.stop()
+    state.cleanup.resolve()
+    await expect(stopping).resolves.toEqual({
+      state: 'stopped',
+      cancelAttempts: 1,
+      sessionCleanup: 'closed',
+    })
+    expect(state.cancellation.cancel).toHaveBeenCalledWith(91n)
+    expect(state.cancellation.cancel).toHaveBeenCalledWith(92n)
+    expect(state.cancellation.close).toHaveBeenCalledWith(91n)
+    expect(state.cancellation.close).toHaveBeenCalledWith(92n)
+  })
+
+  it('closes a late-announced slot handle after a still-running Worker exits', async () => {
+    const state = fixture()
+    const waiting = state.supervisor.waitUntilReady()
+    state.deliver(ready())
+    await waiting
+    state.cleanup.resolve()
+    const stopping = state.supervisor.stop()
+    state.deliver({ version: 1, type: 'thread_handle', generation: 7, threadHandle: 95n })
+    await expect(stopping).resolves.toMatchObject({ state: 'still_running' })
+    expect(state.cancellation.cancel).toHaveBeenCalledWith(95n)
+    state.worker.resolve()
+    await vi.waitFor(() => { expect(state.cancellation.close).toHaveBeenCalledWith(95n) })
+  })
 })
