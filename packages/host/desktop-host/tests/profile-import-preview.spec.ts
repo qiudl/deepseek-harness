@@ -112,8 +112,8 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
       { name: 'alpha', status: 'archive_verified', archiveDigest: sha, lockfileResolutionVerified: true },
       { name: 'beta', status: 'source_unverified' },
     ])
-    expect(await inspectProfileImportPluginArchives({ ...lockedInput,
-      catalog: undefined, selectedPluginNames: ['alpha'] })).toEqual([
+    expect(await inspectProfileImportPluginArchives({ ...source, uid,
+      expectedSnapshotDigest: locked.snapshotDigest, selectedPluginNames: ['alpha'] })).toEqual([
       { name: 'alpha', status: 'source_unverified' },
     ])
     await chmod(archiveDirectory, 0o722)
