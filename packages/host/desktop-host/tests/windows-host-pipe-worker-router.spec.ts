@@ -161,12 +161,28 @@ describe('Windows Host pipe Worker router', () => {
   it('closes only the disconnected connection and keeps serving the other', async () => {
     const state = fixture()
     const { running } = await serveTwoConnections(state)
+    // The real-lane sequence: a view connection serves a request, the Desktop peer hangs
+    // up on the response write (Win32 232), and its slot exits after reporting the count.
+    state.slots[0]?.deliver(slotMessage('request', {
+      connectionId: firstConnection, sequence: 1, frame: encodeHostControlFrame(request),
+    }))
+    await vi.waitFor(() => {
+      expect(state.parentSent).toContainEqual(expect.objectContaining({
+        type: 'request', connectionId: firstConnection, sequence: 1,
+      }))
+    })
+    state.deliverParent(slotMessage('response', {
+      connectionId: firstConnection, sequence: 1, frame: encodeHostControlFrame(response),
+    }))
+    await vi.waitFor(() => {
+      expect(state.slots[0]?.sent).toContainEqual(expect.objectContaining({ type: 'response' }))
+    })
     state.slots[0]?.deliver(slotMessage('disconnected', {
-      connectionId: firstConnection, requestsHandled: 0,
+      connectionId: firstConnection, requestsHandled: 1,
     }))
     await vi.waitFor(() => {
       expect(state.parentSent).toContainEqual({
-        version: 1, type: 'disconnected', generation: 7, connectionId: firstConnection, requestsHandled: 0,
+        version: 1, type: 'disconnected', generation: 7, connectionId: firstConnection, requestsHandled: 1,
       })
     })
     state.slots[0]?.exit()
@@ -181,7 +197,7 @@ describe('Windows Host pipe Worker router', () => {
     state.flag.request()
     state.deliverParent(slotMessage('stop'))
     for (const slot of [...state.slots]) slot.exit()
-    await expect(running).resolves.toEqual({ connectionsServed: 1, requestsHandled: 0 })
+    await expect(running).resolves.toEqual({ connectionsServed: 1, requestsHandled: 1 })
   })
 
   it('aborts every in-flight connection on stop and spawns no further acceptor', async () => {

@@ -186,6 +186,51 @@ describe('Windows Host pipe Worker runner', () => {
     expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'disconnected', 'stopped'])
   })
 
+  it('lets a requested stop own the teardown when it races a peer hangup on write', async () => {
+    const state = fixture([])
+    const peerGone = Object.assign(new Error('WriteFile failed with Win32 code 232'), { win32Code: 232 })
+    let reads = 0
+    state.options.createChannel = () => ({
+      readFrame: vi.fn(async () => {
+        reads += 1
+        return reads === 1 ? request : null
+      }),
+      send: vi.fn(async () => {
+        state.flag.request()
+        state.deliver({ version: 1, type: 'stop', generation: 7 })
+        throw peerGone
+      }),
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).resolves.toEqual({
+      connectionsServed: 1,
+      requestsHandled: 1,
+    })
+    expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'request', 'stopped'])
+  })
+
+  it('closes the connection with the handled count when the peer hangs up on a response write', async () => {
+    const state = fixture([])
+    const peerGone = Object.assign(new Error('WriteFile failed with Win32 code 232'), { win32Code: 232 })
+    let reads = 0
+    state.options.createChannel = () => ({
+      readFrame: vi.fn(async () => {
+        reads += 1
+        return reads === 1 ? request : null
+      }),
+      send: vi.fn(async () => { throw peerGone }),
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).resolves.toEqual({
+      connectionsServed: 1,
+      requestsHandled: 1,
+    })
+    expect(state.sent).toEqual([
+      { version: 1, type: 'ready', generation: 7, threadHandle: 91n },
+      { version: 1, type: 'connected', generation: 7, connectionId },
+      expect.objectContaining({ type: 'request', sequence: 1 }),
+      { version: 1, type: 'disconnected', generation: 7, connectionId, requestsHandled: 1 },
+    ])
+  })
+
   it('fails the Worker generation when a connection fails for another reason', async () => {
     const state = fixture([])
     state.options.createChannel = () => ({

@@ -114,8 +114,13 @@ export async function runWindowsHostPipeWorker<Evidence>(
             console.error(`[dsh-host] connection closed by the Desktop peer: ${
               (error as Error).message
             }`)
-            try { await bridge.closeConnection(0) } catch { /* the peer is already gone */ }
-            return { requestsHandled: 0, stopped: false }
+            // The parent already counted the handled requests; closing with any other count
+            // poisons the slot bridge and leaks an open connection on the router (0023 only
+            // covered a zero-request read-side hangup, but Win32 232 surfaces on WriteFile).
+            // A stop that raced the hangup owns the connection teardown instead.
+            const requestsHandled = bridge.requestsHandled
+            if (bridge.state === 'connected') await bridge.closeConnection(requestsHandled)
+            return { requestsHandled, stopped: false }
           }
         },
       })

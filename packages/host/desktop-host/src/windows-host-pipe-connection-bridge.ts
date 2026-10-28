@@ -72,6 +72,9 @@ export class WindowsHostPipeConnectionBridge {
 
   get state(): ConnectionBridgeState { return this.workerState }
 
+  /** Completed request/response cycles on this connection (the parent-visible count). */
+  get requestsHandled(): number { return this.nextSequence - 1 }
+
   async announceReady(threadHandle: bigint): Promise<void> {
     if (!this.hasState('awaiting_ready')) return this.fail()
     await this.sendChecked({
