@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
+import { parseHostCollaborationRegistrationChallenge, parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
   parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
@@ -246,6 +246,18 @@ describe('Windows Desktop Host startup', () => {
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
     await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
+    expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    const registrationChallenge = parseHostCollaborationRegistrationChallenge({
+      registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+      expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+      account_issuer: issuer, account_subject: accountId,
+    })
+    await expect(client.attestCollaborationRegistration({ ...account, challenge: registrationChallenge }))
+      .resolves.toMatchObject({ challenge: registrationChallenge,
+        installation_id: state.options.installationId, host_instance_id: state.options.hostInstanceId })
+    await expect(client.attestCollaborationRegistration({
+      ...account, authorityBindingVersion: 2, challenge: registrationChallenge,
+    })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.inspectWorkspaceModelSelection(selection))
       .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
     expect(await client.collaborationAnalysis({ ...account, command: { action: 'root_feedback', operation: { action: 'read' } } })).toEqual({ kind: 'root_feedback', record: null })
