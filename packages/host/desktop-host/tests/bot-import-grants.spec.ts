@@ -55,3 +55,16 @@ it('keeps one signed import approval bound to its owner, Profile, target and Hos
     bootNonce: randomBytes(32).toString('base64url') }, () => now)
     .register(grant, account, 'profile')).toThrow()
 })
+
+it('admits all 20 authorized batches of a 5,000-Session team and bounds the next', () => {
+  const registry = new BotImportGrantRegistry(publicKey, identity, () => now)
+  for (let index = 0; index < 21; index++) {
+    const batchClaims = { ...claims, operation_id: randomUUID(),
+      session_ids: [`session-${randomUUID()}`],
+      nonce: randomBytes(32).toString('base64url') }
+    const batch = { ...batchClaims, signature: sign(null,
+      encodeHostBotImportGrantPayload(batchClaims), keys.privateKey).toString('base64url') }
+    if (index < 20) expect(() => registry.register(batch, account, 'profile')).not.toThrow()
+    else expect(() => registry.register(batch, account, 'profile')).toThrow()
+  }
+})

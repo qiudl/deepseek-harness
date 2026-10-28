@@ -9,6 +9,9 @@ interface ActiveGrant {
   readonly profileId: string
 }
 
+// A full 5,000-Session team needs ceil(5,000 / 256) concurrent batches.
+const MAX_ACTIVE_GRANTS = 20
+
 /** In-memory, single-Host approvals. Signed claims cannot be replayed after boot or revocation. */
 export class BotImportGrantRegistry {
   private readonly active = new Map<string, ActiveGrant>()
@@ -39,7 +42,8 @@ export class BotImportGrantRegistry {
     }, this.now())
     for (const [operationId, entry] of this.active)
       if (entry.grant.expires_at <= this.now()) this.active.delete(operationId)
-    if (this.used.has(grant.operation_id) || this.active.size >= 8 || this.used.size >= 10_000)
+    if (this.used.has(grant.operation_id) || this.active.size >= MAX_ACTIVE_GRANTS ||
+        this.used.size >= 10_000)
       throw new HostAuthorityError('replayed')
     this.used.add(grant.operation_id)
     this.active.set(grant.operation_id, { grant, profileId })
