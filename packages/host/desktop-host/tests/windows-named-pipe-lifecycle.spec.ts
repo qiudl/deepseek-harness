@@ -287,4 +287,75 @@ describe('Windows named-pipe native lifecycle', () => {
       })).rejects.toBeInstanceOf(HostAuthorityError)
     }
   })
+
+  it('tolerates an already-closed handle and preserves non-Error cleanup failures', async () => {
+    const alreadyClosed = bindings({
+      closeHandle: vi.fn(() => { throw new WindowsNamedPipeNativeError('CloseHandle', 6) }),
+    })
+    await expect(withAcceptedWindowsNamedPipe({
+      policy,
+      bindings: alreadyClosed.native,
+      attest: async () => ({ pid: 42 }),
+      serve: async () => 'served',
+    })).resolves.toBe('served')
+
+    const nonObject = bindings({
+      closeHandle: vi.fn(() => { throw 'CloseHandle exploded' }),
+    })
+    await expect(withAcceptedWindowsNamedPipe({
+      policy,
+      bindings: nonObject.native,
+      attest: async () => ({ pid: 42 }),
+      serve: async () => 'unreachable',
+    })).rejects.toBeInstanceOf(HostAuthorityError)
+  })
+
+  it('completes a provisioning stop even when cleanup reports a non-Error failure', async () => {
+    let stopped = false
+    const fixture = bindings({
+      createNamedPipe: vi.fn(() => { stopped = true; return 91n }),
+      closeHandle: vi.fn(() => { throw 'CloseHandle exploded' }),
+    })
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy, bindings: fixture.native, stopRequested: () => stopped,
+      attest: async () => ({ pid: 42 }), serve: async () => 'unreachable',
+    })).resolves.toEqual({ state: 'stopped' })
+  })
+
+  it('stops between acceptance and service without serving', async () => {
+    let observations = 0
+    const serve = vi.fn(async () => 'unreachable')
+    const fixture = bindings()
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy,
+      bindings: fixture.native,
+      // The stop becomes visible only after the accept phase's final observation.
+      stopRequested: () => {
+        observations += 1
+        return observations > 5
+      },
+      attest: async () => ({ pid: 42 }),
+      serve,
+    })).resolves.toEqual({ state: 'stopped' })
+    expect(serve).not.toHaveBeenCalled()
+    expect(fixture.native.disconnectNamedPipe).toHaveBeenCalledWith(91n)
+    expect(fixture.native.closeHandle).toHaveBeenCalledWith(91n)
+  })
+
+  it('normalizes a cancelled blocking read during service only after stop is visible', async () => {
+    let stopped = false
+    const fixture = bindings()
+    await expect(withCancellableAcceptedWindowsNamedPipe({
+      policy,
+      bindings: fixture.native,
+      stopRequested: () => stopped,
+      attest: async () => ({ pid: 42 }),
+      serve: async () => {
+        stopped = true
+        throw new WindowsNamedPipeNativeError('ReadFile', 995)
+      },
+    })).resolves.toEqual({ state: 'stopped' })
+    expect(fixture.native.disconnectNamedPipe).toHaveBeenCalledWith(91n)
+    expect(fixture.native.closeHandle).toHaveBeenCalledWith(91n)
+  })
 })

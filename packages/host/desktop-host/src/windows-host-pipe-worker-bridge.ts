@@ -23,6 +23,11 @@ interface PendingResponse {
   readonly reject: (error: Error) => void
 }
 
+interface ConnectionState {
+  nextSequence: number
+  pending: PendingResponse | undefined
+}
+
 type WorkerBridgeState = 'awaiting_ready' | 'ready' | 'connected' | 'stopping' | 'stopped' | 'failed'
 
 function protocolError(): WindowsHostWorkerProtocolError {
@@ -52,16 +57,20 @@ function stopSentinel(request: HostControlFrame): HostControlFrame {
   } as unknown as HostControlFrame
 }
 
+function validHandle(value: unknown): value is bigint {
+  return typeof value === 'bigint' && value > 0n && value < 0xFFFF_FFFF_FFFF_FFFFn
+}
+
 /**
- * Worker-side half of the Windows Host bridge.
- * It exposes the request handler consumed by the blocking pipe loop while enforcing
- * one response waiter, one connection, and one immutable Worker generation.
+ * Router-thread half of the Windows Host bridge, multiplexing every concurrent connection.
+ * Each connection gets an independent sequence and a single response waiter, so concurrent
+ * slot threads never share control state. The parent observes one generation-bound stream;
+ * stop settles every pending waiter with a retryable sentinel before the Worker drains.
  */
 export class WindowsHostPipeWorkerBridge {
   private workerState: WorkerBridgeState = 'awaiting_ready'
-  private connectionId: string | undefined
-  private nextSequence = 1
-  private pending: PendingResponse | undefined
+  private readonly threadHandles = new Set<bigint>()
+  private readonly connections = new Map<string, ConnectionState>()
 
   constructor(private readonly options: WindowsHostPipeWorkerBridgeOptions) {
     if (!Number.isSafeInteger(options.generation) || options.generation < 1) {
@@ -71,6 +80,7 @@ export class WindowsHostPipeWorkerBridge {
 
   get state(): WorkerBridgeState { return this.workerState }
 
+  /** First announced handle becomes the generation's ready handshake cancellation target. */
   async announceReady(threadHandle: bigint): Promise<void> {
     if (!this.hasState('awaiting_ready')) return this.fail()
     await this.sendChecked({
@@ -80,35 +90,54 @@ export class WindowsHostPipeWorkerBridge {
       threadHandle,
     })
     if (this.workerState !== 'awaiting_ready') return this.fail()
+    this.threadHandles.add(threadHandle)
     this.workerState = 'ready'
   }
 
+  /** Forward an additional slot thread handle so the parent can cancel its blocking I/O. */
+  async announceThreadHandle(threadHandle: bigint): Promise<void> {
+    if (!this.hasState('ready') && !this.hasState('connected') && !this.hasState('stopping')) {
+      return this.fail()
+    }
+    if (!validHandle(threadHandle) || this.threadHandles.has(threadHandle)) return this.fail()
+    await this.sendChecked({
+      version: 1,
+      type: 'thread_handle',
+      generation: this.options.generation,
+      threadHandle,
+    })
+    if (!this.hasState('ready') && !this.hasState('connected') && !this.hasState('stopping')) {
+      return this.fail()
+    }
+    this.threadHandles.add(threadHandle)
+  }
+
   async openConnection(connectionId: string): Promise<void> {
-    if (!this.hasState('ready')) return this.fail()
+    if (!this.hasState('ready') && !this.hasState('connected')) return this.fail()
+    if (this.connections.has(connectionId)) return this.fail()
     await this.sendChecked({
       version: 1,
       type: 'connected',
       generation: this.options.generation,
       connectionId,
     })
-    if (this.workerState !== 'ready') return this.fail()
-    this.connectionId = connectionId
-    this.nextSequence = 1
+    if (!this.hasState('ready') && !this.hasState('connected')) return this.fail()
+    this.connections.set(connectionId, { nextSequence: 1, pending: undefined })
     this.workerState = 'connected'
   }
 
-  async handleRequest(request: HostControlFrame): Promise<HostControlFrame> {
-    const connectionId = this.connectionId
-    if (this.workerState !== 'connected' || connectionId === undefined
-      || this.pending !== undefined || request.type !== 'request') return this.fail()
+  async handleRequest(request: HostControlFrame, connectionId: string): Promise<HostControlFrame> {
+    const connection = this.connections.get(connectionId)
+    if (this.workerState !== 'connected' || connection === undefined
+      || connection.pending !== undefined || request.type !== 'request') return this.fail()
     let resolve!: (response: HostControlFrame) => void
     let reject!: (error: Error) => void
     const response = new Promise<HostControlFrame>((accept, decline) => {
       resolve = accept
       reject = decline
     })
-    const sequence = this.nextSequence
-    this.pending = { connectionId, sequence, request, resolve, reject }
+    const sequence = connection.nextSequence
+    connection.pending = { connectionId, sequence, request, resolve, reject }
     try {
       await this.sendChecked({
         version: 1,
@@ -133,19 +162,22 @@ export class WindowsHostPipeWorkerBridge {
         if (!this.options.stopRequested() || this.workerState === 'stopping'
           || this.workerState === 'stopped' || this.workerState === 'failed') throw protocolError()
         this.workerState = 'stopping'
-        const pending = this.pending
-        this.pending = undefined
-        if (pending !== undefined) pending.resolve(stopSentinel(pending.request))
+        for (const connection of this.connections.values()) {
+          const pending = connection.pending
+          connection.pending = undefined
+          if (pending !== undefined) pending.resolve(stopSentinel(pending.request))
+        }
         return
       }
       if (message.type !== 'response' || this.workerState !== 'connected') throw protocolError()
-      const pending = this.pending
-      if (pending === undefined || message.connectionId !== pending.connectionId
+      const connection = this.connections.get(message.connectionId)
+      const pending = connection?.pending
+      if (connection === undefined || pending === undefined
         || message.sequence !== pending.sequence) throw protocolError()
       const response = decodeHostControlFrame(message.frame)
       if (!correlated(response, pending.request)) throw protocolError()
-      this.pending = undefined
-      this.nextSequence += 1
+      connection.pending = undefined
+      connection.nextSequence += 1
       pending.resolve(response)
     } catch (error) {
       this.poison(error)
@@ -153,10 +185,11 @@ export class WindowsHostPipeWorkerBridge {
     }
   }
 
-  async closeConnection(requestsHandled: number): Promise<void> {
-    const connectionId = this.connectionId
-    if (this.workerState !== 'connected' || connectionId === undefined || this.pending !== undefined
-      || !Number.isSafeInteger(requestsHandled) || requestsHandled !== this.nextSequence - 1) return this.fail()
+  async closeConnection(connectionId: string, requestsHandled: number): Promise<void> {
+    const connection = this.connections.get(connectionId)
+    if (!this.hasState('connected') || connection === undefined || connection.pending !== undefined
+      || !Number.isSafeInteger(requestsHandled)
+      || requestsHandled !== connection.nextSequence - 1) return this.fail()
     await this.sendChecked({
       version: 1,
       type: 'disconnected',
@@ -164,17 +197,22 @@ export class WindowsHostPipeWorkerBridge {
       connectionId,
       requestsHandled,
     })
-    if (!this.hasState('connected') || this.connectionId !== connectionId) return this.fail()
-    this.connectionId = undefined
-    this.workerState = 'ready'
+    if (!this.hasState('connected')
+      || this.connections.get(connectionId) !== connection) return this.fail()
+    this.connections.delete(connectionId)
+    if (this.connections.size === 0) this.workerState = 'ready'
   }
 
   async announceStopped(): Promise<void> {
-    if (!this.options.stopRequested() || this.pending !== undefined
-      || this.workerState === 'stopped' || this.workerState === 'failed') return this.fail()
+    if (!this.options.stopRequested() || this.workerState === 'stopped' || this.workerState === 'failed') {
+      return this.fail()
+    }
+    for (const connection of this.connections.values()) {
+      if (connection.pending !== undefined) return this.fail()
+    }
     await this.sendChecked({ version: 1, type: 'stopped', generation: this.options.generation })
     if (this.hasState('failed') || this.hasState('stopped')) return this.fail()
-    this.connectionId = undefined
+    this.connections.clear()
     this.workerState = 'stopped'
   }
 
@@ -198,10 +236,13 @@ export class WindowsHostPipeWorkerBridge {
 
   private poison(error: unknown): void {
     const reason = error instanceof Error ? error : protocolError()
-    const pending = this.pending
-    this.pending = undefined
-    this.connectionId = undefined
+    const pendings: PendingResponse[] = []
+    for (const connection of this.connections.values()) {
+      if (connection.pending !== undefined) pendings.push(connection.pending)
+      connection.pending = undefined
+    }
+    this.connections.clear()
     this.workerState = 'failed'
-    pending?.reject(reason)
+    for (const pending of pendings) pending.reject(reason)
   }
 }

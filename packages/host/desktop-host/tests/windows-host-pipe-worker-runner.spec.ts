@@ -146,7 +146,7 @@ describe('Windows Host pipe Worker runner', () => {
     expect(state.options.lifecycleBindings.closeHandle).toHaveBeenCalledWith(81n)
   })
 
-  it('reports a clean disconnect before serving the next connection', async () => {
+  it('reports a clean disconnect and completes the stop handshake', async () => {
     const state = fixture([null])
     state.options.port.send.mockImplementation((message: WindowsHostWorkerMessage) => {
       state.sent.push(message)
@@ -157,6 +157,15 @@ describe('Windows Host pipe Worker runner', () => {
       requestsHandled: 0,
     })
     expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'disconnected', 'stopped'])
+  })
+
+  it('exits without the stop handshake after a clean disconnect when no stop was requested', async () => {
+    const state = fixture([null])
+    await expect(runWindowsHostPipeWorker(state.options)).resolves.toEqual({
+      connectionsServed: 1,
+      requestsHandled: 0,
+    })
+    expect(state.sent.map(message => message.type)).toEqual(['ready', 'connected', 'disconnected'])
   })
 
   it('keeps the Worker generation when the Desktop peer hangs up mid-connection', async () => {
@@ -181,6 +190,15 @@ describe('Windows Host pipe Worker runner', () => {
     const state = fixture([])
     state.options.createChannel = () => ({
       readFrame: vi.fn(async () => { throw new Error('ReadFile failed with Win32 code 87') }),
+      send: vi.fn(async () => {}),
+    })
+    await expect(runWindowsHostPipeWorker(state.options)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('fails the Worker generation when a connection error is not an object', async () => {
+    const state = fixture([])
+    state.options.createChannel = () => ({
+      readFrame: vi.fn(async () => { throw 'ReadFile exploded' }),
       send: vi.fn(async () => {}),
     })
     await expect(runWindowsHostPipeWorker(state.options)).rejects.toMatchObject({ code: 'unavailable' })

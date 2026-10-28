@@ -33,6 +33,11 @@ export type CancellableAcceptedWindowsNamedPipeResult<Result> =
   | { readonly state: 'served'; readonly result: Result }
   | { readonly state: 'stopped' }
 
+/** Accept phase outcome: an owned, attested pipe or an explicit stopped state. */
+type AcceptedPipeOutcome<Evidence> =
+  | { readonly state: 'accepted'; readonly pipe: bigint; readonly evidence: Evidence }
+  | { readonly state: 'stopped' }
+
 function validHandle(value: unknown): value is bigint {
   return typeof value === 'bigint' && value > 0n
     && value !== -1n && value !== INVALID_HANDLE_VALUE
@@ -74,17 +79,15 @@ async function closePipe(
 }
 
 /**
- * Own one first-instance pipe from security descriptor creation through final CloseHandle.
- * The descriptor is freed before the blocking accept; the caller-owned service callback
- * retains a live, authenticated pipe for its full lifetime.
- * @param options - fixed policy, worker-owned native bindings, attestor, and connection service.
- * @returns the service callback result after all native cleanup succeeds.
+ * Accept phase: provision the descriptor and pipe, block in connect, then attest the peer.
+ * The accepted pipe is NOT torn down on success; ownership passes to the serve phase and
+ * the same slot thread closes it afterward. A visible stop or any failure tears the pipe
+ * down inside this phase; a stop during provisioning never surfaces as an authority error.
  */
-async function runAcceptedWindowsNamedPipe<Evidence, Result>(
+async function acceptWindowsNamedPipe<Evidence, Result>(
   options: AcceptedWindowsNamedPipeOptions<Evidence, Result>,
   stopRequested: () => boolean,
-): Promise<CancellableAcceptedWindowsNamedPipeResult<Result>> {
-  if (stopRequested()) return { state: 'stopped' }
+): Promise<AcceptedPipeOutcome<Evidence>> {
   let descriptor: bigint | undefined
   let pipe: bigint | undefined
   try {
@@ -113,16 +116,17 @@ async function runAcceptedWindowsNamedPipe<Evidence, Result>(
     if (cleanupFailure !== undefined) {
       // REQ-20261026-0023: a stop during provisioning must not surface as an authority error; the
       // Worker treats an uncaught throw as a runtime failure and the carrier then dies.
-      console.error(`[dsh-host] stop requested during pipe provisioning; cleanup reported ${
-        cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure)
-      }`)
+      const reason = cleanupFailure instanceof Error
+        ? cleanupFailure.message
+        : 'unknown native cleanup failure'
+      console.error(`[dsh-host] stop requested during pipe provisioning; cleanup reported ${reason}`)
     }
     return { state: 'stopped' }
   }
 
   let connected = false
-  let result: Result | undefined
-  let completed = false
+  let evidence: Evidence | undefined
+  let attested = false
   let stopped = false
   let failure: unknown
   try {
@@ -134,19 +138,51 @@ async function runAcceptedWindowsNamedPipe<Evidence, Result>(
     if (stopRequested()) {
       stopped = true
     } else {
-      const evidence = await options.attest(pipe)
-      if (stopRequested()) {
-        stopped = true
-      } else {
-        result = await options.serve(pipe, evidence)
-        completed = true
-      }
+      evidence = await options.attest(pipe)
+      attested = true
+      if (stopRequested()) stopped = true
+    }
+  } catch (error) {
+    if (stopRequested() && isCancelledNativeIo(error)) stopped = true
+    else failure = error
+  }
+  if (stopped || failure !== undefined) {
+    const cleanupFailure = await closePipe(options.bindings, pipe, connected)
+    failure ??= cleanupFailure
+  }
+  if (failure !== undefined) throw authorityError(failure)
+  if (stopped) return { state: 'stopped' }
+  /* v8 ignore next -- a non-failed, non-stopped accept always completes attestation. */
+  if (!attested) throw new HostAuthorityError('unavailable')
+  return { state: 'accepted', pipe, evidence: evidence as Evidence }
+}
+
+/**
+ * Serve phase: run the caller-owned connection service, then always tear the pipe down.
+ * Only Win32 cancellation code 995 after the stop flag is visible is normalized.
+ */
+async function serveWindowsNamedPipeConnection<Evidence, Result>(
+  options: AcceptedWindowsNamedPipeOptions<Evidence, Result>,
+  pipe: bigint,
+  evidence: Evidence,
+  stopRequested: () => boolean,
+): Promise<CancellableAcceptedWindowsNamedPipeResult<Result>> {
+  let result: Result | undefined
+  let completed = false
+  let stopped = false
+  let failure: unknown
+  try {
+    if (stopRequested()) {
+      stopped = true
+    } else {
+      result = await options.serve(pipe, evidence)
+      completed = true
     }
   } catch (error) {
     if (stopRequested() && isCancelledNativeIo(error)) stopped = true
     else failure = error
   } finally {
-    const cleanupFailure = await closePipe(options.bindings, pipe, connected)
+    const cleanupFailure = await closePipe(options.bindings, pipe, true)
     failure ??= cleanupFailure
   }
   if (failure !== undefined) throw authorityError(failure)
@@ -154,6 +190,24 @@ async function runAcceptedWindowsNamedPipe<Evidence, Result>(
   /* v8 ignore next -- a non-failed, non-stopped transaction sets completed with its result. */
   if (!completed) throw new HostAuthorityError('unavailable')
   return { state: 'served', result: result as Result }
+}
+
+/**
+ * Own one first-instance pipe from security descriptor creation through final CloseHandle.
+ * The descriptor is freed before the blocking accept; the caller-owned service callback
+ * retains a live, authenticated pipe for its full lifetime. Concurrency comes from running
+ * this whole transaction on its own slot thread, never from sharing the handle.
+ * @param options - fixed policy, worker-owned native bindings, attestor, and connection service.
+ * @returns the service callback result after all native cleanup succeeds.
+ */
+async function runAcceptedWindowsNamedPipe<Evidence, Result>(
+  options: AcceptedWindowsNamedPipeOptions<Evidence, Result>,
+  stopRequested: () => boolean,
+): Promise<CancellableAcceptedWindowsNamedPipeResult<Result>> {
+  if (stopRequested()) return { state: 'stopped' }
+  const accepted = await acceptWindowsNamedPipe(options, stopRequested)
+  if (accepted.state === 'stopped') return { state: 'stopped' }
+  return serveWindowsNamedPipeConnection(options, accepted.pipe, accepted.evidence, stopRequested)
 }
 
 export async function withAcceptedWindowsNamedPipe<Evidence, Result>(
