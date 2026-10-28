@@ -35,6 +35,7 @@ export class BotImportGrantRegistry {
       issuer: account.issuer, subject: account.subject,
       operationId: candidate.operation_id, sourceDigest: candidate.source_digest,
       targetDeviceId: candidate.target_device_id,
+      targetProfileId: candidate.target_profile_id,
     }, this.now())
     for (const [operationId, entry] of this.active)
       if (entry.grant.expires_at <= this.now()) this.active.delete(operationId)

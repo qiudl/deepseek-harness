@@ -16,8 +16,9 @@ const identity = { hostInstanceId: randomUUID(),
   processNonce: randomBytes(32).toString('base64url'),
   bootNonce: randomBytes(32).toString('base64url') }
 const claims: HostBotImportGrantClaims = {
-  schema_version: 'dsh-bot-import-grant/v1', operation_id: randomUUID(),
+  schema_version: 'dsh-bot-import-grant/v2', operation_id: randomUUID(),
   source_digest: 'a'.repeat(64), target_device_id: 'm5max',
+  target_profile_id: randomUUID(),
   session_ids: [`session-${randomUUID()}`],
   authority_environment_id: account.authorityEnvironmentId,
   account_binding_handle: account.accountBindingHandle,

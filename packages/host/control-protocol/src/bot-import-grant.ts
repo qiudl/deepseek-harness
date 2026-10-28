@@ -11,10 +11,11 @@ const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
 
 /** Main-signed approval scoped to one Host boot and Account team import. */
 export interface HostBotImportGrant {
-  readonly schema_version: 'dsh-bot-import-grant/v1'
+  readonly schema_version: 'dsh-bot-import-grant/v2'
   readonly operation_id: string
   readonly source_digest: string
   readonly target_device_id: string
+  readonly target_profile_id: string
   readonly session_ids: readonly string[]
   readonly authority_environment_id: string
   readonly account_binding_handle: string
@@ -33,7 +34,8 @@ export interface HostBotImportGrant {
 /** Claims signed by Desktop Main before the signature field is added. */
 export type HostBotImportGrantClaims = Omit<HostBotImportGrant, 'signature'>
 
-const keys = ['schema_version', 'operation_id', 'source_digest', 'target_device_id', 'session_ids',
+const keys = ['schema_version', 'operation_id', 'source_digest', 'target_device_id',
+  'target_profile_id', 'session_ids',
   'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
   'account_issuer', 'account_subject', 'host_instance_id', 'process_nonce', 'boot_nonce',
   'issued_at', 'expires_at', 'nonce', 'signature'] as const
@@ -51,10 +53,11 @@ export function parseHostBotImportGrant(value: unknown): HostBotImportGrant {
   const sessionIds = row(value) ? value.session_ids : undefined
   if (!row(value) || Object.keys(value).length !== keys.length ||
       keys.some(key => !Object.hasOwn(value, key)) ||
-      value.schema_version !== 'dsh-bot-import-grant/v1' ||
+      value.schema_version !== 'dsh-bot-import-grant/v2' ||
       typeof value.operation_id !== 'string' || !UUID.test(value.operation_id) ||
       typeof value.source_digest !== 'string' || !DIGEST.test(value.source_digest) ||
       typeof value.target_device_id !== 'string' || !DEVICE.test(value.target_device_id) ||
+      typeof value.target_profile_id !== 'string' || !UUID.test(value.target_profile_id) ||
       !Array.isArray(sessionIds) || sessionIds.length < 1 ||
       sessionIds.length > 256 ||
       sessionIds.some((id: unknown, index: number) =>
@@ -79,8 +82,9 @@ export function parseHostBotImportGrant(value: unknown): HostBotImportGrant {
       Buffer.from(value.signature, 'base64url').toString('base64url') !== value.signature)
     throw Error('invalid_bot_import_grant')
   return {
-    schema_version: 'dsh-bot-import-grant/v1', operation_id: value.operation_id,
+    schema_version: 'dsh-bot-import-grant/v2', operation_id: value.operation_id,
     source_digest: value.source_digest, target_device_id: value.target_device_id,
+    target_profile_id: value.target_profile_id,
     session_ids: Object.freeze(sessionIds.map((id: unknown) => String(id))),
     authority_environment_id: value.authority_environment_id,
     account_binding_handle: value.account_binding_handle,
@@ -103,6 +107,7 @@ export function encodeHostBotImportGrantPayload(claims: HostBotImportGrantClaims
   const canonical = {
     schema_version: grant.schema_version, operation_id: grant.operation_id,
     source_digest: grant.source_digest, target_device_id: grant.target_device_id,
+    target_profile_id: grant.target_profile_id,
     session_ids: grant.session_ids,
     authority_environment_id: grant.authority_environment_id,
     account_binding_handle: grant.account_binding_handle,
@@ -112,7 +117,7 @@ export function encodeHostBotImportGrantPayload(claims: HostBotImportGrantClaims
     boot_nonce: grant.boot_nonce,
     issued_at: grant.issued_at, expires_at: grant.expires_at, nonce: grant.nonce,
   }
-  return Buffer.from(`dsh-bot-import-grant/v1\0${JSON.stringify(canonical)}`, 'utf8')
+  return Buffer.from(`dsh-bot-import-grant/v2\0${JSON.stringify(canonical)}`, 'utf8')
 }
 
 /** Host-observed identity and operation claims that a signed grant must match. */
@@ -128,6 +133,7 @@ export interface HostBotImportGrantExpected {
   readonly operationId: string
   readonly sourceDigest: string
   readonly targetDeviceId: string
+  readonly targetProfileId: string
 }
 
 /** Verify a Main approval against the Host's pinned public key and live scope.
@@ -151,6 +157,7 @@ export function verifyHostBotImportGrant(value: unknown, rawPublicKey: string,
       grant.account_issuer !== expected.issuer || grant.account_subject !== expected.subject ||
       grant.operation_id !== expected.operationId || grant.source_digest !== expected.sourceDigest ||
       grant.target_device_id !== expected.targetDeviceId ||
+      grant.target_profile_id !== expected.targetProfileId ||
       !Number.isSafeInteger(now) || grant.issued_at > now || grant.expires_at <= now ||
       !verify(null, encodeHostBotImportGrantPayload(grant),
         createPublicKey({ key: Buffer.concat([SPKI_PREFIX, key]), format: 'der', type: 'spki' }),

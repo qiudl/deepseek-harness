@@ -8,8 +8,9 @@ const publicKey = (keys.publicKey.export({ type: 'spki', format: 'der' }) as Buf
   .subarray(-32).toString('base64url')
 const now = 1_800_000_000_000
 const claims: HostBotImportGrantClaims = {
-  schema_version: 'dsh-bot-import-grant/v1', operation_id: randomUUID(),
+  schema_version: 'dsh-bot-import-grant/v2', operation_id: randomUUID(),
   source_digest: 'a'.repeat(64), target_device_id: 'm5max',
+  target_profile_id: randomUUID(),
   session_ids: [`session-${randomUUID()}`],
   authority_environment_id: randomUUID(), account_binding_handle: 'binding:main',
   authority_binding_version: 1, account_issuer: 'https://accounts.example.test',
@@ -28,13 +29,14 @@ const expected = { hostInstanceId: claims.host_instance_id, processNonce: claims
   authorityBindingVersion: claims.authority_binding_version,
   issuer: claims.account_issuer, subject: claims.account_subject,
   operationId: claims.operation_id, sourceDigest: claims.source_digest,
-  targetDeviceId: claims.target_device_id }
+  targetDeviceId: claims.target_device_id, targetProfileId: claims.target_profile_id }
 
 it('accepts a bound short-lived Main signature and rejects scope changes or expiry', () => {
   expect(verifyHostBotImportGrant(grant, publicKey, expected, now)).toEqual(grant)
   for (const changed of [
     { ...grant, source_digest: 'b'.repeat(64) },
     { ...grant, target_device_id: 'boston' },
+    { ...grant, target_profile_id: randomUUID() },
     { ...grant, session_ids: [`session-${randomUUID()}`] },
     { ...grant, session_ids: [] },
     { ...grant, session_ids: [claims.session_ids[0], claims.session_ids[0]] },
@@ -43,6 +45,10 @@ it('accepts a bound short-lived Main signature and rejects scope changes or expi
   ]) expect(() => verifyHostBotImportGrant(changed, publicKey, expected, now)).toThrow()
   expect(() => verifyHostBotImportGrant(grant, publicKey,
     { ...expected, hostInstanceId: randomUUID() }, now)).toThrow()
+  expect(() => verifyHostBotImportGrant(grant, publicKey,
+    { ...expected, targetProfileId: randomUUID() }, now)).toThrow()
+  expect(() => verifyHostBotImportGrant({ ...grant,
+    schema_version: 'dsh-bot-import-grant/v1' }, publicKey, expected, now)).toThrow()
   expect(() => verifyHostBotImportGrant(grant, publicKey, expected, claims.expires_at)).toThrow()
   expect(() => verifyHostBotImportGrant(grant, publicKey, expected, claims.issued_at - 1)).toThrow()
 })

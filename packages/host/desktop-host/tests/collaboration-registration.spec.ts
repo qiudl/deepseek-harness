@@ -152,9 +152,10 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     isConnected: () => !lifetime.signal.aborted, close: () => { lifetime.abort(); session.close() } })
   onTestFinished(() => { client.close() })
   const makeImportGrant = () => {
-    const claims = { schema_version: 'dsh-bot-import-grant/v1' as const,
+    const claims = { schema_version: 'dsh-bot-import-grant/v2' as const,
       operation_id: importOperationId, source_digest: importScope.source_digest,
       target_device_id: importScope.target_device_id,
+      target_profile_id: randomUUID(),
       session_ids: [importScope.session_id],
       authority_environment_id: binding.authorityEnvironmentId,
       account_binding_handle: binding.accountBindingHandle,
