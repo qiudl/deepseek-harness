@@ -10,6 +10,7 @@ const now = 1_800_000_000_000
 const claims: HostBotImportGrantClaims = {
   schema_version: 'dsh-bot-import-grant/v1', operation_id: randomUUID(),
   source_digest: 'a'.repeat(64), target_device_id: 'm5max',
+  session_ids: [`session-${randomUUID()}`],
   authority_environment_id: randomUUID(), account_binding_handle: 'binding:main',
   authority_binding_version: 1, account_issuer: 'https://accounts.example.test',
   account_subject: randomUUID(), host_instance_id: randomUUID(),
@@ -34,6 +35,9 @@ it('accepts a bound short-lived Main signature and rejects scope changes or expi
   for (const changed of [
     { ...grant, source_digest: 'b'.repeat(64) },
     { ...grant, target_device_id: 'boston' },
+    { ...grant, session_ids: [`session-${randomUUID()}`] },
+    { ...grant, session_ids: [] },
+    { ...grant, session_ids: [claims.session_ids[0], claims.session_ids[0]] },
     { ...grant, account_subject: randomUUID() },
     { ...grant, profile_path: '/private/team' },
   ]) expect(() => verifyHostBotImportGrant(changed, publicKey, expected, now)).toThrow()

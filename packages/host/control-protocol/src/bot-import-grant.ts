@@ -4,6 +4,7 @@ import { createPublicKey, verify } from 'node:crypto'
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
 const DEVICE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u
+const SESSION = /^session-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u
 const BASE64URL = /^[A-Za-z0-9_-]+$/u
 const MAX_LIFETIME_MS = 30 * 60_000
 const SPKI_PREFIX = Buffer.from('302a300506032b6570032100', 'hex')
@@ -14,6 +15,7 @@ export interface HostBotImportGrant {
   readonly operation_id: string
   readonly source_digest: string
   readonly target_device_id: string
+  readonly session_ids: readonly string[]
   readonly authority_environment_id: string
   readonly account_binding_handle: string
   readonly authority_binding_version: number
@@ -31,7 +33,7 @@ export interface HostBotImportGrant {
 /** Claims signed by Desktop Main before the signature field is added. */
 export type HostBotImportGrantClaims = Omit<HostBotImportGrant, 'signature'>
 
-const keys = ['schema_version', 'operation_id', 'source_digest', 'target_device_id',
+const keys = ['schema_version', 'operation_id', 'source_digest', 'target_device_id', 'session_ids',
   'authority_environment_id', 'account_binding_handle', 'authority_binding_version',
   'account_issuer', 'account_subject', 'host_instance_id', 'process_nonce', 'boot_nonce',
   'issued_at', 'expires_at', 'nonce', 'signature'] as const
@@ -46,12 +48,18 @@ const short = (value: unknown): value is string =>
  * @returns Strict grant record.
  */
 export function parseHostBotImportGrant(value: unknown): HostBotImportGrant {
+  const sessionIds = row(value) ? value.session_ids : undefined
   if (!row(value) || Object.keys(value).length !== keys.length ||
       keys.some(key => !Object.hasOwn(value, key)) ||
       value.schema_version !== 'dsh-bot-import-grant/v1' ||
       typeof value.operation_id !== 'string' || !UUID.test(value.operation_id) ||
       typeof value.source_digest !== 'string' || !DIGEST.test(value.source_digest) ||
       typeof value.target_device_id !== 'string' || !DEVICE.test(value.target_device_id) ||
+      !Array.isArray(sessionIds) || sessionIds.length < 1 ||
+      sessionIds.length > 256 ||
+      sessionIds.some((id: unknown, index: number) =>
+        typeof id !== 'string' || !SESSION.test(id) ||
+        index > 0 && id <= sessionIds[index - 1]) ||
       !short(value.authority_environment_id) || !short(value.account_binding_handle) ||
       !Number.isSafeInteger(value.authority_binding_version) ||
       (value.authority_binding_version as number) < 1 ||
@@ -73,6 +81,7 @@ export function parseHostBotImportGrant(value: unknown): HostBotImportGrant {
   return {
     schema_version: 'dsh-bot-import-grant/v1', operation_id: value.operation_id,
     source_digest: value.source_digest, target_device_id: value.target_device_id,
+    session_ids: Object.freeze([...sessionIds]) as readonly string[],
     authority_environment_id: value.authority_environment_id,
     account_binding_handle: value.account_binding_handle,
     authority_binding_version: value.authority_binding_version as number,
@@ -94,6 +103,7 @@ export function encodeHostBotImportGrantPayload(claims: HostBotImportGrantClaims
   const canonical = {
     schema_version: grant.schema_version, operation_id: grant.operation_id,
     source_digest: grant.source_digest, target_device_id: grant.target_device_id,
+    session_ids: grant.session_ids,
     authority_environment_id: grant.authority_environment_id,
     account_binding_handle: grant.account_binding_handle,
     authority_binding_version: grant.authority_binding_version,

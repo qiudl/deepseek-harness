@@ -51,6 +51,7 @@ export class BotImportGrantRegistry {
     if (!entry || entry.profileId !== input.profileId ||
         entry.grant.source_digest !== input.scope.source_digest ||
         entry.grant.target_device_id !== input.scope.target_device_id ||
+        !entry.grant.session_ids.includes(input.scope.session_id) ||
         entry.grant.expires_at <= this.now()) {
       if (entry?.grant.expires_at && entry.grant.expires_at <= this.now())
         this.active.delete(input.transfer.operationId)

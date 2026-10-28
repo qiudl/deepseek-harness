@@ -18,6 +18,7 @@ const identity = { hostInstanceId: randomUUID(),
 const claims: HostBotImportGrantClaims = {
   schema_version: 'dsh-bot-import-grant/v1', operation_id: randomUUID(),
   source_digest: 'a'.repeat(64), target_device_id: 'm5max',
+  session_ids: [`session-${randomUUID()}`],
   authority_environment_id: account.authorityEnvironmentId,
   account_binding_handle: account.accountBindingHandle,
   authority_binding_version: account.authorityBindingVersion,
@@ -33,7 +34,7 @@ it('keeps one signed import approval bound to its owner, Profile, target and Hos
   let time = now
   const registry = new BotImportGrantRegistry(publicKey, identity, () => time)
   expect(registry.register(grant, account, 'profile')).toEqual(grant)
-  const sessionId = `session-${randomUUID()}`
+  const sessionId = claims.session_ids[0]!
   const input = { profileId: 'profile', ownerId: account.ownerId,
     scope: { source_digest: claims.source_digest, target_device_id: claims.target_device_id,
       session_id: sessionId },
@@ -43,6 +44,7 @@ it('keeps one signed import approval bound to its owner, Profile, target and Hos
   expect(() => registry.check(input)).not.toThrow()
   expect(() => registry.check({ ...input, ownerId: 'another-account-verified-connection' })).not.toThrow()
   for (const changed of [{ profileId: 'other' },
+    { scope: { ...input.scope, session_id: `session-${randomUUID()}` } },
     { scope: { ...input.scope, target_device_id: 'boston' } }])
     expect(() => registry.check({ ...input, ...changed })).toThrow()
   expect(() => registry.register(grant, account, 'profile')).toThrow()

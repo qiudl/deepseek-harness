@@ -151,6 +151,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     const claims = { schema_version: 'dsh-bot-import-grant/v1' as const,
       operation_id: importOperationId, source_digest: importScope.source_digest,
       target_device_id: importScope.target_device_id,
+      session_ids: [importScope.session_id],
       authority_environment_id: binding.authorityEnvironmentId,
       account_binding_handle: binding.accountBindingHandle,
       authority_binding_version: binding.authorityBindingVersion,
