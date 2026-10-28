@@ -123,6 +123,20 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
     } finally {
       await chmod(archiveDirectory, 0o700)
     }
+    const originalInspect = source.target.inspectExistingPersistence.bind(source.target)
+    let inspections = 0
+    const inspect = vi.spyOn(source.target, 'inspectExistingPersistence').mockImplementation(async () => {
+      const existing = await originalInspect()
+      if (++inspections === 3) await writeFile(archive, 'tampered', { mode: 0o600 })
+      return existing
+    })
+    try {
+      await expect(inspectProfileImportPluginArchives(lockedInput))
+        .rejects.toThrow('profile_import_plugin_archive_changed')
+    } finally {
+      inspect.mockRestore()
+      await writeFile(archive, bytes, { mode: 0o600 })
+    }
     await expect(inspectProfileImportPluginArchives({ ...input, expectedSnapshotDigest: 'f'.repeat(64) }))
       .rejects.toThrow('profile_import_inventory_changed')
     await expect(inspectProfileImportPluginArchives({ ...lockedInput, selectedPluginNames: ['missing'] }))
