@@ -41,15 +41,15 @@ it('keeps one signed import approval bound to its owner, Profile, target and Hos
     transfer: { kind: 'open' as const, operationId: claims.operation_id,
       sourceDigest: claims.source_digest, sessionId },
     signal: new AbortController().signal }
-  expect(() => registry.check(input)).not.toThrow()
-  expect(() => registry.check({ ...input, ownerId: 'another-account-verified-connection' })).not.toThrow()
+  expect(() => { registry.check(input) }).not.toThrow()
+  expect(() => { registry.check({ ...input, ownerId: 'another-account-verified-connection' }) }).not.toThrow()
   for (const changed of [{ profileId: 'other' },
     { scope: { ...input.scope, session_id: `session-${randomUUID()}` } },
     { scope: { ...input.scope, target_device_id: 'boston' } }])
-    expect(() => registry.check({ ...input, ...changed })).toThrow()
+    expect(() => { registry.check({ ...input, ...changed }) }).toThrow()
   expect(() => registry.register(grant, account, 'profile')).toThrow()
   time = claims.expires_at
-  expect(() => registry.check(input)).toThrow()
+  expect(() => { registry.check(input) }).toThrow()
   expect(() => new BotImportGrantRegistry(publicKey, { ...identity,
     bootNonce: randomBytes(32).toString('base64url') }, () => now)
     .register(grant, account, 'profile')).toThrow()

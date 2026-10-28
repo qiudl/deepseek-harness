@@ -999,6 +999,31 @@ export interface ProfileBotChatReadResult {
   readonly result: { readonly page: import('./bot-chat-read.ts').HostBotChatPage }
 }
 
+/** Account-scoped inventory; never exposed by the remote Bot read surface. */
+export interface ProfileBotImportInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_inventory'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly read: import('./bot-import-inventory.ts').HostBotImportInventoryRequest
+  }
+}
+
+/** Account-scoped inventory response. */
+export interface ProfileBotImportInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_import_inventory'
+  readonly result: { readonly page: import('./bot-import-inventory.ts').HostBotImportInventoryPage }
+}
+
 /** Raw Bot Session transfer; requires a separate operation grant in the Host. */
 export interface ProfileBotImportSourceTransferRequest {
   readonly version: 1
@@ -2575,6 +2600,8 @@ export type HostControlFrame =
   | ProfileBotChatReadResult
   | ProfileBotImportSourceTransferRequest
   | ProfileBotImportSourceTransferResult
+  | ProfileBotImportInventoryRequest
+  | ProfileBotImportInventoryResult
   | ProfileBotImportGrantRequest
   | ProfileBotImportGrantResult
   | ProfileBotChatAttachmentsReadRequest

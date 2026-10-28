@@ -780,6 +780,8 @@ export async function startDesktopHostApplication(
       readBotChat: (profileId, request, signal) => workers.readBotChat(profileId, request, signal),
       transferBotImportSource: (profileId, request, signal) =>
         workers.transferBotImportSource(profileId, request, signal),
+      readBotImportInventory: (profileId, request, signal) =>
+        workers.readBotImportInventory(profileId, request, signal),
       ...(config.botImportGrantPublicKey === undefined ? {} :
         { botImportGrantPublicKey: config.botImportGrantPublicKey }),
       readBotChatAttachments: (profileId, request, signal) =>

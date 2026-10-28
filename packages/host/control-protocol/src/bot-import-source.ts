@@ -112,11 +112,11 @@ export function parseHostBotImportSourceResult(value: unknown,
       typeof value.contentBase64 === 'string' && value.contentBase64.length <= 43_692 &&
       /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value.contentBase64)) {
       const bytes = Buffer.from(value.contentBase64, 'base64')
-      const end = (value.offset as number) + bytes.length
+      const end = value.offset + bytes.length
       if (bytes.length > 0 && bytes.length <= CHUNK_BYTES &&
-          bytes.toString('base64') === value.contentBase64 && end <= (value.totalBytes as number) &&
+          bytes.toString('base64') === value.contentBase64 && end <= value.totalBytes &&
           (value.nextOffset === null ? end === value.totalBytes :
-            value.nextOffset === end && end < (value.totalBytes as number)))
+            value.nextOffset === end && end < value.totalBytes))
         return value as HostBotImportSourceResult
     }
   }

@@ -111,6 +111,11 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Current committed Bot Session inventory inside this Profile's private worker. */
+  readonly readBotImportInventory?: (
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportInventoryRequest,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportInventoryPage>
   /** Transfer one current-team raw Session page inside the private Host worker boundary. */
   readonly transferBotImportSource?: (
     request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportSourceRequest,

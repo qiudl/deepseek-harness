@@ -26,3 +26,21 @@ it('rejects a raw transfer completed after its Profile worker is disposed', asyn
   await expect(read).rejects.toMatchObject({ code: 'stale' })
   expect(transferBotImportSource).toHaveBeenCalledWith(request, signal)
 })
+
+it('rejects a source inventory page completed after its Profile worker is disposed', async () => {
+  const inventory = { version: 1 as const, sourceDigest: 'b'.repeat(64),
+    teamRevision: 3, sessionIds: [request.sessionId], nextCursor: null }
+  let finish!: (value: typeof inventory) => void
+  const pending = new Promise<typeof inventory>((resolve) => { finish = resolve })
+  const readBotImportInventory = vi.fn(async () => pending)
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), readBotImportInventory,
+  }))
+  onTestFinished(() => workers.disposeAll())
+  await workers.start(profile)
+  const read = workers.readBotImportInventory(profile.profileId,
+    { kind: 'inventory' }, new AbortController().signal)
+  await workers.disposeAll()
+  finish(inventory)
+  await expect(read).rejects.toMatchObject({ code: 'stale' })
+})

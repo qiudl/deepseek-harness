@@ -81,7 +81,7 @@ export function parseHostBotImportGrant(value: unknown): HostBotImportGrant {
   return {
     schema_version: 'dsh-bot-import-grant/v1', operation_id: value.operation_id,
     source_digest: value.source_digest, target_device_id: value.target_device_id,
-    session_ids: Object.freeze([...sessionIds]) as readonly string[],
+    session_ids: Object.freeze(sessionIds.map((id: unknown) => String(id))),
     authority_environment_id: value.authority_environment_id,
     account_binding_handle: value.account_binding_handle,
     authority_binding_version: value.authority_binding_version as number,

@@ -55,6 +55,7 @@ import { handleDesktopBotMemoryReadRequest } from './desktop-bot-memory-read.ts'
 import { handleDesktopBotGroupHistoryReadRequest } from './desktop-bot-group-history-read.ts'
 import { handleDesktopBotChatReadRequest } from './desktop-bot-chat-read.ts'
 import { handleDesktopBotImportSourceRequest } from './desktop-bot-import-source.ts'
+import { handleDesktopBotImportInventoryRequest } from './desktop-bot-import-inventory.ts'
 import { handleDesktopBotChatAttachmentsReadRequest } from './desktop-bot-chat-attachments-read.ts'
 import { handleDesktopBotChatAttachmentTransferRequest } from './desktop-bot-chat-attachment-transfer.ts'
 import type { HostBotTeamReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -62,6 +63,7 @@ import type { HostBotMemoryReadRequest } from '@deepseek-ai/dsh-host-control-pro
 import type { HostBotGroupHistoryReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotChatReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotImportSourceRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotImportInventoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotChatAttachmentTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
@@ -462,6 +464,20 @@ export function apply(ctx: Context, config: Config): void {
             read(input: HostBotImportSourceRequest, signal: AbortSignal): Promise<unknown>
           }
           if (!service) throw Error('bot_import_source_unavailable')
+          const result = await service.read(request, signal)
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-import-inventory',
+      handler: (req, res) => handleDesktopBotImportInventoryRequest(req, res, sourceToken,
+        async (request, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkImportSource') as undefined | {
+            read(input: HostBotImportInventoryRequest, signal: AbortSignal): Promise<unknown>
+          }
+          if (!service) throw Error('bot_import_inventory_unavailable')
           const result = await service.read(request, signal)
           signal.throwIfAborted()
           return result

@@ -31,6 +31,24 @@ export class ProfileWorkerSupervisor {
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
+  /** Require the same live worker generation before and after a private inventory page.
+   * @param profileId Current Profile identifier.
+   * @param request Bounded source inventory selector.
+   * @param signal Operation cancellation signal.
+   * @returns Page from the same live worker generation.
+   */
+  async readBotImportInventory(profileId: string,
+    request: import('@deepseek-ai/dsh-host-control-protocol').HostBotImportInventoryRequest,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotImportInventoryPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readBotImportInventory) throw new HostAuthorityError('unavailable')
+    const page = await worker.readBotImportInventory(request, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return page
+  }
+
   /** Read only a committed page from the selected live Profile worker generation.
    * @param profileId Current Profile identifier.
    * @param request Bounded logical group selector.

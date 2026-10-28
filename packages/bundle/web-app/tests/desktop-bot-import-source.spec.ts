@@ -15,7 +15,7 @@ async function fixture(read = vi.fn(async () => result)) {
   await new Promise<void>((yes, no) => { server.once('error', no); server.listen(0, '127.0.0.1', yes) })
   onTestFinished(async () => {
     server.closeAllConnections()
-    await new Promise<void>((yes, no) => server.close(error => error ? no(error) : yes()))
+    await new Promise<void>((yes, no) => server.close((error) => { if (error) no(error); else yes() }))
   })
   const url = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}`
   const post = (body: object, authorization = `Bearer ${token}`) => fetch(url, {

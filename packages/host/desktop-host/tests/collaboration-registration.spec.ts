@@ -102,6 +102,9 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     request.kind === 'open' ? importOpened : request.kind === 'next'
       ? { ...importOpened, offset: request.offset, contentBase64: 'W10=', nextOffset: null }
       : { version: 1, closed: true })
+  const importInventoryPage = { version: 1 as const, sourceDigest: importScope.source_digest,
+    teamRevision: 3, sessionIds: [importSessionId], nextCursor: null }
+  const readBotImportInventory = vi.fn(async () => importInventoryPage)
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -120,7 +123,8 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     readBotTeam, readBotMemory, readBotGroupHistory, readBotChat, readBotChatAttachments,
     transferBotChatAttachment,
-    ...(supportImport ? { botImportGrantPublicKey: importPublicKey, transferBotImportSource } : {}),
+    ...(supportImport ? { botImportGrantPublicKey: importPublicKey, transferBotImportSource,
+      readBotImportInventory } : {}),
     ...(supportBot ? {
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
         signal.throwIfAborted()
@@ -176,6 +180,7 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     attachmentScope, attachmentTransferPage,
     importScope, importOperationId, importTransferId, importOpened,
     transferBotImportSource, makeImportGrant,
+    readBotImportInventory, importInventoryPage,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
@@ -320,6 +325,28 @@ it('reads visible Bot attachment manifests only for the current Account, Bot and
     return f.attachmentsPage
   })
   await expect(f.client.readBotChatAttachments(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('reads import inventory only for the live Account and rechecks revocation after Worker reply', async () => {
+  const disabled = await fixture()
+  const request = { kind: 'inventory' as const }
+  const missing = { ...disabled.input, issuer: disabled.account.issuer,
+    subject: disabled.account.subject, request }
+  await expect(disabled.client.readBotImportInventory(missing))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  const f = await fixture(false, false, true, true)
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, request }
+  await expect(f.client.readBotImportInventory(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.readBotImportInventory(input)).toEqual(f.importInventoryPage)
+  expect(f.readBotImportInventory).toHaveBeenCalledWith(f.profile.profileId,
+    request, expect.any(AbortSignal))
+  await expect(f.client.readBotImportInventory({ ...input, subject: randomUUID() })).rejects.toThrow()
+  f.readBotImportInventory.mockImplementationOnce(async () => {
+    f.host.revokeOwner(f.ownerId)
+    return f.importInventoryPage
+  })
+  await expect(f.client.readBotImportInventory(input)).rejects.toThrow()
 })
 
 it('transfers Bot attachment bytes only for the current Account and exact scope', async () => {

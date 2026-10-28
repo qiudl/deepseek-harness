@@ -46,6 +46,8 @@ export { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
   parseHostBotImportSourceScope } from './bot-import-source.js'
 export type { HostBotImportSourceRequest, HostBotImportSourceResult,
   HostBotImportSourceScope } from './bot-import-source.js'
+export { parseHostBotImportInventoryRequest, parseHostBotImportInventoryPage } from './bot-import-inventory.js'
+export type { HostBotImportInventoryRequest, HostBotImportInventoryPage } from './bot-import-inventory.js'
 export { parseHostBotImportGrant, encodeHostBotImportGrantPayload,
   verifyHostBotImportGrant } from './bot-import-grant.js'
 export type { HostBotImportGrant, HostBotImportGrantClaims,
@@ -62,6 +64,7 @@ export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotGroupHistoryReadRequest, ProfileBotGroupHistoryReadResult,
   ProfileBotChatReadRequest, ProfileBotChatReadResult,
   ProfileBotImportSourceTransferRequest, ProfileBotImportSourceTransferResult,
+  ProfileBotImportInventoryRequest, ProfileBotImportInventoryResult,
   ProfileBotImportGrantRequest, ProfileBotImportGrantResult,
   ProfileBotChatAttachmentsReadRequest, ProfileBotChatAttachmentsReadResult,
   ProfileBotChatAttachmentTransferRequest, ProfileBotChatAttachmentTransferResult,

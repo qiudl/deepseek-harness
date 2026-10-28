@@ -19,6 +19,9 @@ import { parseHostBotImportSourceRequest, parseHostBotImportSourceResult,
   type ProfileBotImportSourceTransferRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotImportGrant, type HostBotImportGrant,
   type ProfileBotImportGrantRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotImportInventoryRequest, parseHostBotImportInventoryPage,
+  type HostBotImportInventoryRequest, type HostBotImportInventoryPage,
+  type ProfileBotImportInventoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatAttachmentsPage, parseHostBotChatAttachmentsReadRequest,
   type HostBotChatAttachmentsPage, type HostBotChatAttachmentsReadRequest,
   type ProfileBotChatAttachmentsReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -356,6 +359,8 @@ export interface UnixHostServerOptions {
   readonly botImportGrantPublicKey?: string
   readonly transferBotImportSource?: (profileId: string, request: HostBotImportSourceRequest,
     signal: AbortSignal) => Promise<HostBotImportSourceResult>
+  readonly readBotImportInventory?: (profileId: string, request: HostBotImportInventoryRequest,
+    signal: AbortSignal) => Promise<HostBotImportInventoryPage>
   readonly readBotChatAttachments?: (profileId: string, request: HostBotChatAttachmentsReadRequest,
     signal: AbortSignal) => Promise<HostBotChatAttachmentsPage>
   readonly transferBotChatAttachment?: (profileId: string, request: HostBotChatAttachmentTransferRequest,
@@ -641,7 +646,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'readBotGroupHistory'
     | 'readBotChat'
-    | 'botImportGrantPublicKey' | 'transferBotImportSource'
+    | 'botImportGrantPublicKey' | 'transferBotImportSource' | 'readBotImportInventory'
     | 'readBotChatAttachments'
     | 'transferBotChatAttachment'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -2551,6 +2556,20 @@ export class HostControlAuthority {
             frame.params.transfer, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { value } })
+        } else if (frame.method === 'profile.bot_import_inventory') {
+          const read = this.options.readBotImportInventory
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          this.options.host.authorizeCollaborationRegistration(account)
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          const request = parseHostBotImportInventoryRequest(frame.params.read)
+          const page = parseHostBotImportInventoryPage(await read(profileId, request, context.signal), request)
+          context.signal.throwIfAborted()
+          this.options.host.authorizeCollaborationRegistration(account)
+          if (this.options.host.authorizeAccountModelText(account) !== profileId)
+            throw new HostAuthorityError('stale')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { page } })
         } else if (frame.method === 'profile.bot_chat_attachments_read') {
           const read = this.options.readBotChatAttachments
           if (!read) throw new HostAuthorityError('upgrade_required')
@@ -2827,6 +2846,7 @@ export class HostControlAuthority {
           ...(this.options.readBotChat ? ['profile.bot_chat_read'] : []),
           ...(this.botImportGrants
             ? ['profile.bot_import_grant', 'profile.bot_import_source_transfer'] : []),
+          ...(this.options.readBotImportInventory ? ['profile.bot_import_inventory'] : []),
           ...(this.options.readBotChatAttachments ? ['profile.bot_chat_attachments_read'] : []),
           ...(this.options.transferBotChatAttachment ? ['profile.bot_chat_attachment_transfer'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
@@ -4896,6 +4916,34 @@ export class UnixHostClient {
     return parseHostBotImportSourceResult(frame.result.value, request.params.transfer)
   }
 
+  /** Read one current-team source inventory page through the Account Profile.
+   * @param input Current Account binding and bounded inventory request.
+   * @returns Validated source inventory page.
+   */
+  async readBotImportInventory(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly request: HostBotImportInventoryRequest
+    readonly signal?: AbortSignal
+  }): Promise<HostBotImportInventoryPage> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_import_inventory' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileBotImportInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_import_inventory',
+      params: { ...this.collaborationAccountRequestParams(input),
+        read: parseHostBotImportInventoryRequest(input.request) },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    return parseHostBotImportInventoryPage(frame.result.page, request.params.read)
+  }
+
   /** Register one locally confirmed Main signature for this exact Account and Host boot.
    * @param input Current Account and Main-signed grant.
    * @returns Accepted operation and expiry.
@@ -5998,6 +6046,7 @@ export class UnixHostClient {
       | ProfileBotGroupHistoryReadRequest
       | ProfileBotChatReadRequest
       | ProfileBotImportSourceTransferRequest
+      | ProfileBotImportInventoryRequest
       | ProfileBotImportGrantRequest
       | ProfileBotChatAttachmentsReadRequest
       | ProfileBotChatAttachmentTransferRequest
