@@ -182,6 +182,7 @@ import { HostAuthorityError } from './types.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileImportPreview } from './profile-import-preview.ts'
+import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
@@ -372,6 +373,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupResponse>
   /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
   readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
+  /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
+  readonly diagnostics?: HostDiagnostics
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -636,7 +639,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'inspectProfileImport' | 'listProfileImportStatus' | 'prepareProfileImport'
     | 'commitProfileImport' | 'abortProfileImport' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -1222,6 +1225,7 @@ export class HostControlAuthority {
       ownerId,
       now: clock,
       signal,
+      diagnostics: this.options.diagnostics,
       inspect: frame => this.inspect(
         frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
         this.options.host.supportsOfflineAccountRecovery(),
@@ -1731,19 +1735,34 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.bootstrap_local') {
-            profile = await this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId))
+            profile = await hostStepRejection(
+              () => this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId)),
+              'bootstrap_local_rejected',
+            )
           } else {
-            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-            profile = await this.options.host.restoreLocalProfile({
-              profileId: selector.profile_id as never,
-              bindingGeneration: selector.binding_generation,
-              ...profileUnlockFields(frame.params, ownerId),
-            })
+            const selector = await hostStepRejection(
+              () => verifyProfileSelector(this.options.identity, frame.params.profile_selector),
+              'restore_selector_invalid',
+            )
+            profile = await hostStepRejection(
+              () => this.options.host.restoreLocalProfile({
+                profileId: selector.profile_id as never,
+                bindingGeneration: selector.binding_generation,
+                ...profileUnlockFields(frame.params, ownerId),
+              }),
+              'restore_profile_rejected',
+            )
           }
-          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
+          const persistenceGeneration = await hostStepRejection(
+            () => this.options.profilePersistenceGeneration(profile.profileId),
+            'local_persistence_unavailable',
+          )
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+            result: await hostStepRejection(
+              () => localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+              'local_profile_result_invalid',
+            ),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({

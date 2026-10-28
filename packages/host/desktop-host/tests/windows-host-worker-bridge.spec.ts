@@ -61,6 +61,7 @@ describe('Windows Host Worker bridge', () => {
   it('strictly decodes every generation-bound Worker message shape', () => {
     const valid = [
       ready(),
+      { version: 1, type: 'thread_handle', generation: 7, threadHandle: 92n },
       connected(),
       requestMessage(),
       { ...requestMessage(), type: 'response' },
@@ -78,6 +79,8 @@ describe('Windows Host Worker bridge', () => {
       { ...ready(), threadHandle: '91' },
       { ...ready(), threadHandle: 91n, unexpected: true },
       { version: 1, type: 'ready', generation: 7, unexpected: 91n },
+      { version: 1, type: 'thread_handle', generation: 7, threadHandle: 0n },
+      { version: 1, type: 'thread_handle', generation: 7 },
       { ...connected(), connectionId: 42 },
       { ...requestMessage(), connectionId: 'not-a-uuid' },
       { ...requestMessage(), sequence: -1 },
@@ -117,9 +120,34 @@ describe('Windows Host Worker bridge', () => {
 
     const { bridge } = fixture()
     await expect(bridge.receive(ready())).resolves.toBeUndefined()
-    expect(bridge.cancellationThreadHandle).toBe(91n)
+    expect(bridge.cancellationThreadHandles).toEqual([91n])
     await expect(bridge.receive(ready())).rejects.toBeInstanceOf(WindowsHostWorkerProtocolError)
     expect(bridge.state).toBe('failed')
+  })
+
+  it('records additional blocking thread handles and rejects duplicates or early announcements', async () => {
+    const { bridge } = fixture()
+    await expect(bridge.receive({ version: 1, type: 'thread_handle', generation: 7, threadHandle: 92n }))
+      .rejects.toBeInstanceOf(WindowsHostWorkerProtocolError)
+
+    const valid = fixture()
+    await valid.bridge.receive(ready())
+    await valid.bridge.receive({ version: 1, type: 'thread_handle', generation: 7, threadHandle: 92n })
+    expect(valid.bridge.cancellationThreadHandles).toEqual([91n, 92n])
+    await expect(valid.bridge.receive({
+      version: 1, type: 'thread_handle', generation: 7, threadHandle: 92n,
+    })).rejects.toBeInstanceOf(WindowsHostWorkerProtocolError)
+    await expect(valid.bridge.receive({
+      version: 1, type: 'thread_handle', generation: 7, threadHandle: 91n,
+    })).rejects.toBeInstanceOf(WindowsHostWorkerProtocolError)
+  })
+
+  it('accepts a late thread handle announcement while a stop is unwinding', async () => {
+    const { bridge } = fixture()
+    await bridge.receive(ready())
+    await bridge.requestStop()
+    await bridge.receive({ version: 1, type: 'thread_handle', generation: 7, threadHandle: 93n })
+    expect(bridge.cancellationThreadHandles).toEqual([91n, 93n])
   })
 
   it('opens one shared Host session and returns only a correlated canonical response', async () => {
@@ -432,5 +460,103 @@ describe('Windows Host Worker bridge', () => {
     await expect(bridge.receive({ type: 'malformed' })).rejects
       .toBeInstanceOf(WindowsHostWorkerProtocolError)
     await expect(bridge.sessionCleanup).rejects.toThrow('Windows Host Worker operation failed')
+  })
+
+  it('serves two concurrent sessions with independent sequences and no shared waiter', async () => {
+    const other = '118f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
+    const sent: WindowsHostWorkerMessage[] = []
+    const closes: string[] = []
+    const signals: AbortSignal[] = []
+    const handled: string[] = []
+    const bridge = new WindowsHostWorkerBridge({
+      generation: 7,
+      requestStopFlag: () => undefined,
+      send: (message) => { sent.push(message) },
+      openSession: (id, signal) => {
+        signals.push(signal)
+        return {
+          handleRequest: async (frame: HostControlFrame) => {
+            handled.push(id)
+            return responseFor(frame)
+          },
+          close: () => { closes.push(id) },
+        }
+      },
+    })
+    await bridge.receive(ready())
+    await bridge.receive(connected())
+    await bridge.receive(connected(other))
+    expect(bridge.state).toBe('connected')
+
+    const first = bridge.receive(requestMessage())
+    const second = bridge.receive({
+      version: 1,
+      type: 'request',
+      generation: 7,
+      connectionId: other,
+      sequence: 1,
+      frame: encodeHostControlFrame(request),
+    })
+    await Promise.all([first, second])
+    expect(handled.sort()).toEqual([connectionId, other].sort())
+    expect(sent.map(message => (message as { connectionId?: string }).connectionId)).toEqual([
+      connectionId,
+      other,
+    ])
+    expect(sent.every(message => message.type === 'response' && message.sequence === 1)).toBe(true)
+  })
+
+  it('disconnects only the matching session and keeps serving the other', async () => {
+    const other = '118f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
+    const { bridge, sent, closes, signals } = fixture()
+    await bridge.receive(ready())
+    await bridge.receive(connected())
+    await bridge.receive(connected(other))
+    await bridge.receive(requestMessage())
+    await bridge.receive({
+      version: 1,
+      type: 'disconnected',
+      generation: 7,
+      connectionId,
+      requestsHandled: 1,
+    })
+    expect(closes).toEqual([connectionId])
+    expect(signals[0]?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+    expect(bridge.state).toBe('connected')
+
+    await bridge.receive({
+      version: 1,
+      type: 'request',
+      generation: 7,
+      connectionId: other,
+      sequence: 1,
+      frame: encodeHostControlFrame(request),
+    })
+    expect(sent.at(-1)).toMatchObject({ type: 'response', connectionId: other, sequence: 1 })
+  })
+
+  it('aborts every session on stop and closes them all when the Worker stops', async () => {
+    const other = '118f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
+    const { bridge, closes, signals } = fixture()
+    await bridge.receive(ready())
+    await bridge.receive(connected())
+    await bridge.receive(connected(other))
+    await bridge.requestStop()
+    expect(signals.map(signal => signal.aborted)).toEqual([true, true])
+    expect(closes.sort()).toEqual([connectionId, other].sort())
+    expect(bridge.state).toBe('stopping')
+  })
+
+  it('closes every remaining session when the Worker reports stopped', async () => {
+    const other = '118f0f4c-87f8-7e2d-a2f8-7b93d34e3126'
+    const { bridge, closes, signals } = fixture()
+    await bridge.receive(ready())
+    await bridge.receive(connected())
+    await bridge.receive(connected(other))
+    await bridge.receive({ version: 1, type: 'stopped', generation: 7 })
+    expect(signals.map(signal => signal.aborted)).toEqual([true, true])
+    expect(closes.sort()).toEqual([connectionId, other].sort())
+    expect(bridge.state).toBe('stopped')
   })
 })
