@@ -22,12 +22,17 @@ let scaffold: WebScaffold
 let browser: Browser
 let page: Page
 let sessionId: SessionId
+let otherSessionId: SessionId
 let buildDirectory: string
 const screenshotDirectory = process.env.DSH_NATIVE_WORKBENCH_SCREENSHOT_DIR
 const duetTargets: unknown[] = []
+const dictationTargets: unknown[] = []
+const dictations = new Map<string | number, (text: string | null) => void>()
+let dictationAborts = 0
 const streams = new Map<string | number, AbortController>()
 const failures: string[] = []
 const requests: { path: string; done?: number; bytes?: number }[] = []
+const nativeTasks = new Set<Promise<void>>()
 beforeAll(async () => {
   buildDirectory = await mkdtemp(join(tmpdir(), 'dsh-native-workbench-'))
   // Exercise this checkout's real App document, including CSP hashes, in clean CI.
@@ -38,8 +43,10 @@ beforeAll(async () => {
   scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
   const fixture = await readFile(new URL('../../../snapshots/web/seeded-history/session.v3.jsonl', import.meta.url), 'utf8')
   sessionId = await seedSession(scaffold, fixture, 'native-workbench-history')
+  otherSessionId = await seedSession(scaffold, fixture, 'native-workbench-other')
   const workspace = await scaffold.ctx.workspaceRegistry.create(scaffold.workspaceCwd, 'iPhone 验收')
   await workspace.attachSession(sessionId)
+  await workspace.attachSession(otherSessionId)
   browser = await chromium.launch()
   page = await browser.newPage({ viewport: { width: 390, height: 844 }, locale: 'zh-CN' })
   page.on('pageerror', error => failures.push(error.message))
@@ -54,49 +61,64 @@ beforeAll(async () => {
     endpoint?: string
     payload?: unknown
   }) => {
-    const send = async (value: object, bytes?: Uint8Array): Promise<void> => {
-      await page.evaluate(({ value, encoded }) => {
-        const receiver = Reflect.get(window, 'nativeReceive') as (value: object) => void
-        const body = encoded === undefined ? undefined : Uint8Array.from(atob(encoded), char => char.charCodeAt(0)).buffer
-        receiver({ ...value, ...(body === undefined ? {} : { body }) })
-      }, { value, encoded: bytes && Buffer.from(bytes).toString('base64') })
-    }
-    if (frame.t === 'abort') { streams.get(frame.id)?.abort(); streams.delete(frame.id); return }
-    if (frame.t === 'stream-open' && frame.endpoint) {
-      const abort = new AbortController()
-      streams.set(frame.id, abort)
-      try {
-        const uplink = (async function* () { /* No client stream items in this reading scenario. */ })()
-        const source = await scaffold.ctx.typertGateway.wireStream.open(frame.endpoint, frame.payload, uplink, undefined, abort.signal)
-        for await (const value of source) await send({ t: 'stream-item', id: frame.id, value })
-        if (!abort.signal.aborted) await send({ t: 'stream-end', id: frame.id })
-      } catch (error) {
-        if (!abort.signal.aborted) await send({ t: 'stream-error', id: frame.id,
-          failure: { kind: 'remote', ...scaffold.ctx.typertGateway.wireStream.failure(error) } })
-      } finally { streams.delete(frame.id) }
-      return
-    }
-    if (frame.t !== 'req' || !frame.url) return
-    const path = new URL(frame.url).pathname + new URL(frame.url).search
-    const observed: { path: string; done?: number; bytes?: number } = { path }
-    requests.push(observed)
-    let response: Response
-    if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections() })
-    else if (path === '/__native_workbench__') response = Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false })
-    else if (path === '/__native_duet__') {
-      const target: unknown = JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8'))
-      duetTargets.push(target)
-      response = Response.json({ ok: true, value: { accepted: true } })
-    }
-    else if (path === '/__account__') response = Response.json(null)
-    // Signed remote assets omit optional development source maps.
-    else if (path.includes('.js.map')) response = new Response(null, { status: 404 })
-    else response = await scaffold.hostFetch(path, { ...(frame.method ? { method: frame.method } : {}),
-      ...(frame.headers ? { headers: frame.headers } : {}),
-      ...(frame.bytes ? { body: Buffer.from(frame.bytes) } : {}) })
-    const bytes = new Uint8Array(await response.arrayBuffer())
-    await send({ t: 'res', id: frame.id, status: response.status, headers: Object.fromEntries(response.headers) }, bytes)
-    observed.done = response.status; observed.bytes = bytes.length
+    const task = (async (): Promise<void> => {
+      const send = async (value: object, bytes?: Uint8Array): Promise<void> => {
+        await page.evaluate(({ value, encoded }) => {
+          const receiver = Reflect.get(window, 'nativeReceive') as (value: object) => void
+          const body = encoded === undefined ? undefined : Uint8Array.from(atob(encoded), char => char.charCodeAt(0)).buffer
+          receiver({ ...value, ...(body === undefined ? {} : { body }) })
+        }, { value, encoded: bytes && Buffer.from(bytes).toString('base64') })
+      }
+      if (frame.t === 'abort') {
+        streams.get(frame.id)?.abort(); streams.delete(frame.id)
+        if (dictations.has(frame.id)) { dictationAborts++; dictations.get(frame.id)?.(null); dictations.delete(frame.id) }
+        return
+      }
+      if (frame.t === 'stream-open' && frame.endpoint) {
+        const abort = new AbortController()
+        streams.set(frame.id, abort)
+        try {
+          const uplink = (async function* () { /* No client stream items in this reading scenario. */ })()
+          const source = await scaffold.ctx.typertGateway.wireStream.open(frame.endpoint, frame.payload, uplink, undefined, abort.signal)
+          for await (const value of source) await send({ t: 'stream-item', id: frame.id, value })
+          if (!abort.signal.aborted) await send({ t: 'stream-end', id: frame.id })
+        } catch (error) {
+          if (!abort.signal.aborted) await send({ t: 'stream-error', id: frame.id,
+            failure: { kind: 'remote', ...scaffold.ctx.typertGateway.wireStream.failure(error) } })
+        } finally { streams.delete(frame.id) }
+        return
+      }
+      if (frame.t !== 'req' || !frame.url) return
+      const path = new URL(frame.url).pathname + new URL(frame.url).search
+      const observed: { path: string; done?: number; bytes?: number } = { path }
+      requests.push(observed)
+      let response: Response
+      if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections() })
+      else if (path === '/__native_workbench__') response = Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false,
+        personalInbox: false, botPending: false, dictation: true })
+      else if (path === '/__native_dictation__') {
+        dictationTargets.push(JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8')))
+        const text = await new Promise<string | null>((resolve) => { dictations.set(frame.id, resolve) })
+        dictations.delete(frame.id)
+        response = Response.json({ ok: true, value: { text } })
+      }
+      else if (path === '/__native_duet__') {
+        const target: unknown = JSON.parse(Buffer.from(frame.bytes ?? []).toString('utf8'))
+        duetTargets.push(target)
+        response = Response.json({ ok: true, value: { accepted: true } })
+      }
+      else if (path === '/__account__') response = Response.json(null)
+      // Signed remote assets omit optional development source maps.
+      else if (path.includes('.js.map')) response = new Response(null, { status: 404 })
+      else response = await scaffold.hostFetch(path, { ...(frame.method ? { method: frame.method } : {}),
+        ...(frame.headers ? { headers: frame.headers } : {}),
+        ...(frame.bytes ? { body: Buffer.from(frame.bytes) } : {}) })
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      await send({ t: 'res', id: frame.id, status: response.status, headers: Object.fromEntries(response.headers) }, bytes)
+      observed.done = response.status; observed.bytes = bytes.length
+    })()
+    nativeTasks.add(task)
+    return task.finally(() => { nativeTasks.delete(task) })
   })
   const parentPath = join(scaffold.workspaceCwd, 'native-parent.html')
   await writeFile(parentPath, '<!doctype html><body></body>')
@@ -128,7 +150,12 @@ beforeAll(async () => {
   }, nativeDocument)
 }, 120000)
 afterAll(async () => {
+  const child = page?.frames().find(frame => frame.parentFrame())
+  if (child && !child.isDetached()) await child.evaluate(() => { window.dispatchEvent(new Event('pagehide')) })
+  for (const complete of dictations.values()) complete(null)
+  dictations.clear()
   for (const abort of streams.values()) abort.abort()
+  await Promise.allSettled([...nativeTasks])
   try { await browser?.close() } finally {
     try { await scaffold?.close() } finally {
       if (buildDirectory) await rm(buildDirectory, { recursive: true, force: true })
@@ -153,6 +180,7 @@ it('mounts shared mobile controls from real Host injections without parent acces
   await frame.locator(`[data-row-key="session:${sessionId}"]`).click()
   await frame.locator('[data-chat-flow-kind="user"]').first().waitFor()
   await frame.getByTestId('native-duet-input').click()
+  await frame.getByRole('menuitem', { name: '快聊', exact: true }).click()
   await expect.poll(() => duetTargets).toEqual([{ sessionId }])
   expect(await frame.locator('[data-chat-flow-kind="turn-process"]').count()).toBe(0)
   const input = frame.locator('[contenteditable="true"]').first()
@@ -170,6 +198,62 @@ it('mounts shared mobile controls from real Host injections without parent acces
     await mkdir(screenshotDirectory, { recursive: true })
     await page.screenshot({ path: join(screenshotDirectory, 'conversation.png') })
   }
+})
+
+it('dictates into the existing editor without sending, preserves concurrent edits and cancels when leaving chat', async () => {
+  const frame = page.frameLocator('iframe'), input = frame.locator('[data-composer-input][contenteditable="true"]').first()
+  const promptCount = () => requests.filter(item => item.path === '/api/session/prompt').length
+  const before = promptCount()
+  const finish = (text: string | null): void => {
+    const complete = [...dictations.values()].at(-1)
+    if (!complete) throw Error('no active native recording')
+    complete(text)
+  }
+  const record = async (): Promise<void> => {
+    const previous = dictationTargets.length
+    await frame.getByTestId('native-duet-input').click()
+    await frame.getByRole('menuitem', { name: '语音转写', exact: true }).click()
+    await expect.poll(() => dictationTargets.length).toBe(previous + 1)
+    expect(dictationTargets.at(-1)).toEqual({ sessionId })
+  }
+  for (const width of [320, 390, 430]) {
+    await page.setViewportSize({ width, height: 844 })
+    await input.fill(`原草稿${width} `)
+    await frame.getByTestId('native-duet-input').click()
+    const menu = frame.getByRole('menu', { name: '语音输入' })
+    const bounds = await menu.boundingBox()
+    expect(bounds?.x).toBeGreaterThanOrEqual(16)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width - 16)
+    expect((await menu.ariaSnapshot()).trim()).toBe((await readFile(new URL('./expected/native-dictation/menu.yml', import.meta.url), 'utf8')).trim())
+    if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, `voice-menu-${width}.png`) })
+    await frame.getByRole('menuitem', { name: '语音转写', exact: true }).click()
+    await expect.poll(() => dictations.size).toBe(1)
+    finish(`可编辑转写${width}`)
+    await expect.poll(async () => input.innerText()).toBe(`原草稿${width} 可编辑转写${width}`)
+    expect(await frame.locator('html').evaluate(element => element.scrollWidth <= innerWidth)).toBe(true)
+    expect(promptCount()).toBe(before)
+    if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, `dictation-draft-${width}.png`) })
+  }
+  const unchanged = await input.innerText()
+  await record(); finish(null)
+  await expect.poll(() => dictations.size).toBe(0)
+  expect(await input.innerText()).toBe(unchanged)
+  await record(); await input.fill('用户继续编辑的新草稿'); finish('不可覆盖的新转写')
+  await frame.getByRole('status').filter({ hasText: '输入内容已变化' }).waitFor()
+  expect(await input.innerText()).toBe('用户继续编辑的新草稿')
+  expect(await frame.getByRole('status').filter({ hasText: '输入内容已变化' }).innerText()).toContain('不可覆盖的新转写')
+  if (screenshotDirectory) await page.screenshot({ path: join(screenshotDirectory, 'dictation-conflict-430.png') })
+  await record()
+  const aborted = dictationAborts
+  await frame.getByRole('button', { name: '打开导航', exact: true }).click()
+  await frame.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
+  await frame.locator(`[data-row-key="session:${otherSessionId}"]`).click()
+  await expect.poll(() => dictationAborts).toBe(aborted + 1)
+  await frame.getByRole('button', { name: '打开导航', exact: true }).click()
+  await frame.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
+  await frame.locator(`[data-row-key="session:${sessionId}"]`).click()
+  expect(await input.innerText()).toBe('用户继续编辑的新草稿')
+  expect(promptCount()).toBe(before); expect(failures).toEqual([])
 })
 
 
