@@ -19,7 +19,7 @@ const signal = new AbortController().signal
 
 function snapshot() {
   const rows = [
-    { version: SESSION_FORMAT_VERSION, id: 'session-one', createdAt: 1, isSeeded: false },
+    { type: 'session', version: SESSION_FORMAT_VERSION, id: 'session-one', createdAt: 1 },
     { type: 'turn/start', seq: 0, data: { turn: 0 } },
     { type: 'user/message', seq: 1, data: { role: 'user', source: { kind: 'user' },
       content: [{ type: 'text', text: 'private plan' }] } },

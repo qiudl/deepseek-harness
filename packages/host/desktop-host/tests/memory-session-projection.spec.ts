@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { projectMemorySession } from '../src/memory-session-projection.ts'
 
 const sessionId = 'session-54a5bf6e-b050-46f3-8149-f48b709b0480'
-const header = { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, isSeeded: false }
+const header = { type: 'session', version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1 }
 const row = (type: string, seq: number, data: unknown, extras = {}) => ({ type, seq, time: seq + 2, data, ...extras })
 const text = (value: string) => [{ type: 'text', text: value }]
 const oneTurn = [
@@ -18,6 +19,13 @@ const oneTurn = [
 const snapshot = (events: unknown[], meta: object = header) => ({ sessionId, revision: 'r1', text: `${[meta, ...events].map(value => JSON.stringify(value)).join('\n')}\n` })
 
 describe('local memory Session projection', () => {
+  it('reads the committed v0 Session fixture without rewriting its source', () => {
+    const text = readFileSync(new URL('../../../experimental/webworker-runtime/tests/fixtures/vfs-example/home/sessions/--dsh-workspace--/preview-showcase/session.jsonl', import.meta.url), 'utf8')
+    const records = projectMemorySession({ sessionId: 'preview-showcase', revision: 'v0-fixture', text })
+    expect(records.some(record => record.kind === 'user')).toBe(true)
+    expect(records.some(record => record.kind === 'assistant')).toBe(true)
+  })
+
   it('keeps completed human and final assistant text, redacts credentials, and excludes tool and injection bodies', () => {
     const result = projectMemorySession(snapshot(oneTurn))
     const sourceVersion = createHash('sha256').update('r1').digest('hex')
@@ -149,6 +157,8 @@ describe('local memory Session projection', () => {
       { ...snapshot(oneTurn), text: `${JSON.stringify(header)}\n\n${JSON.stringify(oneTurn[0])}\n` },
       { ...snapshot(oneTurn), text: snapshot(oneTurn).text.slice(0, -1) },
       snapshot(oneTurn, { ...header, isSeeded: true }),
+      snapshot(oneTurn, { ...header, isSeeded: false }),
+      snapshot(oneTurn, { ...header, seedLength: 1 }),
       snapshot(oneTurn, { ...header, delegationDepth: 1 }),
       snapshot(oneTurn, { ...header, origin: 'foreign' }),
       snapshot(oneTurn, []),

@@ -118,8 +118,11 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
   let header: unknown
   try { header = JSON.parse(lines[0] || '') } catch { throw new HostAuthorityError('unavailable') }
   const meta = object(header)
+  const topLevel = SESSION_FORMAT_VERSION === 0
+    ? meta?.type === 'session' && meta.isSeeded === undefined && meta.seedLength === undefined
+    : meta?.isSeeded === false
   if (!meta || meta.id !== snapshot.sessionId || meta.version !== SESSION_FORMAT_VERSION
-    || meta.isSeeded !== false || (meta.delegationDepth !== undefined && meta.delegationDepth !== 0)
+    || !topLevel || (meta.delegationDepth !== undefined && meta.delegationDepth !== 0)
     || meta.parentSession !== undefined || meta.origin !== undefined)
     throw new HostAuthorityError('unavailable')
   const records: MemoryProjectedRecord[] = []
@@ -133,8 +136,10 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
     if (!event || event.seq !== nextSeq || typeof event.type !== 'string') throw new HostAuthorityError('unavailable')
     const projectedEvent = event.type === 'turn/start' || event.type === 'turn/end'
       || event.type === 'user/message' || event.type === 'assistant/message'
+    const emptyV0Sources = SESSION_FORMAT_VERSION === 0 && Array.isArray(event.sourceEventSeqs)
+      && event.sourceEventSeqs.length === 0
     if (projectedEvent && ((event.surfaceOp !== undefined && event.surfaceOp !== 'append')
-      || event.sourceEventSeqs !== undefined)) throw new HostAuthorityError('unavailable')
+      || event.sourceEventSeqs !== undefined && !emptyV0Sources)) throw new HostAuthorityError('unavailable')
     nextSeq += 1
     if (event.type === 'turn/start') {
       const turn = data?.turn

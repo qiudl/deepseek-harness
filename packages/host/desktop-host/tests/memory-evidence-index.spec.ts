@@ -7,7 +7,7 @@ const scope = { ownerUserId: 'owner-a', installationId: 'installation-a', profil
 
 function snapshot(message: string, revision = 'r1', sessionId = 'session-one') {
   const rows = [
-    { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, isSeeded: false },
+    { type: 'session', version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1 },
     { type: 'turn/start', seq: 0, data: { turn: 0 } },
     { type: 'user/message', seq: 1, data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: message }] } },
     { type: 'assistant/message', seq: 2, data: { message: { role: 'assistant', content: [{ type: 'text', text: 'answer' }] } } },
@@ -242,7 +242,7 @@ describe('Host local memory Evidence index', () => {
   it('handles empty sessions, repeated revisions, missing matches, and idempotent deletion', () => {
     const index = new HostMemoryEvidenceIndex(scope)
     const empty = { sessionId: 'empty', revision: 'r1',
-      text: `${JSON.stringify({ version: SESSION_FORMAT_VERSION, id: 'empty', createdAt: 1, isSeeded: false })}\n` }
+      text: `${JSON.stringify({ type: 'session', version: SESSION_FORMAT_VERSION, id: 'empty', createdAt: 1 })}\n` }
     expect(index.replace(scope, empty, 0)).toBe(1)
     expect(index.replace(scope, empty, 1)).toBe(1)
     expect(index.search(scope, 'anything', 1).items).toEqual([])
@@ -285,7 +285,7 @@ describe('Host local memory Evidence index', () => {
   it('rejects a single Session that exceeds the distinct gram budget', () => {
     const sessionId = 'many-grams'
     const rows: unknown[] = [
-      { version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, isSeeded: false },
+      { type: 'session', version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1 },
       { type: 'turn/start', seq: 0, data: { turn: 0 } },
     ]
     for (let part = 0; part < 21; part++) {
