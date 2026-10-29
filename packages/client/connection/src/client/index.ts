@@ -141,6 +141,8 @@ export interface ConnectionHandle {
    * A remote Host carrier overrides all three local classifications.
    */
   readonly isLoopback: boolean
+  /** The carrier connects to another machine; a presentation fact, never an authority grant. */
+  readonly isRemoteHost: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
   readonly generation: ConnectionGenerationState
   /** Current recovery lifecycle for connection-specific consumers. */
@@ -248,6 +250,7 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
     publishState(undefined)
   }
   const handle: ConnectionHandle = {
+    isRemoteHost: transport?.remoteHost === true,
     isLoopback: transport?.remoteHost === true ? false
       : transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
     generation: {

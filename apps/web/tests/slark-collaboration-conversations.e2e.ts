@@ -48,6 +48,7 @@ it('shows the same Session in collaboration and keeps the phone list beneath cha
 
     await page.setViewportSize({ width: 390, height: 844 })
     const mobileNav = page.getByRole('navigation', { name: 'Mobile navigation' })
+    await page.getByRole('button', { name: 'Open navigation', exact: true }).click()
     await mobileNav.waitFor()
     await mobileNav.getByRole('button', { name: /Collaboration/ }).click()
     await list.getByRole('button', { name: /2 items need attention/ }).click()
@@ -58,7 +59,7 @@ it('shows the same Session in collaboration and keeps the phone list beneath cha
     await page.setViewportSize({ width: 390, height: 520 })
     await expect.poll(async () => {
       const box = await composer.boundingBox()
-      return box ? box.y + box.height <= 462 : false
+      return box ? box.y + box.height <= 520 : false
     }).toBe(true)
     await page.setViewportSize({ width: 390, height: 844 })
     await page.getByTestId('slark-scope-toggle').click()
@@ -67,7 +68,8 @@ it('shows the same Session in collaboration and keeps the phone list beneath cha
     await sheet.waitFor()
     expect(await sheet.boundingBox()).toMatchObject({ x: 0, width: 390 })
     await page.getByTestId('slark-scope-cancel').click()
-    await page.getByRole('button', { name: 'Back to list' }).click()
+    await page.getByRole('button', { name: 'Open navigation', exact: true }).click()
+    await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('button', { name: /Collaboration/ }).click()
     await page.locator('[data-mobile-section="collaboration"]').waitFor()
     expect(await list.getByText('2 items need attention').count()).toBe(1)
     expect(tripwire.pageErrors).toEqual([])

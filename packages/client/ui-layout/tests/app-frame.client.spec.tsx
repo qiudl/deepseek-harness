@@ -66,6 +66,7 @@ function mountFrame(windowWidth = frameWidth) {
   const slotCalls: { key: string; props: object; options: RenderOpts | undefined }[] = []
   const renderSlot: AppFrameProps['renderSlot'] = (key, owner, options) => {
     slotCalls.push({ key, props: owner, options })
+    if (key === 'shell.navigation') return options?.fallback ?? null
     return <div data-testid={`${key}-content`} data-entry-key={options?.entryKey} />
   }
   const useSessions: AppFrameProps['useSessions'] = sel => sel({
@@ -183,24 +184,29 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
-  it('shows phone Web lists and chat as separate full-screen layers', () => {
-    const { frame, instance, sidebarOwner, getByRole } = mountFrame(390)
-    resize(390)
+  for (const width of [320, 390, 430]) it(`opens and closes a left drawer without replacing retained chat at ${width}px`, () => {
+    const { frame, instance, sidebarOwner, getByRole, queryByRole } = mountFrame(width)
+    resize(width)
     expect(frame.dataset.phoneWeb).toBe('true')
-    expect(sidebarOwner()).toMatchObject({ collapsed: false, width: 390, mobileSection: 'chat' })
+    expect(sidebarOwner()).toMatchObject({ collapsed: false, width, mobileSection: 'chat' })
+    expect(queryByRole('navigation')).toBeNull()
+    const opener = getByRole('button', { name: 'mobile.openNavigation' })
+    opener.focus()
+    fireEvent.click(opener)
+    expect(getByRole('dialog', { name: 'mobile.navigation' })).toBeDefined()
     fireEvent.click(getByRole('button', { name: 'mobile.conversations' }))
     expect(frame.dataset.mobileSection).toBe('ordinary')
-    expect(sidebarOwner().mobileSection).toBe('ordinary')
+    expect(queryByRole('dialog')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+    fireEvent.click(opener)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(queryByRole('dialog')).toBeNull()
     act(() => { instance.actions.selectPanel('settings' as MainPanelId) })
     expect(frame.dataset.mobileSection).toBe('chat')
-    fireEvent.click(getByRole('button', { name: 'mobile.backToList' }))
-    expect(frame.dataset.mobileSection).toBe('ordinary')
-    act(() => {
-      instance.actions.showMobileSection('collaboration')
-      instance.actions.showMobileChat()
-    })
-    fireEvent.click(getByRole('button', { name: 'mobile.backToList' }))
-    expect(frame.dataset.mobileSection).toBe('collaboration')
+    fireEvent.click(opener)
+    fireEvent.click(getByRole('button', { name: 'mobile.chat' }))
+    expect(frame.dataset.mobileSection).toBe('chat')
+    expect(queryByRole('dialog')).toBeNull()
   })
 
   it('fits the phone frame to the visual viewport when the keyboard opens', () => {

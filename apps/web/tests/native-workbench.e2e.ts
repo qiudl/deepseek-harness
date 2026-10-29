@@ -147,7 +147,9 @@ it('mounts shared mobile controls from real Host injections without parent acces
     }
   })
   await frame.getByRole('button', { name: '继续', exact: true }).click({ timeout: 60000 })
-  await frame.getByText('‹ 返回列表', { exact: true }).click()
+  await frame.getByRole('button', { name: '打开导航', exact: true }).click()
+  await frame.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
+  await frame.getByRole('treeitem').filter({ has: frame.getByText('iPhone 验收', { exact: true }) }).click()
   await frame.locator(`[data-row-key="session:${sessionId}"]`).click()
   await frame.locator('[data-chat-flow-kind="user"]').first().waitFor()
   await frame.getByTestId('native-duet-input').click()

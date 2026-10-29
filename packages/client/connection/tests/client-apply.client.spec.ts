@@ -134,6 +134,7 @@ describe('connection client apply', () => {
     ;(globalThis as Win).location = { hostname: 'localhost' }
     const handle = await mount()
     expect(handle.isLoopback).toBe(true)
+    expect(handle.isRemoteHost).toBe(false)
   })
 
   it('reports non-loopback page authority through the connection handle', async () => {
@@ -144,7 +145,9 @@ describe('connection client apply', () => {
   it('keeps a remote Host unprivileged even when its shell page is on localhost', async () => {
     ;(globalThis as Win).location = { hostname: 'localhost' }
     ;(globalThis as Win).__DSH_TRANSPORT__ = { remoteHost: true, ownsHost: false }
-    expect((await mount()).isLoopback).toBe(false)
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+    expect(handle.isRemoteHost).toBe(true)
   })
 
   it('requires one generation source and ignores a stale source disposer', async () => {
