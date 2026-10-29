@@ -1339,12 +1339,6 @@
   "packages/host/desktop-host/src/windows-host-journal.ts": {
     "e3b3858336ae260253abe549d2b763f5087ab4e8650f4eb5b323339eff0a6ce4": 2
   },
-  "packages/host/desktop-host/src/windows-host-pipe-worker-bridge.ts": {
-    "ebfa56674d7ce18b2d8c11e4bc69bf5993f7aa2770a08e7ea888af56253da6ed": 1
-  },
-  "packages/host/desktop-host/src/windows-host-pipe-worker-entry.ts": {
-    "addefd11baca5ad135b1df9d5b1d9f046e7d3fa640b42f5a3e415ddd2a23353d": 1
-  },
   "packages/host/desktop-host/src/windows-host-worker-bridge.ts": {
     "e538f1f3d9dadee6079b7ae4f6063b9106492e8c15c246a30c0c36f44215d593": 1
   },

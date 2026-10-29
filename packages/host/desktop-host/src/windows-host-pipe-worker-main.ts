@@ -1,125 +1,86 @@
-import { randomUUID } from 'node:crypto'
+import { Worker } from 'node:worker_threads'
 import {
   decodeWindowsHostPipeWorkerBootData,
 } from './windows-host-pipe-worker-boot.ts'
-import { createHostDiagnostics } from './host-diagnostics.ts'
+import { createWindowsHostPipeSlotBootData } from './windows-host-pipe-slot-boot.ts'
 import {
-  runWindowsHostPipeWorker,
-  type WindowsHostPipeWorkerPort,
-  type WindowsHostPipeWorkerRunResult,
-  type WindowsHostPipeWorkerRunnerOptions,
+  runWindowsHostPipeWorkerRouter,
+  type WindowsHostPipeSlotHandle,
+  type WindowsHostPipeWorkerRouterOptions,
+} from './windows-host-pipe-worker-router.ts'
+import type {
+  WindowsHostPipeWorkerPort,
+  WindowsHostPipeWorkerRunResult,
 } from './windows-host-pipe-worker-runner.ts'
-import { WindowsNamedPipeFrameChannel } from './windows-named-pipe-frame-channel.ts'
-import {
-  loadWindowsNamedPipeIoBindings,
-  type WindowsNamedPipeIoBindings,
-} from './windows-named-pipe-io.ts'
-import {
-  loadWindowsNamedPipeLifecycleBindings,
-} from './windows-named-pipe-native.ts'
-import type { WindowsNamedPipeLifecycleBindings } from './windows-named-pipe-lifecycle.ts'
-import {
-  loadWindowsPeerAttestor,
-  type WindowsNativePeerAttestorOptions,
-} from './windows-peer-attestor-native.ts'
-import { loadWindowsAuthenticodeVerifier } from './windows-authenticode-native.ts'
-import { loadWindowsExecutableDigest } from './windows-executable-digest.ts'
-import { loadWindowsPeerProcessNativeApi } from './windows-peer-process-native.ts'
-import { loadPinnedWindowsVaultNativeModule } from './windows-pinned-vault-native.ts'
-import type { WindowsPeerAttestor, WindowsPeerEvidence } from './windows-peer-attestor.ts'
 import {
   createWindowsWorkerStopFlag,
-  loadWindowsWorkerIoCancellation,
-  type WindowsWorkerIoCancellation,
+  type WindowsWorkerStopFlag,
 } from './windows-worker-io-cancellation.ts'
 
-/** Native loader seams; production uses the complete Windows-only implementations below. */
+/** Slot spawn seam; production re-enters this Worker's bundled entry with slot boot data. */
 export interface WindowsHostPipeWorkerMainDependencies {
-  readonly loadCancellation: () => Promise<WindowsWorkerIoCancellation>
-  readonly loadLifecycle: () => Promise<WindowsNamedPipeLifecycleBindings>
-  readonly loadIo: () => Promise<WindowsNamedPipeIoBindings>
-  readonly loadAttestor: (options: WindowsNativePeerAttestorOptions) => Promise<WindowsPeerAttestor>
-  readonly createConnectionId: () => string
-  readonly runWorker: (
-    options: WindowsHostPipeWorkerRunnerOptions<WindowsPeerEvidence>,
+  readonly spawnSlot: (firstInstance: boolean) => WindowsHostPipeSlotHandle
+  readonly runRouter: (
+    options: WindowsHostPipeWorkerRouterOptions,
   ) => Promise<WindowsHostPipeWorkerRunResult>
 }
 
-/* v8 ignore start -- the pinned native chain executes only inside the signed Windows Worker. */
-function pinnedNativeDependencies(
-  nativeModule: ReturnType<typeof decodeWindowsHostPipeWorkerBootData>['nativeModule'],
-): WindowsHostPipeWorkerMainDependencies {
-  let native: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
-  const loadKoffi = () => Promise.resolve(
-    native ??= loadPinnedWindowsVaultNativeModule(nativeModule),
-  )
-  const runtime = { platform: 'win32', arch: 'x64', isMainThread: false }
-  return {
-    loadCancellation: () => loadWindowsWorkerIoCancellation({
-      ...runtime,
-      loadKoffi,
-    }),
-    loadLifecycle: () => loadWindowsNamedPipeLifecycleBindings({
-      ...runtime,
-      loadKoffi,
-    }),
-    loadIo: () => loadWindowsNamedPipeIoBindings({
-      ...runtime,
-      loadKoffi,
-    }),
-    loadAttestor: options => loadWindowsPeerAttestor(options, {
-      loadAuthenticode: facts => loadWindowsAuthenticodeVerifier({
-        ...facts,
-        loadKoffi,
+/* v8 ignore start -- the nested Worker spawn executes only inside the signed Windows Worker. */
+function spawnWindowsHostPipeSlot(
+  boot: ReturnType<typeof decodeWindowsHostPipeWorkerBootData>,
+  stopFlag: WindowsWorkerStopFlag,
+): (firstInstance: boolean) => WindowsHostPipeSlotHandle {
+  return (firstInstance) => {
+    const worker = new Worker(new URL('windows-host-pipe-worker-entry.js', import.meta.url), {
+      workerData: createWindowsHostPipeSlotBootData(boot, firstInstance, stopFlag),
+      name: 'dsh-windows-host-pipe-slot',
+      execArgv: [],
+    })
+    return {
+      port: {
+        send: (message) => { worker.postMessage(message) },
+        subscribe: (listener) => {
+          worker.on('message', listener)
+          return () => { worker.off('message', listener) }
+        },
+      },
+      exited: new Promise<void>((resolve, reject) => {
+        worker.once('error', reject)
+        worker.once('exit', (code) => {
+          if (code === 0) resolve()
+          else reject(new Error(`Windows Host pipe slot exited with code ${code}`))
+        })
       }),
-      loadDigest: facts => loadWindowsExecutableDigest({
-        ...facts,
-        loadKoffi,
-      }),
-      loadProcessNative: (trust, facts) => loadWindowsPeerProcessNativeApi(trust, {
-        ...facts,
-        loadKoffi,
-      }),
-    }),
-    createConnectionId: randomUUID,
-    runWorker: options => runWindowsHostPipeWorker(options),
+      terminate: async () => { await worker.terminate() },
+    }
   }
 }
 /* v8 ignore stop */
 
-/** Decode boot state, load the all-or-nothing native chain, and enter the pipe Worker runner. */
+/**
+ * Decode boot state and enter the non-blocking router that fans connections out to slots.
+ * The router thread loads no native component itself; every blocking call stays on the
+ * per-connection slot threads so one stuck pipe can never starve the others.
+ */
 export async function runWindowsHostPipeWorkerMain(
   port: WindowsHostPipeWorkerPort,
   rawBootData: unknown,
   dependencies?: WindowsHostPipeWorkerMainDependencies,
 ): Promise<WindowsHostPipeWorkerRunResult> {
   const boot = decodeWindowsHostPipeWorkerBootData(rawBootData)
-  /* v8 ignore next -- the production default is exercised only by signed Windows Worker lanes. */
-  const resolvedDependencies = dependencies ?? pinnedNativeDependencies(boot.nativeModule)
   const stopFlag = createWindowsWorkerStopFlag(boot.stopFlagBuffer)
   if (stopFlag.requested()) {
     await port.send({ version: 1, type: 'stopped', generation: boot.generation })
     return { connectionsServed: 0, requestsHandled: 0 }
   }
-  const [cancellation, lifecycleBindings, io, attest] = await Promise.all([
-    resolvedDependencies.loadCancellation(),
-    resolvedDependencies.loadLifecycle(),
-    resolvedDependencies.loadIo(),
-    resolvedDependencies.loadAttestor({
-      allowedPublisherThumbprints: new Set(boot.allowedPublisherThumbprints),
-      allowedExecutableDigests: new Set(boot.allowedExecutableDigests),
-      diagnostics: createHostDiagnostics({ root: boot.diagnosticsRoot }),
-    }),
-  ])
-  return await resolvedDependencies.runWorker({
+  /* v8 ignore next -- the production default is exercised only by signed Windows Worker lanes. */
+  const spawnSlot = dependencies?.spawnSlot ?? spawnWindowsHostPipeSlot(boot, stopFlag)
+  /* v8 ignore next -- the production default is exercised only by signed Windows Worker lanes. */
+  const runRouter = dependencies?.runRouter ?? (options => runWindowsHostPipeWorkerRouter(options))
+  return await runRouter({
     generation: boot.generation,
-    policy: boot.policy,
     stopFlag,
-    cancellation,
-    lifecycleBindings,
-    attest,
-    createConnectionId: resolvedDependencies.createConnectionId,
-    createChannel: handle => new WindowsNamedPipeFrameChannel(handle, io),
     port,
+    spawnSlot,
   })
 }
