@@ -11,6 +11,7 @@ import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJo
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 import type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
+import type { SkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -559,6 +560,27 @@ export interface ProfileSkillHubBindingResult {
     readonly challengeId: string
     readonly signature: string
   }
+}
+
+/** Ask the current Host/Profile grant to sign one Server-resolved private Bot message actor. */
+export interface ProfileSkillHubBotMessageActorRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly input: SkillHubBotMessageActorInput
+  }
+}
+
+/** Compact EdDSA JWS signed only by the current installation key. */
+export interface ProfileSkillHubBotMessageActorResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly result: { readonly compact_jws: string }
 }
 
 /** Fixed package coordinates carried with every Host-controlled ZIP fragment. */
@@ -2292,6 +2314,8 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubBindingResult
+  | ProfileSkillHubBotMessageActorRequest
+  | ProfileSkillHubBotMessageActorResult
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageRequest
