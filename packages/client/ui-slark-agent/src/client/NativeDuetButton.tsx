@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { IconMicrophoneOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconMicrophoneOutlineRegular, MenuSurface } from '@deepseek-ai/dsh-client-ui-primitives'
 import css from './NativeDuetButton.module.css'
 
 type Props = PropsRuntime<'conversation.input.right'> & PropsLocale<'slarkAgent'> & {
@@ -56,10 +56,10 @@ export function NativeDuetButton({ sessionId, start, dictate, inputActions, t }:
       disabled={state?.owner === owner && state.pending} onClick={() => { if (dictate) setMenu(!menu); else void begin('call') }} data-testid="native-duet-input">
       <IconMicrophoneOutlineRegular size={18} />
     </button>
-    {menu && dictate && <span className={css.menu} role="menu" aria-label={t('voice.menu')}>
-      {start && <button type="button" role="menuitem" onClick={() => { void begin('call') }} data-testid="native-voice-call">{t('voice.call')}</button>}
-      <button type="button" role="menuitem" onClick={() => { void begin('dictation') }} data-testid="native-voice-dictation">{t('voice.dictation')}</button>
-    </span>}
+    {menu && dictate && <MenuSurface compact className={css.menu} role="menu" aria-label={t('voice.menu')}>
+      {start && <button type="button" className={css.menuItem} role="menuitem" onClick={() => { void begin('call') }} data-testid="native-voice-call">{t('voice.call')}</button>}
+      <button type="button" className={css.menuItem} role="menuitem" onClick={() => { void begin('dictation') }} data-testid="native-voice-dictation">{t('voice.dictation')}</button>
+    </MenuSurface>}
     {state?.owner === owner && state.notice && <span className={css.notice} role="status">
       {t(state.notice === 'call' ? 'duet.uncertain' : state.notice === 'changed' ? 'dictation.changed' : 'dictation.unavailable')}
       {state.retained && <span className={css.retained}>{state.retained}</span>}

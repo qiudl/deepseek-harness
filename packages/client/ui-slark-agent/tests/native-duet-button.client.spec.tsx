@@ -84,6 +84,26 @@ it('supports keyboard menu navigation and displays dictation failure without sta
   await vi.waitFor(() => { expect(view.getByRole('status').textContent).toContain('转写暂不可用') })
   expect(start).not.toHaveBeenCalled()
 })
+it('navigates both directions and endpoints, closes outside focus, and starts Quick chat on the original Session', async () => {
+  const pending = Promise.withResolvers<undefined>()
+  const start = vi.fn(() => pending.promise), dictate = vi.fn(async () => null)
+  const view = render(createElement(NativeDuetButton, { ...dockRuntime('original'), t: dockTranslate, start, dictate }))
+  const outside = document.createElement('button'); document.body.appendChild(outside)
+  onTestFinished(() => { view.unmount(); outside.remove(); pending.resolve(undefined) })
+  const button = view.getByRole('button', { name: '语音输入' })
+  fireEvent.click(button)
+  const first = view.getByRole('menuitem', { name: '快聊' }), last = view.getByRole('menuitem', { name: '语音转写' })
+  for (const [key, target] of [['End', last], ['Home', first], ['ArrowUp', last]] as const) {
+    fireEvent.keyDown(document.activeElement!, { key }); expect(document.activeElement).toBe(target)
+  }
+  fireEvent.blur(last, { relatedTarget: outside })
+  expect(view.queryByRole('menu')).toBeNull()
+  fireEvent.click(button); fireEvent.click(view.getByRole('menuitem', { name: '快聊' }))
+  expect(start).toHaveBeenCalledExactlyOnceWith('original'); expect(dictate).not.toHaveBeenCalled()
+  expect(button).toHaveProperty('disabled', true)
+  pending.resolve(undefined); await vi.waitFor(() => { expect(button).toHaveProperty('disabled', false) })
+})
+
 it('shows localized failure and ignores a late failure after changing Sessions', async () => {
   let fail!: (error: Error) => void
   const start = () => new Promise<void>((_resolve, reject) => { fail = reject })
