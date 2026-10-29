@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
-import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
+import { parseHostBotChatSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
@@ -22,6 +22,31 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('uses the Bot provider under the original Session claim and reconciles without obtaining write control', async () => {
+    const request = parseHostBotChatSubmission({ botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' })
+    const result = { botId: 'bot_1', sessionId: 'own-2', submissionId: request.submissionId, state: 'accepted' }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'own-2')
+    const invoke = vi.fn(() => { throw Error('Bot must not fall back to naked Session prompt') })
+    const botChat = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control, undefined, botChat)
+    const send = { operation: 'bot.chat.send' as const, command_id: randomUUID() as never, session_id: 'own-2', control: proof, request }
+    const receipt = { operation: 'bot.chat.receipt' as const, command_id: randomUUID() as never, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
+    await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
+    expect(botChat).toHaveBeenCalledTimes(2)
+    expect(botChat).toHaveBeenNthCalledWith(1, 'bot.chat.send', request, signal)
+    expect(botChat).toHaveBeenNthCalledWith(2, 'bot.chat.receipt', request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(new DesktopRemoteSessionExecutor(gatewayFixture({ invoke })).execute(receipt, signal)).resolves.toBeNull()
+    botChat.mockResolvedValueOnce({ ...result, submissionId: randomUUID() })
+    await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_chat_receipt')
+    const abort = new AbortController(); abort.abort()
+    await expect(executor.execute(receipt, abort.signal)).rejects.toThrow()
+  })
   it('binds terminal calls to live control and preserves only typed terminal failures', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'session-1')

@@ -116,6 +116,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 私有 `bot/chat` 读取通过所选 Profile 显式启用的 Bot 服务，解析已有的默认或指定 Bot 及其当前私聊 Session。它不返回 Bot 配置、密钥或历史，也不执行 bootstrap 或发送。缺少提供者时返回 null；格式错误或目标被替换的响应会被拒绝。[Host 控制协议](../../host/control-protocol/README.zh.md)定义请求上限与 capability 协商。
 
+私有 Session 桥还通过显式启用的 Bot 服务提供固定的发送与回执命令。发送持有预期 Session 的既有控制权；核对回执无需接管控制权。稳定 submission ID 跨网络请求与会话换段保留。Bot 提供者缺失时，两种命令均不退化为通用 Session prompt。响应离开 worker 前核对目标并验证；认证、取消和插件释放继续由既有层负责。
+
 远程 `session/collaborationSources` 精确读取使用 `snapshotDigest` 替代 `cursor`，要求恰好一条匹配的原消息且无后续游标。摘要不符、定位与分页混用，以及单条消息超出预算时均拒绝；定位保留现有 Gateway 鉴权。
 
 仅限 Host 的 `session/collaborationMembership` 读取校验最多 50 组准确的工作区与会话身份，调用当前 Profile 的 Session Controller，并在返回 Main 前验证数量、顺序及归属结果。浏览器 Cookie 不能授权这一私有 worker 路由。

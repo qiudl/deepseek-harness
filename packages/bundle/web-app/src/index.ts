@@ -643,7 +643,17 @@ export function apply(ctx: Context, config: Config): void {
         localControlStatus: sessionId => control.browserStatus(sessionId),
         localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
-      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control, terminalStreams)
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control, terminalStreams,
+        async (operation, request, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            sendLocalBotChat?: (input: typeof request, signal: AbortSignal) => Promise<unknown>
+            readLocalBotChatReceipt?: (input: typeof request, signal: AbortSignal) => Promise<unknown>
+          }
+          const method = operation === 'bot.chat.send' ? service?.sendLocalBotChat : service?.readLocalBotChatReceipt
+          if (!method) return null
+          return method.call(service, request, signal)
+        })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
         handler: (req, res) => handleDesktopRemoteSessionRequest(

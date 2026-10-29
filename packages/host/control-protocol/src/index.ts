@@ -37,6 +37,8 @@ export { parseHostBotIdentity, parseHostBotIdentityTarget,
 export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
 export { parseHostBotChatRequest, parseHostBotChat } from './bot-chat.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
+export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
+export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,

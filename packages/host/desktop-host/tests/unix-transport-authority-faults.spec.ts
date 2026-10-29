@@ -272,6 +272,48 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('cancels an in-flight Bot admission when its authenticated transport is closed', async () => {
+    let enter!: () => void, observeAbort!: () => void
+    const ready = new Promise<void>((resolve) => { enter = resolve })
+    const aborted = new Promise<void>((resolve) => { observeAbort = resolve })
+    const execute = vi.fn((_profileId: string, _command: unknown, signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      signal.addEventListener('abort', () => { observeAbort(); reject(signal.reason) }, { once: true })
+      enter()
+    }))
+    const f = await authorityClient({ remoteSession: execute, remoteBotChatSupported: true })
+    const command = { operation: 'bot.chat.receipt' as const, command_id: randomUUID() as never,
+      request: { botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' } as never }
+    const calling = f.client.remoteSession({ ...opened, command })
+    await ready
+    f.client.close()
+    await expect(calling).rejects.toThrow()
+    await aborted
+    f.client.close()
+  })
+  it('negotiates Bot admission and receipt through the signed Host capability and closed protocol', async () => {
+    const request = { botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' } as never
+    const command = { operation: 'bot.chat.receipt' as const, command_id: randomUUID() as never, request }
+    const result = { botId: 'bot_1', sessionId: 'own-2', submissionId: (request as { submissionId: string }).submissionId, state: 'accepted' }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    expect(old.client.inspection.capabilities).not.toContain('profile.remote_session.bot_chat')
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    Object.defineProperty(old.client, 'inspection', { value: { ...old.client.inspection,
+      capabilities: [...old.client.inspection.capabilities, 'profile.remote_session.bot_chat'] } })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotChatSupported: true })
+    expect(enabled.client.remoteBotChatSupported).toBe(true)
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    expect(execute).toHaveBeenCalledWith(profileId, command, expect.any(AbortSignal))
+    execute.mockResolvedValueOnce({ ...result, botId: 'other' })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+    const missing = await authorityClient({ remoteBotChatSupported: true })
+    expect(missing.client.inspection.capabilities).not.toContain('profile.remote_session.bot_chat')
+    missing.client.close()
+  })
   it('negotiates Bot chat through signed inspection and local SDK support before execution', async () => {
     const input = { ...opened, endpoint: 'bot/chat' as const, payload: { args: { botId: null } } }
     const execute = vi.fn(async (): Promise<unknown> => ({ revision: 4, defaultBotId: null, bot: null }))

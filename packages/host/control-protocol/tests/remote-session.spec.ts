@@ -15,6 +15,19 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips fixed Bot commands and rejects proof omissions, mismatched Sessions and extra authority', () => {
+    const request = { botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' }
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const send = { operation: 'bot.chat.send', command_id: randomUUID(), session_id: request.sessionId, control, request }
+    const receipt = { operation: 'bot.chat.receipt', command_id: randomUUID(), request }
+    for (const command of [send, receipt]) {
+      const decoded = decode(frame(command))
+      expect(decodeHostControlFrame(encodeHostControlFrame(decoded))).toEqual(decoded)
+    }
+    for (const command of [{ ...send, control: undefined }, { ...send, session_id: 'other' },
+      { ...send, request: { ...request, profileId: 'other' } }, { ...receipt, session_id: request.sessionId },
+      { ...send, request: { ...request, submissionId: '' } }]) expect(() => decode(frame(command))).toThrow()
+  })
   it('rejects terminal proof omissions and cross-Session arguments before dispatch', () => {
     const command = { operation: 'terminal.apply', command_id: randomUUID(), session_id: 's1',
       control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -72,7 +73,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', '')
-  vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', '')
+  vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_REMOTE_UI_TOKEN', token)
   ctx.provide('webServer', {
     host: '127.0.0.1', port: 0,
@@ -104,6 +105,12 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       : null,
     ...groupOperations,
     readLocalBotChat,
+    sendLocalBotChat: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
+      botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotChatReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
+      botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const nativeRoom = {
@@ -197,6 +204,35 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   Object.assign(botService, { readLocalBotChat })
   expect(await (await postChat({ botId: 'bot_1' })).json()).toEqual({ value: chat })
+  const remoteUrl = chatUrl.replace('desktop-remote-ui', 'desktop-remote-session')
+  const postRemote = (command: object, auth = `Bearer ${token}`) => fetch(remoteUrl, { method: 'POST',
+    headers: { authorization: auth }, body: JSON.stringify(command) })
+  const request = { botId: 'bot_1', sessionId: target.session_id, submissionId: randomUUID(), text: 'Hello' }
+  const controllerId = randomUUID()
+  const receiptCommand = { operation: 'bot.chat.receipt', command_id: randomUUID(), request }
+  expect((await postRemote(receiptCommand, '')).status).toBe(403)
+  expect(await (await postRemote(receiptCommand)).json()).toEqual({ value: {
+    botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
+  } })
+  const acquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: target.session_id, controller_id: controllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const control = { controller_id: controllerId, generation: acquired.value.claim.generation, epoch: acquired.value.claim.epoch }
+  const sendCommand = { operation: 'bot.chat.send', command_id: randomUUID(), session_id: target.session_id, control, request }
+  expect((await postRemote({ ...sendCommand, control: { ...control, epoch: control.epoch + 1 } })).status).toBe(409)
+  expect(botService.sendLocalBotChat).not.toHaveBeenCalled()
+  expect(await (await postRemote(sendCommand)).json()).toEqual({ value: {
+    botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'accepted',
+  } })
+  expect(botService.sendLocalBotChat).toHaveBeenCalledWith(request, expect.any(AbortSignal))
+  expect(botService.readLocalBotChatReceipt).toHaveBeenCalledWith(request, expect.any(AbortSignal))
+  expect(session.seq).toBe(seq)
+  expect(resume).not.toHaveBeenCalled()
+  const sender = botService.sendLocalBotChat
+  Reflect.deleteProperty(botService, 'sendLocalBotChat')
+  expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { sendLocalBotChat: sender })
   const botResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })

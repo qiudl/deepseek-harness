@@ -116,6 +116,8 @@ When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the 
 
 The private `bot/chat` read uses the selected Profile's opt-in Bot service to resolve an existing default or explicit Bot and its current own-chat Session. It returns no Bot configuration, secrets or history and performs no bootstrap or send. Missing providers return null; malformed or retargeted replies are refused. The [Host control protocol](../../host/control-protocol/README.md) owns the request limits and capability negotiation.
 
+The private Session bridge also exposes fixed Bot send and receipt commands through the opt-in Bot service. A send holds the expected Session's existing control claim; a receipt can be read without taking over that claim. Stable submission IDs survive transport requests and part rollover. Neither command falls back to a generic Session prompt when the Bot provider is missing. Replies are correlated and validated before leaving the worker; authentication, cancellation and plugin disposal retain their existing owners.
+
 Remote `session/collaborationSources` exact lookup accepts `snapshotDigest` instead of `cursor` and requires exactly one matching original without a continuation. Substituted digests, mixed lookup and pagination, and oversized individual messages reject; lookup retains the existing Gateway authorization.
 
 The Host-only `session/collaborationMembership` read validates up to 50 exact Workspace/Session pairs, invokes the current Profile Session controller, and verifies an equally sized ordered ownership reply before returning it to Main. Browser cookies do not authorize this private worker route.
