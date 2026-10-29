@@ -277,7 +277,7 @@ describe('Unix transport authority failures', () => {
     const ready = new Promise<void>((resolve) => { enter = resolve })
     const aborted = new Promise<void>((resolve) => { observeAbort = resolve })
     const execute = vi.fn((_profileId: string, _command: unknown, signal: AbortSignal) => new Promise<never>((_resolve, reject) => {
-      signal.addEventListener('abort', () => { observeAbort(); reject(signal.reason) }, { once: true })
+      signal.addEventListener('abort', () => { observeAbort(); reject(new Error('Bot admission cancelled', { cause: signal.reason })) }, { once: true })
       enter()
     }))
     const f = await authorityClient({ remoteSession: execute, remoteBotChatSupported: true })
