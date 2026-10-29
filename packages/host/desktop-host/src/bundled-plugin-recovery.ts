@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { lstat, open, readdir, realpath } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
+import { lstat, open, readlink, readdir, realpath } from 'node:fs/promises'
+import { dirname, join, relative, sep } from 'node:path'
 import { Parser } from 'tar'
 import type { BundledPlugin, BundledPluginCatalog } from './bundled-plugins.ts'
 import { bundledDependencySpec } from './bundled-plugins.ts'
@@ -10,6 +10,32 @@ import { HostAuthorityError } from './types.ts'
 const MAX_ENTRIES = 8192
 const MAX_BYTES = 128 * 1024 * 1024
 const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+
+async function pnpmLinkedRoot(plugin: BundledPlugin, webRoot: string, uid: number): Promise<string> {
+  const modules = join(webRoot, 'node_modules')
+  const pnpm = join(modules, '.pnpm')
+  const folder = `${plugin.name.replace('/', '+')}@file+.bundled-plugins+${plugin.sha256}.tgz`
+  const link = join(modules, plugin.name)
+  const target = join(pnpm, folder, 'node_modules', plugin.name)
+  for (const directory of [modules, pnpm, dirname(link), join(pnpm, folder),
+    join(pnpm, folder, 'node_modules'), dirname(target), target]) {
+    const stat = await lstat(directory)
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== uid || (stat.mode & 0o022) !== 0) {
+      throw new HostAuthorityError('runtime_incompatible')
+    }
+  }
+  const stat = await lstat(link)
+  if (!stat.isSymbolicLink() || stat.uid !== uid
+    || await readlink(link) !== relative(dirname(link), target)) {
+    throw new HostAuthorityError('runtime_incompatible')
+  }
+  const canonical = join(await realpath(pnpm), folder, 'node_modules', plugin.name)
+  /* v8 ignore next -- after the checked directory inodes and exact link target, this rejects only a filesystem swap during realpath. */
+  if (await realpath(link) !== canonical || await realpath(target) !== canonical) {
+    throw new HostAuthorityError('runtime_incompatible')
+  }
+  return canonical
+}
 
 function digest(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex') }
 
@@ -83,6 +109,7 @@ async function archiveInventory(bytes: Buffer): Promise<Map<string, { size: numb
  */
 export async function verifyCopiedBundledPlugin(
   catalog: BundledPluginCatalog, plugin: BundledPlugin, webRoot: string, uid: number,
+  layout: 'copied' | 'pnpm_link' = 'copied',
 ): Promise<string> {
   try {
     const archive = catalog.readArchive(plugin)
@@ -99,7 +126,8 @@ export async function verifyCopiedBundledPlugin(
       const parts = path.split('/')
       for (let length = 1; length < parts.length; length++) directories.add(parts.slice(0, length).join('/'))
     }
-    const root = join(webRoot, 'node_modules', plugin.name)
+    const root = layout === 'pnpm_link' ? await pnpmLinkedRoot(plugin, webRoot, uid)
+      : join(webRoot, 'node_modules', plugin.name)
     let entries = 0
     let bytes = 0
     const seen = new Set<string>()

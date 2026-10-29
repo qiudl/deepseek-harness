@@ -26,6 +26,7 @@ const baseCapabilities = [
   'profile.lease_close',
   'profile.ensure',
   'profile.ensure_account_token',
+  'profile.ensure_slark_federated',
   'profile.bootstrap_local',
   'profile.open',
   'profile.open_local',
@@ -43,6 +44,8 @@ const allCapabilities = [
   'profile.extensions',
   'profile.model_text',
 ].sort() as HostControlCapability[]
+const importCapabilities = [...allCapabilities, 'profile.import_preview', 'profile.import_status',
+  'profile.import_prepare', 'profile.import_commit', 'profile.import_abort'].sort() as HostControlCapability[]
 
 function inspection(
   request: HostInspectRequest,
@@ -133,6 +136,75 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('keeps import mutation proofs and selections on the Main-only control channel', async () => {
+    const seen: HostControlFrame[] = []
+    const capabilities = [...allCapabilities, 'profile.import_prepare', 'profile.import_commit',
+      'profile.import_abort'].sort() as HostControlCapability[]
+    const { client } = await makeClient((frame) => {
+      seen.push(frame)
+      return result(frame, { operation_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190',
+        phase: frame.method === 'profile.import_prepare' ? 'staged'
+          : frame.method === 'profile.import_commit' ? 'committed' : 'aborted' })
+    }, capabilities)
+    const identity = {
+      authority_environment_id: binding.authorityEnvironmentId as never,
+      account_binding_handle: binding.accountBindingHandle as never,
+      authority_binding_version: binding.authorityBindingVersion,
+      account_issuer: 'https://slark.example.com', account_subject: 'person-1',
+      source_account_issuer: 'https://accounts.dsh.example.com', source_account_subject: 'old-person',
+      source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43),
+      operation_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190',
+    }
+    expect(await client.prepareProfileImport({ ...identity, expected_preview_digest: 'a'.repeat(64) as never,
+      selected_session_ids: ['source-session'], selected_plugin_names: [] })).toMatchObject({ phase: 'staged' })
+    expect(await client.commitProfileImport(identity)).toMatchObject({ phase: 'committed' })
+    expect(await client.abortProfileImport(identity)).toMatchObject({ phase: 'aborted' })
+    expect(seen.map(frame => frame.method)).toEqual([
+      'profile.import_prepare', 'profile.import_commit', 'profile.import_abort'])
+    const first = seen[0]
+    if (first?.type !== 'request' || first.method !== 'profile.import_prepare') throw Error('prepare missing')
+    expect(first.params.source_unlock_material).toBe(identity.source_unlock_material)
+    expect(first.params.selected_session_ids).toEqual(['source-session'])
+    const oldHost = await makeClient(frame => result(frame, {}))
+    await expect(oldHost.client.prepareProfileImport({ ...identity,
+      expected_preview_digest: 'a'.repeat(64) as never,
+      selected_session_ids: ['source-session'], selected_plugin_names: [] }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+  })
+  it('queries durable import status using the owner connection and both identity proofs', async () => {
+    let sent: HostControlFrame | undefined
+    const operations = [{ operation_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3190',
+      phase: 'committing', revision: 4, session_count: 2, plugin_count: 1 }]
+    const { client } = await makeClient((frame) => {
+      sent = frame
+      return result(frame, { operations, next_operation_offset: null })
+    }, [...allCapabilities, 'profile.import_status' as HostControlCapability].sort())
+    expect(await client.listProfileImportStatus({
+      authority_environment_id: binding.authorityEnvironmentId as never,
+      account_binding_handle: binding.accountBindingHandle as never,
+      authority_binding_version: binding.authorityBindingVersion,
+      account_issuer: 'https://slark.example.com', account_subject: 'person-1',
+      source_account_issuer: 'https://accounts.dsh.example.com', source_account_subject: 'old-person',
+      source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43),
+      operation_offset: 0,
+    })).toEqual({ operations, next_operation_offset: null })
+    expect(sent?.method).toBe('profile.import_status')
+    if (sent?.type !== 'request' || sent.method !== 'profile.import_status') {
+      throw Error('status request missing')
+    }
+    expect(sent.params.source_account_subject).toBe('old-person')
+    expect(sent.params.account_subject).toBe('person-1')
+    const oldHost = await makeClient(frame => result(frame, { operations }))
+    await expect(oldHost.client.listProfileImportStatus({
+      authority_environment_id: binding.authorityEnvironmentId as never,
+      account_binding_handle: binding.accountBindingHandle as never,
+      authority_binding_version: binding.authorityBindingVersion,
+      account_issuer: 'https://slark.example.com', account_subject: 'person-1',
+      source_account_issuer: 'https://accounts.dsh.example.com', source_account_subject: 'old-person',
+      source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43),
+      operation_offset: 0,
+    })).rejects.toMatchObject({ code: 'upgrade_required' })
+  })
   it('projects bounded personal model text only when the Host advertises it', async () => {
     const seen: HostControlFrame[] = []
     const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
@@ -397,6 +469,16 @@ describe('Unix Host client protocol projections', () => {
     await expect(client.openOfflineAccountProfile({ profileSelector })).resolves.toMatchObject({ ...lease, accessScope: 'offline_local' })
     await expect(client.ensureAccountProfile({ ...binding, issuer: 'issuer', subject: 'subject', accountAccessToken: 'token',
       keyHandle: 'keychain:one', unlockMaterial: 'material' })).resolves.toEqual({ profileId: lease.profileId, profileSelector })
+    await expect(client.ensureSlarkAccountProfile({ ...binding,
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3184',
+      accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:one', unlockMaterial: 'material',
+      expected: {
+        slarkUserId: 'user-1', environmentId: binding.authorityEnvironmentId,
+        profileId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+        deviceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+        deviceKeyThumbprint: 'A'.repeat(43), loginEpoch: 0, bindingEpoch: 1,
+      },
+    })).resolves.toEqual({ profileId: lease.profileId, profileSelector })
     await expect(client.restoreProfile({ ...binding, profileSelector, keyHandle: 'keychain:one', unlockMaterial: 'material' }))
       .resolves.toEqual({ profileId: lease.profileId, profileSelector })
     await expect(client.bootstrapLocalProfile({ keyHandle: 'keychain:one', unlockMaterial: 'material' }))
@@ -602,6 +684,98 @@ describe('Unix Host client protocol projections', () => {
     await expect(client.extensions({ ...lease, command: { action: 'prepare', kind: 'plugin', payload: '{}' } }))
       .rejects.toMatchObject({ code: 'extension_refused' })
   })
+})
+
+it('keeps old Account import proof off the wire when import capabilities are absent', async () => {
+  const sent = vi.fn()
+  const { client } = await makeClient((frame) => { sent(frame); return result(frame, {}) })
+  const identity = { authority_environment_id: binding.authorityEnvironmentId as never,
+    account_binding_handle: binding.accountBindingHandle as never, authority_binding_version: 1,
+    account_issuer: 'https://accounts.example.com', account_subject: 'person',
+    source_account_issuer: 'https://accounts.example.com', source_account_subject: 'person',
+    source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43) }
+  const operation_id = installationId as never
+  try {
+    await expect(client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'a'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.commitProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.abortProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(sent).not.toHaveBeenCalled()
+  } finally { client.close() }
+})
+
+it('uses authenticated import capabilities for preview, status, prepare, commit, and abort', async () => {
+  const seen: HostControlFrame[] = []
+  const operation_id = installationId
+  const { client } = await makeClient((frame) => {
+    seen.push(frame)
+    switch (frame.method) {
+      case 'profile.import_preview':
+        return result(frame, { source_snapshot_digest: 'a'.repeat(64), target_snapshot_digest: 'b'.repeat(64),
+          preview_digest: 'c'.repeat(64), session_count: 0, plugin_count: 0,
+          next_session_offset: null, next_plugin_offset: null, sessions: [], plugins: [] })
+      case 'profile.import_status':
+        return result(frame, { next_operation_offset: null, operations: [] })
+      case 'profile.import_prepare':
+        return result(frame, { operation_id, phase: 'staged' })
+      case 'profile.import_commit':
+        return result(frame, { operation_id, phase: 'committed' })
+      case 'profile.import_abort':
+        return result(frame, { operation_id, phase: 'aborted' })
+      default: throw Error('unexpected_request')
+    }
+  }, importCapabilities)
+  const identity = { authority_environment_id: binding.authorityEnvironmentId as never,
+    account_binding_handle: binding.accountBindingHandle as never, authority_binding_version: 1,
+    account_issuer: 'https://accounts.example.com', account_subject: 'person',
+    source_account_issuer: 'https://accounts.example.com', source_account_subject: 'person',
+    source_profile_key_handle: 'keychain:old', source_unlock_material: 'A'.repeat(43) }
+  try {
+    await expect(client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .resolves.toMatchObject({ session_count: 0, next_session_offset: null })
+    await expect(client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .resolves.toEqual({ next_operation_offset: null, operations: [] })
+    await expect(client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'c'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .resolves.toEqual({ operation_id, phase: 'staged' })
+    await expect(client.commitProfileImport({ ...identity, operation_id }))
+      .resolves.toEqual({ operation_id, phase: 'committed' })
+    await expect(client.abortProfileImport({ ...identity, operation_id }))
+      .resolves.toEqual({ operation_id, phase: 'aborted' })
+    expect(seen.map(frame => frame.method)).toEqual([
+      'profile.import_preview', 'profile.import_status', 'profile.import_prepare',
+      'profile.import_commit', 'profile.import_abort',
+    ])
+    expect(seen.every(frame => frame.type === 'request' && 'params' in frame
+      && 'source_unlock_material' in frame.params
+      && frame.params.source_unlock_material === identity.source_unlock_material)).toBe(true)
+  } finally { client.close() }
+  const mismatched = await makeClient(frame => ({ version: 1, type: 'result',
+    request_id: frame.request_id, method: 'profile.status', result: { state: 'locked' } }),
+  importCapabilities)
+  try {
+    await expect(mismatched.client.previewProfileImport({ ...identity, session_offset: 0, plugin_offset: 0 }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.listProfileImportStatus({ ...identity, operation_offset: 0 }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.prepareProfileImport({ ...identity, operation_id,
+      expected_preview_digest: 'c'.repeat(64) as never,
+      selected_session_ids: ['session-1'], selected_plugin_names: [] }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.commitProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(mismatched.client.abortProfileImport({ ...identity, operation_id }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  } finally { mismatched.client.close() }
 })
 
 it('requires explicit recovery-material capabilities without sending secrets to an older Host', async () => {

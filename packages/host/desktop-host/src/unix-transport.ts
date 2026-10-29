@@ -1,4 +1,5 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
@@ -124,6 +125,16 @@ import type {
   ProfileRecoverOfflineAccountRequest,
   ProfileOpenOfflineAccountRequest,
   ProfileRecoveryStatusRequest,
+  ProfileImportPreviewRequest,
+  ProfileImportPreviewResult,
+  ProfileImportStatusRequest,
+  ProfileImportStatusResult,
+  ProfileImportPrepareRequest,
+  ProfileImportPrepareResult,
+  ProfileImportCommitRequest,
+  ProfileImportCommitResult,
+  ProfileImportAbortRequest,
+  ProfileImportAbortResult,
   MigrationExportBeginRequest,
   MigrationExportInventoryRequest,
   MigrationExistingSourceInventoryRequest,
@@ -171,6 +182,8 @@ import type {
 import { HostAuthorityError } from './types.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import type { ProfileImportPreview } from './profile-import-preview.ts'
+import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
@@ -300,6 +313,48 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Read both existing Profile inventories without starting workers or writing state. */
+  readonly inspectProfileImport?: (
+    sourceProfileId: string, targetProfileId: string, signal: AbortSignal,
+  ) => Promise<ProfileImportPreview>
+  readonly listProfileImportStatus?: (input: Readonly<{
+    sourceProfileId: string
+    targetProfileId: string
+    operationOffset: number
+    assertAuthority(): Promise<void>
+  }>) => Promise<Readonly<{ nextOperationOffset: number | null
+    operations: readonly Readonly<{
+      operationId: string
+      phase: ProfileImportStatusResult['result']['operations'][number]['phase']
+      revision: number
+      sessionCount: number
+      pluginCount: number
+    }>[] }>>
+  /** Internal transaction entry; transport exposure follows recovery and runtime activation gates. */
+  readonly prepareProfileImport?: (input: Readonly<{
+    sourceProfileId: string
+    targetProfileId: string
+    operationId: string
+    expectedPreviewDigest: string
+    selectedSessionIds: readonly string[]
+    selectedPluginNames: readonly string[]
+    assertAuthority(): Promise<void>
+    signal?: AbortSignal
+  }>) => Promise<{ readonly phase: 'staged'; readonly operationId: string }>
+  readonly commitProfileImport?: (input: Readonly<{
+    sourceProfileId: string
+    targetProfileId: string
+    operationId: string
+    assertAuthority(): Promise<void>
+    signal?: AbortSignal
+  }>) => Promise<{ readonly phase: 'committed'; readonly operationId: string }>
+  readonly abortProfileImport?: (input: Readonly<{
+    sourceProfileId: string
+    targetProfileId: string
+    operationId: string
+    assertAuthority(): Promise<void>
+    signal?: AbortSignal
+  }>) => Promise<{ readonly phase: 'aborted'; readonly operationId: string }>
   /** The owning Host creates a private package root for the selected Profile. */
   readonly createSkillHubPackageStore?: (profileId: string, bindingGeneration: string,
     hostKeyId: string) => ReturnType<typeof createSkillHubPackageInstallationStore>
@@ -319,6 +374,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupResponse>
   /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
   readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
+  /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
+  readonly diagnostics?: HostDiagnostics
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -420,6 +477,10 @@ export interface UnixHostServerOptions {
     profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
     payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
   ) => Promise<unknown>
+  /** Advertise Bot admission and reconciliation only for the bundled Profile worker. */
+  readonly remoteBotChatSupported?: boolean
+  /** Advertise existing Bot chat reads only for the bundled Profile worker. */
+  readonly remoteUiBotChatSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
   /** Advertise source-side history fragmentation only when the worker implements it. */
@@ -581,11 +642,12 @@ async function recheckReferenceSource(
 /** Transport-independent Host account, Profile, and migration authority inputs. */
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
-  'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
+  'identity' | 'host' | 'inspectProfileImport' | 'listProfileImportStatus' | 'prepareProfileImport'
+    | 'commitProfileImport' | 'abortProfileImport' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
-    | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -611,6 +673,7 @@ const capabilities = [
   'profile.ensure',
   'profile.ensure_account_token',
   'profile.ensure_binding_scope',
+  'profile.ensure_slark_federated',
   'profile.bootstrap_local',
   'profile.open',
   'profile.open_local',
@@ -1034,6 +1097,22 @@ class FrameChannel implements HostClientFrameTransport {
   }
 }
 
+type SlarkImportParams = ProfileImportPreviewRequest['params'] | ProfileImportStatusRequest['params']
+  | ProfileImportPrepareRequest['params'] | ProfileImportCommitRequest['params']
+  | ProfileImportAbortRequest['params']
+
+function slarkImportAuthority(p: SlarkImportParams, ownerId: string): Parameters<DesktopHost['authorizeSlarkImportPreview']>[0] {
+  return {
+    authorityEnvironmentId: p.authority_environment_id,
+    accountBindingHandle: p.account_binding_handle,
+    authorityBindingVersion: p.authority_binding_version,
+    ownerId, issuer: p.account_issuer, subject: p.account_subject,
+    sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
+    sourceKeyHandle: p.source_profile_key_handle,
+    sourceUnlockMaterial: p.source_unlock_material,
+  }
+}
+
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
@@ -1151,6 +1230,7 @@ export class HostControlAuthority {
       ownerId,
       now: clock,
       signal,
+      diagnostics: this.options.diagnostics,
       inspect: frame => this.inspect(
         frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
         this.options.host.supportsOfflineAccountRecovery(),
@@ -1493,11 +1573,149 @@ export class HostControlAuthority {
               ? { state: 'failed', reason_code: status.reasonCode }
               : { state: status.state },
           })
+        } else if (frame.method === 'profile.import_status') {
+          const list = this.options.listProfileImportStatus
+          if (!list) throw new HostAuthorityError('upgrade_required')
+          const p = frame.params
+          const authority = slarkImportAuthority(p, ownerId)
+          const selected = this.options.host.authorizeSlarkImportPreview(authority)
+          const assertAuthority = async () => {
+            context.signal.throwIfAborted()
+            const checked = this.options.host.authorizeSlarkImportPreview(authority)
+            const stale = checked.sourceProfileId !== selected.sourceProfileId
+              || checked.targetProfileId !== selected.targetProfileId
+            if (stale) throw new HostAuthorityError('stale')
+            await Promise.resolve()
+          }
+          const status = await list({ ...selected, operationOffset: p.operation_offset, assertAuthority })
+          await assertAuthority()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { next_operation_offset: status.nextOperationOffset,
+              operations: status.operations.map(row => ({ operation_id: row.operationId,
+                phase: row.phase, revision: row.revision, session_count: row.sessionCount,
+                plugin_count: row.pluginCount })) } })
+        } else if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
+          || frame.method === 'profile.import_abort') {
+          const p = frame.params
+          const authority = slarkImportAuthority(p, ownerId)
+          const selected = this.options.host.authorizeSlarkImportPreview(authority)
+          const assertAuthority = async () => {
+            context.signal.throwIfAborted()
+            const checked = this.options.host.authorizeSlarkImportPreview(authority)
+            if (checked.sourceProfileId !== selected.sourceProfileId
+              || checked.targetProfileId !== selected.targetProfileId) throw new HostAuthorityError('stale')
+            await Promise.resolve()
+          }
+          const base = { ...selected, operationId: p.operation_id, assertAuthority, signal: context.signal }
+          try {
+            if (frame.method === 'profile.import_prepare') {
+              const prepare = this.options.prepareProfileImport
+              if (!prepare) throw new HostAuthorityError('upgrade_required')
+              const answer = await prepare({ ...base, expectedPreviewDigest: frame.params.expected_preview_digest,
+                selectedSessionIds: frame.params.selected_session_ids,
+                selectedPluginNames: frame.params.selected_plugin_names })
+              await assertAuthority()
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { operation_id: answer.operationId, phase: answer.phase } })
+            } else if (frame.method === 'profile.import_commit') {
+              const commit = this.options.commitProfileImport
+              if (!commit) throw new HostAuthorityError('upgrade_required')
+              const answer = await commit(base)
+              await assertAuthority()
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { operation_id: answer.operationId, phase: answer.phase } })
+            } else {
+              const abort = this.options.abortProfileImport
+              if (!abort) throw new HostAuthorityError('upgrade_required')
+              const answer = await abort(base)
+              await assertAuthority()
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { operation_id: answer.operationId, phase: answer.phase } })
+            }
+          } catch (error) {
+            if (error instanceof Error && error.message === 'profile_import_inventory_changed') {
+              throw new HostAuthorityError('stale')
+            }
+            if (error instanceof Error && error.message === 'profile_import_selection_invalid') {
+              throw new HostAuthorityError('invalid_input')
+            }
+            if (error instanceof Error && error.message.startsWith('profile_import_')) {
+              throw new HostAuthorityError('profile_integrity_failed')
+            }
+            throw error
+          }
+        } else if (frame.method === 'profile.import_preview') {
+          const inspect = this.options.inspectProfileImport
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const p = frame.params
+          const authority = slarkImportAuthority(p, ownerId)
+          const selected = this.options.host.authorizeSlarkImportPreview(authority)
+          let preview: ProfileImportPreview
+          try { preview = await inspect(selected.sourceProfileId, selected.targetProfileId, context.signal) }
+          catch (error) {
+            if (error instanceof Error && error.message === 'profile_import_inventory_changed')
+              throw new HostAuthorityError('stale')
+            if (error instanceof Error && error.message === 'profile_import_schema_unsupported')
+              throw new HostAuthorityError('schema_unsupported')
+            if (error instanceof Error && error.message.startsWith('profile_import_'))
+              throw new HostAuthorityError('profile_integrity_failed')
+            throw error
+          }
+          const checked = this.options.host.authorizeSlarkImportPreview(authority)
+          if (checked.sourceProfileId !== selected.sourceProfileId || checked.targetProfileId !== selected.targetProfileId
+            || (p.expected_preview_digest !== undefined && p.expected_preview_digest !== preview.previewDigest)) {
+            throw new HostAuthorityError('stale')
+          }
+          if (p.session_offset > preview.sessions.length || p.plugin_offset > preview.plugins.length) {
+            throw new HostAuthorityError('invalid_input')
+          }
+          const sessions = preview.sessions.slice(p.session_offset, p.session_offset + 32).map(item => ({
+            id: item.source.id, created_at: item.source.createdAt,
+            ...(item.source.parentSession === undefined ? {} : { parent_session: item.source.parentSession }),
+            event_count: item.source.eventCount, source_digest: item.source.semanticDigest as HostControlSha256,
+            state: item.state,
+            ...(item.target === undefined ? {} : { target_digest: item.target.semanticDigest as HostControlSha256 }),
+          }))
+          const plugins = preview.plugins.slice(p.plugin_offset, p.plugin_offset + 32).map(item => ({
+            name: item.source.name, version: item.source.version,
+            source_digest: item.source.sourceDigest as HostControlSha256, state: item.state,
+            ...(item.target === undefined ? {} : {
+              target_version: item.target.version,
+              target_digest: item.target.sourceDigest as HostControlSha256,
+            }),
+          }))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: {
+              source_snapshot_digest: preview.sourceSnapshotDigest as HostControlSha256,
+              target_snapshot_digest: preview.targetSnapshotDigest as HostControlSha256,
+              preview_digest: preview.previewDigest as HostControlSha256,
+              session_count: preview.sessions.length, plugin_count: preview.plugins.length,
+              next_session_offset: p.session_offset + sessions.length < preview.sessions.length
+                ? p.session_offset + sessions.length : null,
+              next_plugin_offset: p.plugin_offset + plugins.length < preview.plugins.length
+                ? p.plugin_offset + plugins.length : null,
+              sessions, plugins,
+            } })
         } else if (frame.method === 'profile.ensure' || frame.method === 'profile.restore') {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.ensure') {
             if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
-            profile = await this.options.host.ensureAccountProfile({
+            const slark = frame.params.slark_expected
+            profile = slark ? await this.options.host.ensureSlarkAccountProfile({
+              accountAccessToken: frame.params.account_access_token,
+              issuer: frame.params.account_issuer, subject: frame.params.account_subject,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+              expected: {
+                slarkUserId: slark.slark_user_id,
+                environmentId: slark.environment_id,
+                profileId: slark.person_profile_id,
+                deviceId: slark.device_id,
+                deviceKeyThumbprint: slark.device_key_thumbprint,
+                loginEpoch: slark.login_epoch,
+                bindingEpoch: slark.binding_epoch,
+              },
+            }) : await this.options.host.ensureAccountProfile({
               ...(frame.params.authority_binding_scope === undefined
                 ? {} : { authorityBindingScope: frame.params.authority_binding_scope }),
               accountAccessToken: frame.params.account_access_token,
@@ -1522,19 +1740,34 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.bootstrap_local') {
-            profile = await this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId))
+            profile = await hostStepRejection(
+              () => this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId)),
+              'bootstrap_local_rejected',
+            )
           } else {
-            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-            profile = await this.options.host.restoreLocalProfile({
-              profileId: selector.profile_id as never,
-              bindingGeneration: selector.binding_generation,
-              ...profileUnlockFields(frame.params, ownerId),
-            })
+            const selector = await hostStepRejection(
+              () => verifyProfileSelector(this.options.identity, frame.params.profile_selector),
+              'restore_selector_invalid',
+            )
+            profile = await hostStepRejection(
+              () => this.options.host.restoreLocalProfile({
+                profileId: selector.profile_id as never,
+                bindingGeneration: selector.binding_generation,
+                ...profileUnlockFields(frame.params, ownerId),
+              }),
+              'restore_profile_rejected',
+            )
           }
-          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
+          const persistenceGeneration = await hostStepRejection(
+            () => this.options.profilePersistenceGeneration(profile.profileId),
+            'local_persistence_unavailable',
+          )
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+            result: await hostStepRejection(
+              () => localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+              'local_profile_result_invalid',
+            ),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
@@ -1885,14 +2118,21 @@ export class HostControlAuthority {
           let value: HostRemoteSessionJson
           if (frame.method === 'profile.remote_session') {
             const execute = this.options.remoteSession
-            if (!execute) throw new HostAuthorityError('upgrade_required')
-            value = await execute(profileId, frame.params.command, context.signal)
+            const command = frame.params.command
+            const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
+            if (!execute || (botChat && !this.options.remoteBotChatSupported)) throw new HostAuthorityError('upgrade_required')
+            value = await execute(profileId, command, context.signal)
+            if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
+              parseHostBotChatReceipt(value, command.request)
           } else {
             const execute = this.options.remoteUiRead
-            if (!execute || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
+            if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
+              || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
               throw new HostAuthorityError('upgrade_required')
             }
             value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
+            if (frame.params.endpoint === 'bot/chat')
+              parseHostBotChat(value, parseHostBotChatRequest(frame.params.payload.args))
           }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
@@ -2501,15 +2741,19 @@ export class HostControlAuthority {
               // Scan a bounded page window; only the original delivery's result may cross this boundary.
               let after = frame.params.after
               let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              // A result page always carries the validated Slark owner from its result ticket.
+              let slarkOwnerUserId = ''
               for (let scan = 0; scan < 1000; scan++) {
                 const page = await readAccountBotGroupResultPage({ ...groupInput, after })
-                if (page.state !== 'ok' || page.results.length === 0) {
-                  reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                slarkOwnerUserId = page.ownerUserId
+                if (page.reply.state !== 'ok' || page.reply.results.length === 0) {
+                  reply = page.reply.state === 'ok' ?
+                    { state: 'ok', results: [], next: frame.params.after } : page.reply
                   break
                 }
                 // The worker parser bounds an `ok` page to one valid result, and
                 // the empty page returned above; this entry is present here.
-                const result = page.results[0] as (typeof page.results)[number]
+                const result = page.reply.results[0] as (typeof page.reply.results)[number]
                 if (result.deliveryId === frame.params.command.deliveryId) {
                   reply = { state: 'ok', results: [result], next: result.seq }
                   break
@@ -2526,7 +2770,7 @@ export class HostControlAuthority {
                   account_binding_handle: account.accountBindingHandle,
                   authority_binding_version: account.authorityBindingVersion,
                   account_issuer: account.issuer, account_subject: account.subject,
-                  owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                  owner_user_id: slarkOwnerUserId, computer_id: frame.params.computer_id,
                   slark_audience: frame.params.slark_audience,
                   installation_id: this.options.identity.installationId,
                   installation_public_key: this.options.identity.installationPublicKey,
@@ -2692,10 +2936,12 @@ export class HostControlAuthority {
           ...(this.options.installGroupInputFence ? ['profile.group_input_fence'] : []),
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotChatSupported ? ['profile.remote_ui_read.bot_chat'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
@@ -2709,6 +2955,11 @@ export class HostControlAuthority {
             ? ['profile.model_claim_retry'] : []),
           ...(this.options.extensions ? ['profile.extensions'] : []),
           ...(offlineAccountRecovery ? recoveryCapabilities : []),
+          ...(this.options.inspectProfileImport ? ['profile.import_preview'] : []),
+          ...(this.options.listProfileImportStatus ? ['profile.import_status'] : []),
+          ...(this.options.prepareProfileImport ? ['profile.import_prepare'] : []),
+          ...(this.options.commitProfileImport ? ['profile.import_commit'] : []),
+          ...(this.options.abortProfileImport ? ['profile.import_abort'] : []),
           ...(this.options.recoveryMaterialsPersistenceGeneration
             ? ['profile.recovery_materials.describe', 'profile.recovery_materials.validate'] : []),
           ...(migrationExport ? [
@@ -2857,6 +3108,10 @@ function botGroupClientStop(input: { readonly computerId: string
 
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
+  /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
+  readonly remoteBotChatSupported = true
+  /** This SDK can encode the existing Bot identity/current-chat read. */
+  readonly remoteUiBotChatSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
   /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
@@ -3217,6 +3472,105 @@ export class UnixHostClient {
   }
 
   /**
+   * Preview one bounded page of an old Account import into the verified Slark Profile.
+   * @param input - Current authority, source proof, and page cursor.
+   * @param signal - Optional cancellation signal.
+   * @returns One digest-bound preview page.
+   */
+  async previewProfileImport(input: Omit<ProfileImportPreviewRequest['params'],
+    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'>,
+  signal?: AbortSignal): Promise<ProfileImportPreviewResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.import_preview' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileImportPreviewRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.import_preview',
+      params: { ...this.auth(), ...input },
+    }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Rediscover durable import phases after the Desktop window or Main restarts.
+   * @param input - Current authority, source proof, and status cursor.
+   * @param signal - Optional cancellation signal.
+   * @returns One page of durable operation phases.
+   */
+  async listProfileImportStatus(input: Omit<ProfileImportStatusRequest['params'],
+    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'>,
+  signal?: AbortSignal): Promise<ProfileImportStatusResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.import_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileImportStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.import_status',
+      params: { ...this.auth(), ...input },
+    }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Stage a selected import under the current Host authority.
+   * @param input - Source proof, preview digest, selection, and operation ID.
+   * @param signal - Optional cancellation signal.
+   * @returns Durable staged operation ID and phase.
+   */
+  async prepareProfileImport(input: Omit<ProfileImportPrepareRequest['params'],
+    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'>,
+  signal?: AbortSignal): Promise<ProfileImportPrepareResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.import_prepare' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileImportPrepareRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.import_prepare', params: { ...this.auth(), ...input } }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Commit a staged import while source and target authority still match.
+   * @param input - Source proof and staged operation ID.
+   * @param signal - Optional cancellation signal.
+   * @returns Durable committed operation ID and phase.
+   */
+  async commitProfileImport(input: Omit<ProfileImportCommitRequest['params'],
+    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'>,
+  signal?: AbortSignal): Promise<ProfileImportCommitResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.import_commit' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileImportCommitRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.import_commit', params: { ...this.auth(), ...input } }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Abort a staged import while source and target authority still match.
+   * @param input - Source proof and staged operation ID.
+   * @param signal - Optional cancellation signal.
+   * @returns Durable aborted operation ID and phase.
+   */
+  async abortProfileImport(input: Omit<ProfileImportAbortRequest['params'],
+    'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'>,
+  signal?: AbortSignal): Promise<ProfileImportAbortResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.import_abort' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileImportAbortRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.import_abort', params: { ...this.auth(), ...input } }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
    * Open one recovered Account Profile through an offline-domain selector.
    * @param input - offline selector and optional cancellation.
    * @returns offline-scoped generation-fenced view lease.
@@ -3261,11 +3615,51 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.accountBindingParams(input),
-        account_access_token: input.accountAccessToken,
-        account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
-        profile_unlock_material: input.unlockMaterial,
+        ...this.accountTokenParams(input),
         ...(input.authorityBindingScope === undefined ? {} : { authority_binding_scope: input.authorityBindingScope as never }),
+      },
+    }
+    return this.callReadyProfile(request, input.signal)
+  }
+
+  /**
+   * Require the Slark token verifier and a Main-selected current identity.
+   * @param input - Scoped binding, token, and current Slark claims.
+   * @returns Ready Profile ID and local selector.
+   */
+  async ensureSlarkAccountProfile(input: AccountBindingInput & {
+    readonly issuer: string
+    readonly subject: string
+    readonly accountAccessToken: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly expected: {
+      readonly slarkUserId: string
+      readonly environmentId: string
+      readonly profileId: string
+      readonly deviceId: string
+      readonly deviceKeyThumbprint: string
+      readonly loginEpoch: number
+      readonly bindingEpoch: number
+    }
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    if (!this.inspection.capabilities.includes('profile.ensure_slark_federated' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileEnsureRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
+      params: {
+        ...this.accountTokenParams(input),
+        slark_expected: {
+          slark_user_id: input.expected.slarkUserId,
+          environment_id: input.expected.environmentId,
+          person_profile_id: input.expected.profileId,
+          device_id: input.expected.deviceId,
+          device_key_thumbprint: input.expected.deviceKeyThumbprint,
+          login_epoch: input.expected.loginEpoch,
+          binding_epoch: input.expected.bindingEpoch,
+        },
       },
     }
     return this.callReadyProfile(request, input.signal)
@@ -4824,6 +5218,9 @@ export class UnixHostClient {
     readonly command: HostRemoteSessionCommand
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
+    if ((input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_chat' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
@@ -4832,7 +5229,10 @@ export class UnixHostClient {
         ...this.leaseCommandParams(input),
       },
     }
-    return this.remoteProfileValue(request, input.signal)
+    const value = await this.remoteProfileValue(request, input.signal)
+    if (input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      parseHostBotChatReceipt(value, input.command.request)
+    return value
   }
 
   /**
@@ -4849,6 +5249,8 @@ export class UnixHostClient {
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
     if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)
+      || (input.endpoint === 'bot/chat'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_chat' as HostControlCapability))
       || (input.endpoint === 'asset/read-gzip-chunk'
         && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
       throw new HostAuthorityError('upgrade_required')
@@ -5421,6 +5823,20 @@ export class UnixHostClient {
     }
   }
 
+  private accountTokenParams(input: AccountBindingInput & Readonly<{
+    issuer: string
+    subject: string
+    accountAccessToken: string
+    keyHandle: string
+    unlockMaterial: string
+  }>) {
+    return {
+      ...this.accountBindingParams(input), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
+    }
+  }
+
   private leaseCommandParams<T>(input: {
     readonly viewLeaseId: string
     readonly leaseGeneration: number
@@ -5583,6 +5999,8 @@ export class UnixHostClient {
       | ProfileSkillHubClockV2Request
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
+      | ProfileImportPreviewRequest | ProfileImportStatusRequest
+      | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest

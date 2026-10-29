@@ -138,6 +138,7 @@ interface RetainedSession {
 }
 
 class FakeSessions implements ISessions {
+  registerPromptRoute(): () => void { throw new Error('test sessions: prompt route is not stubbed') }
   readonly discussionRequestId = collaborationDiscussionRequestId
   readonly list: MutableSource<SessionListState>
   readonly create: ReturnType<typeof vi.fn<ISessions['create']>>
@@ -274,6 +275,7 @@ class FakeDirectoryPicker {
 }
 
 interface BenchOptions {
+  readonly restoreInitial?: boolean
   readonly conversation?: boolean
   readonly configureWorkspaces?: (workspaces: FakeWorkspaces) => void
   readonly workspaces?: WorkspaceSnapshot
@@ -313,6 +315,7 @@ function bench(options: BenchOptions = {}) {
     sessions,
     view.actions,
     notify,
+    options.restoreInitial,
   )
   return { ctx, directoryPicker, sessions, uiWorkspace, workspaces, layout, selectPanel, view, notify, requestDraftInitialization }
 }
@@ -1240,6 +1243,22 @@ describe('UiWorkspaceService', () => {
     const b = bench({ sessions: sessionState(), workspaces: workspaceState() })
     b.workspaces.list.set(workspaceState([workspace('a')]))
     expect(b.sessions.create).not.toHaveBeenCalled()
+  })
+
+  it('leaves remote startup to its home owner and still allows explicit Session navigation', () => {
+    persistSelection({ sessionId: sid('saved') })
+    const b = bench({
+      restoreInitial: false,
+      sessions: sessionState([summary('saved')]),
+      workspaces: workspaceState([workspace('a', [sid('saved')])]),
+    })
+    expect(b.sessions.create).not.toHaveBeenCalled()
+    expect(b.sessions.retain).not.toHaveBeenCalled()
+    b.workspaces.list.set(workspaceState([workspace('a', [sid('saved')])]))
+    expect(b.sessions.create).not.toHaveBeenCalled()
+    expect(b.sessions.retain).not.toHaveBeenCalled()
+    b.uiWorkspace.openSession(sid('chosen'))
+    expect(b.sessions.retain).toHaveBeenCalledExactlyOnceWith(sid('chosen'), { source: 'mainView' })
   })
 
   it('clears a selected blank archived by a catalog update without reconnecting', () => {

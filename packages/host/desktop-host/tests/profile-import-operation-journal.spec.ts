@@ -1,0 +1,240 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
+
+const faults = vi.hoisted(() => ({ manyEntries: false, missingRoot: false, linkError: false, unlinkError: false }))
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...actual,
+    readdir: async (...args: Parameters<typeof actual.readdir>) => faults.manyEntries
+      ? Array.from({ length: 100_001 }, () => 'invalid') : actual.readdir(...args),
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      if (faults.missingRoot && String(args[0]).endsWith('/profile-import-operations')) {
+        throw Object.assign(new Error('journal root disappeared'), { code: 'ENOENT' })
+      }
+      return actual.lstat(...args)
+    },
+    link: async (...args: Parameters<typeof actual.link>) => {
+      if (faults.linkError) throw Object.assign(new Error('link failed'), { code: 'EIO' })
+      return actual.link(...args)
+    },
+    unlink: async (...args: Parameters<typeof actual.unlink>) => {
+      if (faults.unlinkError && String(args[0]).endsWith('.tmp')) {
+        throw Object.assign(new Error('temporary cleanup failed'), { code: 'EACCES' })
+      }
+      return actual.unlink(...args)
+    },
+  }
+})
+
+const uid = process.getuid?.() ?? 0
+const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-import-operation-'))
+  onTestFinished(() => rm(root, { recursive: true, force: true }))
+  const directory = join(root, 'control', 'profile-import-operations')
+  await mkdir(join(root, 'control'), { mode: 0o700 })
+  const journal = new FileProfileImportOperationJournal(directory, uid)
+  const sourceSnapshotDigest = 'a'.repeat(64), targetSnapshotDigest = 'b'.repeat(64)
+  const input = {
+    operationId: randomUUID(), sourceProfileId: randomUUID(), targetProfileId: randomUUID(),
+    sourceSnapshotDigest, targetSnapshotDigest,
+    previewDigest: digest([sourceSnapshotDigest, targetSnapshotDigest]),
+    selectedSessionIds: ['session-one'], selectedPluginNames: ['dsh-duet'],
+    targetGeneration: 2, stagedGeneration: 3,
+  }
+  return { root, directory, journal, input }
+}
+
+describe.skipIf(process.platform === 'win32')('Profile import operation journal', () => {
+  it('rejects an oversized directory without reading an operation', async () => {
+    const { journal, input } = await fixture()
+    await journal.create(input)
+    faults.manyEntries = true
+    onTestFinished(() => { faults.manyEntries = false })
+    await expect(journal.listForPair(input.sourceProfileId, input.targetProfileId))
+      .rejects.toThrow('profile_import_journal_too_large')
+  })
+
+  it('ignores a filename with an invalid operation UUID', async () => {
+    const { directory, journal, input } = await fixture()
+    const record = await journal.create(input)
+    await writeFile(join(directory, '00000000-0000-0000-0000-000000000000.1.json'), '{}', { mode: 0o600 })
+    expect(await journal.listForPair(input.sourceProfileId, input.targetProfileId)).toEqual([record])
+  })
+
+  it('rejects a journal root that disappears after creation', async () => {
+    const { journal, input } = await fixture()
+    faults.missingRoot = true
+    onTestFinished(() => { faults.missingRoot = false })
+    await expect(journal.create(input)).rejects.toThrow('profile_import_journal_unsafe')
+  })
+
+  it('propagates a failed immutable link and a failed temporary cleanup', async () => {
+    const { journal, input } = await fixture()
+    faults.linkError = true
+    onTestFinished(() => { faults.linkError = false; faults.unlinkError = false })
+    await expect(journal.create(input)).rejects.toThrow('link failed')
+    faults.unlinkError = true
+    await expect(journal.create({ ...input, operationId: randomUUID() }))
+      .rejects.toThrow('temporary cleanup failed')
+  })
+
+  it('rejects invalid authority and a record moved under another operation ID', async () => {
+    const { directory, journal, input } = await fixture()
+    expect(() => new FileProfileImportOperationJournal('relative', uid))
+      .toThrow('profile_import_journal_invalid')
+    expect(() => new FileProfileImportOperationJournal(directory, -1))
+      .toThrow('profile_import_journal_invalid')
+    await expect(journal.load('invalid')).rejects.toThrow('profile_import_journal_invalid')
+    await expect(journal.listForPair('invalid', input.targetProfileId))
+      .rejects.toThrow('profile_import_journal_invalid')
+    const prepared = await journal.create(input)
+    expect(await journal.load(randomUUID())).toBeNull()
+    await writeFile(join(directory, `${input.operationId}.1.json`),
+      `${JSON.stringify({ ...prepared, operationId: randomUUID() })}\n`, { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    await writeFile(join(directory, `${input.operationId}.1.json`),
+      `${JSON.stringify({ ...prepared, revision: 2 })}\n`, { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+  })
+
+  it('rejects an oversized intent before leaving an operation record', async () => {
+    const { directory, journal, input } = await fixture()
+    const selectedSessionIds = Array.from({ length: 10_000 }, (_, index) =>
+      `session-${String(index).padStart(5, '0')}-${'x'.repeat(230)}`)
+    await expect(journal.create({ ...input, selectedSessionIds }))
+      .rejects.toThrow('profile_import_journal_too_large')
+    expect(await journal.load(input.operationId)).toBeNull()
+    expect(await readdir(directory)).toEqual([])
+  })
+
+  it('refuses a journal directory opened to other users', async () => {
+    const { directory, journal, input } = await fixture()
+    await journal.create(input)
+    await chmod(directory, 0o755)
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_unsafe')
+    await expect(journal.create({ ...input, operationId: randomUUID() }))
+      .rejects.toThrow('profile_import_journal_unsafe')
+  })
+
+  it('records intent before mutation and advances through strict durable versions', async () => {
+    const { directory, journal, input } = await fixture()
+    expect(await journal.load(input.operationId)).toBeNull()
+    await expect(access(directory)).rejects.toMatchObject({ code: 'ENOENT' })
+    const prepared = await journal.create(input)
+    expect(prepared.phase).toBe('prepared')
+    expect(await journal.load(input.operationId)).toEqual(prepared)
+    await expect(journal.create(input)).rejects.toThrow('profile_import_journal_stale')
+    const fenced = await journal.advance(prepared, 'fenced')
+    const staged = await journal.advance(fenced, 'staged')
+    await expect(journal.advance(prepared, 'aborted')).rejects.toThrow('profile_import_journal_stale')
+    const committing = await journal.advance(staged, 'committing')
+    expect((await new FileProfileImportOperationJournal(directory, uid).load(input.operationId))?.phase)
+      .toBe('committing')
+    await expect(journal.advance(committing, 'aborted')).rejects.toThrow('profile_import_journal_state')
+    const committed = await journal.advance(committing, 'committed')
+    expect(committed.revision).toBe(5)
+    expect(await readdir(directory)).toEqual([1, 2, 3, 4, 5].map(version => `${input.operationId}.${version}.json`))
+    expect(JSON.stringify(committed)).not.toContain('credential')
+    expect(await new FileProfileImportOperationJournal(directory, uid)
+      .listForPair(input.sourceProfileId, input.targetProfileId)).toEqual([committed])
+    expect(await journal.listForPair(input.targetProfileId, input.sourceProfileId)).toEqual([])
+  })
+
+  it('rediscovers only operations belonging to the authorized Profile pair', async () => {
+    const { journal, input } = await fixture()
+    expect(await journal.listForPair(input.sourceProfileId, input.targetProfileId)).toEqual([])
+    const first = await journal.create(input)
+    const second = await journal.create({ ...input, operationId: randomUUID() })
+    await journal.create({ ...input, operationId: randomUUID(), targetProfileId: randomUUID() })
+    expect(await journal.listForPair(input.sourceProfileId, input.targetProfileId))
+      .toEqual([first, second].sort((left, right) => left.operationId.localeCompare(right.operationId)))
+    await expect(journal.listForPair(input.sourceProfileId, input.sourceProfileId))
+      .rejects.toThrow('profile_import_journal_invalid')
+  })
+
+  it('rejects changed selection, invalid snapshots, and unsupported transitions', async () => {
+    const { journal, input } = await fixture()
+    await expect(journal.create({ ...input, previewDigest: '0'.repeat(64) }))
+      .rejects.toThrow('profile_import_journal_invalid')
+    await expect(journal.create({ ...input, selectedSessionIds: ['one', 'one'] }))
+      .rejects.toThrow('profile_import_journal_invalid')
+    const prepared = await journal.create(input)
+    await expect(journal.advance(prepared, 'committed')).rejects.toThrow('profile_import_journal_state')
+    await expect(journal.advance({ ...prepared, selectedSessionIds: ['other'] }, 'fenced'))
+      .rejects.toThrow('profile_import_journal_stale')
+  })
+
+  it('permits a dedicated plugin abort from committing while preserving the session-only rule', async () => {
+    const { journal, input } = await fixture()
+    const pluginPrepared = await journal.create(input)
+    const pluginFenced = await journal.advance(pluginPrepared, 'fenced')
+    const pluginStaged = await journal.advance(pluginFenced, 'staged')
+    const pluginCommitting = await journal.advance(pluginStaged, 'committing')
+    expect((await journal.abortPluginCommitting(pluginCommitting)).phase).toBe('aborted')
+    await expect(journal.abortPluginCommitting(pluginCommitting)).rejects.toThrow('profile_import_journal_stale')
+    const other = await fixture()
+    const sessionPrepared = await other.journal.create({ ...other.input, selectedPluginNames: [] })
+    const sessionFenced = await other.journal.advance(sessionPrepared, 'fenced')
+    const sessionStaged = await other.journal.advance(sessionFenced, 'staged')
+    const sessionCommitting = await other.journal.advance(sessionStaged, 'committing')
+    await expect(other.journal.abortPluginCommitting(sessionCommitting))
+      .rejects.toThrow('profile_import_journal_state')
+  })
+
+  it('fails closed for a corrupt highest version and an unsafe journal file', async () => {
+    const { directory, journal, input } = await fixture()
+    const prepared = await journal.create(input)
+    const fenced = await journal.advance(prepared, 'fenced')
+    const latest = join(directory, `${input.operationId}.${fenced.revision}.json`)
+    await writeFile(latest, '{corrupt', { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    await rm(latest)
+    const replacement = join(directory, 'replacement.json')
+    await writeFile(replacement, `${JSON.stringify(fenced)}\n`, { mode: 0o600 })
+    await symlink(replacement, latest)
+    await expect(journal.load(input.operationId)).rejects.toThrow()
+    expect(JSON.parse(await readFile(join(directory, `${input.operationId}.1.json`), 'utf8')))
+      .toEqual(prepared)
+  })
+
+  it('rejects a non-record version and inaccessible journal storage', async () => {
+    const { root, directory, journal, input } = await fixture()
+    await journal.create(input)
+    await writeFile(join(directory, `${input.operationId}.1.json`), 'null\n', { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    const control = join(root, 'control')
+    await chmod(control, 0o400)
+    try { await expect(journal.load(input.operationId)).rejects.toThrow() }
+    finally { await chmod(control, 0o700) }
+  })
+
+  it('does not create an intent under a read-only journal parent', async () => {
+    const { root, journal, input } = await fixture()
+    const control = join(root, 'control')
+    await chmod(control, 0o500)
+    try { await expect(journal.create(input)).rejects.toThrow() }
+    finally { await chmod(control, 0o700) }
+    expect(await journal.load(input.operationId)).toBeNull()
+  })
+
+  it('rejects a malformed newer version and a redirected parent directory', async () => {
+    const { root, directory, journal, input } = await fixture()
+    await journal.create(input)
+    const malformed = join(directory, `${input.operationId}.99999999999999999999.json`)
+    await writeFile(malformed, '{}', { mode: 0o600 })
+    await expect(journal.load(input.operationId)).rejects.toThrow('profile_import_journal_invalid')
+    await rm(malformed)
+    const alias = join(root, 'alias')
+    await symlink(join(root, 'control'), alias)
+    const redirected = new FileProfileImportOperationJournal(join(alias, 'profile-import-operations'), uid)
+    await expect(redirected.load(input.operationId)).rejects.toThrow('profile_import_journal_unsafe')
+  })
+})

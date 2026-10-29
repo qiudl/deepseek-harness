@@ -237,7 +237,7 @@ export function existingProfilePatch(
 }
 
 /** Exact released layout: only the settings owner moved to config-editor in rc.1. */
-function releasedSettingsProfilePatch(
+export function releasedSettingsProfilePatch(
   profileRoot: string,
   persistence: { readonly root: string; readonly compression: 'none' },
   ownerPaths: AppliedMigrationOwnerState,

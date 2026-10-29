@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
+import { parseHostCollaborationRegistrationChallenge, parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
   parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
@@ -36,16 +36,17 @@ const accountId = '30000000-0000-4000-8000-000000000003'
 
 afterEach(() => { vi.restoreAllMocks() })
 
-function accountToken(key: KeyObject, now: number): string {
+function accountToken(key: KeyObject, now: number, tokenType = 'dsh-access+jwt',
+  claims: Record<string, unknown> = {}): string {
   const issuedAt = Math.floor(now / 1_000)
   const header = Buffer.from(JSON.stringify({
-    alg: 'ES256', kid: 'identity-2026-09', typ: 'dsh-access+jwt',
+    alg: 'ES256', kid: 'identity-2026-09', typ: tokenType,
   })).toString('base64url')
   const payload = Buffer.from(JSON.stringify({
     ag: 3, aud: 'dsh-host', exp: issuedAt + 600, iat: issuedAt, iss: issuer,
     jti: '50000000-0000-4000-8000-000000000005', kg: 7, nbf: issuedAt,
     sg: 5, sid: '40000000-0000-4000-8000-000000000004', sub: accountId,
-    typ: 'dsh-access+jwt',
+    typ: tokenType, ...claims,
   })).toString('base64url')
   const input = `${header}.${payload}`
   return `${input}.${sign('sha256', Buffer.from(input, 'ascii'), {
@@ -246,6 +247,18 @@ describe('Windows Desktop Host startup', () => {
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
     await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
+    expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    const registrationChallenge = parseHostCollaborationRegistrationChallenge({
+      registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+      expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+      account_issuer: issuer, account_subject: accountId,
+    })
+    await expect(client.attestCollaborationRegistration({ ...account, challenge: registrationChallenge }))
+      .resolves.toMatchObject({ challenge: registrationChallenge,
+        installation_id: state.options.installationId, host_instance_id: state.options.hostInstanceId })
+    await expect(client.attestCollaborationRegistration({
+      ...account, authorityBindingVersion: 2, challenge: registrationChallenge,
+    })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.inspectWorkspaceModelSelection(selection))
       .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
     expect(await client.collaborationAnalysis({ ...account, command: { action: 'root_feedback', operation: { action: 'read' } } })).toEqual({ kind: 'root_feedback', record: null })
@@ -476,6 +489,40 @@ describe('Windows Desktop Host startup', () => {
     await application.close()
   })
 
+  it('accepts the Slark scoped token only for its declared Windows device binding', async () => {
+    const state = fixture()
+    const now = 1_780_000_000_000
+    const application = await startWindowsDesktopHostApplication(state.options,
+      { now: () => now }, state.dependencies)
+    try {
+      const expected = { slarkUserId: 'slark-user',
+        environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        profileId: '11111111-1111-4111-8111-111111111111',
+        deviceId: '33333333-3333-4333-8333-333333333333',
+        deviceKeyThumbprint: Buffer.alloc(32, 4).toString('base64url'),
+        loginEpoch: 2, bindingEpoch: 3 }
+      const bindingScope = createHash('sha256').update(JSON.stringify([
+        'slark-dsh-binding-scope-v1', expected.environmentId, expected.slarkUserId,
+      ])).digest('hex')
+      const token = accountToken(state.accountPrivateKey, now, 'dsh-slark-access+jwt', {
+        slark_user_id: expected.slarkUserId, environment_id: expected.environmentId,
+        profile_id: expected.profileId, device_id: expected.deviceId,
+        device_key_thumbprint: expected.deviceKeyThumbprint, binding_scope: bindingScope,
+        login_epoch: expected.loginEpoch, binding_epoch: expected.bindingEpoch,
+        operation_id: '70000000-0000-4000-8000-000000000007',
+      })
+      const base = { issuer, subject: accountId, authorityEnvironmentId: expected.environmentId,
+        accountBindingHandle: `slark:${expected.profileId}`, authorityBindingVersion: 3,
+        accountAccessToken: token, keyHandle: 'windows-credential:slark', unlockMaterial,
+        ownerId: 'slark-owner' }
+      const ready = await application.host.ensureSlarkAccountProfile({ ...base, expected })
+      expect(typeof ready.profileId).toBe('string')
+      await expect(application.host.ensureSlarkAccountProfile({ ...base,
+        expected: { ...expected, deviceId: '44444444-4444-4444-8444-444444444444' } }))
+        .rejects.toThrow()
+    } finally { await application.close() }
+  })
+
   it('uses platform defaults and forwards an optional failure observer', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
     vi.spyOn(process, 'arch', 'get').mockReturnValue('x64')
@@ -679,4 +726,23 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   expect(noCatalogOptions.bundledPlugin).toBeUndefined()
   await noCatalogOptions.install(profile, 'fixture@1.0.0', context)
   expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('archivePath')
+})
+
+it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalizer', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  const canonicalize = (token: string): string =>
+    ({ LA: 'S-1-5-21-1-2-3-500', SY: 'S-1-5-18', BA: 'S-1-5-32-544' })[token] ?? token
+  const decoded = decodeEvidenceSddl(
+    'O:LAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)',
+    canonicalize,
+  )
+  expect(decoded.ownerSid).toBe('S-1-5-21-1-2-3-500')
+  expect(decoded.daclProtected).toBe(true)
+  expect(decoded.access.map(entry => entry.sid)).toEqual([
+    'S-1-5-18',
+    'S-1-5-32-544',
+    'S-1-5-21-1-2-3-500',
+  ])
+  const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
+  expect(passthrough.ownerSid).toBe('LA')
 })

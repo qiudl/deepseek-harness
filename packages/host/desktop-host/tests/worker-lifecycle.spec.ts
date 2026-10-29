@@ -5,6 +5,22 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('closes a worker when profile authority changes during startup', async () => {
+  let release!: () => void
+  const done = new Promise<void>((resolve) => { release = resolve })
+  const closeNotifications = vi.fn()
+  const abort = vi.fn(() => { release() })
+  let checks = 0
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications, abort, done }),
+    () => { if (++checks === 3) throw Error('profile fenced') })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await expect(workers.ensure(input)).rejects.toThrow('profile fenced')
+  expect(closeNotifications).toHaveBeenCalledOnce()
+  expect(abort).toHaveBeenCalledOnce()
+  await expect(workers.activate(input.profileId)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
 it('reads the exact original worker reference grant and refuses changed digests, cancellation and missing workers', async () => {
   const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
     session_id: 'session', source_message_id: 'message', source_revision: '1' })

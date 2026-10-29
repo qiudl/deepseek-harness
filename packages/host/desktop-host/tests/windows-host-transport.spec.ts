@@ -125,6 +125,7 @@ function fixture() {
       path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
       sha256: '3'.repeat(64),
     },
+    diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
     maxCancelAttempts: 4,
     waitForCancelRetry,
     startupDeadline,

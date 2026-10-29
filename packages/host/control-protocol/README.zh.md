@@ -32,6 +32,10 @@ kind: "package-reference"
 - capability 是排序、去重的点分 token，且必须包含 `host.inspect`；未协商方法显式拒绝。
 - 错误只暴露稳定 code、是否可重试和 correlation id；异常文本和本地路径不得进入帧。
 
+`profile.import_preview` 只读分页比较由 Main 选定的旧 Account Profile 与当前已验证的 Slark Profile。请求携带两边 issuer/subject、当前绑定、旧 Profile 钥匙句柄和解锁材料、偏移量及可选的预览摘要。Host 在读取前后核对两边 Profile 身份与旧钥匙证明。每页最多返回 32 条会话和 32 条插件记录，以及快照摘要与总数；结果不含事件正文、凭据、路径或插件包来源。后续页必须固定同一预览摘要。此方法不提交导入。
+
+`profile.import_prepare` 接受 Main 明确选中的新会话/插件、预览摘要和稳定操作 ID；`profile.import_commit` 与 `profile.import_abort` 用同一操作 ID 完成或中止。三个命令每次都携带当前 Slark 绑定及旧 Profile 解锁证明，Host 执行前后重验授权。`profile.import_status` 可在回执丢失后查询持久阶段；`committing` 不能当作成功。旧 Host 未声明能力时，Main 必须保留只读预览。
+
 协商后的 `profile.extensions` 方法携带 Main 持有的租约，以及清单、准备、提交、状态或取消命令。准备载荷上限为 32,768 个 UTF-8 字节；结果仅包含计划、有界元数据或持久回执状态。插件继续执行的操作类型必须为字面字符串 `install`、`update` 或 `remove`；数组和对象直接拒绝，不做强制转换。种类支持由 Host 执行器决定，能够解析某种类不代表安装能力可用。 技能清单可包含布尔字段 `skill_archives`；缺失时调用方不能认定支持资源包。资源包计划在同一载荷上限内携带 URL 和摘要元数据，不携带 ZIP 字节。
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。
@@ -41,6 +45,10 @@ kind: "package-reference"
 `profile.remote_ui_read` 将启动、资源、Session 和六种精确的启动元数据读取绑定到同一有效视图租约。`cotTranslation/limits` 读取翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
 原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
+
+`profile.remote_ui_read.bot_chat` 单独发布固定的 `bot/chat` 读取能力。精确参数 `{ botId: string | null }` 选择已有 Bot 或团队的第一个 Main Bot。响应仅包含团队 revision、默认 Bot 身份，以及所选 Bot 的公开身份和当前私聊 Session ID；提供者不可用与 Bot 不存在保持不同语义。读取不初始化团队、不创建 Session，也不授予 prompt 权限。消费方同时要求已签名的 Host capability 和本地 SDK 的 `remoteUiBotChatSupported` 标志。
+
+`profile.remote_session.bot_chat` 单独发布 `bot.chat.send` 和 `bot.chat.receipt`。二者将已有 Bot、预期私聊分段、稳定 submission UUID 与至多 16 KiB 的规范化文本绑定。发送持有既有 Session 控制权并调用显式启用的 Bot 提供者，保留能力准备与 prompt 语义。回执与原 Session 日志对应；unobserved 不代表可安全重试。提供者缺失仍返回 null。消费方同时要求已签名 capability 和 SDK 的 remoteBotChatSupported 标志；旧或自定义 worker 不隐式继承支持。
 
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 

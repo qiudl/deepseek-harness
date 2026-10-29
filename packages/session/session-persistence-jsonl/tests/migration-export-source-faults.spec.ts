@@ -109,6 +109,9 @@ describe('migration export source filesystem faults', () => {
     fsFaults.changeFinalLog = true
     await expect(fixture.source.listSnapshots()).rejects.toThrow(/source_changed/u)
     expect(fsFaults.logChecks).toBe(2)
+    fsFaults.logChecks = 0
+    await expect(fixture.source.listImportInventory())
+      .rejects.toThrow('profile_import_inventory_changed')
   })
 
   it('rejects a complete JSON header without its required log newline', async () => {
@@ -133,5 +136,7 @@ describe('migration export source filesystem faults', () => {
     const fixture = await sourceFixture(true)
     zstdFaults.tooLarge = true
     await expect(fixture.source.listSnapshots()).rejects.toThrow(/source_too_large/u)
+    await expect(fixture.source.listImportInventory())
+      .rejects.toThrow('profile_import_inventory_invalid')
   })
 })

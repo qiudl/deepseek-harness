@@ -379,6 +379,10 @@ describe('dsh web Profile worker', () => {
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
     await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_DELIVERY_TOKEN: 'C'.repeat(43) } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.createImportCandidate(spec(root), -1))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(factory.createImportCandidate(spec(root), 1.5))
+      .rejects.toMatchObject({ code: 'invalid_input' })
   })
   it('rejects relative launch paths and non-ready or oversized child output', async () => {
     expect(() => new DshWebProfileWorkerFactory({

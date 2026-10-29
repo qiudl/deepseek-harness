@@ -34,7 +34,7 @@ type AccountBotGroupInput = {
 export function accountBindingIdentity(input: Pick<AccountBotGroupInput,
   'account' | 'computerId' | 'installationId' | 'slarkAudience'>) {
   return {
-    ownerUserId: input.account.ownerId, computerId: input.computerId,
+    computerId: input.computerId,
     accountIssuer: input.account.issuer, accountSubject: input.account.subject,
     environmentId: input.account.authorityEnvironmentId,
     accountBindingHandle: input.account.accountBindingHandle,
@@ -86,12 +86,12 @@ async function authorizeDelivery(input: AccountBotGroupInput,
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId)
     throw new HostAuthorityError('stale')
-  return profileId
+  return { profileId, ownerUserId: claim.ownerUserId }
 }
 
 /** Accept one Bot group message only after Account and live Slark authority agree. */
 export async function deliverAccountBotGroup(input: AccountBotGroupInput): Promise<HostBotGroupResponse> {
-  const profileId = await authorizeDelivery(input)
+  const { profileId } = await authorizeDelivery(input)
   const { command } = input
   let result: HostBotGroupResponse
   try {
@@ -120,10 +120,10 @@ export async function deliverAccountBotGroup(input: AccountBotGroupInput): Promi
 /** The result reader confirms result-only Slark authority before exposing Bot output. */
 export async function readAccountBotGroupResultPage(input: AccountBotGroupInput & {
   after: number
-}): Promise<HostBotGroupResponse> {
+}): Promise<{ reply: HostBotGroupResponse; ownerUserId: string }> {
   if (!Number.isSafeInteger(input.after) || input.after < 0)
     throw new HostAuthorityError('invalid_input')
-  const profileId = await authorizeDelivery(input, 'result')
+  const { profileId, ownerUserId } = await authorizeDelivery(input, 'result')
   const query: HostBotGroupCommand = { operation: 'result_page', groupId: input.command.groupId,
     botId: input.command.botId, memberCycle: input.command.memberCycle,
     after: input.after, limit: 1 }
@@ -132,7 +132,7 @@ export async function readAccountBotGroupResultPage(input: AccountBotGroupInput 
   input.host.authorizeCollaborationRegistration(input.account)
   if (input.host.authorizeAccountModelText(input.account) !== profileId ||
       !matchesHostBotGroupResponse(result, query)) throw new HostAuthorityError('stale')
-  return result
+  return { reply: result, ownerUserId }
 }
 
 /** Clear only the result whose Slark receipt was recorded by the caller. */
@@ -141,7 +141,7 @@ export async function acknowledgeAccountBotGroupResult(input: AccountBotGroupInp
 }): Promise<HostBotGroupResponse> {
   if (input.resultId !== `${input.command.deliveryId}:final`)
     throw new HostAuthorityError('invalid_input')
-  const profileId = await authorizeDelivery(input, 'result-ack')
+  const { profileId } = await authorizeDelivery(input, 'result-ack')
   const command: HostBotGroupCommand = { operation: 'ack_result',
     groupId: input.command.groupId, botId: input.command.botId,
     memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
