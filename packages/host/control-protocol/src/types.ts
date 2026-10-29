@@ -539,6 +539,81 @@ export interface MigrationExportReadResult {
   }
 }
 
+/** REQ-20261021-0013: signed, read-only memory operation in the current Account Profile. */
+export interface ProfileMemoryQueryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.memory_query'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly owner_user_id: string
+    readonly computer_id: string
+    readonly command: { readonly action: 'warm' } | {
+      readonly action: 'search'
+      readonly directive: unknown
+      readonly query: string
+      readonly limit: number
+    } | {
+      readonly action: 'evidence_chunk'
+      readonly directive: unknown
+      readonly source_ref: HostControlSha256
+      readonly offset: number
+    }
+  }
+}
+
+/** Account and Profile attribution for one redacted Session record. */
+export interface ProfileMemorySource {
+  readonly ownerUserId: string
+  readonly installationId: string
+  readonly profileId: string
+  readonly sessionId: string
+  readonly formatVersion: number
+}
+
+/** Stable reference to one projected Session event and source revision. */
+export interface ProfileMemoryEvidenceIdentity {
+  readonly sourceRef: HostControlSha256
+  readonly sourceVersion: HostControlSha256
+  readonly eventSeq: number
+  readonly kind: 'user' | 'assistant'
+  readonly source: ProfileMemorySource
+}
+
+/** Redacted text is capped to one 8 KiB fragment in a Host control frame. */
+export interface ProfileMemoryQueryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.memory_query'
+  readonly result: {
+    readonly action: 'warm'
+    readonly state: 'ready'
+  } | {
+    readonly action: 'search'
+    readonly generation: number
+    readonly items: readonly (ProfileMemoryEvidenceIdentity & { readonly snippet: string })[]
+  } | {
+    readonly action: 'evidence_chunk'
+    readonly state: 'missing'
+  } | {
+    readonly action: 'evidence_chunk'
+    readonly state: 'ready'
+    readonly chunk: ProfileMemoryEvidenceIdentity & {
+      readonly offset: number
+      readonly totalBytes: number
+      readonly textDigest: HostControlSha256
+      readonly bytesBase64url: string
+      readonly nextOffset: number | null
+    }
+  }
+}
+
 /** Sanitized failure response. */
 export interface HostControlErrorFrame {
   readonly version: 1
@@ -554,6 +629,7 @@ export interface HostControlErrorFrame {
 
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileMemoryQueryRequest | ProfileMemoryQueryResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest

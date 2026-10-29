@@ -34,6 +34,8 @@ export type {
   HostProfileId,
   HostViewLeaseId,
   HostViewActivationHandle,
+  ProfileMemoryQueryRequest, ProfileMemoryQueryResult,
+  ProfileMemorySource, ProfileMemoryEvidenceIdentity,
   HostInspectRequest,
   HostInspectResult,
   ProfileOpenRequest,

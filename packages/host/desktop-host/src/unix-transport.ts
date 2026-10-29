@@ -814,7 +814,7 @@ export class UnixHostServer {
               bootstrap_cookie: activated.bootstrapCookie,
             },
           })
-        } else {
+        } else if (frame.method === 'profile.lease_close') {
           this.options.host.closeOwnedViewLease({
             viewLeaseId: frame.params.view_lease_id as unknown as ProfileViewLeaseId,
             leaseGeneration: frame.params.lease_generation,
@@ -822,6 +822,8 @@ export class UnixHostServer {
             ownerId,
           })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: 'profile.lease_close', result: { closed: true } })
+        } else {
+          throw new HostAuthorityError('unavailable')
         }
       } catch (error) { channel.send(safeError(authorityCode(error), frame)) }
     })
