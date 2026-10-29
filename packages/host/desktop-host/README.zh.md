@@ -37,7 +37,7 @@ Profile registry 只保存规范 DSH Account issuer 与 opaque subject 的设备
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
 
-Web Profile worker 通过显式子进程环境接收独立随机记忆路由 bearer。父 Host 只在私有请求闭包中保留该 bearer。固定到某一代 worker 的 Profile reader 在每次清单和读取后检查该 worker 仍为当前实例；Web 路由只借用冷态 Session，并在检查前后核验持久 revision。此路径仅供内部使用，Session ID 和浏览器 Cookie 都不会因此成为授权凭证。签名记忆查询控制与产品索引仍是独立的后续接线工作。
+Web Profile worker 通过显式子进程环境接收独立随机记忆路由 bearer。父 Host 只在私有请求闭包中保留该 bearer。固定到某一代 worker 的 Profile reader 在每次清单和读取后检查该 worker 仍为当前实例；Web 路由只借用冷态 Session，并在检查前后核验持久 revision。Host 的记忆授权还核验当前连接的解锁状态、Account issuer 与 subject、环境 binding 是否指向同一 Profile。此路径仅供内部使用，Session ID 和浏览器 Cookie 都不会因此成为授权凭证。签名记忆查询控制与产品索引仍是独立的后续接线工作。
 
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。
 

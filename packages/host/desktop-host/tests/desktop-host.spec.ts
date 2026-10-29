@@ -726,6 +726,29 @@ describe('worker and Desktop-only bundle', () => {
     expect(JSON.stringify(opened)).not.toContain(accountSubject)
   })
 
+  it('binds memory access to the unlocked owner and exact Account identity', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 3), clock,
+      keyHandleUnlocked: () => true })
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      verifyAccountAccessToken: verifyTestAccountToken, ensureProfileWorker: async () => undefined })
+    const profile = await host.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'memory-account', accountAccessToken: accountToken(slarkIssuer, 'memory-account'),
+      keyHandle: 'keychain:memory', authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:memory', authorityBindingVersion: 1,
+      unlockMaterial, ownerId: 'connection-memory',
+    })
+    const input = { authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:memory', authorityBindingVersion: 1,
+      issuer: slarkIssuer, subject: 'memory-account', ownerId: 'connection-memory' }
+    await expect(host.authorizeMemoryProfile(input)).resolves.toBe(profile.profileId)
+    await expect(host.authorizeMemoryProfile({ ...input, subject: 'another' }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(host.authorizeMemoryProfile({ ...input, ownerId: 'other-connection' }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    host.revokeOwner('connection-memory')
+    await expect(host.authorizeMemoryProfile(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
   it('atomically extends an activated lease when the same owner reopens its Profile', async () => {
     let now = 1_000
     const leaseClock = { now: () => now }
