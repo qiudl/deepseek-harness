@@ -83,12 +83,18 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 `resolveLanTrust` 在启动时只采样一次网络：loopback 绑定（`127.0.0.1`）不派生任何 LAN 地址，绑定所有网卡则会加入每个非 internal IPv4 字面量。派生字面量加上显式的 `--trusted-host` 权威标识组成 `/api` 浏览器信任栅栏，打印的 LAN URL 始终与该栅栏一致。
 
+### Desktop 记忆读取
+
+父 Desktop Host 提供独立的 `DSH_PROFILE_MEMORY_TOKEN` 时，Web Profile 才注册两个仅限 loopback 的精确路由，用于有界 Session 清单和冷态逻辑读取。浏览器 cookie 不能授权这些路由。读取器借用经持久层校验的 Session，并在观察前后核验持久 revision；实时、委托和变化中的 Session 均被拒绝。父 Host 必须在索引前脱敏逻辑事件。普通 `dsh web` 启动不会暴露这两个路由。
+
 ### 源码地图
 
 | 文件 | 职责 |
 |---|---|
 | [`src/index.ts`](src/index.ts) | `web-app` 粘合插件：dist 解析、LAN 信任采样、提示词段落、bash 变量、URL 行、浏览器交接 |
 | [`src/startup.ts`](src/startup.ts) | `web-startup` 提供方：`--host`、`--port`、`--trusted-host`、`--no-open`、`--help` |
+| [`src/desktop-memory-session.ts`](src/desktop-memory-session.ts) | 私有 Profile Session 清单和带 revision 核验的逻辑读取 |
+| [`src/desktop-private-read.ts`](src/desktop-private-read.ts) | 有界、仅 bearer 可访问的精确路由请求处理器 |
 | [`cordis.patch.yml`](cordis.patch.yml) | Web patch：重述的基础值、Web 宿主行、浏览器名录、preset 之后的 agent 层 |
 | [`src/invariant.ts`](src/invariant.ts) | 不变式伴生插件：无运行时不变式；每项贡献都由 registry 释放 |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | dist 解析、fallback 席位、提示词段落、就绪宣告 |

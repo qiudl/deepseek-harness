@@ -1,4 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
@@ -9,6 +10,7 @@ const execFileAsync = promisify(execFile)
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
+  'DSH_PROFILE_MEMORY_TOKEN',
 ])
 
 /** Verifies that a child PID, rather than another local process, owns a loopback listener. */
@@ -63,6 +65,35 @@ async function exchangeBootstrap(
   return { name: match[1], value: match[2] }
 }
 
+async function readPrivateMemory(origin: string, token: string, kind: 'list' | 'read', target: unknown,
+  signal: AbortSignal): Promise<unknown> {
+  signal.throwIfAborted()
+  const timeout = AbortSignal.timeout(10_000)
+  const response = await fetch(`${origin}/internal/desktop-memory-${kind === 'list' ? 'sessions' : 'session'}`, {
+    method: 'POST', redirect: 'manual', signal: AbortSignal.any([signal, timeout]),
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(target),
+  })
+  if (response.status !== 200 || response.body === null) throw new HostAuthorityError('unavailable')
+  const reader = response.body.getReader()
+  const chunks: Buffer[] = []
+  let bytes = 0
+  const maximum = kind === 'list' ? 16 * 1024 : 65 * 1024 * 1024
+  try {
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      bytes += chunk.value.byteLength
+      if (bytes > maximum) throw new HostAuthorityError('unavailable')
+      chunks.push(Buffer.from(chunk.value))
+    }
+    signal.throwIfAborted()
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
+  } finally {
+    await reader.cancel().catch(() => {})
+  }
+}
+
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
 export class DshWebProfileWorkerFactory {
   private generation = 0
@@ -78,6 +109,7 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const memoryToken = randomBytes(32).toString('base64url')
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
@@ -88,12 +120,13 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_ID: spec.profileId,
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+        DSH_PROFILE_MEMORY_TOKEN: memoryToken,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1
-    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation)
+    return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation, memoryToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -149,6 +182,7 @@ export class DshWebProfileWorkerFactory {
     viewOrigin: string,
     bootstrapCookie: { readonly name: string; readonly value: string },
     generation: number,
+    memoryToken: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -166,6 +200,10 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      memoryRead: (kind, target, signal) => {
+        if (requestedStop || settled) throw new HostAuthorityError('unavailable')
+        return readPrivateMemory(viewOrigin, memoryToken, kind, target, signal)
+      },
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
         if (requestedStop || settled) return

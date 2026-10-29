@@ -1,7 +1,7 @@
 /** REQ-20261021-0013: bounded, local-only projection of current-format Session text. */
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { createHash } from 'node:crypto'
-import type { HostMemorySessionSnapshot } from './types.ts'
+import type { HostMemoryRawSessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u
@@ -117,7 +117,7 @@ function plainText(message: Record<string, unknown> | null, role: string): strin
 }
 
 /** No raw message, tool payload, system prompt, or mutable surface history leaves this call. */
-export function projectMemorySession(snapshot: HostMemorySessionSnapshot): readonly MemoryProjectedRecord[] {
+export function projectMemorySession(snapshot: HostMemoryRawSessionSnapshot): readonly MemoryProjectedRecord[] {
   if (!SESSION_ID.test(snapshot.sessionId) || !snapshot.revision || snapshot.revision.length > 256
     || Buffer.byteLength(snapshot.text, 'utf8') > MAX_BYTES) throw new HostAuthorityError('invalid_input')
   const lines = snapshot.text.split('\n')
