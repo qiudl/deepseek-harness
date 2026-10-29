@@ -301,6 +301,7 @@ class TestSessionReference implements SessionReference {
  * behavior/calls/stubs) are bench-only surface.
  */
 export class TestSessions implements ISessions {
+  registerPromptRoute(): () => void { throw new Error('test sessions: prompt route is not stubbed') }
   /** Production Source discussion identity; deriving it opens no fixture Session. */
   readonly discussionRequestId: ISessions['discussionRequestId'] = collaborationDiscussionRequestId
   /** The useSessions catalog feed, independent of view ownership. */
