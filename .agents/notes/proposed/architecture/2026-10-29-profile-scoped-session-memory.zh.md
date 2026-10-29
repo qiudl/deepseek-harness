@@ -12,7 +12,7 @@ Status: proposed
 
 Session 所有权保留在已认证的 Desktop Host 及当前选定的 Person Profile 中。Profile 本地读取器只能枚举该 Profile 的持久 Session 快照，并返回有界、脱敏的用户与助手文本用于索引。Host 在每次读取前后核验当前所有者、Profile、安装和进程代次。每次搜索或证据请求均由短期签名指令授权；worker 只接收投影页并返回候选引用，不接收原始 Session 日志。
 
-当前 master 的 Session 格式是 v0。持久化顶层头包含 `type: "session"`，不含 seed 或 parent 字段。因此投影拒绝带 seed、parent、origin 或非零 delegation depth 的头，拒绝被替换的来源事件，只接受当前 v0 的追加表示。私有读取器仍须基于当前 `SessionPersistence` API 实现；Host 内部模块本身不会开启产品读取。
+当前 master 的 Session 格式是 v0。持久化顶层头包含 `type: "session"`，不含 seed 或 parent 字段。因此投影拒绝带 seed、parent、origin 或非零 delegation depth 的头，拒绝被替换的来源事件。私有读取器应使用已校验的逻辑 `inspect()` 视图，并比较读取前后的 `listSnapshots()` revision。Host 内部模块本身不会开启产品读取。
 
 ## 考虑过的替代方案
 
@@ -31,4 +31,4 @@ Session 所有权保留在已认证的 Desktop Host 及当前选定的 Person Pr
 
 ## 风险
 
-当前 `SessionPersistence.inspect()` 返回逻辑快照，而初版投影接收 JSONL 文本。产品读取器必须使用一种权威表示并保留 revision 核验；直接复制另一分支的旧路由会造成格式不匹配。脱敏可能遗漏未知形式的凭据，因此在导入真实历史前仍需限制输出并获得用户明确同意。
+当前投影要求 JSONL 每行对应一个事件，但 JSONL 持久层默认把连续 chunk 事件打包为存储行。因此直接读取原始产物会拒绝常规产品 Session。投影需要以逻辑事件为输入，同时保留 v0、来源和脱敏核验；读取器还须在检查前后比较 `listSnapshots()` revision，并拒绝正在变化的来源。脱敏可能遗漏未知形式的凭据，因此在导入真实历史前仍需限制输出并获得用户明确同意。

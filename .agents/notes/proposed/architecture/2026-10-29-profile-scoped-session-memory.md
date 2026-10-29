@@ -12,7 +12,7 @@ A separate memory agent cannot inherit a DSH user's Session authority. A Session
 
 Keep Session ownership in the authenticated Desktop Host and its selected Person Profile. A Profile-local reader should enumerate only that Profile's persisted Session snapshots and return bounded, redacted user and assistant text for indexing. The Host should verify the current owner, Profile, installation, and process generation before and after each read. A signed, short-lived directive should authorize each search or evidence request; a worker should receive projected pages and return candidate references, never raw Session logs.
 
-The current master stores Session format v0. Its persisted top-level header has `type: "session"` and no seed or parent fields. The projection therefore rejects a header with seed, parent, origin, or nonzero delegation depth and rejects replaced source events. It accepts only the current v0 append representation. The private reader still needs an implementation against the current `SessionPersistence` API; the internal Host modules alone do not enable product reads.
+The current master stores Session format v0. Its persisted top-level header has `type: "session"` and no seed or parent fields. The projection therefore rejects a header with seed, parent, origin, or nonzero delegation depth and rejects replaced source events. The private reader should use a validated logical `inspect()` view and compare `listSnapshots()` revisions before and after reading. The internal Host modules alone do not enable product reads.
 
 ## Alternatives considered
 
@@ -31,4 +31,4 @@ The current master stores Session format v0. Its persisted top-level header has 
 
 ## Risks
 
-The current `SessionPersistence.inspect()` returns a logical snapshot rather than a raw JSONL artifact, while the initial projection accepts JSONL text. The product reader must use one authoritative representation and retain revision checks; copying a historical route from another branch would create a format mismatch. Redaction can miss unknown credential forms, so bounded output and explicit user consent remain necessary before importing real history.
+The current projection accepts one event per JSONL line, but JSONL persistence packs consecutive chunk events into storage rows by default. A raw-artifact reader would therefore reject ordinary product Sessions. The projection needs a logical-event input that preserves its v0, source, and redaction checks; the reader must also compare `listSnapshots()` revisions around inspection and refuse a changing source. Redaction can miss unknown credential forms, so bounded output and explicit user consent remain necessary before importing real history.
