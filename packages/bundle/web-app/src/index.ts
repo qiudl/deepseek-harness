@@ -657,7 +657,17 @@ export function apply(ctx: Context, config: Config): void {
   if (desktopRemoteUiToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteUiToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
       const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
-        () => remoteCtx.webServer.collectIndexInjections())
+        () => remoteCtx.webServer.collectIndexInjections(),
+        async (botId, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotChat?: (botId: string | null) => Promise<unknown>
+          }
+          if (!service?.readLocalBotChat) return null
+          const value = await service.readLocalBotChat(botId)
+          signal.throwIfAborted()
+          return value
+        })
       const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents,
         request => remoteCtx.connection.createSharedFetchHandler('/api').fetch(request), terminalStreams)
       remoteCtx.effect(() => remoteCtx.webServer.register({

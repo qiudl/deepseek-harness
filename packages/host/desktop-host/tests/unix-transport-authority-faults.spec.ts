@@ -272,6 +272,30 @@ describe('Unix transport authority failures', () => {
     client.close()
   })
 
+  it('negotiates Bot chat through signed inspection and local SDK support before execution', async () => {
+    const input = { ...opened, endpoint: 'bot/chat' as const, payload: { args: { botId: null } } }
+    const execute = vi.fn(async (): Promise<unknown> => ({ revision: 4, defaultBotId: null, bot: null }))
+    const old = await authorityClient({ remoteUiRead: execute })
+    expect(old.client.inspection.capabilities).not.toContain('profile.remote_ui_read.bot_chat')
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    Object.defineProperty(old.client, 'inspection', { value: { ...old.client.inspection,
+      capabilities: [...old.client.inspection.capabilities, 'profile.remote_ui_read.bot_chat'] } })
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotChatSupported: true })
+    expect(enabled.client.remoteUiBotChatSupported).toBe(true)
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_chat')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual({ revision: 4, defaultBotId: null, bot: null })
+    expect(execute).toHaveBeenCalledOnce()
+    execute.mockResolvedValueOnce({ revision: 4, defaultBotId: null, bot: null, secret: 'private' })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+    const missing = await authorityClient({ remoteUiBotChatSupported: true })
+    expect(missing.client.inspection.capabilities).not.toContain('profile.remote_ui_read.bot_chat')
+    missing.client.close()
+  })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
     const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
       payload: { args: { url: '/plugins/a.js', offset: 0 } } }

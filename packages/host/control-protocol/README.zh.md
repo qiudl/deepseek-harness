@@ -42,6 +42,8 @@ kind: "package-reference"
 
 原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
 
+`profile.remote_ui_read.bot_chat` 单独发布固定的 `bot/chat` 读取能力。精确参数 `{ botId: string | null }` 选择已有 Bot 或团队的第一个 Main Bot。响应仅包含团队 revision、默认 Bot 身份，以及所选 Bot 的公开身份和当前私聊 Session ID；提供者不可用与 Bot 不存在保持不同语义。读取不初始化团队、不创建 Session，也不授予 prompt 权限。消费方同时要求已签名的 Host capability 和本地 SDK 的 `remoteUiBotChatSupported` 标志。
+
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。

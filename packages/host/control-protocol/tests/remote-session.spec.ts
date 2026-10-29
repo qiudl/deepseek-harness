@@ -173,6 +173,15 @@ describe('Profile remote UI read wire commands', () => {
     params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
       endpoint, payload },
   })
+  it('round-trips only the fixed Bot chat selector and refuses Session or authority injection', () => {
+    for (const botId of [null, 'bot_1']) {
+      const input = readFrame('bot/chat', { args: { botId } })
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    }
+    for (const args of [{}, { botId: 'bot\n' }, { botId: null, profile: 'other' }, { botId: null, sessionId: 's' }])
+      expect(() => decode(readFrame('bot/chat', { args }))).toThrow()
+    expect(() => decode(readFrame('bot', { args: { endpoint: 'state' } }))).toThrow()
+  })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
     for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {
