@@ -9,6 +9,18 @@ export type ProfileViewActivationHandle = Branded<'ProfileViewActivationHandle'>
 /** Session-scoped enterprise context lease. */
 export type ContextLeaseId = Branded<'ContextLeaseId'>
 
+/** Raw Session snapshot confined to the Host until local redaction. */
+export interface HostMemorySessionSnapshot {
+  readonly sessionId: string
+  readonly revision: string
+  readonly text: string
+}
+/** Bounded metadata from the current Profile worker. */
+export interface HostMemorySessionPage {
+  readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
+  readonly nextAfter: string | null
+}
+
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
 
