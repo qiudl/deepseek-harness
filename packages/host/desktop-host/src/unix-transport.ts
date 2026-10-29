@@ -24,6 +24,8 @@ import type {
   ProfileOpenRequest,
   ProfileViewActivateRequest,
   ProfileStatusRequest,
+  ProfileMemoryQueryRequest,
+  ProfileMemoryQueryResult,
   MigrationExportBeginRequest,
   MigrationExportInventoryRequest,
   MigrationExistingSourceInventoryRequest,
@@ -45,6 +47,9 @@ import type { HostAuthorityErrorCode, PersonProfileId, ProfileOpenResult, Profil
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { SingleHostLock } from './single-instance.ts'
+import { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
+import { HostMemoryReadController } from './memory-read-controller.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -71,6 +76,8 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
+  readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -497,9 +504,13 @@ export class UnixHostServer {
   private async accept(socket: Socket): Promise<void> {
     const ownerId = randomUUID()
     const lifetime = new AbortController()
+    let memorySlot: { readonly key: string; readonly controller: HostMemoryReadController } | undefined
+    let memoryBusy = false
     this.connections.add(socket)
     socket.once('close', () => {
       lifetime.abort()
+      memorySlot?.controller.clear()
+      memorySlot = undefined
       this.connections.delete(socket)
       this.options.host.revokeOwner(ownerId)
     })
@@ -566,7 +577,8 @@ export class UnixHostServer {
       if (frame.type !== 'request') { socket.destroy(); return }
       if (!inspected) {
         if (frame.method !== 'host.inspect') { socket.destroy(); return }
-        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled)
+        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
+          this.options.memoryDirectiveVerifier !== undefined && this.options.memoryProfileReader !== undefined)
         inspected = true
         authorizer = new HostRequestAuthorizer({
           clientInstanceId: frame.params.client_instance_id,
@@ -580,7 +592,68 @@ export class UnixHostServer {
       if (!authorizer) { socket.destroy(); return }
       try {
         authorizer.authorize(frame.params)
-        if (frame.method === 'migration.existing_source.inventory') {
+        if (frame.method === 'profile.memory_query') {
+          const verifier = this.options.memoryDirectiveVerifier
+          const readerFor = this.options.memoryProfileReader
+          if (!verifier || !readerFor) throw new HostAuthorityError('upgrade_required')
+          if (memoryBusy) throw new HostAuthorityError('busy')
+          memoryBusy = true
+          try {
+            const params: ProfileMemoryQueryRequest['params'] = frame.params
+            const key = JSON.stringify([params.authority_environment_id, params.account_binding_handle,
+              params.authority_binding_version, params.account_issuer, params.account_subject,
+              params.owner_user_id, params.computer_id])
+            if (memorySlot?.key !== key) {
+              memorySlot?.controller.clear()
+              memorySlot = undefined
+              const profileId = await this.options.host.authorizeMemoryProfile({
+                authorityEnvironmentId: params.authority_environment_id,
+                accountBindingHandle: params.account_binding_handle,
+                authorityBindingVersion: params.authority_binding_version,
+                issuer: params.account_issuer, subject: params.account_subject, ownerId,
+              })
+              const reader = readerFor(profileId)
+              const current = () => {
+                lifetime.signal.throwIfAborted()
+                const status = this.options.host.getProfileStatus({
+                  authorityEnvironmentId: params.authority_environment_id,
+                  accountBindingHandle: params.account_binding_handle,
+                  authorityBindingVersion: params.authority_binding_version, ownerId,
+                })
+                if (status.state !== 'ready' || status.profileId !== profileId)
+                  throw new HostAuthorityError('unauthorized')
+                reader.assertCurrent()
+                return { environmentId: params.authority_environment_id,
+                  ownerUserId: params.owner_user_id, computerId: params.computer_id,
+                  installationId: this.options.identity.installationId, profileId,
+                  hostInstanceId: this.options.identity.hostInstanceId,
+                  processNonce: this.options.identity.processNonce, reader }
+              }
+              memorySlot = { key, controller: new HostMemoryReadController(verifier, current) }
+            }
+            const controller = memorySlot.controller
+            let result: ProfileMemoryQueryResult['result']
+            if (params.command.action === 'warm') {
+              await controller.warm(lifetime.signal)
+              result = { action: 'warm', state: 'ready' }
+            } else if (params.command.action === 'search') {
+              const found = await controller.search(params.command.directive,
+                params.command.query, params.command.limit, lifetime.signal)
+              result = { action: 'search', generation: found.generation, items: found.items as never }
+            } else {
+              const chunk = await controller.evidenceChunk(params.command.directive,
+                params.command.source_ref, params.command.offset, lifetime.signal)
+              result = chunk === null ? { action: 'evidence_chunk', state: 'missing' }
+                : { action: 'evidence_chunk', state: 'ready', chunk: chunk as never }
+            }
+            channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+              request_id: frame.request_id, method: frame.method, result })))
+          } catch (error) {
+            memorySlot?.controller.clear()
+            memorySlot = undefined
+            throw error
+          } finally { memoryBusy = false }
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -835,6 +908,7 @@ export class UnixHostServer {
     migrationExport: boolean,
     migrationImport: boolean,
     legacyMigration: boolean,
+    memoryQuery: boolean,
   ): HostInspectResult {
     if (!request.params.supported_versions.includes(1)) throw new HostAuthorityError('unavailable')
     const identity = this.options.identity
@@ -861,6 +935,7 @@ export class UnixHostServer {
             'migration.import_snapshot.abort', 'migration.import_snapshot.commit',
             'migration.import_snapshot.stage', 'migration.import_snapshot.status', 'migration.import_snapshot.verify',
           ] : []),
+          ...(memoryQuery ? ['profile.memory_query'] : []),
         ]
           .sort().map(value => value as HostControlCapability),
         challenge_signature: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' as HostControlSignature,
@@ -1343,6 +1418,34 @@ export class UnixHostClient {
     return { importId: frame.result.import_id, stageVersion: frame.result.stage_version, state: frame.result.state }
   }
 
+  /** Read a bounded Profile memory result only when this Host advertises signed-query support. */
+  async memoryQuery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerUserId: string
+    readonly computerId: string
+    readonly command: ProfileMemoryQueryRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileMemoryQueryResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileMemoryQueryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        account_issuer: input.issuer, account_subject: input.subject,
+        owner_user_id: input.ownerUserId, computer_id: input.computerId,
+        command: input.command },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Verify one inactive migration generation through stage-version CAS.
    * @param input - import id, expected version, target selector, and signal.
@@ -1434,7 +1537,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
-      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileMemoryQueryRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

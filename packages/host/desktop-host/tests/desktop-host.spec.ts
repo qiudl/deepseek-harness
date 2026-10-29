@@ -1,8 +1,9 @@
-import { generateKeyPairSync } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { linkSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import {
   ApprovalAuthority,
   ContextLeaseAuthority,
@@ -20,6 +21,8 @@ import {
   discoverUnixHost,
   personIndex,
 } from '../src/index.ts'
+import { MemoryDirectiveVerifier } from '../src/memory-directive-verifier.ts'
+import type { HostMemoryProfileReader } from '../src/memory-evidence-index.ts'
 
 const dir = (): string => mkdtempSync(join(tmpdir(), 'dsh-desktop-host-'))
 const clock = { now: () => 1_000 }
@@ -141,12 +144,19 @@ describe('authenticated Unix transport', () => {
     runtimeGeneration: 5,
     schemaGeneration: 1,
   }
+  const connectHost = (socketPath: string) => UnixHostClient.connect({
+    socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+    trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+    attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+  })
 
   async function fixture(
     createMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationExport']>,
     createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
     now: () => number = clock.now,
+    memory?: { readonly verifier: MemoryDirectiveVerifier
+      readonly reader: (profileId: string) => HostMemoryProfileReader },
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
     const root = dir()
     const socketPath = join(root, 'host.sock')
@@ -167,6 +177,8 @@ describe('authenticated Unix transport', () => {
       socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
       attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
       profilePersistenceGeneration: () => 1,
+      ...(memory === undefined ? {} : { memoryDirectiveVerifier: memory.verifier,
+        memoryProfileReader: memory.reader }),
       ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
       ...(createMigrationImport === undefined ? {} : { createMigrationImport }),
       ...(createLegacyMigrationExport === undefined ? {} : { createLegacyMigrationExport }),
@@ -207,6 +219,71 @@ describe('authenticated Unix transport', () => {
     ])
     client.close()
     await server.close()
+  })
+
+  it('keeps memory unavailable by default and serves a signed, Profile-scoped synthetic query when configured', async () => {
+    const binding = { authorityEnvironmentId: stagingEnvironmentId,
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+      issuer: slarkIssuer, subject: 'u1', ownerUserId: 'owner-u1', computerId: 'computer-1' }
+    const disabled = await fixture()
+    const disabledClient = await connectHost(disabled.socketPath)
+    await expect(disabledClient.memoryQuery({ ...binding, command: { action: 'warm' } }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    disabledClient.close()
+    await disabled.server.close()
+
+    const signing = generateKeyPairSync('ed25519')
+    const ring = JSON.stringify({ version: 1, environmentId: stagingEnvironmentId,
+      issuer: 'https://slark.example', keys: [{ kid: 'test',
+        publicKeyPem: signing.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        validFrom: 1, validUntil: 60_000 }] })
+    const rows = [
+      { type: 'session', version: SESSION_FORMAT_VERSION, id: 'session-one', createdAt: 1 },
+      { type: 'turn/start', seq: 0, data: { turn: 0 } },
+      { type: 'user/message', seq: 1, data: { role: 'user', source: { kind: 'user' },
+        content: [{ type: 'text', text: 'private plan token=private' }] } },
+      { type: 'turn/end', seq: 2, data: { turn: 0, reason: { kind: 'completed' } } },
+    ]
+    const reader: HostMemoryProfileReader = { assertCurrent() {},
+      list: async () => ({ items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }),
+      read: async () => ({ sessionId: 'session-one', revision: 'r1',
+        text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }) }
+    const enabled = await fixture(undefined, undefined, undefined, clock.now, {
+      verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
+    })
+    const client = await connectHost(enabled.socketPath)
+    const profile = await client.ensureAccountProfile({ ...binding,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), keyHandle: 'keychain:u1', unlockMaterial })
+    expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
+      .toEqual({ action: 'warm', state: 'ready' })
+    const grant = { grantId: '11111111-1111-4111-8111-111111111111', generation: 1,
+      ownerUserId: binding.ownerUserId, environmentId: stagingEnvironmentId,
+      computerId: binding.computerId, installationId: identity.installationId,
+      profileId: profile.profileId, readerKind: 'personal_dsh' }
+    const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
+      keyId: 'test', requestId: '33333333-3333-4333-8333-333333333333',
+      nonce: Buffer.alloc(32, 7).toString('base64url'),
+      hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce,
+      issuedAt: 1_000, expiresAt: 15_000, operation: 'search',
+      queryDigest: createHash('sha256').update(JSON.stringify(['search', 'private', 1])).digest('hex'),
+      limit: 1, grant }
+    const payload = Buffer.from('slark.dsh-memory-query/v1\0' + JSON.stringify([
+      unsigned.schemaVersion, unsigned.purpose, unsigned.issuer, unsigned.keyId,
+      unsigned.requestId, unsigned.nonce, unsigned.hostInstanceId, unsigned.processNonce,
+      unsigned.issuedAt, unsigned.expiresAt, unsigned.operation, unsigned.queryDigest,
+      unsigned.limit, grant.grantId, grant.generation, grant.ownerUserId, grant.environmentId,
+      grant.computerId, grant.installationId, grant.profileId, grant.readerKind,
+    ]))
+    const directive = { ...unsigned, signature: sign(null, payload, signing.privateKey).toString('base64url') }
+    const search = { ...binding, command: { action: 'search' as const, directive, query: 'private', limit: 1 } }
+    const found = await client.memoryQuery(search)
+    expect(found).toMatchObject({ action: 'search', items: [{ source: { profileId: profile.profileId },
+      snippet: 'private plan token=[REDACTED]' }] })
+    await expect(client.memoryQuery(search)).rejects.toMatchObject({ code: 'replayed' })
+    await expect(client.memoryQuery({ ...binding, subject: 'other', command: { action: 'warm' } }))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+    client.close()
+    await enabled.server.close()
   })
 
   it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
@@ -382,13 +459,8 @@ describe('authenticated Unix transport', () => {
 
   it('revokes only the disconnected connection unlock while another environment remains unlocked', async () => {
     const { server, socketPath } = await fixture()
-    const connect = () => UnixHostClient.connect({
-      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
-      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
-      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
-    })
-    const staging = await connect()
-    const production = await connect()
+    const staging = await connectHost(socketPath)
+    const production = await connectHost(socketPath)
     await staging.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'u1'),
@@ -401,7 +473,7 @@ describe('authenticated Unix transport', () => {
     })
     staging.close()
     await new Promise<void>(resolve => setImmediate(resolve))
-    const replacement = await connect()
+    const replacement = await connectHost(socketPath)
     await expect(replacement.getProfileStatus({
       authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
     })).resolves.toEqual({ state: 'locked' })

@@ -384,8 +384,8 @@ function memoryIdentity(value: unknown): ProfileMemoryEvidenceIdentity {
   const row = record(value), source = record(row.source)
   exactKeys(source, ['ownerUserId', 'installationId', 'profileId', 'sessionId', 'formatVersion'])
   if (row.kind !== 'user' && row.kind !== 'assistant') reject()
-  const formatVersion = generation(source.formatVersion)
-  if (formatVersion !== 3 && formatVersion !== 4) reject()
+  const formatVersion = nonnegative(source.formatVersion)
+  if (formatVersion !== 0) reject()
   return { sourceRef: digest(row.sourceRef), sourceVersion: digest(row.sourceVersion),
     eventSeq: nonnegative(row.eventSeq), kind: row.kind,
     source: { ownerUserId: boundedText(source.ownerUserId, 256),

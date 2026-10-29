@@ -23,7 +23,7 @@ const params = {
 const request = { version: 1, type: 'request', request_id: uuid, method: 'profile.memory_query',
   params: { ...params, command: { action: 'search', directive, query: 'redacted', limit: 1 } } }
 const source = { ownerUserId: 'owner', installationId: 'installation', profileId: 'profile',
-  sessionId: 'session-one', formatVersion: 4 }
+  sessionId: 'session-one', formatVersion: 0 }
 const identity = { sourceRef: hash, sourceVersion: 'b'.repeat(64), eventSeq: 2,
   kind: 'assistant', source }
 const wire = (value: unknown) => `${JSON.stringify(value)}\n`
