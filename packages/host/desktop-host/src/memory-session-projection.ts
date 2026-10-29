@@ -27,6 +27,14 @@ export interface MemoryProjectedRecord {
   readonly text: string
 }
 
+/** One validated logical Session observation from Profile-owned persistence. */
+export interface HostMemoryLogicalSnapshot {
+  readonly sessionId: string
+  readonly revision: string
+  readonly meta: unknown
+  readonly events: readonly unknown[]
+}
+
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : null
@@ -112,14 +120,37 @@ function plainText(message: Record<string, unknown> | null, role: string): strin
 export function projectMemorySession(snapshot: HostMemorySessionSnapshot): readonly MemoryProjectedRecord[] {
   if (!SESSION_ID.test(snapshot.sessionId) || !snapshot.revision || snapshot.revision.length > 256
     || Buffer.byteLength(snapshot.text, 'utf8') > MAX_BYTES) throw new HostAuthorityError('invalid_input')
-  const sourceVersion = createHash('sha256').update(snapshot.revision).digest('hex')
   const lines = snapshot.text.split('\n')
   if (lines.length > MAX_EVENTS + 2 || lines.at(-1) !== '') throw new HostAuthorityError('unavailable')
   let header: unknown
   try { header = JSON.parse(lines[0] || '') } catch { throw new HostAuthorityError('unavailable') }
+  if (object(header)?.type !== 'session') throw new HostAuthorityError('unavailable')
+  const events: unknown[] = []
+  for (const line of lines.slice(1, -1)) {
+    if (!line) throw new HostAuthorityError('unavailable')
+    try { events.push(JSON.parse(line)) } catch { throw new HostAuthorityError('unavailable') }
+  }
+  return projectMemoryLogicalSession({ sessionId: snapshot.sessionId, revision: snapshot.revision,
+    meta: header, events })
+}
+
+/** Project a persistence-validated logical log, including backends that pack physical chunk rows. */
+export function projectMemoryLogicalSession(snapshot: HostMemoryLogicalSnapshot): readonly MemoryProjectedRecord[] {
+  if (!SESSION_ID.test(snapshot.sessionId) || !snapshot.revision || snapshot.revision.length > 256
+    || !Array.isArray(snapshot.events) || snapshot.events.length > MAX_EVENTS) throw new HostAuthorityError('invalid_input')
+  let bytes = 0
+  for (const event of snapshot.events) {
+    const serialized = JSON.stringify(event)
+    if (typeof serialized !== 'string') throw new HostAuthorityError('unavailable')
+    bytes += Buffer.byteLength(serialized, 'utf8') + 1
+    if (bytes > MAX_BYTES) throw new HostAuthorityError('unavailable')
+  }
+  const sourceVersion = createHash('sha256').update(snapshot.revision).digest('hex')
+  const header = snapshot.meta
   const meta = object(header)
   const topLevel = SESSION_FORMAT_VERSION === 0
-    ? meta?.type === 'session' && meta.isSeeded === undefined && meta.seedLength === undefined
+    ? (meta?.type === 'session' || meta?.type === undefined)
+      && meta?.isSeeded === undefined && meta?.seedLength === undefined
     : meta?.isSeeded === false
   if (!meta || meta.id !== snapshot.sessionId || meta.version !== SESSION_FORMAT_VERSION
     || !topLevel || (meta.delegationDepth !== undefined && meta.delegationDepth !== 0)
@@ -128,12 +159,11 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
   const records: MemoryProjectedRecord[] = []
   let nextSeq = 0
   let pending: { turn: number; user: MemoryProjectedRecord[]; assistant?: MemoryProjectedRecord } | null = null
-  for (const line of lines.slice(1, -1)) {
-    if (!line) throw new HostAuthorityError('unavailable')
-    let parsed: unknown
-    try { parsed = JSON.parse(line) } catch { throw new HostAuthorityError('unavailable') }
+  for (const parsed of snapshot.events) {
     const event = object(parsed), data = object(event?.data)
-    if (!event || event.seq !== nextSeq || typeof event.type !== 'string') throw new HostAuthorityError('unavailable')
+    if (!event || event.seq !== nextSeq || typeof event.type !== 'string'
+      || event.type === 'text-chunks' || event.type === 'reasoning-chunks'
+      || event.type === 'tool-call-chunks') throw new HostAuthorityError('unavailable')
     const projectedEvent = event.type === 'turn/start' || event.type === 'turn/end'
       || event.type === 'user/message' || event.type === 'assistant/message'
     const emptyV0Sources = SESSION_FORMAT_VERSION === 0 && Array.isArray(event.sourceEventSeqs)

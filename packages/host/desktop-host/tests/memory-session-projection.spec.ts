@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { projectMemorySession } from '../src/memory-session-projection.ts'
+import { projectMemoryLogicalSession, projectMemorySession } from '../src/memory-session-projection.ts'
 
 const sessionId = 'session-54a5bf6e-b050-46f3-8149-f48b709b0480'
 const header = { type: 'session', version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1 }
@@ -19,6 +19,15 @@ const oneTurn = [
 const snapshot = (events: unknown[], meta: object = header) => ({ sessionId, revision: 'r1', text: `${[meta, ...events].map(value => JSON.stringify(value)).join('\n')}\n` })
 
 describe('local memory Session projection', () => {
+  it('projects a logical v0 inspection without a physical JSONL header tag', () => {
+    const logical = projectMemoryLogicalSession({ sessionId, revision: 'r1',
+      meta: { version: 0, id: sessionId, createdAt: 1, delegationDepth: 0 }, events: oneTurn })
+    expect(logical).toEqual(projectMemorySession(snapshot(oneTurn)))
+    expect(() => projectMemoryLogicalSession({ sessionId, revision: 'r1',
+      meta: { version: 0, id: sessionId, createdAt: 1, delegationDepth: 0 },
+      events: [{ type: 'text-chunks', seq: 0, data: { text: 'packed storage row' } }] })).toThrow()
+  })
+
   it('reads the committed v0 Session fixture without rewriting its source', () => {
     const text = readFileSync(new URL('../../../experimental/webworker-runtime/tests/fixtures/vfs-example/home/sessions/--dsh-workspace--/preview-showcase/session.jsonl', import.meta.url), 'utf8')
     const records = projectMemorySession({ sessionId: 'preview-showcase', revision: 'v0-fixture', text })
