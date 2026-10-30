@@ -169,6 +169,7 @@ describe('Session fixture lifecycle', () => {
   it('requires an explicit create stub and records successful create and refresh calls', async () => {
     const runtime = await SlotTestRuntime.create()
     await expect(runtime.sessions.create()).rejects.toThrow(/create is not stubbed/)
+    expect(() => runtime.sessions.registerPromptRoute()).toThrow('prompt route is not stubbed')
     await runtime.sessions.add({ id: 'created' })
     const create = vi.fn(() => Promise.resolve('created' as SessionId))
     runtime.sessions.stubCreate(create)

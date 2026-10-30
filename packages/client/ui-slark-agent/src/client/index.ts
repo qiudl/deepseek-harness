@@ -139,7 +139,11 @@ export interface DesktopAgentInvocation {
 declare global {
   interface Window {
     __DSH_DESKTOP_HOST__?: DesktopAgentDirectory
-    __DSH_NATIVE_WORKBENCH__?: { duetStart?: (sessionId: string) => Promise<void>; conversationDraft?: DraftBridge }
+    __DSH_NATIVE_WORKBENCH__?: {
+      duetStart?: (sessionId: string) => Promise<void>
+      conversationDraft?: DraftBridge
+      dictate?: (sessionId: string, signal: AbortSignal) => Promise<string | null>
+    }
   }
 }
 
@@ -326,9 +330,10 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.slots.inject('conversation.input.right', () => {
     const start = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.duetStart
-    if (!start) return () => {}
+    const dictate = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.dictate
+    if (!start && !dictate) return () => {}
     return ctx.slots.register({ name: 'conversation.input.right', id: 'slark-native-duet', order: 10, locale: NS,
-      inject: () => ({ start }),
+      inject: () => ({ ...(start ? { start } : {}), ...(dictate ? { dictate } : {}) }),
     }, NativeDuetButton)
   })
   ctx.slots.inject('conversation.input.dock', () => {

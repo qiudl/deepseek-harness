@@ -16,6 +16,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
+import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -27,7 +28,7 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading' | 'shell.mobile.collaboration'>
+  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading' | 'shell.mobile.collaboration' | 'shell.navigation'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
 
@@ -137,6 +138,8 @@ export function AppFrame({
   renderSlot,
   t,
 }: AppFrameProps) {
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const closeDrawer = useCallback(() => { setDrawerOpen(false) }, [])
   const layoutInfo = useStore(state => state.layoutInfo)
   const frameRef = useRef<HTMLDivElement | null>(null)
   const viewport = layoutInfo.viewportWidth
@@ -170,9 +173,9 @@ export function AppFrame({
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
   const phoneWeb = viewport <= 640
+  useEffect(() => { if (!phoneWeb) setDrawerOpen(false) }, [phoneWeb])
   const mobileSection = layoutInfo.mobileSection
-  // VisualViewport shrinks for the phone keyboard even when the layout
-  // viewport does not; keep chat input and bottom navigation above it.
+  // Fit the retained chat to the visible area when the phone keyboard opens.
   useEffect(() => {
     if (!phoneWeb || !window.visualViewport) return
     const visual = window.visualViewport, frame = frameRef.current
@@ -320,18 +323,26 @@ export function AppFrame({
         {overlays}
       </div>
       {phoneWeb && <>
-        {mobileSection === 'chat' && <button type="button" className={css.mobileBack}
-          onClick={() => { actions.showMobileList() }} aria-label={t('mobile.backToList')}>‹ {t('mobile.backToList')}</button>}
-        <nav className={css.mobileNav} aria-label={t('mobile.navigation')}>
-          <button type="button" aria-current={mobileSection === 'ordinary' ? 'page' : undefined}
-            onClick={() => { actions.showMobileSection('ordinary') }}>{t('mobile.conversations')}</button>
-          <button type="button" aria-current={mobileSection === 'chat' ? 'page' : undefined}
-            onClick={() => { actions.showMobileSection('chat') }}>{t('mobile.chat')}</button>
-          {renderSlot('shell.mobile.collaboration', {
-            active: mobileSection === 'collaboration',
-            open: () => { actions.showMobileSection('collaboration') },
-          })}
-        </nav>
+        <button type="button" className={css.mobileMenu} aria-label={t('mobile.openNavigation')}
+          aria-expanded={drawerOpen} aria-controls="dsh-mobile-navigation" onClick={() => { setDrawerOpen(true) }}>☰</button>
+        <Modal open={drawerOpen} onClose={closeDrawer} title={t('mobile.navigation')} headless className={css.drawer ?? ''}>
+          <header className={css.drawerHeader}><strong>{productTitle}</strong>
+            <button type="button" aria-label={t('mobile.closeNavigation')} onClick={closeDrawer}>×</button></header>
+          <div id="dsh-mobile-navigation" className={css.drawerBody}>
+            {renderSlot('shell.navigation', { close: closeDrawer }, { fallback: (
+              <nav aria-label={t('mobile.navigation')}>
+                <button type="button" aria-current={mobileSection === 'ordinary' ? 'page' : undefined}
+                  onClick={() => { actions.showMobileSection('ordinary'); closeDrawer() }}>{t('mobile.conversations')}</button>
+                <button type="button" aria-current={mobileSection === 'chat' ? 'page' : undefined}
+                  onClick={() => { actions.showMobileSection('chat'); closeDrawer() }}>{t('mobile.chat')}</button>
+                {renderSlot('shell.mobile.collaboration', {
+                  active: mobileSection === 'collaboration',
+                  open: () => { actions.showMobileSection('collaboration'); closeDrawer() },
+                })}
+              </nav>
+            ) })}
+          </div>
+        </Modal>
       </>}
       {leadingMounted && (
         <div className={css.leadingSeat} data-shell-leading>

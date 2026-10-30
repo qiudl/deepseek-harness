@@ -1,4 +1,5 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
@@ -432,6 +433,10 @@ export interface UnixHostServerOptions {
     profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
     payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
   ) => Promise<unknown>
+  /** Advertise Bot admission and reconciliation only for the bundled Profile worker. */
+  readonly remoteBotChatSupported?: boolean
+  /** Advertise existing Bot chat reads only for the bundled Profile worker. */
+  readonly remoteUiBotChatSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
   /** Advertise source-side history fragmentation only when the worker implements it. */
@@ -597,7 +602,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
-    | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1941,14 +1946,21 @@ export class HostControlAuthority {
           let value: HostRemoteSessionJson
           if (frame.method === 'profile.remote_session') {
             const execute = this.options.remoteSession
-            if (!execute) throw new HostAuthorityError('upgrade_required')
-            value = await execute(profileId, frame.params.command, context.signal)
+            const command = frame.params.command
+            const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
+            if (!execute || (botChat && !this.options.remoteBotChatSupported)) throw new HostAuthorityError('upgrade_required')
+            value = await execute(profileId, command, context.signal)
+            if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
+              parseHostBotChatReceipt(value, command.request)
           } else {
             const execute = this.options.remoteUiRead
-            if (!execute || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
+            if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
+              || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
               throw new HostAuthorityError('upgrade_required')
             }
             value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
+            if (frame.params.endpoint === 'bot/chat')
+              parseHostBotChat(value, parseHostBotChatRequest(frame.params.payload.args))
           }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
@@ -2752,10 +2764,12 @@ export class HostControlAuthority {
           ...(this.options.installGroupInputFence ? ['profile.group_input_fence'] : []),
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotChatSupported ? ['profile.remote_ui_read.bot_chat'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
@@ -2917,6 +2931,10 @@ function botGroupClientStop(input: { readonly computerId: string
 
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
+  /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
+  readonly remoteBotChatSupported = true
+  /** This SDK can encode the existing Bot identity/current-chat read. */
+  readonly remoteUiBotChatSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
   /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
@@ -4932,6 +4950,9 @@ export class UnixHostClient {
     readonly command: HostRemoteSessionCommand
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
+    if ((input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_chat' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
@@ -4940,7 +4961,10 @@ export class UnixHostClient {
         ...this.leaseCommandParams(input),
       },
     }
-    return this.remoteProfileValue(request, input.signal)
+    const value = await this.remoteProfileValue(request, input.signal)
+    if (input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      parseHostBotChatReceipt(value, input.command.request)
+    return value
   }
 
   /**
@@ -4957,6 +4981,8 @@ export class UnixHostClient {
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
     if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)
+      || (input.endpoint === 'bot/chat'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_chat' as HostControlCapability))
       || (input.endpoint === 'asset/read-gzip-chunk'
         && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
       throw new HostAuthorityError('upgrade_required')

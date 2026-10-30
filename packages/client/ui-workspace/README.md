@@ -24,6 +24,8 @@ This package lets users browse grouped or flat Session lists, choose a Workspace
 
 -----
 
+On a remote Host carrier, startup does not restore a saved Session or create a blank one. The remote home owner chooses the initial identity through `openSession`; explicit list navigation remains available. Ordinary local startup retains its existing restoration behavior.
+
 <a id="use-this-package"></a>
 ## Use this package
 
