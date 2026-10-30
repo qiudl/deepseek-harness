@@ -104,7 +104,7 @@ it.each(['restored archive', 'target archive', 'mismatched archive', 'unverified
     const spy = vi.spyOn(pluginTree, 'restorePluginTree').mockImplementationOnce((...args) => {
       restore(...args); writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'changed after restoration')
     })
-    onTestFinished(() => spy.mockRestore())
+    onTestFinished(() => { spy.mockRestore() })
   }
   interrupted = false
   const recoveryId = randomUUID(); owner.commit(f.authority, recovery.planId, recoveryId); await owner.settled()
@@ -169,7 +169,7 @@ it('does not bypass unsupported toggle errors for other actions or sources', () 
   for (const request of [
     { action: 'toggle', packageName: 'fixture', enabled: true },
     { action: 'update', packageName: 'fixture', spec: 'fixture@2.0.0' },
-  ]) expect(() => executor.validate(profile, 'plugin', JSON.stringify(request))).toThrow('plugin_toggle_unsupported')
+  ]) expect(() => { executor.validate(profile, 'plugin', JSON.stringify(request)) }).toThrow('plugin_toggle_unsupported')
 })
 
 it.each(['success', 'failure', 'wrong dependency', 'tree changed', 'same tree', 'patch restored', 'ack changed', 'corrupt restoration'])
@@ -205,7 +205,7 @@ it.each(['success', 'failure', 'wrong dependency', 'tree changed', 'same tree', 
     const spy = vi.spyOn(pluginTree, 'restorePluginTree').mockImplementationOnce((...args) => {
       restore(...args); writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'changed after restoration')
     })
-    onTestFinished(() => spy.mockRestore())
+    onTestFinished(() => { spy.mockRestore() })
   }
   const plan = await owner.prepare(f.authority, 'plugin', JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'bundled:fixture@2.0.0' }))
   const id = randomUUID(); owner.commit(f.authority, plan.planId, id); await owner.settled()
@@ -214,7 +214,8 @@ it.each(['success', 'failure', 'wrong dependency', 'tree changed', 'same tree', 
   if (failed) {
     expect(owner.status(f.authority, id)).toMatchObject({ pluginPackage: { stage: 'restoration_verified' } })
     expect(readFileSync(patch, 'utf8')).toBe('before\n')
-    expect(JSON.parse(readFileSync(f.manifest, 'utf8')).dependencies.fixture).toBe(oldDependency)
+    const manifest = JSON.parse(readFileSync(f.manifest, 'utf8')) as { dependencies: Record<string, string> }
+    expect(manifest.dependencies.fixture).toBe(oldDependency)
     expect(acknowledgements).toBe(1)
     expect(readFileSync(join(f.web, 'node_modules/fixture/client.js'), 'utf8')).toBe('locally modified')
   }

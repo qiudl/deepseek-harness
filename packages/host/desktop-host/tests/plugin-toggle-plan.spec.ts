@@ -19,7 +19,7 @@ it('preserves the old effective web configuration when the upgraded Bot drops it
   const upgraded = [{ insert: [{ id: 'bot', name: 'ds-bot' }] }]
   const previous = composeEntries([base, legacy]).find(row => row.id === 'web')
   expect(composeEntries([base, upgraded]).find(row => row.id === 'web')?.config).not.toEqual(previous?.config)
-  const preserved = [{ id: 'web', config: previous!.config }]
+  const preserved = [{ id: 'web', config: previous!.config as Record<string, unknown> }]
   expect(composeEntries([base, upgraded, preserved]).find(row => row.id === 'web')).toEqual(previous)
   const explicitUserOverride = [{ id: 'web', config: { searchProvider: 'custom', fetchProvider: 'http' } }]
   expect(composeEntries([base, legacy, explicitUserOverride]).find(row => row.id === 'web')).toEqual(

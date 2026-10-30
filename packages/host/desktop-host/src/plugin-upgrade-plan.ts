@@ -29,14 +29,16 @@ export function parseBundledUpgradePatch(text: string): ProfileLayer['patches'] 
   if (doc.errors.length || doc.warnings.length || !isSeq(doc.contents)) throw Error('invalid_patch')
   const parsed: unknown = doc.toJSON()
   if (!Array.isArray(parsed) || !isPlainJson(parsed) || parsed.length > 128) throw Error('invalid_patch')
-  for (const patch of parsed) {
-    if (!patch || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).join(',') !== 'insert'
-      || !Array.isArray(patch.insert) || patch.insert.length > 128) throw Error('invalid_patch')
-    for (const entry of patch.insert) {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)
-        || Object.keys(entry).some(key => !['id', 'name', 'config'].includes(key))
-        || typeof entry.id !== 'string' || !entry.id || typeof entry.name !== 'string'
-        || !entry.name || entry.name.startsWith('.') || entry.name.startsWith('/') || entry.name.includes('\\')) throw Error('invalid_patch')
+  for (const patch of parsed as unknown[]) {
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw Error('invalid_patch')
+    const record = patch as Record<string, unknown>
+    if (Object.keys(record).join(',') !== 'insert' || !Array.isArray(record.insert) || record.insert.length > 128) throw Error('invalid_patch')
+    for (const entry of record.insert as unknown[]) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw Error('invalid_patch')
+      const row = entry as Record<string, unknown>
+      if (Object.keys(row).some(key => !['id', 'name', 'config'].includes(key))
+        || typeof row.id !== 'string' || !row.id || typeof row.name !== 'string'
+        || !row.name || row.name.startsWith('.') || row.name.startsWith('/') || row.name.includes('\\')) throw Error('invalid_patch')
     }
   }
   return parsed as ProfileLayer['patches']
@@ -78,7 +80,8 @@ export function planPluginUpgrade(oldLayers: Layers, newLayers: Layers, patch: s
     if (JSON.stringify(old) === JSON.stringify(next)) continue
     if (JSON.stringify({ ...old, config: undefined }) !== JSON.stringify({ ...next, config: undefined }) ||
         !isPlainJson(old.config)) throw Error('plugin_upgrade_shared_entry_changed')
-    doc.contents.add(doc.createNode({ id: shared.id, config: JSON.parse(JSON.stringify(old.config)) }))
+    const config: unknown = JSON.parse(JSON.stringify(old.config))
+    doc.contents.add(doc.createNode({ id: shared.id, config }))
     changed = true
   }
   const output = changed ? doc.toString() : patch

@@ -632,7 +632,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     if ('action' in parsed && parsed.action === 'remove') return this.remove(profileId, parsed, context)
     if ('action' in parsed && parsed.action === 'toggle') return this.toggle(profileId, parsed, context)
     const upgradePlan = this.options.upgradePlan
-    if ('action' in parsed && parsed.action === 'update' && upgradePlan
+    if ('action' in parsed && upgradePlan
       && this.needsUpgradePlan(profileId, parsed, this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? '')) {
       const root = this.root(profileId)
       const original = this.read(root, 'profiles/web/cordis.patch.yml')

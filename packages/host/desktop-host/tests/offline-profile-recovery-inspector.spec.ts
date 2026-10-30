@@ -210,7 +210,8 @@ it('plans preservation from the verified target archive before changing the Prof
   const result = await prepareBundledPluginUpgrade(value.catalog, plugin, layers, '[]\n', [])
   expect(result.patch).toContain('searchProvider: auto')
   const nextLayers = layers.map(layer => layer.packageName === plugin.name ? { ...layer, patches: result.patches } : layer)
-  expect(pluginBundleEntries(nextLayers, parseDocument(result.patch).toJSON(), plugin.name)).toEqual([
+  const parsedPatch = parseDocument(result.patch).toJSON() as Parameters<typeof pluginBundleEntries>[1]
+  expect(pluginBundleEntries(nextLayers, parsedPatch, plugin.name)).toEqual([
     { entryId: 'include:bot', moduleName: 'fixture-plugin' },
   ])
   expect(await readFile(join(value.web, 'package.json'), 'utf8')).toBe(before)

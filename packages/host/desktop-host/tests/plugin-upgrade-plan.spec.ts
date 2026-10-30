@@ -16,6 +16,8 @@ it('reads insertion-only bundle patches without executing them', () => {
 })
 
 it.each([
+  '- 1\n',
+  '- insert: [1]\n',
   '- id: web\n  config: {}\n',
   '- insert:\n    - id: bot\n      name: ./local\n',
   '- insert:\n    - id: bot\n      name: ds-bot\n      config: !!js expression\n',
@@ -69,7 +71,7 @@ it('leaves the patch byte-for-byte intact when no shared settings change', () =>
 
 it('bounds and validates target and local patch documents', () => {
   expect(() => parseBundledUpgradePatch(' '.repeat(1_048_577))).toThrow('invalid_patch')
-  expect(() => parseBundledUpgradePatch(`${'- insert: []\n'.repeat(129)}`)).toThrow('invalid_patch')
+  expect(() => parseBundledUpgradePatch('- insert: []\n'.repeat(129))).toThrow('invalid_patch')
   expect(() => parseBundledUpgradePatch('- insert:\n    - id: bot\n      name: ds-bot\n      config: .inf\n')).toThrow('invalid_patch')
   expect(() => planPluginUpgrade([base, legacy], [base, next], '{}\n', [], 'ds-bot')).toThrow('invalid_patch')
   expect(() => planPluginUpgrade([base, legacy], [base, next], `#${'a'.repeat(1_048_576)}\n[]\n`, [], 'ds-bot'))

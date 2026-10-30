@@ -46,7 +46,7 @@ it.each(['file', 'directory'])('rejects a %s changed during capture', (mode) => 
 it('rejects a directory replaced after the final tree verification', () => {
   const tree = fixture(); const uid = process.getuid!(); const snapshot = capturePluginTree(tree, uid)
   fault.mode = 'publish'; fault.root = tree; fault.count = 0
-  expect(() => restorePluginTree(tree, randomUUID(), snapshot.bytes, snapshot.digest, snapshot.digest, uid, () => {}))
+  expect(() => { restorePluginTree(tree, randomUUID(), snapshot.bytes, snapshot.digest, snapshot.digest, uid, () => {}) })
     .toThrow('plugin_state_changed')
 })
 

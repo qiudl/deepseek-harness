@@ -181,12 +181,12 @@ it('binds upgrade backup evidence to the original operation', () => {
     originalSpecDigest: hash(JSON.stringify(`file:.bundled-plugins/${rollbackDigest}.tgz`)), scopeDigest: hash('scope'), removedIds: [], stage: 'prepared',
     upgrade: { operationId: originalId, beforeDigest: hash('before'), afterDigest: hash('after'),
       rollbackSpec: 'bundled:fixture@0.1.0', rollbackDigest, treeDigest: hash('tree') } }
-  expect(() => validateExtensionReceipt(receipt)).not.toThrow()
+  expect(() => { validateExtensionReceipt(receipt) }).not.toThrow()
   receipt.operationId = randomUUID()
-  expect(() => validateExtensionReceipt(receipt)).toThrow('invalid_receipt')
+  expect(() => { validateExtensionReceipt(receipt) }).toThrow('invalid_receipt')
   receipt.restores = originalId
   receipt.recoveryMode = 'complete'
-  expect(() => validateExtensionReceipt(receipt)).not.toThrow()
+  expect(() => { validateExtensionReceipt(receipt) }).not.toThrow()
 })
 
 it('rejects a package checkpoint that points to another operation’s backup', async () => {
@@ -802,12 +802,12 @@ it('binds checkpoints to the original Skill removal target and refuses rewritten
       expect(context.operationId).toBeDefined()
       expect(() => { context.checkpointMcp!({ beforeRevision: hash('before'), afterRevision: hash('after'),
         originalPresent: false, introducedIds: [], stage: 'prepared' }) }).toThrow('invalid_checkpoint')
-      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,entryId:'flat-other' }) }).toThrow('invalid_checkpoint')
-      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,stage:'removal_verified' }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointSkillRemoval!({ ...evidence,entryId:'flat-other' }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointSkillRemoval!({ ...evidence,stage:'removal_verified' }) }).toThrow('invalid_checkpoint')
       context.checkpointSkillRemoval!(evidence)
-      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,originalDigest:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
-      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,beforeRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
-      expect(() =>{  context.checkpointSkillRemoval!({ ...evidence,removedRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointSkillRemoval!({ ...evidence,originalDigest:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointSkillRemoval!({ ...evidence,beforeRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
+      expect(() => { context.checkpointSkillRemoval!({ ...evidence,removedRevision:hash('forged'),stage:'removed' }) }).toThrow('invalid_checkpoint')
       context.checkpointSkillRemoval!(removedEvidence)
       throw Error('interrupted')
     },
@@ -827,7 +827,7 @@ it('binds checkpoints to the original Skill removal target and refuses rewritten
   const id = randomUUID(); owner.commit(f.authority,plan.planId,id); await owner.settled()
   expect(owner.status(f.authority,id)).toMatchObject({ state:'unknown',skillRemoval:removedEvidence })
   const invalid = { ...f.store.read(id)!,skillRemoval:{ ...evidence,entryId:'../escape' } }
-  expect(() =>{  f.store.write(invalid) }).toThrow('invalid_receipt')
+  expect(() => { f.store.write(invalid) }).toThrow('invalid_receipt')
   expect(owner.status(f.authority, id)).toMatchObject({ canRestore: true })
   const recovery = await owner.prepare(f.authority, 'skill', JSON.stringify({ action: 'restore-removal', operationId: id }))
   const recoveryId = randomUUID()
