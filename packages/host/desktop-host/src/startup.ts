@@ -626,6 +626,20 @@ export async function startDesktopHostApplication(
       },
     })
     const pnpmEntrypointPath = config.pnpmEntrypointPath
+    const verifyRollbackSnapshot = async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
+      context: Parameters<ProfilePluginExecutor['execute']>[2], retained?: string) => {
+      const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
+      if (!requested) throw Error('invalid_recovery')
+      const webRoot = join(profileRoot, 'profiles/web'); const dependency = bundledDependencySpec(upgrade.rollbackDigest)
+      const verify = async () => {
+        const actual = await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true, retained)
+        if (actual.spec !== upgrade.rollbackSpec || actual.digest !== upgrade.rollbackDigest) throw Error('invalid_recovery')
+      }
+      context.guard(); context.signal.throwIfAborted(); await verify()
+      const digest = capturePluginTree(retained ?? join(webRoot, 'node_modules', requested.name), uid).digest
+      await verify(); context.guard(); context.signal.throwIfAborted()
+      return digest
+    }
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
       inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
@@ -723,34 +737,9 @@ export async function startDesktopHostApplication(
           await verifyCopiedBundledPlugin(bundledCatalog, plugin, join(profileRoot, 'profiles/web'), uid)
           context.guard(); context.signal.throwIfAborted()
         },
-        verifyRollbackTree: async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
-          context: Parameters<ProfilePluginExecutor['execute']>[2]) => {
-          const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
-          if (!requested) throw Error('invalid_recovery')
-          const webRoot = join(profileRoot, 'profiles/web'); const dependency = bundledDependencySpec(upgrade.rollbackDigest)
-          const verify = async () => {
-            const actual = await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true)
-            if (actual.spec !== upgrade.rollbackSpec || actual.digest !== upgrade.rollbackDigest) throw Error('invalid_recovery')
-          }
-          context.guard(); context.signal.throwIfAborted(); await verify()
-          const digest = capturePluginTree(join(webRoot, 'node_modules', requested.name), uid).digest
-          await verify(); context.guard(); context.signal.throwIfAborted()
-          return digest
-        },
-        verifyRetainedRollbackTree: async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
-          retained: string, context: Parameters<ProfilePluginExecutor['execute']>[2]) => {
-          const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
-          if (!requested) throw Error('invalid_recovery')
-          const webRoot = join(profileRoot, 'profiles/web'); const dependency = bundledDependencySpec(upgrade.rollbackDigest)
-          const verify = async () => {
-            const actual = await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true, retained)
-            if (actual.spec !== upgrade.rollbackSpec || actual.digest !== upgrade.rollbackDigest) throw Error('invalid_recovery')
-          }
-          context.guard(); context.signal.throwIfAborted(); await verify()
-          const digest = capturePluginTree(retained, uid).digest
-          await verify(); context.guard(); context.signal.throwIfAborted()
-          return digest
-        },
+        verifyRollbackTree: (profileRoot, upgrade, context) => verifyRollbackSnapshot(profileRoot, upgrade, context),
+        verifyRetainedRollbackTree: (profileRoot, upgrade, retained, context) =>
+          verifyRollbackSnapshot(profileRoot, upgrade, context, retained),
         bundledPlugin: (name: string, version: string) => {
           const plugin = bundledCatalog.get(name, version)
           return plugin && { entryIds: plugin.entryIds, dependency: bundledDependencySpec(plugin.sha256) }
