@@ -33,6 +33,10 @@ export {
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
 export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
+export { parseHostFriendBotConfirmationChallenge, parseHostFriendBotConfirmationAssertion,
+  encodeHostFriendBotConfirmationPayload } from './friend-bot-confirmation.js'
+export type { HostFriendBotConfirmationChallenge,
+  HostFriendBotConfirmationAssertion } from './friend-bot-confirmation.js'
 export type { HostBotIdentity } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
