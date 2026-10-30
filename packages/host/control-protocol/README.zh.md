@@ -68,6 +68,8 @@ kind: "package-reference"
 
 `profile.skillhub_binding` 使用独立签名域 `SLARK-SKILLHUB-DSH-PROFILE-BINDING/v1` 为一个 Host 本地 Profile 选择器签署 Slark 挑战。固定顺序 JSON 精确绑定 Slark 用户、Computer、Host 安装、本地 Profile、绑定代次和挑战 UUID。Host 根据当前本地 Profile 授权核验选择器；Desktop broker 提供 Slark 用户和 Computer 坐标。Slark 必须再与已认证 daemon 和数据库一次性挑战核对，才能建立 SkillHub 目标绑定。此签名本身不授予安装或执行权限。
 
+`profile.skillhub_bot_message_actor` 只接受由 Slark 解析的私聊消息、工具调用、Person 权威、策略和请求摘要字段，并要求当前连接持有对应的 Profile selector。Host 补入自己的安装、本地 Profile、绑定代次、密钥身份、token 和有界时间，再用该安装密钥签发紧凑 EdDSA JWS；客户端返回前会复核原始输入和已检查的 Host 密钥。该证明本身不授予 SkillHub 权限，Slark 消费前仍须核验当前 Person、Host/Profile 和项目权威。
+
 `profile.skillhub_package_chunk` 每个规范控制帧最多传输同一固定 ZIP 的 32 KiB。每片重复 Profile 选择器、包计划、总字节数和下一偏移；Host 每次重查当前连接的 Profile 授权，拒绝坐标变化、片段缺口和超限片段。最后的确认只表示完整包已在该 Profile 私有存储中完成验证和准备，不表示已激活、加载或授权。Slark 在单独提交前仍须重查来源和目标权限。
 
 `profile.skillhub_package` 使用固定的 Profile 选择器、绑定代次和预期包 revision 激活已准备的操作，也可读取当前包回执。两种操作均要求当前连接拥有 Profile 授权，并携带调用方提供的挑战 UUID。Host 验证已准备文件并比较 revision 后才替换版本指针；回执在 `SLARK-SKILLHUB-DSH-PACKAGE-RECEIPT/v1` 签名域下绑定该挑战、Host 安装、Profile、公钥、操作、版本和新 revision。当前结果为空表示没有已激活的包。`readiness: prepared` 只证明存储激活；运行时加载需要独立证据，Slark 激活前仍须重查自身的当前来源和目标授权。
