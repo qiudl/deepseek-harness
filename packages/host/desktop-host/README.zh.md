@@ -85,7 +85,7 @@ REQ-20261022-0022 的 Slark Profile 使用由 Account issuer、subject 和 Slark
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
-本地好友 Bot 确认签名函数检查挑战中的 Account 绑定、当前 Host 进程、短时效，以及可信 Profile worker 返回的准确 Bot ID、发言者引用和显示名摘要。读取后重新校验 Account/Profile 权限，再用安装 Ed25519 密钥签名。目前没有控制方法暴露该签名函数；Slark 在创建好友关系前仍须在线核验双方选定的 Bot，并消费自己的挑战。
+`profile.friend_bot_confirmation` 仅在已认证的 Account 控制连接且当前 Profile worker 能解析 Bot 身份时暴露好友 Bot 签名函数。它检查挑战中的 Account 绑定、当前 Host 进程、短时效，以及该 worker 返回的准确 Bot ID、发言者引用和显示名摘要。读取后重新校验 Account/Profile 权限，再用安装 Ed25519 密钥签名。客户端核对准确挑战、已检验的 Host 对端及签名。Slark 在创建好友关系前仍须在线核验双方选定的 Bot，并消费自己的挑战。
 
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 

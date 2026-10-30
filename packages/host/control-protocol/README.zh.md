@@ -86,7 +86,7 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
-好友 Bot 确认辅助函数解析 Slark 准确的 36 字段挑战、编码固定的 `slark-dsh-friend-bot-confirmation/v1` 签名载荷，并解析 64 字节 Ed25519 证明。这些辅助函数目前仅定义本地协议值；尚无 Host 控制方法接收该挑战。挑战签发、一次性消费、当前路由核验及最终好友关系决策仍由 Slark 负责。
+`profile.friend_bot_confirmation` 在已认证 Host 连接上接收准确的 36 字段 Slark 挑战及当前 Account 绑定。响应是固定 `slark-dsh-friend-bot-confirmation/v1` 载荷上的 64 字节 Ed25519 签名。Host 签名前通过当前 Profile worker 检查选定 Bot。挑战签发、一次性消费、当前路由核验、双方选定 Bot 的在线核验及最终好友关系决策仍由 Slark 负责。
 
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 

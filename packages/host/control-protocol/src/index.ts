@@ -39,6 +39,7 @@ export type { HostFriendBotConfirmationChallenge,
   HostFriendBotConfirmationAssertion } from './friend-bot-confirmation.js'
 export type { HostBotIdentity } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileFriendBotConfirmationRequest, ProfileFriendBotConfirmationResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

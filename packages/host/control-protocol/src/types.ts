@@ -1033,6 +1033,31 @@ export interface ProfileBotIdentityResult {
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
 }
 
+/** Request one current Account Bot signature for a Slark-issued friend challenge. */
+export interface ProfileFriendBotConfirmationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.friend_bot_confirmation'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly challenge: import('./friend-bot-confirmation.ts').HostFriendBotConfirmationChallenge
+  }
+}
+
+/** Exact installation signature; Slark still owns one-use challenge consumption. */
+export interface ProfileFriendBotConfirmationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.friend_bot_confirmation'
+  readonly result: import('./friend-bot-confirmation.ts').HostFriendBotConfirmationAssertion
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2414,6 +2439,8 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityRequest
   | ProfileBotIdentityResult
+  | ProfileFriendBotConfirmationRequest
+  | ProfileFriendBotConfirmationResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest
