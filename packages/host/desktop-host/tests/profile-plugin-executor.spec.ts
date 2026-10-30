@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { FileExtensionReceipts, ProfileExtensionOperations, type ExtensionReceipt } from '../src/extension-operations.ts'
 import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
+import { capturePluginTree } from '../src/plugin-tree-snapshot.ts'
+import * as pluginTree from '../src/plugin-tree-snapshot.ts'
 
 function fixture(acknowledged = true) {
-  const root = mkdtempSync(join(tmpdir(), 'plugin-executor-'))
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'plugin-executor-')))
   const web = join(root, 'profiles/web'); mkdirSync(web, { recursive: true, mode: 0o700 })
   const manifest = join(web, 'package.json'); writeFileSync(manifest, '{}', { mode: 0o600 })
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
@@ -27,6 +29,197 @@ function fixture(acknowledged = true) {
   return { root, web, manifest, executor, store, operations, authority, calls: () => calls }
 }
 const payload = JSON.stringify({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+
+it.each(['restored archive', 'target archive', 'mismatched archive', 'unverified target', 'corrupt restoration',
+  'missing after swap', 'missing no verifier', 'missing wrong dependency'])
+('recovers an interrupted bundled update with %s', async (mode) => {
+  const f = fixture()
+  const before = '# before\n[]\n'; const after = '# before\n- id: web\n  config: {searchProvider: auto}\n'
+  const patch = join(f.web, 'cordis.patch.yml')
+  mkdirSync(join(f.web, 'node_modules/fixture'), { recursive: true, mode: 0o700 })
+  writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'old client', { mode: 0o600 })
+  writeFileSync(patch, before, { mode: 0o600 })
+  const rollbackDigest = 'a'.repeat(64)
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: `file:.bundled-plugins/${rollbackDigest}.tgz` }, dsh: { profile: { bundles: ['fixture'] } } }))
+  let interrupted = true
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    togglePlan: () => { throw Error('plugin_toggle_unsupported') }, acknowledgeToggle: async () => {},
+    upgradePlan: async () => ({ patch: after, rollback: { spec: 'bundled:fixture@1.0.0', digest: rollbackDigest } }),
+    bundledPlugin: () => ({ entryIds: ['bot'], dependency: 'file:target.tgz' }),
+    ...(mode === 'unverified target' ? {} : { verifyUpgradeTarget: async () => {
+      if (readFileSync(join(f.web, 'node_modules/fixture/client.js'), 'utf8') !== 'target version') throw Error('invalid_target')
+    } }),
+    verifyRollbackTree: async () => {
+      if (readFileSync(join(f.web, 'node_modules/fixture/client.js'), 'utf8') !== 'archive version') throw Error('invalid_archive')
+      if (mode === 'mismatched archive') return '0'.repeat(64)
+      return capturePluginTree(join(f.web, 'node_modules/fixture'), process.getuid!()).digest
+    },
+    ...(mode === 'missing no verifier' ? {} : { verifyRetainedRollbackTree: async (_root: string, _upgrade: unknown, retained: string) => {
+      if (readFileSync(join(retained, 'client.js'), 'utf8') !== 'archive version') throw Error('invalid_archive')
+      return capturePluginTree(retained, process.getuid!()).digest
+    } }),
+    install: async () => {
+      if (interrupted) throw Error('interrupted')
+      expect(readFileSync(join(f.web, 'node_modules/fixture/client.js'), 'utf8'))
+        .toBe(mode === 'target archive' ? 'target version' : 'old client')
+      writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: 'file:target.tgz' }, dsh: { profile: { bundles: ['fixture'] } } }))
+    }, acknowledge: async () => {},
+  })
+  const owner = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
+  onTestFinished(async () => owner.dispose())
+  const plan = await owner.prepare(f.authority, 'plugin', JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'bundled:fixture@2.0.0' }))
+  const id = randomUUID(); owner.commit(f.authority, plan.planId, id); await owner.settled()
+  expect(owner.status(f.authority, id)).toMatchObject({ state: 'unknown', pluginPackage: { upgrade: { operationId: id } } })
+  expect(readFileSync(patch, 'utf8')).toBe(after)
+  expect(readFileSync(join(f.web, `.plugin-before-${id}`), 'utf8')).toBe(`1${before}`)
+  expect(readFileSync(join(f.web, `.plugin-after-${id}`), 'utf8')).toBe(`1${after}`)
+  const recoveryPayload = JSON.stringify({ action: 'complete-package', operationId: id })
+  writeFileSync(patch, '# another operation\n', { mode: 0o600 })
+  await expect(owner.prepare(f.authority, 'plugin', recoveryPayload)).rejects.toThrow('plugin_state_changed')
+  expect(readFileSync(patch, 'utf8')).toBe('# another operation\n')
+  writeFileSync(patch, after, { mode: 0o600 })
+  const backup = join(f.web, `.plugin-after-${id}`)
+  writeFileSync(backup, '1modified backup', { mode: 0o600 })
+  await expect(owner.prepare(f.authority, 'plugin', recoveryPayload)).rejects.toThrow('invalid_backup')
+  writeFileSync(backup, `1${after}`, { mode: 0o600 })
+  const treeBackup = join(f.web, `.plugin-tree-${id}`); const savedTree = readFileSync(treeBackup)
+  writeFileSync(treeBackup, 'damaged')
+  await expect(owner.prepare(f.authority, 'plugin', recoveryPayload)).rejects.toThrow('invalid_backup')
+  writeFileSync(treeBackup, savedTree); chmodSync(treeBackup, 0o644)
+  await expect(owner.prepare(f.authority, 'plugin', recoveryPayload)).rejects.toThrow('invalid_backup')
+  chmodSync(treeBackup, 0o600)
+  writeFileSync(patch, mode === 'target archive' ? after : before, { mode: 0o600 })
+  const target = mode === 'target archive' || mode === 'unverified target'
+  writeFileSync(join(f.web, 'node_modules/fixture/client.js'), target ? 'target version' : 'archive version')
+  if (mode.startsWith('missing ')) {
+    const retained = join(f.web, 'node_modules', `.plugin-tree-replaced-${id}-${randomUUID()}`)
+    mkdirSync(retained, { mode: 0o700 }); renameSync(join(f.web, 'node_modules/fixture'), join(retained, 'tree'))
+  }
+  if (target || mode === 'missing wrong dependency') {
+    writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: 'file:target.tgz' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  }
+  const recovery = await owner.prepare(f.authority, 'plugin', recoveryPayload)
+  if (mode === 'corrupt restoration') {
+    const restore = pluginTree.restorePluginTree
+    const spy = vi.spyOn(pluginTree, 'restorePluginTree').mockImplementationOnce((...args) => {
+      restore(...args); writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'changed after restoration')
+    })
+    onTestFinished(() => { spy.mockRestore() })
+  }
+  interrupted = false
+  const recoveryId = randomUUID(); owner.commit(f.authority, recovery.planId, recoveryId); await owner.settled()
+  const success = mode === 'restored archive' || mode === 'target archive' || mode === 'missing after swap'
+  expect(owner.status(f.authority, recoveryId).state).toBe(success ? 'succeeded' : 'unknown')
+  expect(readFileSync(patch, 'utf8')).toBe(success ? after : before)
+})
+
+it('preflights supported updates separately from legacy updates and surfaces planner errors', async () => {
+  const f = fixture(); const profile = f.authority()
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  writeFileSync(join(f.web, 'cordis.patch.yml'), '[]\n')
+  const plan = vi.fn(async () => ({ patch: '[]\n', rollback: { spec: 'bundled:fixture@1.0.0', digest: 'a'.repeat(64) } }))
+  const toggle = vi.fn(() => ({ patch: '', expected: [], disabled: [], previousExpected: [], previousDisabled: [] }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, acknowledgeToggle: async () => {}, togglePlan: toggle, upgradePlan: plan })
+  const request = JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'bundled:fixture@2.0.0' })
+  await expect(executor.preflight(profile, 'plugin', request)).resolves.toBeUndefined()
+  expect(plan).not.toHaveBeenCalled()
+  unlinkSync(join(f.web, 'cordis.patch.yml'))
+  await expect(executor.preflight(profile, 'plugin', JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'fixture@2.0.0' })))
+    .resolves.toBeUndefined()
+  toggle.mockImplementation(() => { throw Error('unexpected planning error') })
+  await expect(executor.preflight(profile, 'plugin', request)).rejects.toThrow('unexpected planning error')
+  toggle.mockImplementation(() => { throw Error('plugin_toggle_unsupported') })
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: 1 }, dsh: { profile: { bundles: ['fixture'] } } }))
+  await expect(executor.preflight(profile, 'plugin', request)).rejects.toThrow('plugin_target_changed')
+})
+
+it('refuses legacy update without recoverable context and detects changes during planning', async () => {
+  const f = fixture(); const profile = f.authority()
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const patchPath = join(f.web, 'cordis.patch.yml'); writeFileSync(patchPath, '[]\n')
+  let change = false
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, acknowledgeToggle: async () => {},
+    togglePlan: () => { throw Error('plugin_toggle_unsupported') },
+    upgradePlan: async () => {
+      if (change) writeFileSync(patchPath, '# concurrent\n[]\n')
+      return { patch: '[]\n', rollback: { spec: 'bundled:fixture@1.0.0', digest: 'a'.repeat(64) } }
+    }, bundledPlugin: () => ({ entryIds: [], dependency: 'file:target.tgz' }) })
+  const request = JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'bundled:fixture@2.0.0' })
+  const context = { kind: 'plugin' as const, signal: new AbortController().signal, guard() {} }
+  await expect(executor.execute(profile, request, context)).rejects.toThrow('upgrade_required')
+  unlinkSync(patchPath)
+  await expect(executor.execute(profile, request, context)).rejects.toThrow('upgrade_required')
+  writeFileSync(patchPath, '[]\n')
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: 1 }, dsh: { profile: { bundles: ['fixture'] } } }))
+  await expect(executor.execute(profile, request, context)).rejects.toThrow('plugin_target_changed')
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  change = true
+  await expect(executor.execute(profile, request, context)).rejects.toThrow('plugin_state_changed')
+  expect(readFileSync(patchPath, 'utf8')).toBe('# concurrent\n[]\n')
+})
+
+it('does not bypass unsupported toggle errors for other actions or sources', () => {
+  const f = fixture(); const profile = f.authority()
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '1.0.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(), install: async () => {},
+    acknowledge: async () => {}, acknowledgeToggle: async () => {}, togglePlan: () => { throw Error('plugin_toggle_unsupported') },
+    upgradePlan: async () => ({ patch: '', rollback: { spec: 'bundled:fixture@1.0.0', digest: 'a'.repeat(64) } }) })
+  for (const request of [
+    { action: 'toggle', packageName: 'fixture', enabled: true },
+    { action: 'update', packageName: 'fixture', spec: 'fixture@2.0.0' },
+  ]) expect(() => { executor.validate(profile, 'plugin', JSON.stringify(request)) }).toThrow('plugin_toggle_unsupported')
+})
+
+it.each(['success', 'failure', 'wrong dependency', 'tree changed', 'same tree', 'patch restored', 'ack changed', 'corrupt restoration'])
+('handles update failure and rollback outcome: %s', async (mode) => {
+  const f = fixture(); const digest = 'b'.repeat(64)
+  const oldDependency = `file:.bundled-plugins/${digest}.tgz`
+  const manifest = (dependency: string) => JSON.stringify({ dependencies: { fixture: dependency }, dsh: { profile: { bundles: ['fixture'] } } })
+  const patch = join(f.web, 'cordis.patch.yml')
+  mkdirSync(join(f.web, 'node_modules/fixture'), { recursive: true, mode: 0o700 })
+  writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'locally modified', { mode: 0o600 })
+  writeFileSync(f.manifest, manifest(oldDependency)); writeFileSync(patch, 'before\n')
+  let acknowledgements = 0
+  const executor = new ProfilePluginExecutor({ resolve: () => f.root, uid: process.getuid!(),
+    togglePlan: () => { throw Error('plugin_toggle_unsupported') }, acknowledgeToggle: async () => {},
+    upgradePlan: async () => ({ patch: 'preserved\n', rollback: { spec: 'bundled:fixture@1.0.0', digest } }),
+    bundledPlugin: () => ({ entryIds: ['bot'], dependency: 'file:target.tgz' }),
+    install: async () => { writeFileSync(f.manifest, manifest('file:target.tgz')); throw Error('installation interrupted') },
+    rollbackUpgrade: async (_root, upgrade) => {
+      expect(upgrade.rollbackDigest).toBe(digest)
+      if (mode === 'failure') throw Error('rollback interrupted')
+      writeFileSync(f.manifest, manifest(mode === 'wrong dependency' ? 'file:target.tgz' : oldDependency))
+      if (mode !== 'same tree') writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'archive version')
+      if (mode === 'patch restored') writeFileSync(patch, 'before\n')
+      if (mode === 'tree changed') return '0'.repeat(64)
+      return capturePluginTree(join(f.web, 'node_modules/fixture'), process.getuid!()).digest
+    },
+    acknowledge: async () => { acknowledgements++; if (mode === 'ack changed') writeFileSync(join(f.web, 'pnpm-lock.yaml'), 'changed') },
+  })
+  const owner = new ProfileExtensionOperations(f.store, executor, { now: Date.now })
+  onTestFinished(async () => owner.dispose())
+  if (mode === 'corrupt restoration') {
+    const restore = pluginTree.restorePluginTree
+    const spy = vi.spyOn(pluginTree, 'restorePluginTree').mockImplementationOnce((...args) => {
+      restore(...args); writeFileSync(join(f.web, 'node_modules/fixture/client.js'), 'changed after restoration')
+    })
+    onTestFinished(() => { spy.mockRestore() })
+  }
+  const plan = await owner.prepare(f.authority, 'plugin', JSON.stringify({ action: 'update', packageName: 'fixture', spec: 'bundled:fixture@2.0.0' }))
+  const id = randomUUID(); owner.commit(f.authority, plan.planId, id); await owner.settled()
+  const failed = mode === 'success' || mode === 'same tree' || mode === 'patch restored'
+  expect(owner.status(f.authority, id).state).toBe(failed ? 'failed' : 'unknown')
+  if (failed) {
+    expect(owner.status(f.authority, id)).toMatchObject({ pluginPackage: { stage: 'restoration_verified' } })
+    expect(readFileSync(patch, 'utf8')).toBe('before\n')
+    const manifest = JSON.parse(readFileSync(f.manifest, 'utf8')) as { dependencies: Record<string, string> }
+    expect(manifest.dependencies.fixture).toBe(oldDependency)
+    expect(acknowledgements).toBe(1)
+    expect(readFileSync(join(f.web, 'node_modules/fixture/client.js'), 'utf8')).toBe('locally modified')
+  }
+})
 
 it('preflights only new plugin installs when an inspector is available', async () => {
   const f = fixture()

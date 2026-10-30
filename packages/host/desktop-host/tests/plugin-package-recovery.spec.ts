@@ -1,10 +1,53 @@
 import { expect, it } from 'vitest'
-import { validPluginPackageRecovery } from '../src/plugin-package-recovery.ts'
+import { createHash } from 'node:crypto'
+import { upgradePatchScope, validPluginPackageRecovery } from '../src/plugin-package-recovery.ts'
 
 const intent = {
   action: 'install', packageName: 'fixture', spec: 'fixture@1.0.0',
   originalSpecDigest: 'a'.repeat(64), scopeDigest: 'b'.repeat(64), removedIds: [], stage: 'prepared',
 }
+const upgrade = { operationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150', beforeDigest: 'c'.repeat(64), afterDigest: 'd'.repeat(64),
+  rollbackSpec: 'bundled:fixture@0.1.0', rollbackDigest: 'e'.repeat(64), treeDigest: 'f'.repeat(64) }
+const originalSpecDigest = createHash('sha256').update(JSON.stringify(`file:.bundled-plugins/${upgrade.rollbackDigest}.tgz`)).digest('hex')
+
+it('accepts digest-only upgrade evidence while retaining legacy receipt support', () => {
+  expect(validPluginPackageRecovery(intent)).toBe(true)
+  expect(validPluginPackageRecovery({ ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade })).toBe(true)
+})
+
+it('accepts only the recorded rollback stages for upgrade receipts', () => {
+  const candidate = { ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade }
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'rollback_completed' })).toBe(true)
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'restoration_verified' })).toBe(true)
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'unexpected' })).toBe(false)
+  expect(validPluginPackageRecovery({ ...intent, stage: 'rollback_completed' })).toBe(false)
+})
+
+it.each([
+  { ...upgrade, operationId: '../backup' }, { ...upgrade, beforeDigest: 'short' },
+  { ...upgrade, treeDigest: 'short' }, { ...upgrade, content: 'secret' }, [], null,
+])('rejects malformed or content-bearing upgrade evidence', (invalid) => {
+  expect(validPluginPackageRecovery({ ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade: invalid })).toBe(false)
+})
+
+it('only permits upgrade evidence for an exact bundled update', () => {
+  expect(validPluginPackageRecovery({ ...intent, upgrade })).toBe(false)
+  expect(validPluginPackageRecovery({ ...intent, action: 'update', upgrade })).toBe(false)
+})
+
+it('binds rollback identity to the original content-addressed dependency', () => {
+  const candidate = { ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade }
+  expect(validPluginPackageRecovery({ ...candidate, originalSpecDigest: 'f'.repeat(64) })).toBe(false)
+  expect(validPluginPackageRecovery({ ...candidate, upgrade: { ...upgrade, rollbackSpec: 'bundled:other@0.1.0' } })).toBe(false)
+  expect(validPluginPackageRecovery({ ...candidate, upgrade: { ...upgrade, rollbackDigest: 'f'.repeat(64) } })).toBe(false)
+})
+
+it('permits only the two recorded patch states during upgrade recovery', () => {
+  const hash = (patch: string | null) => createHash('sha256').update(JSON.stringify(patch)).digest('hex')
+  const states = { ...upgrade, beforeDigest: hash(null), afterDigest: hash('preserved') }
+  expect(upgradePatchScope(null, states)).toEqual(upgradePatchScope('preserved', states))
+  expect(() => upgradePatchScope('concurrently changed', states)).toThrow('plugin_state_changed')
+})
 
 it.each([
   ['action', ['install']], ['stage', ['prepared']],
