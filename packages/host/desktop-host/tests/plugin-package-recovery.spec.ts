@@ -15,6 +15,14 @@ it('accepts digest-only upgrade evidence while retaining legacy receipt support'
   expect(validPluginPackageRecovery({ ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade })).toBe(true)
 })
 
+it('accepts only the recorded rollback stages for upgrade receipts', () => {
+  const candidate = { ...intent, action: 'update', spec: 'bundled:fixture@1.0.0', originalSpecDigest, upgrade }
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'rollback_completed' })).toBe(true)
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'restoration_verified' })).toBe(true)
+  expect(validPluginPackageRecovery({ ...candidate, stage: 'unexpected' })).toBe(false)
+  expect(validPluginPackageRecovery({ ...intent, stage: 'rollback_completed' })).toBe(false)
+})
+
 it.each([
   { ...upgrade, operationId: '../backup' }, { ...upgrade, beforeDigest: 'short' },
   { ...upgrade, treeDigest: 'short' }, { ...upgrade, content: 'secret' }, [], null,
