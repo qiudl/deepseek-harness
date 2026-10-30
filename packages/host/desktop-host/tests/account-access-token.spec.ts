@@ -7,6 +7,7 @@ import {
 
 const ISSUER = 'https://accounts.dsh.colorbuyai.com'
 const STAGING_ISSUER = 'https://accounts.staging.dsh.colorbuyai.com'
+const CN_ISSUER = 'https://accounts.slark.ququclean.com'
 const NOW = 1_780_000_000_000
 const ACCOUNT = '30000000-0000-4000-8000-000000000003'
 const SESSION = '40000000-0000-4000-8000-000000000004'
@@ -49,6 +50,18 @@ function token(overrides: Record<string, unknown> = {}, headerOverrides: Record<
 }
 
 describe('DSH Account Host access token', () => {
+  it('accepts domestic credentials only against the pinned domestic issuer', () => {
+    const keyring = JSON.stringify({ version: 2, issuer: CN_ISSUER,
+      keys: [{ kid: 'identity-2026-09', publicJwk }] })
+    expect(parseDshAccountAccessKeyring(keyring).issuer).toBe(CN_ISSUER)
+    const verifier = new DshAccountAccessTokenVerifier(keyring, { now: () => NOW })
+    expect(verifier.verify(token({ iss: CN_ISSUER })).issuer).toBe(CN_ISSUER)
+    for (const iss of [ISSUER, STAGING_ISSUER, 'https://accounts.attacker.invalid']) {
+      expect(() => verifier.verify(token({ iss }))).toThrow(/Account access token/u)
+    }
+    expect(() => new DshAccountAccessTokenVerifier(rawKeyring, { now: () => NOW })
+      .verify(token({ iss: CN_ISSUER }))).toThrow(/Account access token/u)
+  })
   it('accepts only the canonical ES256 dsh-host credential and returns bounded identity facts', () => {
     const verifier = new DshAccountAccessTokenVerifier(rawKeyring, { now: () => NOW })
     expect(verifier.verify(token())).toEqual({

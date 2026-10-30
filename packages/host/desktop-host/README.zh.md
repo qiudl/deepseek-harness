@@ -53,6 +53,8 @@ Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
+Account 访问验证接受国际生产、预生产和国内 `https://accounts.slark.ququclean.com` issuer。每个 Host 使用一个由发布固定的公开密钥环，并要求凭据 issuer 与该密钥环一致；共享公钥不会授权其他 issuer 的凭据。
+
 `profile.skillhub_binding` 为 Slark SkillHub 单独签署 Host 本地 Profile 事实。当前连接必须拥有该 Profile 授权，签名选择器也必须符合当前绑定代次。证明包含 broker 提供的 Slark 用户与 Computer 坐标；只有 Slark 能认证这些远端坐标并消费一次性挑战。该方法不写入 Profile、Session 或凭据数据。
 
 Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。

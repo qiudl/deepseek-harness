@@ -3,6 +3,7 @@ import { createPublicKey, verify, type JsonWebKey, type KeyObject } from 'node:c
 const ACCOUNT_ISSUERS = [
   'https://accounts.dsh.colorbuyai.com',
   'https://accounts.staging.dsh.colorbuyai.com',
+  'https://accounts.slark.ququclean.com',
 ] as const
 type DshAccountIssuer = (typeof ACCOUNT_ISSUERS)[number]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
