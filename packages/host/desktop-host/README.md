@@ -52,6 +52,7 @@ No direct invalidation; Host control facts do not enter model context.
 - **Unlock material remains embedding-owned** — Slark Main must keep the random 32-byte Profile material in macOS Keychain/safeStorage and provide it only across the authenticated Main-to-Host path. It must never enter Renderer, argv, environment, logs, or the registration file.
 - **Account access remains session-bound** — Slark Main must obtain the `dsh-host` token from DSH Account and provide it only across the authenticated Main-to-Host path. The Host does not persist or log this credential; an expired token requires Slark Main to refresh the Account session before `profile.ensure` can succeed.
 - **Legacy migration is fail-closed until complete** — the Host advertises export only when the active Profile's complete owner-only bundle (sessions, settings, credentials, workspace and Profile configuration) can be staged. A digest-only or session-only transfer is not advertised as a safe migration.
+- **HY capacity is not yet sized for complete Profile history** — the Host index accepts up to 20,000 redacted records, but one worker connection accepts at most 64 sequential embedding requests, including query embeddings. The fixed synthetic worker uses two requests. A dynamic worker needs an explicit batching or index-capacity policy and measured build time before it can claim complete-history semantic coverage. The current startup supplies no product worker opener.
 
 ### Dev Note
 
