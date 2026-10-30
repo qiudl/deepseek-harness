@@ -1097,6 +1097,7 @@ export interface ProfileFriendOnlineLeaseRequest {
     readonly challenge: import('./friend-online-lease-proof.ts').HostFriendOnlineLeaseChallenge
   }
 }
+/** Signed online lease response from the authenticated Host control session. */
 export interface ProfileFriendOnlineLeaseResult {
   readonly version: 1
   readonly type: 'result'

@@ -4762,7 +4762,11 @@ export class UnixHostClient {
     return assertion
   }
 
-  /** Sign a current Account's one-use friend device online lease challenge. */
+  /**
+   * Request an online lease signature from the current Account Host.
+   * @param input - current Account grant and Slark's issue or renewal challenge.
+   * @returns the Host assertion after challenge, peer and signature verification.
+   */
   async attestFriendOnlineLease(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

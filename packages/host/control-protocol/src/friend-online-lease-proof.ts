@@ -2,6 +2,7 @@
 const USER = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,255}$/u
 const isSlarkUserId = (v: unknown): v is string => typeof v === 'string' && USER.test(v)
 
+/** Slark's one-use issue or renewal challenge bound to a current Host socket. */
 export interface HostFriendOnlineLeaseChallenge {
   readonly schema_version: 1
   readonly operation: 'issue' | 'renew'
@@ -32,6 +33,7 @@ export interface HostFriendOnlineLeaseChallenge {
   readonly expires_at: number
   readonly nonce: string
 }
+/** Installation-key signature over one exact online lease challenge. */
 export interface HostFriendOnlineLeaseAssertion {
   readonly schema_version: 1
   readonly challenge: HostFriendOnlineLeaseChallenge
@@ -93,17 +95,32 @@ function assertHostFriendOnlineLeaseChallenge(
       !Number.isSafeInteger(r.expires_at) || Number(r.expires_at)<=Number(r.issued_at) ||
       Number(r.expires_at)-Number(r.issued_at)>10_000) return fail()
 }
+/**
+ * Validate the exact issue or renewal challenge before Host signing.
+ * @param value - untrusted challenge received by the Host.
+ * @returns the validated challenge.
+ */
 export function parseHostFriendOnlineLeaseChallenge(value: unknown): HostFriendOnlineLeaseChallenge {
   const r = exact(value,FIELDS)
   assertHostFriendOnlineLeaseChallenge(r)
   return Object.freeze(r)
 }
+/**
+ * Validate a Host lease response without accepting its signature as authority.
+ * @param value - untrusted Host response.
+ * @returns the structurally valid assertion for signature verification.
+ */
 export function parseHostFriendOnlineLeaseAssertion(value: unknown): HostFriendOnlineLeaseAssertion {
   const r = exact(value,['schema_version','challenge','signature'])
   const challenge = parseHostFriendOnlineLeaseChallenge(r.challenge)
   if (r.schema_version !== 1 || !raw(r.signature,64)) return fail()
   return Object.freeze({ schema_version:1,challenge,signature:r.signature }) as HostFriendOnlineLeaseAssertion
 }
+/**
+ * Encode the lease signature domain and ordered challenge fields.
+ * @param value - the assertion whose challenge is signed.
+ * @returns canonical signature bytes.
+ */
 export function encodeHostFriendOnlineLeasePayload(value: unknown): Buffer {
   const assertion = parseHostFriendOnlineLeaseAssertion(value)
   return Buffer.from('slark-dsh-friend-online-lease/v1\0'+JSON.stringify(
