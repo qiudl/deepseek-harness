@@ -250,6 +250,17 @@ describe('authenticated Unix transport', () => {
       list: async () => ({ items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }),
       read: async () => ({ sessionId: 'session-one', revision: 'r1',
         text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }) }
+    const textOnly = await fixture(undefined, undefined, undefined, clock.now, {
+      verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
+    })
+    const textOnlyClient = await connectHost(textOnly.socketPath)
+    expect(textOnlyClient.inspection.capabilities).toContain('profile.memory_query')
+    expect(textOnlyClient.inspection.capabilities).not.toContain('profile.memory_semantic_search')
+    await expect(textOnlyClient.memoryQuery({ ...binding, command: {
+      action: 'semantic_search', directive: {}, query: 'private', limit: 1,
+    } })).rejects.toMatchObject({ code: 'upgrade_required' })
+    textOnlyClient.close()
+    await textOnly.server.close()
     const projected: Array<{ sourceRef: string; sourceVersion: string; text: string }> = []
     const workerQueries: Array<{ text: string; limit: number }> = []
     const finishWorker: Array<() => void> = []
@@ -267,6 +278,7 @@ describe('authenticated Unix transport', () => {
       }),
     })
     const client = await connectHost(enabled.socketPath)
+    expect(client.inspection.capabilities).toContain('profile.memory_semantic_search')
     const profile = await client.ensureAccountProfile({ ...binding,
       accountAccessToken: accountToken(slarkIssuer, 'u1'), keyHandle: 'keychain:u1', unlockMaterial })
     expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
@@ -279,12 +291,13 @@ describe('authenticated Unix transport', () => {
       ownerUserId: binding.ownerUserId, environmentId: stagingEnvironmentId,
       computerId: binding.computerId, installationId: identity.installationId,
       profileId: profile.profileId, readerKind: 'personal_dsh' }
-    const signSearch = (requestId: string, nonceByte: number) => {
+    const signSearch = (requestId: string, nonceByte: number,
+      operation: 'search' | 'semantic_search' = 'search') => {
       const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
         keyId: 'test', requestId, nonce: Buffer.alloc(32, nonceByte).toString('base64url'),
         hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce,
-        issuedAt: 1_000, expiresAt: 15_000, operation: 'search',
-        queryDigest: createHash('sha256').update(JSON.stringify(['search', 'private', 1])).digest('hex'),
+        issuedAt: 1_000, expiresAt: 15_000, operation,
+        queryDigest: createHash('sha256').update(JSON.stringify([operation, 'private', 1])).digest('hex'),
         limit: 1, grant }
       const payload = Buffer.from('slark.dsh-memory-query/v1\0' + JSON.stringify([
         unsigned.schemaVersion, unsigned.purpose, unsigned.issuer, unsigned.keyId,
@@ -300,17 +313,24 @@ describe('authenticated Unix transport', () => {
     const found = await client.memoryQuery(search)
     expect(found).toMatchObject({ action: 'search', items: [{ source: { profileId: profile.profileId },
       snippet: 'private plan token=[REDACTED]' }] })
+    expect(workerQueries).toHaveLength(0)
+    const semantic = { ...binding, command: { action: 'semantic_search' as const,
+      directive: signSearch('55555555-5555-4555-8555-555555555555', 9, 'semantic_search'),
+      query: 'private', limit: 1 } }
+    expect(await client.memoryQuery(semantic)).toMatchObject({ action: 'semantic_search',
+      items: [{ source: { profileId: profile.profileId }, snippet: 'private plan token=[REDACTED]' }] })
     expect(projected).toHaveLength(2)
     expect(projected.every(item => item.text === 'private plan token=[REDACTED]')).toBe(true)
     expect(workerQueries).toEqual([{ text: 'private', limit: 1 }])
-    await expect(client.memoryQuery(search)).rejects.toMatchObject({ code: 'replayed' })
+    await expect(client.memoryQuery(semantic)).rejects.toMatchObject({ code: 'replayed' })
     expect(workerCloses).toBeGreaterThan(0)
     expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
       .toEqual({ action: 'warm', state: 'ready' })
     finishWorker[2]?.()
     await new Promise(resolve => setImmediate(resolve))
     await expect(client.memoryQuery({ ...binding, command: {
-      action: 'search', directive: signSearch('44444444-4444-4444-8444-444444444444', 8),
+      action: 'semantic_search', directive: signSearch('44444444-4444-4444-8444-444444444444', 8,
+        'semantic_search'),
       query: 'private', limit: 1,
     } })).rejects.toMatchObject({ code: 'unavailable' })
     expect(workerQueries).toHaveLength(1)

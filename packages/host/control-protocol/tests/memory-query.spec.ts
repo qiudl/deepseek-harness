@@ -40,6 +40,22 @@ it('round-trips exact signed search and bounded redacted search metadata', () =>
   expect(decodeHostControlFrame(wire(result))).toEqual(result)
 })
 
+it('keeps semantic search distinct from signed text search', () => {
+  const semantic = { ...request, params: { ...params, command: {
+    action: 'semantic_search', directive: { ...directive, operation: 'semantic_search' },
+    query: 'redacted', limit: 1,
+  } } }
+  expect(decodeHostControlFrame(wire(semantic))).toEqual(semantic)
+  const result = { version: 1, type: 'result', request_id: uuid, method: 'profile.memory_query',
+    result: { action: 'semantic_search', generation: 0, items: [{ ...identity, snippet: 'redacted' }] } }
+  expect(decodeHostControlFrame(wire(result))).toEqual(result)
+  expect(() => decodeHostControlFrame(wire({ ...semantic, params: { ...params,
+    command: { ...semantic.params.command, directive } } }))).toThrow(HostControlProtocolError)
+  expect(() => decodeHostControlFrame(wire({ ...request, params: { ...params,
+    command: { ...request.params.command, directive: semantic.params.command.directive } } })))
+    .toThrow(HostControlProtocolError)
+})
+
 it('requires an exact Account-bound local warmup frame without a query directive', () => {
   const warm = { ...request, params: { ...params, command: { action: 'warm' } } }
   const ready = { version: 1, type: 'result', request_id: uuid, method: 'profile.memory_query',

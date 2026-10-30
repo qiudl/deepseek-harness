@@ -559,6 +559,11 @@ export interface ProfileMemoryQueryRequest {
       readonly query: string
       readonly limit: number
     } | {
+      readonly action: 'semantic_search'
+      readonly directive: unknown
+      readonly query: string
+      readonly limit: number
+    } | {
       readonly action: 'evidence_chunk'
       readonly directive: unknown
       readonly source_ref: HostControlSha256
@@ -595,7 +600,7 @@ export interface ProfileMemoryQueryResult {
     readonly action: 'warm'
     readonly state: 'ready'
   } | {
-    readonly action: 'search'
+    readonly action: 'search' | 'semantic_search'
     readonly generation: number
     readonly items: readonly (ProfileMemoryEvidenceIdentity & { readonly snippet: string })[]
   } | {

@@ -28,7 +28,7 @@ function snapshot() {
   return { sessionId: 'session-one', revision: 'r1', text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }
 }
 
-function directive(operation: 'search' | 'evidence', value: string, nonce = 'N') {
+function directive(operation: 'search' | 'semantic_search' | 'evidence', value: string, nonce = 'N') {
   const grant = { grantId: '11111111-1111-4111-8111-111111111111', generation: 1,
     ownerUserId: identity.ownerUserId, environmentId: identity.environmentId,
     computerId: identity.computerId, installationId: identity.installationId,
@@ -148,16 +148,25 @@ describe('Host memory signed read controller', () => {
     const found = await f.controller.search(directive('search', 'private'), 'private', 1, signal)
     const item = found.items[0]!
     const candidate = { sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }
-    const signed = directive('search', 'private', 'M')
+    const signed = directive('semantic_search', 'private', 'M')
     await expect(f.controller.resolveCandidates(signed, 'private', 1,
       found.indexEpoch, found.generation, [candidate], signal)).resolves.toMatchObject([{ sourceRef: item.sourceRef }])
     await expect(f.controller.resolveCandidates(signed, 'private', 1,
       found.indexEpoch, found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'replayed' })
-    await expect(f.controller.resolveCandidates(directive('search', 'wrong', 'Q'), 'private', 1,
+    await expect(f.controller.resolveCandidates(directive('semantic_search', 'wrong', 'Q'), 'private', 1,
       found.indexEpoch, found.generation, [candidate], signal)).rejects.toMatchObject({ code: 'unauthorized' })
-    await expect(f.controller.resolveCandidates(directive('search', 'private', 'R'), 'private', 1,
+    await expect(f.controller.resolveCandidates(directive('semantic_search', 'private', 'R'), 'private', 1,
       found.indexEpoch, found.generation, [{ ...candidate, sourceVersion: 'f'.repeat(64) }], signal))
       .rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('requires a separate semantic signature before asking the worker to rank', async () => {
+    const f = fixture()
+    await f.controller.warm(signal)
+    const rank = vi.fn(async () => ({ indexEpoch: '0'.repeat(32), generation: 0, candidates: [] }))
+    await expect(f.controller.semanticSearch(directive('search', 'private'), 'private', 1, rank, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(rank).not.toHaveBeenCalled()
   })
 
   it('consumes the signed search before asking a semantic worker for candidates', async () => {
@@ -167,12 +176,12 @@ describe('Host memory signed read controller', () => {
     const item = found.items[0]!
     const rank = vi.fn(async () => ({ indexEpoch: found.indexEpoch, generation: found.generation,
       candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }))
-    const signed = directive('search', 'private', 'M')
+    const signed = directive('semantic_search', 'private', 'M')
     await expect(f.controller.semanticSearch(signed, 'private', 1, rank, signal))
       .resolves.toMatchObject([{ sourceRef: item.sourceRef }])
     await expect(f.controller.semanticSearch(signed, 'private', 1, rank, signal))
       .rejects.toMatchObject({ code: 'replayed' })
-    await expect(f.controller.semanticSearch(directive('search', 'wrong', 'Q'), 'private', 1, rank, signal))
+    await expect(f.controller.semanticSearch(directive('semantic_search', 'wrong', 'Q'), 'private', 1, rank, signal))
       .rejects.toMatchObject({ code: 'unauthorized' })
     expect(rank).toHaveBeenCalledTimes(1)
   })
@@ -182,7 +191,7 @@ describe('Host memory signed read controller', () => {
     await f.controller.warm(signal)
     const query = 'x'.repeat(501)
     const rank = vi.fn()
-    await expect(f.controller.semanticSearch(directive('search', query), query, 1, rank, signal))
+    await expect(f.controller.semanticSearch(directive('semantic_search', query), query, 1, rank, signal))
       .rejects.toMatchObject({ code: 'invalid_input' })
     expect(rank).not.toHaveBeenCalled()
   })
@@ -197,7 +206,7 @@ describe('Host memory signed read controller', () => {
       return { indexEpoch: found.indexEpoch, generation: found.generation,
         candidates: [{ sourceRef: item.sourceRef, sourceVersion: item.sourceVersion }] }
     })
-    await expect(f.controller.semanticSearch(directive('search', 'private', 'M'), 'private', 1, rank, signal))
+    await expect(f.controller.semanticSearch(directive('semantic_search', 'private', 'M'), 'private', 1, rank, signal))
       .rejects.toMatchObject({ code: 'stale' })
   })
 
@@ -206,7 +215,7 @@ describe('Host memory signed read controller', () => {
     await expired.controller.warm(signal)
     const found = await expired.controller.search(directive('search', 'private'), 'private', 1, signal)
     const item = found.items[0]!
-    await expect(expired.controller.semanticSearch(directive('search', 'private', 'M'), 'private', 1,
+    await expect(expired.controller.semanticSearch(directive('semantic_search', 'private', 'M'), 'private', 1,
       async () => {
         expired.setTime(baseTime + 15_000)
         return { indexEpoch: found.indexEpoch, generation: found.generation,
@@ -216,7 +225,7 @@ describe('Host memory signed read controller', () => {
     const stale = fixture()
     await stale.controller.warm(signal)
     const current = await stale.controller.search(directive('search', 'private', 'R'), 'private', 1, signal)
-    await expect(stale.controller.semanticSearch(directive('search', 'private', 'S'), 'private', 1,
+    await expect(stale.controller.semanticSearch(directive('semantic_search', 'private', 'S'), 'private', 1,
       async () => ({ indexEpoch: '0'.repeat(32), generation: current.generation,
         candidates: [{ sourceRef: current.items[0]!.sourceRef,
           sourceVersion: current.items[0]!.sourceVersion }] }), signal))

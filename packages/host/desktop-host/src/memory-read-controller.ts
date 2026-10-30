@@ -83,7 +83,7 @@ export class HostMemoryReadController {
     }
   }
 
-  private async read<T>(directive: unknown, operation: 'search' | 'evidence', value: string,
+  private async read<T>(directive: unknown, operation: 'search' | 'semantic_search' | 'evidence', value: string,
     limit: number, signal: AbortSignal,
     select: (scope: HostMemoryScope, reader: HostMemoryProfileReader) => Promise<T>): Promise<T> {
     signal.throwIfAborted()
@@ -112,21 +112,21 @@ export class HostMemoryReadController {
       (scope, reader) => this.cache.search(scope, reader, query, limit, signal))
   }
 
-  /** Resolve untrusted semantic references only under a signed search directive and matching index epoch. */
+  /** Resolve untrusted semantic references only under a signed semantic directive and matching index epoch. */
   resolveCandidates(directive: unknown, query: string, limit: number, indexEpoch: string, generation: number,
     candidates: readonly HostMemoryCandidateRef[], signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
-    return this.read(directive, 'search', query, limit, signal,
+    return this.read(directive, 'semantic_search', query, limit, signal,
       (scope, reader) => this.cache.resolveCandidates(scope, reader, indexEpoch, generation, candidates, limit, signal))
   }
 
-  /** Consume one signed search before invoking a semantic worker; resolve its untrusted refs under that same read. */
+  /** Consume one signed semantic search before invoking a worker; resolve its untrusted refs under that same read. */
   semanticSearch(directive: unknown, query: string, limit: number,
     rank: (query: string, limit: number, signal: AbortSignal) => Promise<{
       readonly indexEpoch: string
       readonly generation: number
       readonly candidates: readonly HostMemoryCandidateRef[]
     }>, signal: AbortSignal): Promise<readonly HostMemorySearchItem[]> {
-    return this.read(directive, 'search', query, limit, signal, async (scope, reader) => {
+    return this.read(directive, 'semantic_search', query, limit, signal, async (scope, reader) => {
       if (typeof query !== 'string' || query.length < 1 || query.length > 500
         || /[\u0000-\u001f]/u.test(query)) throw new HostAuthorityError('invalid_input')
       const ranked = await rank(query, limit, signal)

@@ -695,12 +695,14 @@ export class UnixHostServer {
               result = { action: 'warm', state: 'ready' }
             } else if (params.command.action === 'search') {
               const command = params.command
-              if (this.options.openMemoryWorker && !slot.worker) throw new HostAuthorityError('unavailable')
-              const found = this.options.openMemoryWorker && slot.worker
-                ? await searchHostMemoryWithWorker(controller, slot.worker.link, slot.worker.stamp,
-                  command.directive, command.query, command.limit, lifetime.signal)
-                : await controller.search(command.directive, command.query, command.limit, lifetime.signal)
+              const found = await controller.search(command.directive, command.query, command.limit, lifetime.signal)
               result = { action: 'search', generation: found.generation, items: found.items as never }
+            } else if (params.command.action === 'semantic_search') {
+              const command = params.command
+              if (!slot.worker) throw new HostAuthorityError('unavailable')
+              const found = await searchHostMemoryWithWorker(controller, slot.worker.link, slot.worker.stamp,
+                command.directive, command.query, command.limit, lifetime.signal)
+              result = { action: 'semantic_search', generation: found.generation, items: found.items as never }
             } else {
               const chunk = await controller.evidenceChunk(params.command.directive,
                 params.command.source_ref, params.command.offset, lifetime.signal)
@@ -998,6 +1000,7 @@ export class UnixHostServer {
             'migration.import_snapshot.stage', 'migration.import_snapshot.status', 'migration.import_snapshot.verify',
           ] : []),
           ...(memoryQuery ? ['profile.memory_query'] : []),
+          ...(memoryQuery && this.options.openMemoryWorker ? ['profile.memory_semantic_search'] : []),
         ]
           .sort().map(value => value as HostControlCapability),
         challenge_signature: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' as HostControlSignature,
@@ -1480,7 +1483,10 @@ export class UnixHostClient {
     return { importId: frame.result.import_id, stageVersion: frame.result.stage_version, state: frame.result.state }
   }
 
-  /** Read a bounded Profile memory result only when this Host advertises signed-query support. */
+  /** Read a bounded result from the authenticated Profile. Semantic requests require the separate worker capability.
+   * @param input Current Account binding and one signed read command; abort cancels the transport call.
+   * @returns Redacted metadata or an evidence fragment from the current Host generation.
+   */
   async memoryQuery(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -1493,6 +1499,9 @@ export class UnixHostClient {
     readonly signal?: AbortSignal
   }): Promise<ProfileMemoryQueryResult['result']> {
     if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (input.command.action === 'semantic_search'
+      && !this.inspection.capabilities.includes('profile.memory_semantic_search' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
     const request: ProfileMemoryQueryRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',

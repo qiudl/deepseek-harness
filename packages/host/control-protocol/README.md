@@ -27,7 +27,7 @@ The transport is not JSON-RPC. A malformed line is a connection-fatal protocol v
 - One UTF-8 JSON object and one final LF per frame; CRLF, extra lines, duplicate or reordered keys, unknown fields, non-canonical numbers, and trailing data are rejected.
 - The JSON object is at most 65,536 UTF-8 bytes, excluding LF. The transport must enforce the same cap while buffering; this string codec cannot undo bytes already accumulated by a caller.
 - UUIDs are lower-case RFC variants. Nonces and Ed25519 material use canonical unpadded base64url. SHA-256 digests use lower-case hexadecimal.
-- Capability names are sorted, unique dotted tokens and must include `host.inspect`. Unknown negotiated methods are refused explicitly.
+- Capability names are sorted, unique dotted tokens and must include `host.inspect`. Unknown negotiated methods are refused explicitly. The `semantic_search` memory action requires a separate signed operation and the `profile.memory_semantic_search` capability; `search` remains Host text retrieval.
 - Errors expose only a stable code, retryability bit, and correlation id. Exception messages and local paths never enter a frame.
 
 ## Challenge authentication

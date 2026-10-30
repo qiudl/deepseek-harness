@@ -359,7 +359,7 @@ function memoryDirective(value: unknown): unknown {
   exactKeys(grant, ['grantId', 'generation', 'ownerUserId', 'environmentId', 'computerId',
     'installationId', 'profileId', 'readerKind'])
   if (row.schemaVersion !== 1 || row.purpose !== 'dsh_memory_query'
-    || (row.operation !== 'search' && row.operation !== 'evidence')
+    || (row.operation !== 'search' && row.operation !== 'semantic_search' && row.operation !== 'evidence')
     || grant.readerKind !== 'personal_dsh' || generation(grant.generation) < 1
     || generation(row.limit) > 10 || timestamp(row.expiresAt) <= timestamp(row.issuedAt)) reject()
   const parsed = {
@@ -410,11 +410,11 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if (command.action === 'warm') {
       exactKeys(command, ['action'])
       parsed = { action: 'warm' }
-    } else if (command.action === 'search') {
+    } else if (command.action === 'search' || command.action === 'semantic_search') {
       exactKeys(command, ['action', 'directive', 'query', 'limit'])
       const query = wireText(command.query, 2000)
       if (query.length < 1 || query.length > 500 || generation(command.limit) > 10) reject()
-      parsed = { action: 'search', directive: memoryDirective(command.directive), query,
+      parsed = { action: command.action, directive: memoryDirective(command.directive), query,
         limit: command.limit as number }
     } else if (command.action === 'evidence_chunk') {
       exactKeys(command, ['action', 'directive', 'source_ref', 'offset'])
@@ -423,8 +423,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     } else return reject()
     if (parsed.action !== 'warm') {
       const directive = parsed.directive as { operation: string; limit: number }
-      if (directive.operation !== (parsed.action === 'search' ? 'search' : 'evidence')
-        || directive.limit !== (parsed.action === 'search' ? parsed.limit : 1)) reject()
+      if (directive.operation !== (parsed.action === 'evidence_chunk' ? 'evidence' : parsed.action)
+        || directive.limit !== (parsed.action === 'evidence_chunk' ? 1 : parsed.limit)) reject()
     }
     return { version: 1, type: 'request', request_id: requestId, method: frame.method,
       params: { ...authorized(params),
@@ -542,11 +542,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
       return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
         method: frame.method, result: { action: 'warm', state: 'ready' } }
     }
-    if (result.action === 'search') {
+    if (result.action === 'search' || result.action === 'semantic_search') {
       exactKeys(result, ['action', 'generation', 'items'])
       if (!Array.isArray(result.items) || result.items.length > 10) reject()
       return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
-        method: frame.method, result: { action: 'search', generation: nonnegative(result.generation),
+        method: frame.method, result: { action: result.action, generation: nonnegative(result.generation),
           items: result.items.map((value) => {
             const row = record(value)
             exactKeys(row, ['sourceRef', 'sourceVersion', 'eventSeq', 'kind', 'source', 'snippet'])
