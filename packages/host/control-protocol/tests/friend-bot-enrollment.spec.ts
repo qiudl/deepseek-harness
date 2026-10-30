@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { encodeHostFriendBotEnrollmentPayload,
+  parseHostFriendBotEnrollmentChallenge,
   parseHostFriendBotEnrollmentAssertion } from '../src/friend-bot-enrollment.ts'
 
 const U = '11111111-1111-4111-8111-111111111111'
@@ -29,4 +30,20 @@ it('matches the Slark enrollment tuple and rejects untrusted public names',() =>
     { ...assertion,display_name:'My\nBot' },
     { ...assertion,challenge:{ ...challenge,operation:'confirm_bot' } },
   ]) expect(() => encodeHostFriendBotEnrollmentPayload(change)).toThrow()
+})
+
+it('rejects malformed challenge objects before reading an installation key or URL', () => {
+  expect(() => parseHostFriendBotEnrollmentChallenge(null)).toThrow()
+  expect(() => parseHostFriendBotEnrollmentChallenge({ ...challenge,
+    get owner_user_id() { return 'friend-a' },
+  })).toThrow()
+  expect(() => parseHostFriendBotEnrollmentChallenge({ ...challenge,
+    host_public_key: 'bad+',
+  })).toThrow()
+  expect(() => parseHostFriendBotEnrollmentChallenge({ ...challenge,
+    account_issuer: 'not a URL',
+  })).toThrow()
+  expect(() => parseHostFriendBotEnrollmentChallenge({ ...challenge,
+    account_issuer: 42,
+  })).toThrow()
 })

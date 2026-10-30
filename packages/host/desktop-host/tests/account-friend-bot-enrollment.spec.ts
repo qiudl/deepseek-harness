@@ -81,3 +81,23 @@ it('refuses stale Account, Host and Bot identity before signing',async () => {
   f.host.revokeOwner(f.proof.ownerId)
   await expect(signAccountFriendBotEnrollment(input)).rejects.toThrow()
 })
+
+it('rejects a Profile switch after worker resolution and accepts a serialized key',async () => {
+  const f = await fixture(); await f.grant()
+  const profile = f.host.authorizeAccountModelText(f.proof)
+  const readProfile = vi.fn()
+  readProfile.mockReturnValueOnce(profile).mockReturnValueOnce(profile)
+    .mockReturnValueOnce(profile).mockReturnValueOnce(randomUUID())
+  const host = { authorizeCollaborationRegistration:
+    f.host.authorizeCollaborationRegistration.bind(f.host), authorizeAccountModelText:readProfile }
+  const input = { host,workers:f.workers,account:f.proof,challenge:f.challenge,
+    identity:f.identity,signal:new AbortController().signal,now:() => f.challenge.issued_at+1 }
+  await expect(signAccountFriendBotEnrollment(input)).rejects.toThrow()
+  expect(readProfile).toHaveBeenCalledTimes(4)
+  const pem = f.identity.installationPrivateKey.export({ format:'pem',type:'pkcs8' }).toString()
+  const assertion = await signAccountFriendBotEnrollment({ ...input,
+    host:f.host,
+    identity:{ ...f.identity,installationPrivateKey:pem } })
+  expect(verify(null,encodeHostFriendBotEnrollmentPayload(assertion),f.publicKey,
+    Buffer.from(assertion.signature,'base64url'))).toBe(true)
+})

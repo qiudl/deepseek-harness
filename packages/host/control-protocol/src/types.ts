@@ -1073,6 +1073,7 @@ export interface ProfileFriendBotEnrollmentRequest {
     readonly challenge: import('./friend-bot-enrollment.ts').HostFriendBotEnrollmentChallenge
   }
 }
+/** Host result carrying the signed Account Bot enrollment assertion. */
 export interface ProfileFriendBotEnrollmentResult {
   readonly version: 1
   readonly type: 'result'

@@ -130,6 +130,20 @@ it('returns a friend Bot enrollment proof through the authenticated strict wire 
     .rejects.toMatchObject({ code:'upgrade_required' })
 })
 
+it('rejects a mismatched enrollment response and an unavailable Bot signer', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_bot_enrollment'
+    ? { ...frame, method: 'profile.friend_bot_confirmation' } as never : frame)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f)))
+    .rejects.toMatchObject({ code: 'unavailable' })
+
+  const noResolver = await fixture(false); await noResolver.grant()
+  expect(Reflect.set(noResolver.client.inspection, 'capabilities',
+    [...noResolver.client.inspection.capabilities, 'profile.friend_bot_enrollment'])).toBe(true)
+  await expect(noResolver.client.attestFriendBotEnrollment(friendEnrollmentInput(noResolver)))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
 it('returns a friend Bot proof through the authenticated control connection and strict wire codec', async () => {
   const f = await fixture(); await f.grant()
   const input = friendConfirmationInput(f)

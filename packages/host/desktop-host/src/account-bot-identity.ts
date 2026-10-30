@@ -1,3 +1,4 @@
+import type { KeyObject } from 'node:crypto'
 import { parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopHost } from './desktop-host.ts'
@@ -6,6 +7,26 @@ import { HostAuthorityError } from './types.ts'
 
 /** Current Account binding accepted on the Host's authenticated owner connection. */
 export type BotIdentityAccount = Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]
+
+/** Installation key and current Host process bound to a friend Bot proof. */
+export interface FriendBotSigningIdentity {
+  readonly installationId: string
+  readonly installationPublicKey: string
+  readonly hostInstanceId: string
+  readonly processNonce: string
+  readonly installationPrivateKey: KeyObject | string | Buffer
+}
+
+/** Shared inputs for signing a Bot proof after Account and Profile checks. */
+export interface FriendBotSigningInput<Challenge> {
+  readonly host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
+  readonly workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>
+  readonly account: BotIdentityAccount
+  readonly challenge: Challenge
+  readonly identity: FriendBotSigningIdentity
+  readonly signal: AbortSignal
+  readonly now: () => number
+}
 
 /**
  * Resolve one Bot only in the currently verified Account Profile and recheck after the worker reply.

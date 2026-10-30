@@ -2576,26 +2576,26 @@ export class HostControlAuthority {
             this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { identity } })
-        } else if (frame.method === 'profile.friend_bot_confirmation') {
+        } else if (frame.method === 'profile.friend_bot_confirmation' ||
+          frame.method === 'profile.friend_bot_enrollment') {
           const resolve = this.options.resolveBotIdentity
           if (!resolve) throw new HostAuthorityError('upgrade_required')
-          const assertion = await signAccountFriendBotConfirmation({
+          const signing = {
             host: this.options.host, workers: { resolveBotIdentity: resolve },
-            account: commandReadAccount(frame.params, ownerId), challenge: frame.params.challenge,
+            account: commandReadAccount(frame.params, ownerId),
             identity: this.options.identity, signal: context.signal, now: clock,
-          })
-          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-            method: frame.method, result: assertion })
-        } else if (frame.method === 'profile.friend_bot_enrollment') {
-          const resolve = this.options.resolveBotIdentity
-          if (!resolve) throw new HostAuthorityError('upgrade_required')
-          const assertion = await signAccountFriendBotEnrollment({
-            host: this.options.host, workers: { resolveBotIdentity: resolve },
-            account: commandReadAccount(frame.params, ownerId), challenge: frame.params.challenge,
-            identity: this.options.identity, signal: context.signal, now: clock,
-          })
-          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
-            method: frame.method, result: assertion })
+          }
+          if (frame.method === 'profile.friend_bot_confirmation') {
+            const result = await signAccountFriendBotConfirmation({
+              ...signing, challenge: frame.params.challenge })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result })
+          } else {
+            const result = await signAccountFriendBotEnrollment({
+              ...signing, challenge: frame.params.challenge })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result })
+          }
         } else if (frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
           const operate = this.options.operateBotGroup
@@ -4644,6 +4644,50 @@ export class UnixHostClient {
     return identity
   }
 
+  private assertFriendBotBinding(
+    input: {
+      accountBindingHandle: string
+      authorityBindingVersion: number
+      issuer: string
+      subject: string
+    },
+    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
+  ): void {
+    if (challenge.binding_id !== input.accountBindingHandle ||
+      challenge.binding_epoch !== String(input.authorityBindingVersion) ||
+      challenge.account_issuer !== input.issuer || challenge.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+  }
+
+  private assertFriendBotAssertion(
+    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
+    assertion: { challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge
+      signature: string },
+    payload: Uint8Array,
+  ): void {
+    const now = this.now()
+    if (JSON.stringify(assertion.challenge) !== JSON.stringify(challenge) ||
+      assertion.challenge.host_installation_id !== this.inspection.installation_id ||
+      assertion.challenge.host_public_key !== this.inspection.installation_public_key ||
+      assertion.challenge.host_instance_id !== this.inspection.host_instance_id ||
+      assertion.challenge.process_nonce !== this.inspection.process_nonce ||
+      !Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
+      !verify(null, payload, publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(assertion.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+  }
+
+  private async requestFriendBotAssertion(
+    request: ProfileFriendBotConfirmationRequest | ProfileFriendBotEnrollmentRequest,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Request one current Bot signature and verify it against this authenticated Host peer.
    * @param input - Current Account binding, exact Slark challenge and cancellation.
@@ -4662,32 +4706,23 @@ export class UnixHostClient {
     const challenge = parseHostFriendBotConfirmationChallenge(input.challenge)
     if (!this.inspection.capabilities.includes('profile.friend_bot_confirmation' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
-    if (challenge.binding_id !== input.accountBindingHandle ||
-      challenge.binding_epoch !== String(input.authorityBindingVersion) ||
-      challenge.account_issuer !== input.issuer || challenge.account_subject !== input.subject)
-      throw new HostAuthorityError('profile_mismatch')
+    this.assertFriendBotBinding(input, challenge)
     const request: ProfileFriendBotConfirmationRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_confirmation',
       params: { ...this.collaborationAccountRequestParams(input), challenge },
     }
-    const frame = await this.call(request, input.signal)
-    input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    const assertion = parseHostFriendBotConfirmationAssertion(frame.result)
-    const now = this.now()
-    if (JSON.stringify(assertion.challenge) !== JSON.stringify(challenge) ||
-      assertion.challenge.host_installation_id !== this.inspection.installation_id ||
-      assertion.challenge.host_public_key !== this.inspection.installation_public_key ||
-      assertion.challenge.host_instance_id !== this.inspection.host_instance_id ||
-      assertion.challenge.process_nonce !== this.inspection.process_nonce ||
-      !Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
-      !verify(null, encodeHostFriendBotConfirmationPayload(challenge),
-        publicKeyObject(this.inspection.installation_public_key), Buffer.from(assertion.signature, 'base64url')))
-      throw new HostAuthorityError('unauthorized')
+    const assertion = parseHostFriendBotConfirmationAssertion(
+      await this.requestFriendBotAssertion(request, input.signal))
+    this.assertFriendBotAssertion(challenge, assertion,
+      encodeHostFriendBotConfirmationPayload(challenge))
     return assertion
   }
 
-  /** Read and sign one current Account Bot for Slark's one-use enrollment challenge. */
+  /**
+   * Read and sign one current Account Bot for Slark's one-use enrollment challenge.
+   * @param input - Current Account binding, exact challenge and cancellation.
+   * @returns Signed assertion for Slark to verify against the current Host.
+   */
   async attestFriendBotEnrollment(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string
@@ -4701,30 +4736,15 @@ export class UnixHostClient {
     const challenge = parseHostFriendBotEnrollmentChallenge(input.challenge)
     if (!this.inspection.capabilities.includes('profile.friend_bot_enrollment' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
-    if (challenge.binding_id !== input.accountBindingHandle ||
-      challenge.binding_epoch !== String(input.authorityBindingVersion) ||
-      challenge.account_issuer !== input.issuer || challenge.account_subject !== input.subject)
-      throw new HostAuthorityError('profile_mismatch')
+    this.assertFriendBotBinding(input, challenge)
     const request: ProfileFriendBotEnrollmentRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_enrollment',
       params: { ...this.collaborationAccountRequestParams(input), challenge },
     }
-    const frame = await this.call(request,input.signal)
-    input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method)
-      throw new HostAuthorityError('unavailable')
-    const assertion = parseHostFriendBotEnrollmentAssertion(frame.result)
-    const now = this.now()
-    if (JSON.stringify(assertion.challenge) !== JSON.stringify(challenge) ||
-      assertion.challenge.host_installation_id !== this.inspection.installation_id ||
-      assertion.challenge.host_public_key !== this.inspection.installation_public_key ||
-      assertion.challenge.host_instance_id !== this.inspection.host_instance_id ||
-      assertion.challenge.process_nonce !== this.inspection.process_nonce ||
-      !Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
-      !verify(null,encodeHostFriendBotEnrollmentPayload(assertion),
-        publicKeyObject(this.inspection.installation_public_key),
-        Buffer.from(assertion.signature,'base64url')))
-      throw new HostAuthorityError('unauthorized')
+    const assertion = parseHostFriendBotEnrollmentAssertion(
+      await this.requestFriendBotAssertion(request, input.signal))
+    this.assertFriendBotAssertion(challenge, assertion,
+      encodeHostFriendBotEnrollmentPayload(assertion))
     return assertion
   }
 

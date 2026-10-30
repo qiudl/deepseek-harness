@@ -1,33 +1,15 @@
 /** REQ-20261028-0025: sign a friend-only registration assertion for the current Account Bot. */
-import { createPrivateKey, sign, type KeyObject } from 'node:crypto'
+import { createPrivateKey, sign } from 'node:crypto'
 import { encodeHostFriendBotEnrollmentPayload,
   parseHostFriendBotEnrollmentAssertion, parseHostFriendBotEnrollmentChallenge,
   type HostFriendBotEnrollmentAssertion, type HostFriendBotEnrollmentChallenge,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import { resolveAccountBotIdentity, type BotIdentityAccount } from './account-bot-identity.ts'
-import type { DesktopHost } from './desktop-host.ts'
-import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { resolveAccountBotIdentity, type FriendBotSigningInput } from './account-bot-identity.ts'
 import { HostAuthorityError } from './types.ts'
 
-interface SigningIdentity {
-  readonly installationId: string
-  readonly installationPublicKey: string
-  readonly hostInstanceId: string
-  readonly processNonce: string
-  readonly installationPrivateKey: KeyObject | string | Buffer
-}
-interface SigningInput {
-  readonly host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
-  readonly workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>
-  readonly account: BotIdentityAccount
-  readonly challenge: HostFriendBotEnrollmentChallenge
-  readonly identity: SigningIdentity
-  readonly signal: AbortSignal
-  readonly now: () => number
-}
 const unavailable = (): never => { throw new HostAuthorityError('profile_mismatch') }
 /** Slark issues and consumes the challenge; this signs only a currently resolved Account Bot. */
-export async function signAccountFriendBotEnrollment(input: SigningInput):
+export async function signAccountFriendBotEnrollment(input: FriendBotSigningInput<HostFriendBotEnrollmentChallenge>):
 Promise<HostFriendBotEnrollmentAssertion> {
   input.signal.throwIfAborted()
   const c = parseHostFriendBotEnrollmentChallenge(input.challenge)

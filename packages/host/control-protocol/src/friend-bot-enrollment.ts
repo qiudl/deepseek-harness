@@ -2,6 +2,7 @@
 const USER = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,255}$/u
 const isSlarkUserId = (v: unknown): v is string => typeof v === 'string' && USER.test(v)
 
+/** Slark's one-use challenge for publishing a current Account Profile Bot. */
 export interface HostFriendBotEnrollmentChallenge {
   readonly schema_version: 1
   readonly operation: 'register_bot'
@@ -30,6 +31,7 @@ export interface HostFriendBotEnrollmentChallenge {
   readonly expires_at: number
   readonly nonce: string
 }
+/** Host-signed Bot identity and public name bound to the enrollment challenge. */
 export interface HostFriendBotEnrollmentAssertion {
   readonly schema_version: 1
   readonly challenge: HostFriendBotEnrollmentChallenge
@@ -78,8 +80,9 @@ function name(v: unknown): v is string {
   return typeof v === 'string' && v.length > 0 && v === v.trim() &&
     !/[\u0000-\u001f\u007f]/u.test(v) && Buffer.byteLength(v,'utf8') <= 512
 }
-export function parseHostFriendBotEnrollmentChallenge(value: unknown): HostFriendBotEnrollmentChallenge {
-  const r = exact(value,FIELDS)
+function assertHostFriendBotEnrollmentChallenge(
+  r: Record<string,unknown>,
+): asserts r is Record<string,unknown> & HostFriendBotEnrollmentChallenge {
   if (r.schema_version !== 1 || r.operation !== 'register_bot' ||
       typeof r.environment_id !== 'string' || !ENV.test(r.environment_id) ||
       !isSlarkUserId(r.owner_user_id) || !origin(r.account_issuer) ||
@@ -94,8 +97,22 @@ export function parseHostFriendBotEnrollmentChallenge(value: unknown): HostFrien
       !Number.isSafeInteger(r.issued_at) || Number(r.issued_at) < 0 ||
       !Number.isSafeInteger(r.expires_at) || Number(r.expires_at) <= Number(r.issued_at) ||
       Number(r.expires_at)-Number(r.issued_at) > 10_000) return fail()
-  return Object.freeze(r) as unknown as HostFriendBotEnrollmentChallenge
 }
+/**
+ * Validate the exact enrollment challenge fields and their bounded values.
+ * @param value - untrusted challenge received by the Host.
+ * @returns the validated challenge.
+ */
+export function parseHostFriendBotEnrollmentChallenge(value: unknown): HostFriendBotEnrollmentChallenge {
+  const r = exact(value,FIELDS)
+  assertHostFriendBotEnrollmentChallenge(r)
+  return Object.freeze(r)
+}
+/**
+ * Validate a signed enrollment response without granting registration authority.
+ * @param value - untrusted Host response.
+ * @returns the structurally valid assertion for signature verification.
+ */
 export function parseHostFriendBotEnrollmentAssertion(value: unknown): HostFriendBotEnrollmentAssertion {
   const r = exact(value,['schema_version','challenge','bot_id','actor_ref','display_name','signature'])
   const challenge = parseHostFriendBotEnrollmentChallenge(r.challenge)
@@ -105,7 +122,11 @@ export function parseHostFriendBotEnrollmentAssertion(value: unknown): HostFrien
   return Object.freeze({ schema_version:1,challenge,bot_id:challenge.bot_id,
     actor_ref:r.actor_ref,display_name:r.display_name,signature:r.signature })
 }
-/** Signed bytes include the Host-supplied exact public name and a distinct operation domain. */
+/**
+ * Encode the enrollment signature domain, challenge, Bot identity and public name.
+ * @param value - the assertion whose exact fields are signed.
+ * @returns canonical signature bytes.
+ */
 export function encodeHostFriendBotEnrollmentPayload(value: unknown): Buffer {
   const a = parseHostFriendBotEnrollmentAssertion(value)
   return Buffer.from('slark-dsh-friend-bot-enrollment/v1\0'+JSON.stringify([
