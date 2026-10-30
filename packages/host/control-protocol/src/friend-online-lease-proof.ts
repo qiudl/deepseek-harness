@@ -72,8 +72,9 @@ function origin(v: unknown): v is string {
   try { const url = new URL(v); return url.protocol === 'https:' && url.origin === v }
   catch { return false }
 }
-export function parseHostFriendOnlineLeaseChallenge(value: unknown): HostFriendOnlineLeaseChallenge {
-  const r = exact(value,FIELDS)
+function assertHostFriendOnlineLeaseChallenge(
+  r: Record<string,unknown>,
+): asserts r is Record<string,unknown> & HostFriendOnlineLeaseChallenge {
   if (r.schema_version !== 1 || (r.operation !== 'issue' && r.operation !== 'renew') ||
       typeof r.environment_id !== 'string' || !ENV.test(r.environment_id) ||
       !isSlarkUserId(r.owner_user_id) || !origin(r.account_issuer) ||
@@ -91,7 +92,11 @@ export function parseHostFriendOnlineLeaseChallenge(value: unknown): HostFriendO
       !Number.isSafeInteger(r.issued_at) || Number(r.issued_at)<0 ||
       !Number.isSafeInteger(r.expires_at) || Number(r.expires_at)<=Number(r.issued_at) ||
       Number(r.expires_at)-Number(r.issued_at)>10_000) return fail()
-  return Object.freeze(r) as unknown as HostFriendOnlineLeaseChallenge
+}
+export function parseHostFriendOnlineLeaseChallenge(value: unknown): HostFriendOnlineLeaseChallenge {
+  const r = exact(value,FIELDS)
+  assertHostFriendOnlineLeaseChallenge(r)
+  return Object.freeze(r)
 }
 export function parseHostFriendOnlineLeaseAssertion(value: unknown): HostFriendOnlineLeaseAssertion {
   const r = exact(value,['schema_version','challenge','signature'])
