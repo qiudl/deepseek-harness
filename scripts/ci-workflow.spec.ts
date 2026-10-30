@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import * as yaml from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
@@ -563,19 +564,27 @@ describe('Python release workflows', () => {
 })
 
 describe('Issue lifecycle workflow', () => {
+  it.each(['qiudl/deepseek-harness', 'deepseek-harness/deepseek-harness', 'deepseek-ai/deepseek-harness'])(
+    'limits the Project automation exception to the Slark fork (%s)', (repository) => {
+      for (const [file, job] of [['issue-policy.yml', 'policy'], ['issue-lifecycle.yml', 'lifecycle']] as const) {
+        const condition = workflowJob(loadWorkflow('.github/workflows/' + file), job).if
+        expect(condition).toBe("github.repository != 'qiudl/deepseek-harness'")
+        expect(runInNewContext(String(condition), { github: { repository } }, { timeout: 1000 }))
+          .toBe(repository !== 'qiudl/deepseek-harness')
+      }
+    },
+  )
   it('runs the lifecycle job on every PR/review event but gates token and board steps', () => {
     const lifecycle = loadWorkflow('.github/workflows/issue-lifecycle.yml')
     const policy = loadWorkflow('.github/workflows/issue-policy.yml')
     const lifecycleJob = workflowJob(lifecycle, 'lifecycle')
     if (!Array.isArray(lifecycleJob.steps)) throw new TypeError('Issue lifecycle job must define steps')
 
-    // The job has no job-level `if`, so it is listed on every pull_request /
-    // pull_request_review event and reports success instead of a gray skip. The
-    // write-capable steps are gated at step level so approved/commented reviews
-    // never mint a Project/Issue App token nor touch the board.
+    // The job only skips this fork. Write-capable steps still skip approved or
+    // commented reviews in upstream repositories.
     expect(lifecycle.on).toHaveProperty('pull_request')
     expect(lifecycle.on).toHaveProperty('pull_request_review')
-    expect(lifecycleJob.if).toBeUndefined()
+    expect(lifecycleJob.if).toBe("github.repository != 'qiudl/deepseek-harness'")
     // Keep the subscription-type gates: issue-lifecycle does not re-subscribe
     // ready_for_review (issue-policy owns that) and only reacts to submitted
     // review events.
