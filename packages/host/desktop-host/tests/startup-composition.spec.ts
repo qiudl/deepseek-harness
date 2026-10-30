@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -15,13 +15,14 @@ import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files
 import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
+import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
   loadOverlayPatches: vi.fn(() => []),
   pluginCommand: vi.fn(async (_input: unknown) => undefined),
   pluginRuntime: vi.fn(async () => undefined),
-  pluginEntries: vi.fn(() => []),
+  pluginEntries: vi.fn<() => { entryId: string; moduleName: string }[]>(() => []),
   composedIds: vi.fn((_layers: unknown, _overrides: unknown): ReadonlySet<string> => new Set<string>()),
   pluginTogglePlan: vi.fn((_layers: unknown, patch: string, _overrides: unknown, _name: string, enabled: boolean) => ({
     patch: enabled ? patch : '- id: startup-tool\n  disabled: true\n',
@@ -46,6 +47,11 @@ const mocks = vi.hoisted(() => ({
   })),
   recoveryPrepare: vi.fn(async (_profile: unknown, _preflight: unknown) => undefined),
   packagedRuntimeAppRoot: vi.fn(() => '/fixture/runtime-app'),
+  pluginOptions: undefined as unknown,
+  verifyRollback: vi.fn(async () => ({ spec: 'bundled:ds-bot@0.2.10', digest: 'd'.repeat(64) })),
+  verifyTarget: vi.fn(async () => 'e'.repeat(64)),
+  captureTree: vi.fn(() => ({ bytes: Buffer.from('tree'), digest: 'f'.repeat(64) })),
+  prepareUpgrade: vi.fn(async () => ({ patch: '[]\n', patches: [] })),
 }))
 
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
@@ -55,6 +61,24 @@ vi.mock('@deepseek-ai/dsh-app-boot', () => ({
 vi.mock('../src/plugin-command.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/plugin-command.ts')>(),
   runProfilePluginCommand: mocks.pluginCommand,
+}))
+vi.mock('../src/profile-plugin-executor.ts', async (load) => {
+  const actual = await load<typeof import('../src/profile-plugin-executor.ts')>()
+  return { ...actual, ProfilePluginExecutor: class extends actual.ProfilePluginExecutor {
+    constructor(options: ConstructorParameters<typeof actual.ProfilePluginExecutor>[0]) {
+      super(options); mocks.pluginOptions = options
+    }
+  } }
+})
+vi.mock('../src/bundled-plugin-recovery.ts', async load => ({
+  ...await load<typeof import('../src/bundled-plugin-recovery.ts')>(),
+  verifyProfileRollbackArchive: mocks.verifyRollback, verifyCopiedBundledPlugin: mocks.verifyTarget,
+}))
+vi.mock('../src/plugin-tree-snapshot.ts', async load => ({
+  ...await load<typeof import('../src/plugin-tree-snapshot.ts')>(), capturePluginTree: mocks.captureTree,
+}))
+vi.mock('../src/plugin-upgrade-plan.ts', async load => ({
+  ...await load<typeof import('../src/plugin-upgrade-plan.ts')>(), prepareBundledPluginUpgrade: mocks.prepareUpgrade,
 }))
 vi.mock('../src/plugin-runtime-ack.ts', () => ({ waitForPluginRuntime: mocks.pluginRuntime }))
 vi.mock('../src/plugin-bundle-entries.ts', () => ({ pluginBundleEntries: mocks.pluginEntries, composedEntryIds: mocks.composedIds }))
@@ -113,9 +137,13 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
   writeFileSync(artifact, 'fixture', { mode: 0o700 })
   const bundledPluginsRoot = join(root, 'bundled-plugins'); mkdirSync(bundledPluginsRoot, { mode: 0o755 })
   writeFileSync(join(bundledPluginsRoot, 'dsh-duet-0.3.0.tgz'), BUNDLED_ARCHIVE, { mode: 0o644 })
+  const botArchive = Buffer.from('bundled bot archive'); const botDigest = createHash('sha256').update(botArchive).digest('hex')
+  writeFileSync(join(bundledPluginsRoot, 'ds-bot-0.2.16.tgz'), botArchive, { mode: 0o644 })
   writeFileSync(join(bundledPluginsRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
     name: 'dsh-duet', version: '0.3.0', file: 'dsh-duet-0.3.0.tgz', sha256: BUNDLED_DIGEST,
-    repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }] }), { mode: 0o644 })
+    repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }, {
+    name: 'ds-bot', version: '0.2.16', file: 'ds-bot-0.2.16.tgz', sha256: botDigest,
+    repository: 'https://github.com/qiudl/ds-bot.git', sourceSha: 'd'.repeat(40), entryIds: ['bot', 'web-search-auto'] }] }), { mode: 0o644 })
   writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
   writeFileSync(accountKeyringPath, keyring, { mode: 0o600 })
   writeFileSync(installationPrivateKeyPath,
@@ -280,6 +308,60 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     ...opened,
     ownerId: 'owner',
   })).origin).toBe('http://127.0.0.1:43123')
+  const pluginOptions = mocks.pluginOptions as ConstructorParameters<typeof import('../src/profile-plugin-executor.ts').ProfilePluginExecutor>[0]
+  if (!pluginOptions.upgradePlan || !pluginOptions.rollbackUpgrade
+    || !pluginOptions.verifyUpgradeTarget || !pluginOptions.verifyRollbackTree || !pluginOptions.verifyRetainedRollbackTree) {
+    throw Error('missing bundled upgrade capabilities')
+  }
+  const signal = new AbortController().signal
+  const lifetime = { kind: 'plugin' as const, signal, guard() {} }
+  const profileRoot = join(root, 'profiles', profile.profileId)
+  const homePatch = join(profileRoot, 'cordis.patch.yml')
+  if (existsSync(homePatch)) unlinkSync(homePatch)
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
+  mocks.pluginEntries.mockReturnValueOnce([]).mockReturnValueOnce([
+    { entryId: 'include:bot', moduleName: 'ds-bot' }, { entryId: 'include:web-search-auto', moduleName: 'ds-bot/web-search' },
+  ])
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+    .resolves.toMatchObject({ patch: '[]\n', rollback: { spec: 'bundled:ds-bot@0.2.10' } })
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'other', 'bundled:other@0.2.16', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('upgrade_required')
+  const catalogGet = vi.spyOn(BundledPluginCatalog.prototype, 'get').mockReturnValueOnce(undefined)
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('bundled_plugin_unavailable')
+  catalogGet.mockRestore()
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [{}] } as never)
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('plugin_bundle_missing')
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
+  mocks.prepareUpgrade.mockResolvedValueOnce({ patch: '[', patches: [] })
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('invalid_patch')
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [
+    { packageName: 'ds-bot', patches: [] }, { packageName: 'base', patches: [] },
+  ], patches: [], skippedBundles: [] } as never)
+  writeFileSync(homePatch, '[]\n', { mode: 0o600 })
+  mocks.pluginEntries.mockReturnValueOnce([]).mockReturnValueOnce([])
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('plugin_entry_conflict')
+  const upgrade = { operationId: randomUUID(), beforeDigest: 'a'.repeat(64), afterDigest: 'b'.repeat(64),
+    rollbackSpec: 'bundled:ds-bot@0.2.10', rollbackDigest: 'd'.repeat(64), treeDigest: 'c'.repeat(64) }
+  await expect(pluginOptions.rollbackUpgrade(profileRoot, upgrade, lifetime)).resolves.toBe('f'.repeat(64))
+  await expect(pluginOptions.verifyRollbackTree(profileRoot, upgrade, lifetime)).resolves.toBe('f'.repeat(64))
+  await expect(pluginOptions.verifyRetainedRollbackTree(profileRoot, upgrade, '/retained', lifetime)).resolves.toBe('f'.repeat(64))
+  await expect(pluginOptions.rollbackUpgrade(profileRoot, { ...upgrade, rollbackSpec: 'invalid' }, lifetime)).rejects.toThrow('invalid_recovery')
+  await expect(pluginOptions.verifyRollbackTree(profileRoot, { ...upgrade, rollbackSpec: 'invalid' }, lifetime)).rejects.toThrow('invalid_recovery')
+  await expect(pluginOptions.verifyRetainedRollbackTree(profileRoot, { ...upgrade, rollbackSpec: 'invalid' }, '/retained', lifetime))
+    .rejects.toThrow('invalid_recovery')
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.9', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.rollbackUpgrade(profileRoot, upgrade, lifetime)).rejects.toThrow('invalid_recovery')
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.9', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.verifyRollbackTree(profileRoot, upgrade, lifetime)).rejects.toThrow('invalid_recovery')
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.9', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.verifyRetainedRollbackTree(profileRoot, upgrade, '/retained', lifetime)).rejects.toThrow('invalid_recovery')
+  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:ds-bot@0.2.16', lifetime)).resolves.toBeUndefined()
+  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:other@0.2.16', lifetime)).rejects.toThrow('bundled_plugin_unavailable')
+  mocks.pluginCommand.mockClear(); mocks.pluginEntries.mockClear()
   const tree = (directory: string): unknown[] => readdirSync(directory).sort().map((name) => {
     const path = join(directory, name), metadata = lstatSync(path)
     return [name, metadata.mode, metadata.size, metadata.mtimeMs, metadata.ctimeMs,

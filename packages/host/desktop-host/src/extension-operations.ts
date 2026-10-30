@@ -114,6 +114,8 @@ export function validateExtensionReceipt(input: unknown): asserts input is Exten
     }
   }
   if (value.pluginPackage !== undefined && (value.kind !== 'plugin' || !validPluginPackageRecovery(value.pluginPackage))) throw Error('invalid_receipt')
+  if (validPluginPackageRecovery(value.pluginPackage) && value.pluginPackage.upgrade
+    && value.pluginPackage.upgrade.operationId !== (value.restores ?? value.operationId)) throw Error('invalid_receipt')
   if (value.recoveryMode !== undefined && (value.recoveryMode !== 'complete' || value.kind !== 'plugin' || !value.restores)) throw Error('invalid_receipt')
   if (value.pluginToggleRecovery !== undefined) {
     const evidence = value.pluginToggleRecovery
@@ -414,14 +416,18 @@ export class ProfileExtensionOperations {
         guard()
         const current = readReceipt()
         if (current.kind !== 'plugin' || current.state !== 'running' || !validPluginPackageRecovery(evidence)) throw Error('invalid_checkpoint')
+        if (evidence.upgrade && evidence.upgrade.operationId !== (plan.restores ?? current.operationId)) throw Error('invalid_checkpoint')
         const target = plan.recoveryMode === 'complete' && plan.restores ? this.store.read(plan.restores)?.pluginPackage : undefined
         const request = JSON.parse(plan.payload) as { action?: string; packageName?: string; spec?: string }
         if (plan.restores ? !target || JSON.stringify({ ...target, stage: 'prepared' }) !== JSON.stringify({ ...evidence, stage: 'prepared' })
           : (request.action ?? 'install') !== evidence.action || request.packageName !== evidence.packageName || request.spec !== evidence.spec) throw Error('invalid_checkpoint')
         const previous = current.pluginPackage
         if (previous && JSON.stringify({ ...previous, stage: 'prepared' }) !== JSON.stringify({ ...evidence, stage: 'prepared' })) throw Error('invalid_checkpoint')
-        const next = previous?.stage === 'prepared' ? 'command_completed' : previous?.stage === 'command_completed' ? 'verified' : undefined
-        if (previous ? evidence.stage !== next : evidence.stage !== 'prepared') throw Error('invalid_checkpoint')
+        const transitions: Record<PluginPackageRecovery['stage'], readonly PluginPackageRecovery['stage'][]> = {
+          prepared: ['command_completed', 'rollback_completed'], command_completed: ['verified', 'rollback_completed'],
+          verified: [], rollback_completed: ['restoration_verified'], restoration_verified: [],
+        }
+        if (previous ? !transitions[previous.stage].includes(evidence.stage) : evidence.stage !== 'prepared') throw Error('invalid_checkpoint')
         this.store.write({ ...current, pluginPackage: { ...evidence }, updatedAt: Math.max(current.updatedAt, this.clock.now()) })
       }
       const context = { kind: plan.kind, operationId: initial.operationId, checkpointSkillRemoval, checkpointMcp,

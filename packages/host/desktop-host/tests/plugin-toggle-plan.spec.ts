@@ -5,6 +5,27 @@ import { parseDocument } from 'yaml'
 import { planPluginToggle, removePluginToggleOverrides } from '../src/plugin-toggle-plan.ts'
 const base = { packageName: 'base', patches: [{ insert: [{ id: 'core', name: 'core-service' }] }] }
 const bundle = { packageName: 'fixture', patches: [{ insert: [{ id: 'tool', name: 'fixture-tool', config: { value: 1 } }] }] }
+it('reproduces rejection of the released Bot bundle that also configures shared web search', () => {
+  const web = { packageName: 'base', patches: [{ insert: [{ id: 'web', name: 'web-service', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } }] }] }
+  const bot = { packageName: 'ds-bot', patches: [{ insert: [{ id: 'bot', name: 'ds-bot' }, { id: 'web-search-auto', name: 'ds-bot/web-search' }] }, { id: 'web', config: { searchProvider: 'auto', fetchProvider: 'http' } }] }
+  const patch = '# user settings\n[]\n'
+  expect(() => planPluginToggle([web, bot], patch, [], 'ds-bot', true)).toThrow('plugin_toggle_unsupported')
+  const rows = composeEntries([web.patches, bot.patches, parseDocument(patch).toJSON()])
+  expect(rows.find(row => row.id === 'web')?.config).toEqual({ searchProvider: 'auto', fetchProvider: 'http' })
+})
+it('preserves the old effective web configuration when the upgraded Bot drops its shared override', () => {
+  const base = [{ insert: [{ id: 'web', name: 'web-service', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } }] }]
+  const legacy = [{ insert: [{ id: 'bot', name: 'ds-bot' }] }, { id: 'web', config: { searchProvider: 'auto', fetchProvider: 'http' } }]
+  const upgraded = [{ insert: [{ id: 'bot', name: 'ds-bot' }] }]
+  const previous = composeEntries([base, legacy]).find(row => row.id === 'web')
+  expect(composeEntries([base, upgraded]).find(row => row.id === 'web')?.config).not.toEqual(previous?.config)
+  const preserved = [{ id: 'web', config: previous!.config }]
+  expect(composeEntries([base, upgraded, preserved]).find(row => row.id === 'web')).toEqual(previous)
+  const explicitUserOverride = [{ id: 'web', config: { searchProvider: 'custom', fetchProvider: 'http' } }]
+  expect(composeEntries([base, legacy, explicitUserOverride]).find(row => row.id === 'web')).toEqual(
+    composeEntries([base, upgraded, preserved, explicitUserOverride]).find(row => row.id === 'web'),
+  )
+})
 it('refuses empty bundles and duplicate entry identities as toggle targets', () => {
   expect(() => planPluginToggle([base, { packageName: 'fixture', patches: [] }], '', [], 'fixture', false))
     .toThrow('plugin_toggle_unsupported')

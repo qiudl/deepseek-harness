@@ -11,11 +11,13 @@ import { closeSync, constants, fsyncSync, lstatSync, openSync, renameSync, unlin
 import { isAbsolute, join } from 'node:path'
 import type { ExtensionExecutor, ExtensionKind, ExtensionReceipt, PluginToggleRecovery } from './extension-operations.ts'
 import { removePluginToggleOverrides, type PluginTogglePlan } from './plugin-toggle-plan.ts'
-import { validPluginPackageRecovery, type PluginPackageRecovery } from './plugin-package-recovery.ts'
+import { upgradePatchScope, validPluginPackageRecovery, type PluginPackageRecovery, type PluginUpgradeRecovery } from './plugin-package-recovery.ts'
 import { isPinnedPluginSpec, pinnedSpecPackageName } from './plugin-command.ts'
-import { parseBundledPluginSpec } from './bundled-plugins.ts'
+import { bundledDependencySpec, parseBundledPluginSpec } from './bundled-plugins.ts'
 import type { PluginScriptApproval } from './plugin-script-preflight.ts'
 import { parse } from 'yaml'
+import { capturePluginTree, findInterruptedPluginTree, restorePluginTree, returnInterruptedPluginTree } from './plugin-tree-snapshot.ts'
+import { readOwnerPrivateFile } from './private-file-io.ts'
 
 type Lifetime = Parameters<ExtensionExecutor['execute']>[2]
 interface PluginRemoveInput { action: 'remove'; packageName: string }
@@ -29,8 +31,16 @@ interface ProfilePluginExecutorOptions {
   /** Windows ACL channel replacing every uid/mode check; required on win32, absent elsewhere. */
   windows?: WindowsExtensionFiles
   togglePlan?(this: void, profileId: string, packageName: string, enabled: boolean, patch: string): PluginTogglePlan
+  /** Plan an exact bundled update without changing Profile files. */
+  upgradePlan?(this: void, profileId: string, packageName: string, spec: string, patch: string, originalDependency: string):
+  Promise<{ patch: string; rollback: { spec: string; digest: string } }>
   acknowledgeToggle?(this: void, profileId: string, plan: PluginTogglePlan, context: Lifetime): Promise<void>
   repair?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
+  rollbackUpgrade?(this: void, profileRoot: string, upgrade: PluginUpgradeRecovery, context: Lifetime): Promise<string>
+  verifyRollbackTree?(this: void, profileRoot: string, upgrade: PluginUpgradeRecovery, context: Lifetime): Promise<string>
+  verifyRetainedRollbackTree?(this: void, profileRoot: string, upgrade: PluginUpgradeRecovery,
+    retained: string, context: Lifetime): Promise<string>
+  verifyUpgradeTarget?(this: void, profileRoot: string, spec: string, context: Lifetime): Promise<void>
   remove?(this: void, profileRoot: string, packageName: string, context: Lifetime): Promise<void>
   acknowledgeRemoval?(this: void, profileId: string, entryIds: readonly string[], context: Lifetime): Promise<void>
   install(profileRoot: string, spec: string, context: Lifetime): Promise<void>
@@ -100,6 +110,13 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private manifest(profileId: string): Record<string, unknown> {
     return record(JSON.parse(this.read(this.root(profileId), 'profiles/web/package.json') ?? 'null'))
   }
+  private needsUpgradePlan(profileId: string, parsed: PluginUpdateInput, patch: string): boolean {
+    if (!parseBundledPluginSpec(parsed.spec) || !this.options.upgradePlan || !this.options.togglePlan || this.options.windows) return false
+    try { this.options.togglePlan(profileId, parsed.packageName, true, patch); return false } catch (error) {
+      if (error instanceof Error && error.message === 'plugin_toggle_unsupported') return true
+      throw error
+    }
+  }
   /** @param profileId Selected Profile. @param kind Market kind. @param payload Immutable source and expected package name. */
   validate(profileId: string, kind: ExtensionKind, payload: string): void {
     if (kind !== 'plugin') throw Error('upgrade_required')
@@ -109,10 +126,16 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
       const bundles = record(record(manifest.dsh).profile).bundles
       if (!Array.isArray(bundles) || bundles.filter(name => name === parsed.packageName).length !== 1) throw Error('plugin_bundle_missing')
       if (!this.options.togglePlan || !this.options.acknowledgeToggle) throw Error('upgrade_required')
-      const plan = this.options.togglePlan(profileId, parsed.packageName, parsed.action === 'toggle' ? parsed.enabled : true,
-        this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? '')
+      let plan: PluginTogglePlan | undefined
+      try {
+        plan = this.options.togglePlan(profileId, parsed.packageName, parsed.action === 'toggle' ? parsed.enabled : true,
+          this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? '')
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'plugin_toggle_unsupported' || parsed.action !== 'update'
+          || !parseBundledPluginSpec(parsed.spec) || !this.options.upgradePlan || this.options.windows) throw error
+      }
       if (parsed.action === 'remove' && (!this.options.remove || !this.options.acknowledgeRemoval)) throw Error('upgrade_required')
-      if (parsed.action === 'update' && plan.previousDisabled.length) throw Error('plugin_update_requires_enabled')
+      if (parsed.action === 'update' && plan?.previousDisabled.length) throw Error('plugin_update_requires_enabled')
       const bundled = parsed.action === 'update' ? parseBundledPluginSpec(parsed.spec) : undefined
       if (bundled && !this.options.bundledPlugin?.(bundled.name, bundled.version)) throw Error('bundled_plugin_unavailable')
       return
@@ -141,11 +164,22 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     if (plugin.entryIds.some(id => composed.has(id))) throw Error('plugin_entry_conflict')
   }
   /** Inspect immutable package metadata without mutating the selected Profile. */
-  preflight(profileId: string, kind: ExtensionKind, payload: string): Promise<PluginScriptApproval | undefined> {
-    if (kind !== 'plugin') return Promise.resolve(undefined)
+  async preflight(profileId: string, kind: ExtensionKind, payload: string): Promise<PluginScriptApproval | undefined> {
+    if (kind !== 'plugin') return undefined
     this.root(profileId)
     const parsed = input(payload)
-    if ('action' in parsed || !this.options.inspectScripts || parseBundledPluginSpec(parsed.spec)) return Promise.resolve(undefined)
+    if ('action' in parsed) {
+      if (parsed.action === 'update' && this.options.upgradePlan) {
+        const patch = this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? ''
+        if (this.needsUpgradePlan(profileId, parsed, patch)) {
+          const dependency = record(this.manifest(profileId).dependencies)[parsed.packageName]
+          if (typeof dependency !== 'string') throw Error('plugin_target_changed')
+          await this.options.upgradePlan(profileId, parsed.packageName, parsed.spec, patch, dependency)
+        }
+      }
+      return undefined
+    }
+    if (!this.options.inspectScripts || parseBundledPluginSpec(parsed.spec)) return undefined
     return this.options.inspectScripts(parsed.packageName, parsed.spec)
   }
   /** @param profileId Selected Profile. @returns Revision of package resolution, build policy and patch inputs. */
@@ -212,7 +246,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     }
     return this.revision(profileId)
   }
-  private async remove(profileId: string, input: PluginRemoveInput, context: Lifetime): Promise<{ state: 'succeeded' }> {
+  private async remove(profileId: string, input: PluginRemoveInput, context: Lifetime): Promise<{ state: 'succeeded' | 'failed' }> {
     const { togglePlan, remove, acknowledgeRemoval } = this.options
     if (!togglePlan || !remove || !acknowledgeRemoval) throw Error('upgrade_required')
     const root = this.root(profileId); const original = this.read(root, 'profiles/web/cordis.patch.yml')
@@ -257,19 +291,19 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private patchDigest(patch: string | null): string {
     return createHash('sha256').update(JSON.stringify(patch)).digest('hex')
   }
-  private backupPath(profileId: string, operationId: string): string {
+  private backupPath(profileId: string, operationId: string, side: 'before' | 'after' = 'before'): string {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(operationId)) throw Error('invalid_input')
-    return join(this.root(profileId), 'profiles/web', `.plugin-before-${operationId}`)
+    return join(this.root(profileId), 'profiles/web', `.plugin-${side}-${operationId}`)
   }
-  private backupToggle(profileId: string, operationId: string, patch: string | null): void {
+  private backupToggle(profileId: string, operationId: string, patch: string | null, side: 'before' | 'after' = 'before'): void {
     if (patch !== null && Buffer.byteLength(patch) > 1_048_576) throw Error('invalid_patch')
     const contents = patch === null ? '0' : `1${patch}`
     const windows = this.options.windows
     if (windows) {
-      writeWindowsExtensionStateFile(windows, this.backupPath(profileId, operationId), contents)
+      writeWindowsExtensionStateFile(windows, this.backupPath(profileId, operationId, side), contents)
       return
     }
-    const fd = openSync(this.backupPath(profileId, operationId),
+    const fd = openSync(this.backupPath(profileId, operationId, side),
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try { writeFileSync(fd, contents); fsyncSync(fd) } finally { closeSync(fd) }
     const parent = openSync(join(this.root(profileId), 'profiles/web'), constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -286,14 +320,35 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   } {
     const evidence = receipt.pluginToggleRecovery
     if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !evidence) throw Error('invalid_recovery')
+    const patch = this.readPatchBackup(profileId, receipt.operationId, 'before', evidence.backupDigest)
+    return { patch, evidence }
+  }
+  private readPatchBackup(profileId: string, operationId: string, side: 'before' | 'after', digest: string): string | null {
     const windows = this.options.windows
     const text = windows
-      ? readWindowsExtensionBackupFile(windows, this.backupPath(profileId, receipt.operationId))
-      : readExtensionBackupFile(this.backupPath(profileId, receipt.operationId), this.options.uid)
+      ? readWindowsExtensionBackupFile(windows, this.backupPath(profileId, operationId, side))
+      : readExtensionBackupFile(this.backupPath(profileId, operationId, side), this.options.uid)
     if (text !== '0' && !text.startsWith('1')) throw Error('invalid_backup')
     const patch = text === '0' ? null : text.slice(1)
-    if (this.patchDigest(patch) !== evidence.backupDigest) throw Error('invalid_backup')
-    return { patch, evidence }
+    if (this.patchDigest(patch) !== digest) throw Error('invalid_backup')
+    return patch
+  }
+  private treePath(profileId: string, operationId: string): string {
+    return join(this.root(profileId), 'profiles/web', `.plugin-tree-${operationId}`)
+  }
+  private treeBackup(profileId: string, operationId: string, bytes: Buffer): void {
+    this.backupPath(profileId, operationId)
+    const fd = openSync(this.treePath(profileId, operationId),
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    try { writeFileSync(fd, bytes); fsyncSync(fd) } finally { closeSync(fd) }
+    const parent = openSync(join(this.root(profileId), 'profiles/web'), constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(parent) } finally { closeSync(parent) }
+  }
+  private readTreeBackup(profileId: string, upgrade: PluginUpgradeRecovery): Buffer {
+    this.backupPath(profileId, upgrade.operationId)
+    const bytes = readOwnerPrivateFile(this.treePath(profileId, upgrade.operationId), this.options.uid, 24 * 1024 * 1024, () => Error('invalid_backup'))
+    if (!bytes || createHash('sha256').update(bytes).digest('hex') !== upgrade.treeDigest) throw Error('invalid_backup')
+    return bytes
   }
   /** @param profileId Authorized Profile. @param receipt Original toggle receipt. @returns Backup and dependency-state validation. */
   validatePluginRestore(profileId: string, receipt: ExtensionReceipt): Promise<void> {
@@ -329,7 +384,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     this.readToggleBackup(profileId, receipt)
     return { state: 'succeeded' }
   }
-  private packageScope(profileId: string, name: string, removedIds: readonly string[]): string {
+  private packageScope(profileId: string, name: string, removedIds: readonly string[], upgrade?: PluginUpgradeRecovery): string {
     const root = this.root(profileId)
     const normalize = (text: string | null, local: boolean): unknown => {
       if (text === null) return null
@@ -378,18 +433,20 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
       for (const file of ['pnpm-workspace.yaml', '.npmrc', 'cordis.patch.yml']) {
         const text = this.read(root, `${prefix}${file}`)
         values.push(file === 'pnpm-workspace.yaml' ? policy(text)
-          : prefix && file === 'cordis.patch.yml' && text !== null && removedIds.length
-            ? removePluginToggleOverrides(text, removedIds.map(id => id.slice('include:'.length))) : text)
+          : prefix && file === 'cordis.patch.yml' && upgrade ? upgradePatchScope(text, upgrade)
+            : prefix && file === 'cordis.patch.yml' && text !== null && removedIds.length
+              ? removePluginToggleOverrides(text, removedIds.map(id => id.slice('include:'.length))) : text)
       }
     }
     return createHash('sha256').update(JSON.stringify(stable(values))).digest('hex')
   }
   private packageIntent(profileId: string, requested: Pick<PluginPackageRecovery, 'action' | 'packageName' | 'spec'>,
-    removedIds: string[]): PluginPackageRecovery {
+    removedIds: string[], upgrade?: PluginUpgradeRecovery): PluginPackageRecovery {
     const manifest = this.manifest(profileId)
     const originalSpec = manifest.dependencies ? record(manifest.dependencies)[requested.packageName] ?? null : null
     const evidence = { ...requested, originalSpecDigest: createHash('sha256').update(JSON.stringify(originalSpec)).digest('hex'), removedIds,
-      scopeDigest: this.packageScope(profileId, requested.packageName, removedIds), stage: 'prepared' }
+      scopeDigest: this.packageScope(profileId, requested.packageName, removedIds, upgrade), stage: 'prepared',
+      ...(upgrade ? { upgrade } : {}) }
     if (!validPluginPackageRecovery(evidence)) throw Error('invalid_package_intent')
     return evidence
   }
@@ -401,7 +458,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     return spec.startsWith('github:') ? spec : spec.slice(spec.lastIndexOf('@') + 1)
   }
   private checkPackageScope(profileId: string, evidence: PluginPackageRecovery): void {
-    if (this.packageScope(profileId, evidence.packageName, evidence.removedIds) !== evidence.scopeDigest) throw Error('plugin_scope_changed')
+    if (this.packageScope(profileId, evidence.packageName, evidence.removedIds, evidence.upgrade) !== evidence.scopeDigest) throw Error('plugin_scope_changed')
     const manifest = this.manifest(profileId)
     const current = manifest.dependencies ? record(manifest.dependencies)[evidence.packageName] ?? null : null
     const expected = this.expectedDependency(evidence.spec)
@@ -415,6 +472,11 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     return Promise.resolve().then(() => {
       if (receipt.profileId !== profileId || receipt.kind !== 'plugin' || !validPluginPackageRecovery(receipt.pluginPackage)) throw Error('invalid_recovery')
       const evidence = receipt.pluginPackage
+      if (evidence.upgrade) {
+        this.readPatchBackup(profileId, evidence.upgrade.operationId, 'before', evidence.upgrade.beforeDigest)
+        this.readPatchBackup(profileId, evidence.upgrade.operationId, 'after', evidence.upgrade.afterDigest)
+        this.readTreeBackup(profileId, evidence.upgrade)
+      }
       if (evidence.action === 'remove' && (!this.options.remove || !this.options.repair || !this.options.acknowledgeRemoval)) throw Error('upgrade_required')
       this.checkPackageScope(profileId, evidence)
     })
@@ -425,17 +487,60 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
    * @param context New confirmed completion lifetime.
    * @returns Success after the original requested package state and runtime are verified.
    */
-  async completePluginPackage(profileId: string, receipt: ExtensionReceipt, context: Lifetime): Promise<{ state: 'succeeded' }> {
+  async completePluginPackage(profileId: string, receipt: ExtensionReceipt, context: Lifetime): Promise<{ state: 'succeeded' | 'failed' }> {
     context.guard(); await this.validatePluginCompletion(profileId, receipt); context.guard()
     const evidence = receipt.pluginPackage
     if (!evidence) throw Error('invalid_recovery')
     return this.runPackage(profileId, evidence, context, true)
   }
-  private async runPackage(profileId: string, evidence: PluginPackageRecovery, context: Lifetime, completing: boolean): Promise<{ state: 'succeeded' }> {
+  private async runPackage(profileId: string, evidence: PluginPackageRecovery, context: Lifetime, completing: boolean): Promise<{ state: 'succeeded' | 'failed' }> {
     const guard = () => { context.signal.throwIfAborted(); context.guard() }
     guard(); this.checkPackageScope(profileId, evidence)
     context.checkpointPluginPackage?.({ ...evidence, stage: 'prepared' })
     const root = this.root(profileId)
+    if (evidence.upgrade) {
+      const upgrade = evidence.upgrade
+      const before = this.readPatchBackup(profileId, upgrade.operationId, 'before', upgrade.beforeDigest)
+      const after = this.readPatchBackup(profileId, upgrade.operationId, 'after', upgrade.afterDigest)
+      const current = this.read(root, 'profiles/web/cordis.patch.yml')
+      this.readTreeBackup(profileId, upgrade)
+      const verifyTree = async () => {
+        const tree = join(root, 'profiles/web/node_modules', evidence.packageName)
+        let currentTree: ReturnType<typeof capturePluginTree>
+        try { currentTree = capturePluginTree(tree, this.options.uid) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || !completing || !this.options.verifyRetainedRollbackTree) throw error
+          const manifest = this.manifest(profileId)
+          if (!manifest.dependencies
+            || record(manifest.dependencies)[evidence.packageName] !== bundledDependencySpec(upgrade.rollbackDigest)) {
+            throw error
+          }
+          const retained = findInterruptedPluginTree(tree, upgrade.operationId, this.options.uid)
+          const digest = await this.options.verifyRetainedRollbackTree(root, upgrade, retained, context)
+          guard(); this.checkPackageScope(profileId, evidence)
+          returnInterruptedPluginTree(tree, upgrade.operationId, digest, this.options.uid, guard)
+          currentTree = capturePluginTree(tree, this.options.uid)
+        }
+        if (currentTree.digest === upgrade.treeDigest) return
+        const currentManifest = this.manifest(profileId)
+        const dependency = currentManifest.dependencies && record(currentManifest.dependencies)[evidence.packageName]
+        if (completing && dependency === bundledDependencySpec(upgrade.rollbackDigest) && this.options.verifyRollbackTree) {
+          const verified = await this.options.verifyRollbackTree(root, upgrade, context)
+          guard(); this.checkPackageScope(profileId, evidence)
+          if (verified !== currentTree.digest) throw Error('plugin_state_changed')
+          restorePluginTree(tree, upgrade.operationId, this.readTreeBackup(profileId, upgrade), upgrade.treeDigest,
+            verified, this.options.uid, guard)
+          if (capturePluginTree(tree, this.options.uid).digest !== upgrade.treeDigest) throw Error('plugin_state_changed')
+          return
+        }
+        if (!completing || !evidence.spec || !this.options.verifyUpgradeTarget) throw Error('plugin_state_changed')
+        await this.options.verifyUpgradeTarget(root, evidence.spec, context)
+        guard()
+      }
+      await verifyTree()
+      if (current !== after) await this.publishPatch(profileId, after, before, await this.revision(profileId), guard)
+      guard(); this.checkPackageScope(profileId, evidence)
+      await verifyTree()
+    }
     if (evidence.action === 'remove') {
       const { remove, repair, acknowledgeRemoval } = this.options
       if (!remove || !acknowledgeRemoval) throw Error('upgrade_required')
@@ -469,19 +574,48 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
       if (await this.revision(profileId) !== revision) throw Error('plugin_state_changed')
     } else {
       if (!evidence.spec) throw Error('invalid_package_intent')
-      await this.options.install(root, evidence.spec, context)
-      guard(); this.checkPackageScope(profileId, evidence)
-      const manifest = this.manifest(profileId)
-      if (typeof record(manifest.dependencies)[evidence.packageName] !== 'string'
-        || !Array.isArray(record(record(manifest.dsh).profile).bundles)
-        || !(record(record(manifest.dsh).profile).bundles as unknown[]).includes(evidence.packageName)) throw Error('plugin_bundle_missing')
-      const expected = this.expectedDependency(evidence.spec)
-      if (record(manifest.dependencies)[evidence.packageName] !== expected) throw Error('plugin_version_mismatch')
-      const revision = await this.revision(profileId)
-      context.checkpointPluginPackage?.({ ...evidence, stage: 'command_completed' })
-      await this.options.acknowledge(profileId, evidence.packageName, context)
-      guard()
-      if (await this.revision(profileId) !== revision) throw Error('plugin_state_changed')
+      try {
+        await this.options.install(root, evidence.spec, context)
+        guard(); this.checkPackageScope(profileId, evidence)
+        const manifest = this.manifest(profileId)
+        if (typeof record(manifest.dependencies)[evidence.packageName] !== 'string'
+          || !Array.isArray(record(record(manifest.dsh).profile).bundles)
+          || !(record(record(manifest.dsh).profile).bundles as unknown[]).includes(evidence.packageName)) throw Error('plugin_bundle_missing')
+        const expected = this.expectedDependency(evidence.spec)
+        if (record(manifest.dependencies)[evidence.packageName] !== expected) throw Error('plugin_version_mismatch')
+        const revision = await this.revision(profileId)
+        context.checkpointPluginPackage?.({ ...evidence, stage: 'command_completed' })
+        await this.options.acknowledge(profileId, evidence.packageName, context)
+        guard()
+        if (await this.revision(profileId) !== revision) throw Error('plugin_state_changed')
+      } catch (error) {
+        const upgrade = evidence.upgrade
+        if (!upgrade || !this.options.rollbackUpgrade) throw error
+        guard(); this.checkPackageScope(profileId, evidence)
+        const before = this.readPatchBackup(profileId, upgrade.operationId, 'before', upgrade.beforeDigest)
+        this.readPatchBackup(profileId, upgrade.operationId, 'after', upgrade.afterDigest)
+        const restoredArchiveDigest = await this.options.rollbackUpgrade(root, upgrade, context)
+        guard(); this.checkPackageScope(profileId, evidence)
+        const manifest = this.manifest(profileId)
+        if (record(manifest.dependencies)[evidence.packageName] !== bundledDependencySpec(upgrade.rollbackDigest)) throw Error('plugin_version_mismatch')
+        const current = this.read(root, 'profiles/web/cordis.patch.yml')
+        const tree = join(root, 'profiles/web/node_modules', evidence.packageName)
+        const currentTree = capturePluginTree(tree, this.options.uid)
+        if (currentTree.digest !== restoredArchiveDigest) throw Error('plugin_state_changed')
+        if (currentTree.digest !== upgrade.treeDigest) {
+          restorePluginTree(tree, upgrade.operationId, this.readTreeBackup(profileId, upgrade), upgrade.treeDigest,
+            currentTree.digest, this.options.uid, guard)
+          if (capturePluginTree(tree, this.options.uid).digest !== upgrade.treeDigest) throw Error('plugin_state_changed')
+        }
+        if (current !== before) await this.publishPatch(profileId, before, current, await this.revision(profileId), guard)
+        const revision = await this.revision(profileId)
+        context.checkpointPluginPackage?.({ ...evidence, stage: 'rollback_completed' })
+        await this.options.acknowledge(profileId, evidence.packageName, context)
+        guard(); this.checkPackageScope(profileId, evidence)
+        if (await this.revision(profileId) !== revision) throw Error('plugin_state_changed')
+        context.checkpointPluginPackage?.({ ...evidence, stage: 'restoration_verified' })
+        return { state: 'failed' }
+      }
     }
     guard(); context.checkpointPluginPackage?.({ ...evidence, stage: 'verified' })
     return { state: 'succeeded' }
@@ -497,6 +631,31 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     const parsed = input(payload)
     if ('action' in parsed && parsed.action === 'remove') return this.remove(profileId, parsed, context)
     if ('action' in parsed && parsed.action === 'toggle') return this.toggle(profileId, parsed, context)
+    const upgradePlan = this.options.upgradePlan
+    if ('action' in parsed && parsed.action === 'update' && upgradePlan
+      && this.needsUpgradePlan(profileId, parsed, this.read(this.root(profileId), 'profiles/web/cordis.patch.yml') ?? '')) {
+      const root = this.root(profileId)
+      const original = this.read(root, 'profiles/web/cordis.patch.yml')
+      const revision = await this.revision(profileId)
+      const dependency = record(this.manifest(profileId).dependencies)[parsed.packageName]
+      if (typeof dependency !== 'string') throw Error('plugin_target_changed')
+      const plan = await upgradePlan(profileId, parsed.packageName, parsed.spec, original ?? '', dependency)
+      context.guard(); context.signal.throwIfAborted()
+      if (await this.revision(profileId) !== revision || this.read(root, 'profiles/web/cordis.patch.yml') !== original) throw Error('plugin_state_changed')
+      {
+        if (!context.operationId || !context.checkpointPluginPackage || this.options.windows) throw Error('upgrade_required')
+        const tree = capturePluginTree(join(root, 'profiles/web/node_modules', parsed.packageName), this.options.uid)
+        context.guard(); context.signal.throwIfAborted()
+        const upgrade = { operationId: context.operationId, beforeDigest: this.patchDigest(original),
+          afterDigest: this.patchDigest(plan.patch),
+          rollbackSpec: plan.rollback.spec, rollbackDigest: plan.rollback.digest, treeDigest: tree.digest }
+        const evidence = this.packageIntent(profileId, parsed, [], upgrade)
+        this.backupToggle(profileId, context.operationId, original)
+        this.backupToggle(profileId, context.operationId, plan.patch, 'after')
+        this.treeBackup(profileId, context.operationId, tree.bytes)
+        return this.runPackage(profileId, evidence, context, false)
+      }
+    }
     const evidence = this.packageIntent(profileId, { action: 'action' in parsed ? parsed.action : 'install',
       packageName: parsed.packageName, spec: parsed.spec }, [])
     return this.runPackage(profileId, evidence, context, false)
