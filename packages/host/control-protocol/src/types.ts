@@ -1082,6 +1082,29 @@ export interface ProfileFriendBotEnrollmentResult {
   readonly result: import('./friend-bot-enrollment.ts').HostFriendBotEnrollmentAssertion
 }
 
+/** Current Account Host signature for one friend device lease issue or renewal. */
+export interface ProfileFriendOnlineLeaseRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.friend_online_lease'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly challenge: import('./friend-online-lease-proof.ts').HostFriendOnlineLeaseChallenge
+  }
+}
+export interface ProfileFriendOnlineLeaseResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.friend_online_lease'
+  readonly result: import('./friend-online-lease-proof.ts').HostFriendOnlineLeaseAssertion
+}
+
 /** Account-bound delivery from a signed Slark group to the current Bot Profile. */
 export interface ProfileBotGroupDeliverRequest {
   readonly version: 1
@@ -2467,6 +2490,8 @@ export type HostControlFrame =
   | ProfileFriendBotConfirmationResult
   | ProfileFriendBotEnrollmentRequest
   | ProfileFriendBotEnrollmentResult
+  | ProfileFriendOnlineLeaseRequest
+  | ProfileFriendOnlineLeaseResult
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageRequest

@@ -89,6 +89,8 @@ The private session coordinator now records an owner-only, append-only intent be
 
 `profile.friend_bot_enrollment` uses the same current Account Profile worker and post-read authority check to sign the worker's exact public Bot name under a distinct registration domain. The authenticated client checks the current Host peer and signature before returning the assertion. Slark still owns one-use challenge storage and the restricted device, Bot, and public-card write.
 
+`profile.friend_online_lease` signs only after checking the current Account grant and Host installation identity. The authenticated client checks the returned challenge, current Host peer, deadline, and installation signature. A signed response does not update Slark's lease.
+
 The private Bot group worker bridge supports one-result recovery pages, exact result acknowledgement and member-cycle revocation. Its worker token and current generation fence remain inside the Host. `profile.bot_group_result_page` exposes one result after revalidating the original Slark delivery ticket against the current Account and group membership. `profile.bot_group_result_ack` clears that result after Slark records its receipt, under the same live ticket. Member-cycle revocation has no public control method.
 
 When a result is present, the Host signs its exact text, Bot/member identity, delivery ID and current Account/installation tuple with the installation key. The client verifies this proof against its inspected Host peer. Slark must verify it again against the current registered Host before recording a Bot message.

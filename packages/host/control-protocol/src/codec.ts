@@ -2,6 +2,7 @@ import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } fr
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
 import { parseHostFriendBotConfirmationChallenge, parseHostFriendBotConfirmationAssertion } from './friend-bot-confirmation.ts'
 import { parseHostFriendBotEnrollmentChallenge, parseHostFriendBotEnrollmentAssertion } from './friend-bot-enrollment.ts'
+import { parseHostFriendOnlineLeaseChallenge, parseHostFriendOnlineLeaseAssertion } from './friend-online-lease-proof.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
@@ -108,6 +109,7 @@ import type {
   ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileFriendBotConfirmationRequest, ProfileFriendBotConfirmationResult,
   ProfileFriendBotEnrollmentRequest, ProfileFriendBotEnrollmentResult,
+  ProfileFriendOnlineLeaseRequest, ProfileFriendOnlineLeaseResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
@@ -1849,6 +1851,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBotIdentityRequest
   | ProfileFriendBotConfirmationRequest
   | ProfileFriendBotEnrollmentRequest
+  | ProfileFriendOnlineLeaseRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
@@ -2626,6 +2629,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       challenge: parseHostFriendBotEnrollmentChallenge(params.challenge),
     } } satisfies ProfileFriendBotEnrollmentRequest
   }
+  if (frame.method === 'profile.friend_online_lease') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      challenge: parseHostFriendOnlineLeaseChallenge(params.challenge),
+    } } satisfies ProfileFriendOnlineLeaseRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2706,6 +2717,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBotIdentityResult
   | ProfileFriendBotConfirmationResult
   | ProfileFriendBotEnrollmentResult
+  | ProfileFriendOnlineLeaseResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
@@ -3194,6 +3206,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
   if (frame.method === 'profile.friend_bot_enrollment') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostFriendBotEnrollmentAssertion(result) } satisfies ProfileFriendBotEnrollmentResult
+  }
+  if (frame.method === 'profile.friend_online_lease') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostFriendOnlineLeaseAssertion(result) } satisfies ProfileFriendOnlineLeaseResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])

@@ -41,10 +41,15 @@ export { parseHostFriendBotEnrollmentChallenge, parseHostFriendBotEnrollmentAsse
   encodeHostFriendBotEnrollmentPayload } from './friend-bot-enrollment.js'
 export type { HostFriendBotEnrollmentChallenge,
   HostFriendBotEnrollmentAssertion } from './friend-bot-enrollment.js'
+export { parseHostFriendOnlineLeaseChallenge, parseHostFriendOnlineLeaseAssertion,
+  encodeHostFriendOnlineLeasePayload } from './friend-online-lease-proof.js'
+export type { HostFriendOnlineLeaseChallenge,
+  HostFriendOnlineLeaseAssertion } from './friend-online-lease-proof.js'
 export type { HostBotIdentity } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileFriendBotConfirmationRequest, ProfileFriendBotConfirmationResult,
   ProfileFriendBotEnrollmentRequest, ProfileFriendBotEnrollmentResult,
+  ProfileFriendOnlineLeaseRequest, ProfileFriendOnlineLeaseResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
