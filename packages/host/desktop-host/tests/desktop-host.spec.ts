@@ -156,7 +156,8 @@ describe('authenticated Unix transport', () => {
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
     now: () => number = clock.now,
     memory?: { readonly verifier: MemoryDirectiveVerifier
-      readonly reader: (profileId: string) => HostMemoryProfileReader },
+      readonly reader: (profileId: string) => HostMemoryProfileReader
+      readonly openWorker?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['openMemoryWorker']> },
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
     const root = dir()
     const socketPath = join(root, 'host.sock')
@@ -178,7 +179,8 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
       profilePersistenceGeneration: () => 1,
       ...(memory === undefined ? {} : { memoryDirectiveVerifier: memory.verifier,
-        memoryProfileReader: memory.reader }),
+        memoryProfileReader: memory.reader,
+        ...(memory.openWorker ? { openMemoryWorker: memory.openWorker } : {}) }),
       ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
       ...(createMigrationImport === undefined ? {} : { createMigrationImport }),
       ...(createLegacyMigrationExport === undefined ? {} : { createLegacyMigrationExport }),
@@ -248,8 +250,20 @@ describe('authenticated Unix transport', () => {
       list: async () => ({ items: [{ sessionId: 'session-one', revision: 'r1' }], nextAfter: null }),
       read: async () => ({ sessionId: 'session-one', revision: 'r1',
         text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }) }
+    const projected: Array<{ sourceRef: string; sourceVersion: string; text: string }> = []
+    const workerQueries: Array<{ text: string; limit: number }> = []
+    let workerCloses = 0
     const enabled = await fixture(undefined, undefined, undefined, clock.now, {
       verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
+      openWorker: async (_profileId, _stamp, _signal) => ({
+        done: new Promise<void>(() => {}),
+        async project(items) { projected.push(...items) },
+        async query(text, limit) {
+          workerQueries.push({ text, limit })
+          return projected.slice(0, limit).map(({ sourceRef, sourceVersion }) => ({ sourceRef, sourceVersion }))
+        },
+        async close() { workerCloses += 1 },
+      }),
     })
     const client = await connectHost(enabled.socketPath)
     const profile = await client.ensureAccountProfile({ ...binding,
@@ -279,7 +293,11 @@ describe('authenticated Unix transport', () => {
     const found = await client.memoryQuery(search)
     expect(found).toMatchObject({ action: 'search', items: [{ source: { profileId: profile.profileId },
       snippet: 'private plan token=[REDACTED]' }] })
+    expect(projected).toHaveLength(1)
+    expect(projected[0]?.text).toBe('private plan token=[REDACTED]')
+    expect(workerQueries).toEqual([{ text: 'private', limit: 1 }])
     await expect(client.memoryQuery(search)).rejects.toMatchObject({ code: 'replayed' })
+    expect(workerCloses).toBeGreaterThan(0)
     await expect(client.memoryQuery({ ...binding, subject: 'other', command: { action: 'warm' } }))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
     client.close()

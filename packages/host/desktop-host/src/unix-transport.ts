@@ -50,6 +50,8 @@ import type { SingleHostLock } from './single-instance.ts'
 import { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
 import { HostMemoryReadController } from './memory-read-controller.ts'
 import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
+import { projectHostMemoryToWorker, searchHostMemoryWithWorker,
+  type MemoryWorkerLink, type MemoryWorkerStamp } from './memory-worker-session.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -78,6 +80,8 @@ export interface UnixHostServerOptions {
   readonly host: DesktopHost
   readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
   readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
+  readonly openMemoryWorker?: (profileId: string, stamp: MemoryWorkerStamp,
+    signal: AbortSignal) => Promise<MemoryWorkerLink>
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -504,12 +508,16 @@ export class UnixHostServer {
   private async accept(socket: Socket): Promise<void> {
     const ownerId = randomUUID()
     const lifetime = new AbortController()
-    let memorySlot: { readonly key: string; readonly controller: HostMemoryReadController } | undefined
+    let memorySlot: { readonly key: string
+      readonly profileId: string
+      readonly controller: HostMemoryReadController
+      worker: { readonly stamp: MemoryWorkerStamp; readonly link: MemoryWorkerLink } | undefined } | undefined
     let memoryBusy = false
     this.connections.add(socket)
     socket.once('close', () => {
       lifetime.abort()
       memorySlot?.controller.clear()
+      if (memorySlot?.worker) void memorySlot.worker.link.close().catch(() => undefined)
       memorySlot = undefined
       this.connections.delete(socket)
       this.options.host.revokeOwner(ownerId)
@@ -605,6 +613,7 @@ export class UnixHostServer {
               params.owner_user_id, params.computer_id])
             if (memorySlot?.key !== key) {
               memorySlot?.controller.clear()
+              if (memorySlot?.worker) await memorySlot.worker.link.close()
               memorySlot = undefined
               const profileId = await this.options.host.authorizeMemoryProfile({
                 authorityEnvironmentId: params.authority_environment_id,
@@ -629,16 +638,36 @@ export class UnixHostServer {
                   hostInstanceId: this.options.identity.hostInstanceId,
                   processNonce: this.options.identity.processNonce, reader }
               }
-              memorySlot = { key, controller: new HostMemoryReadController(verifier, current) }
+              memorySlot = { key, profileId, controller: new HostMemoryReadController(verifier, current), worker: undefined }
             }
-            const controller = memorySlot.controller
+            const slot = memorySlot
+            const controller = slot.controller
             let result: ProfileMemoryQueryResult['result']
             if (params.command.action === 'warm') {
-              await controller.warm(lifetime.signal)
+              if (slot.worker) {
+                await slot.worker.link.close()
+                slot.worker = undefined
+              }
+              const openWorker = this.options.openMemoryWorker
+              if (openWorker) {
+                const projected = await projectHostMemoryToWorker(controller,
+                  (stamp, signal) => openWorker(slot.profileId, stamp, signal), lifetime.signal)
+                slot.worker = { stamp: projected.stamp, link: projected.worker }
+                const invalidate = (): void => {
+                  if (slot.worker?.link !== projected.worker) return
+                  controller.clear()
+                  slot.worker = undefined
+                }
+                void projected.worker.done.then(invalidate, invalidate)
+              } else await controller.warm(lifetime.signal)
               result = { action: 'warm', state: 'ready' }
             } else if (params.command.action === 'search') {
-              const found = await controller.search(params.command.directive,
-                params.command.query, params.command.limit, lifetime.signal)
+              const command = params.command
+              if (this.options.openMemoryWorker && !slot.worker) throw new HostAuthorityError('unavailable')
+              const found = this.options.openMemoryWorker && slot.worker
+                ? await searchHostMemoryWithWorker(controller, slot.worker.link, slot.worker.stamp,
+                  command.directive, command.query, command.limit, lifetime.signal)
+                : await controller.search(command.directive, command.query, command.limit, lifetime.signal)
               result = { action: 'search', generation: found.generation, items: found.items as never }
             } else {
               const chunk = await controller.evidenceChunk(params.command.directive,
@@ -650,6 +679,7 @@ export class UnixHostServer {
               request_id: frame.request_id, method: frame.method, result })))
           } catch (error) {
             memorySlot?.controller.clear()
+            if (memorySlot?.worker) await memorySlot.worker.link.close()
             memorySlot = undefined
             throw error
           } finally { memoryBusy = false }

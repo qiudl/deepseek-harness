@@ -1,6 +1,6 @@
 /** REQ-20261021-0013: process-local index of redacted Profile Session evidence. */
 import { createHash, randomBytes } from 'node:crypto'
-import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session/types'
 import { projectMemoryLogicalSession, projectMemorySession, type MemoryProjectedRecord } from './memory-session-projection.ts'
 import type { HostMemorySessionPage, HostMemorySessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'

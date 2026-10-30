@@ -1,5 +1,5 @@
 /** REQ-20261021-0013: bounded, local-only projection of current-format Session text. */
-import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session/types'
 import { createHash } from 'node:crypto'
 import type { HostMemoryRawSessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'
