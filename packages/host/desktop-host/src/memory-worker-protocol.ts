@@ -105,6 +105,8 @@ export class MemoryWorkerProtocol {
     if (frame.type === 'projected' && this.pendingPage === frame.pageNo) {
       if (this.finalPage && (frame.totalItems !== this.totalItems
         || frame.projectionDigest !== this.finalDigest)) return this.reject()
+      // A ready worker must have room for at least its first query embedding.
+      if (this.finalPage && this.embedId >= 64) return this.reject()
       if (!this.finalPage && (frame.totalItems !== undefined
         || frame.projectionDigest !== undefined)) return this.reject()
       this.pendingPage = null

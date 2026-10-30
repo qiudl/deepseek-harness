@@ -96,6 +96,22 @@ describe('HY worker transaction ordering', () => {
       values: ['synthetic'] })).toThrow()
   })
 
+  it('does not publish a worker that spent its entire embedding budget during projection', () => {
+    const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
+    const final = decodeMemoryWorkerFrame(protocol.project([item], null))
+    if (final.type !== 'projection' || final.totalItems === undefined
+      || final.projectionDigest === undefined) throw Error('missing final projection digest')
+    const { totalItems, projectionDigest } = final
+    const vector = Array<number>(1024).fill(0)
+    for (let embedId = 1; embedId <= 64; embedId++) {
+      protocol.acceptEmbed({ ...base, type: 'embed', embedId, values: ['synthetic'] })
+      protocol.replyEmbedding([vector])
+    }
+    expect(() => protocol.receive({ ...base, type: 'projected', pageNo: 0,
+      totalItems, projectionDigest })).toThrow()
+    expect(() => protocol.query('synthetic', 1)).toThrow()
+  })
+
   it('rejects an accumulated projection above 20,000 items', () => {
     const protocol = new MemoryWorkerProtocol(nonce, epoch, 1)
     const page = Array.from({ length: 16 }, () => item)
