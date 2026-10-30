@@ -320,6 +320,88 @@ describe('authenticated Unix transport', () => {
     await enabled.server.close()
   })
 
+  it('waits for a memory worker lease before completing Host shutdown', async () => {
+    const signing = generateKeyPairSync('ed25519')
+    const ring = JSON.stringify({ version: 1, environmentId: stagingEnvironmentId,
+      issuer: 'https://slark.example', keys: [{ kid: 'test',
+        publicKeyPem: signing.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        validFrom: 1, validUntil: 60_000 }] })
+    const stopped = Promise.withResolvers<undefined>()
+    const closeStarted = Promise.withResolvers<undefined>()
+    const reader: HostMemoryProfileReader = { assertCurrent() {},
+      list: async () => ({ items: [], nextAfter: null }),
+      read: async () => { throw new Error('no synthetic Session') } }
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, {
+      verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
+      openWorker: async () => ({ done: new Promise<void>(() => {}),
+        async project() {}, async query() { return [] },
+        close() { closeStarted.resolve(undefined); return stopped.promise },
+      }),
+    })
+    const client = await connectHost(socketPath)
+    await client.ensureAccountProfile({ issuer: slarkIssuer, subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      keyHandle: 'keychain:u1', unlockMaterial })
+    await client.memoryQuery({ issuer: slarkIssuer, subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, ownerUserId: 'owner-u1', computerId: 'computer-1',
+      command: { action: 'warm' } })
+    const closing = server.close()
+    await closeStarted.promise
+    const completedEarly = await Promise.race([
+      closing.then(() => true), new Promise<false>(resolve => setImmediate(() => resolve(false))),
+    ])
+    stopped.resolve(undefined)
+    await closing
+    client.close()
+    expect(completedEarly).toBe(false)
+  })
+
+  it('waits for a worker still opening when Host shutdown aborts warmup', async () => {
+    const signing = generateKeyPairSync('ed25519')
+    const ring = JSON.stringify({ version: 1, environmentId: stagingEnvironmentId,
+      issuer: 'https://slark.example', keys: [{ kid: 'test',
+        publicKeyPem: signing.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        validFrom: 1, validUntil: 60_000 }] })
+    const opening = Promise.withResolvers<undefined>()
+    const releaseOpen = Promise.withResolvers<undefined>()
+    const stopped = Promise.withResolvers<undefined>()
+    const reader: HostMemoryProfileReader = { assertCurrent() {},
+      list: async () => ({ items: [], nextAfter: null }),
+      read: async () => { throw new Error('no synthetic Session') } }
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, {
+      verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
+      openWorker: async () => {
+        opening.resolve(undefined)
+        await releaseOpen.promise
+        return { done: new Promise<void>(() => {}), async project() {}, async query() { return [] },
+          close: () => stopped.promise }
+      },
+    })
+    const client = await connectHost(socketPath)
+    await client.ensureAccountProfile({ issuer: slarkIssuer, subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      keyHandle: 'keychain:u1', unlockMaterial })
+    const warm = client.memoryQuery({ issuer: slarkIssuer, subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, ownerUserId: 'owner-u1', computerId: 'computer-1',
+      command: { action: 'warm' } })
+    void warm.catch(() => undefined)
+    await opening.promise
+    const closing = server.close()
+    releaseOpen.resolve(undefined)
+    const completedEarly = await Promise.race([
+      closing.then(() => true), new Promise<false>(resolve => setImmediate(() => resolve(false))),
+    ])
+    stopped.resolve(undefined)
+    await closing
+    await expect(warm).rejects.toThrow()
+    client.close()
+    expect(completedEarly).toBe(false)
+  })
+
   it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
     const { server, socketPath } = await fixture()
     const client = await UnixHostClient.connect({

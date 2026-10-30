@@ -453,7 +453,21 @@ export class UnixHostServer {
   private server: Server | undefined
   private socketIdentity?: { dev: number; ino: number }
   private readonly connections = new Set<Socket>()
+  private readonly connectionShutdowns = new Map<Socket, () => Promise<void>>()
+  private readonly memoryWorkerClosures = new Set<Promise<void>>()
+  private readonly memoryProjections = new Set<Promise<unknown>>()
+  private readonly closingMemoryWorkers = new WeakMap<MemoryWorkerLink, Promise<void>>()
   constructor(private readonly options: UnixHostServerOptions) {}
+
+  private closeMemoryWorker(worker: MemoryWorkerLink): Promise<void> {
+    const existing = this.closingMemoryWorkers.get(worker)
+    if (existing) return existing
+    const closing = Promise.resolve().then(() => worker.close())
+    this.closingMemoryWorkers.set(worker, closing)
+    this.memoryWorkerClosures.add(closing)
+    void closing.finally(() => { this.memoryWorkerClosures.delete(closing) }).catch(() => undefined)
+    return closing
+  }
 
   /** Bind the UDS path after refusing link/regular-file substitution. */
   async start(): Promise<void> {
@@ -485,6 +499,7 @@ export class UnixHostServer {
   async close(): Promise<void> {
     const server = this.server
     this.server = undefined
+    const shutdowns = [...this.connectionShutdowns.values()].map(shutdown => shutdown())
     for (const socket of this.connections) socket.destroy()
     if (server) {
       await new Promise<void>((resolve, reject) => {
@@ -494,6 +509,8 @@ export class UnixHostServer {
         })
       })
     }
+    await Promise.allSettled(this.memoryProjections)
+    const workerClosures = await Promise.allSettled([...shutdowns, ...this.memoryWorkerClosures])
     try {
       const stat = lstatSync(this.options.socketPath)
       if (this.socketIdentity && stat.isSocket()
@@ -503,6 +520,8 @@ export class UnixHostServer {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    const failures = workerClosures.filter(result => result.status === 'rejected')
+    if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason), 'memory worker shutdown failed')
   }
 
   private async accept(socket: Socket): Promise<void> {
@@ -513,14 +532,23 @@ export class UnixHostServer {
       readonly controller: HostMemoryReadController
       worker: { readonly stamp: MemoryWorkerStamp; readonly link: MemoryWorkerLink } | undefined } | undefined
     let memoryBusy = false
-    this.connections.add(socket)
-    socket.once('close', () => {
+    let shutdownPromise: Promise<void> | undefined
+    const shutdown = (): Promise<void> => {
+      if (shutdownPromise) return shutdownPromise
       lifetime.abort()
       memorySlot?.controller.clear()
-      if (memorySlot?.worker) void memorySlot.worker.link.close().catch(() => undefined)
+      const worker = memorySlot?.worker?.link
       memorySlot = undefined
-      this.connections.delete(socket)
+      shutdownPromise = worker ? this.closeMemoryWorker(worker) : Promise.resolve()
       this.options.host.revokeOwner(ownerId)
+      return shutdownPromise
+    }
+    this.connectionShutdowns.set(socket, shutdown)
+    this.connections.add(socket)
+    socket.once('close', () => {
+      void shutdown().catch(() => undefined)
+      this.connections.delete(socket)
+      this.connectionShutdowns.delete(socket)
     })
     socket.pause()
     try {
@@ -613,7 +641,7 @@ export class UnixHostServer {
               params.owner_user_id, params.computer_id])
             if (memorySlot?.key !== key) {
               memorySlot?.controller.clear()
-              if (memorySlot?.worker) await memorySlot.worker.link.close()
+              if (memorySlot?.worker) await this.closeMemoryWorker(memorySlot.worker.link)
               memorySlot = undefined
               const profileId = await this.options.host.authorizeMemoryProfile({
                 authorityEnvironmentId: params.authority_environment_id,
@@ -645,13 +673,17 @@ export class UnixHostServer {
             let result: ProfileMemoryQueryResult['result']
             if (params.command.action === 'warm') {
               if (slot.worker) {
-                await slot.worker.link.close()
+                await this.closeMemoryWorker(slot.worker.link)
                 slot.worker = undefined
               }
               const openWorker = this.options.openMemoryWorker
               if (openWorker) {
-                const projected = await projectHostMemoryToWorker(controller,
+                const projection = projectHostMemoryToWorker(controller,
                   (stamp, signal) => openWorker(slot.profileId, stamp, signal), lifetime.signal)
+                this.memoryProjections.add(projection)
+                let projected: Awaited<typeof projection>
+                try { projected = await projection }
+                finally { this.memoryProjections.delete(projection) }
                 slot.worker = { stamp: projected.stamp, link: projected.worker }
                 const invalidate = (): void => {
                   if (slot.worker?.link !== projected.worker) return
@@ -679,7 +711,7 @@ export class UnixHostServer {
               request_id: frame.request_id, method: frame.method, result })))
           } catch (error) {
             memorySlot?.controller.clear()
-            if (memorySlot?.worker) await memorySlot.worker.link.close()
+            if (memorySlot?.worker) await this.closeMemoryWorker(memorySlot.worker.link)
             memorySlot = undefined
             throw error
           } finally { memoryBusy = false }
