@@ -47,7 +47,7 @@ const mocks = vi.hoisted(() => ({
   })),
   recoveryPrepare: vi.fn(async (_profile: unknown, _preflight: unknown) => undefined),
   packagedRuntimeAppRoot: vi.fn(() => '/fixture/runtime-app'),
-  pluginOptions: undefined as unknown,
+  pluginOptions: undefined as ConstructorParameters<typeof import('../src/profile-plugin-executor.ts').ProfilePluginExecutor>[0] | undefined,
   verifyRollback: vi.fn(async () => ({ spec: 'bundled:ds-bot@0.2.10', digest: 'd'.repeat(64) })),
   verifyTarget: vi.fn(async () => 'e'.repeat(64)),
   captureTree: vi.fn(() => ({ bytes: Buffer.from('tree'), digest: 'f'.repeat(64) })),
@@ -308,8 +308,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     ...opened,
     ownerId: 'owner',
   })).origin).toBe('http://127.0.0.1:43123')
-  const pluginOptions = mocks.pluginOptions as ConstructorParameters<typeof import('../src/profile-plugin-executor.ts').ProfilePluginExecutor>[0]
-  if (!pluginOptions.upgradePlan || !pluginOptions.rollbackUpgrade
+  const pluginOptions = mocks.pluginOptions
+  if (!pluginOptions || !pluginOptions.upgradePlan || !pluginOptions.rollbackUpgrade
     || !pluginOptions.verifyUpgradeTarget || !pluginOptions.verifyRollbackTree || !pluginOptions.verifyRetainedRollbackTree) {
     throw Error('missing bundled upgrade capabilities')
   }
