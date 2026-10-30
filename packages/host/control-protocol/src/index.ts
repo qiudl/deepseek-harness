@@ -37,9 +37,14 @@ export { parseHostFriendBotConfirmationChallenge, parseHostFriendBotConfirmation
   encodeHostFriendBotConfirmationPayload } from './friend-bot-confirmation.js'
 export type { HostFriendBotConfirmationChallenge,
   HostFriendBotConfirmationAssertion } from './friend-bot-confirmation.js'
+export { parseHostFriendBotEnrollmentChallenge, parseHostFriendBotEnrollmentAssertion,
+  encodeHostFriendBotEnrollmentPayload } from './friend-bot-enrollment.js'
+export type { HostFriendBotEnrollmentChallenge,
+  HostFriendBotEnrollmentAssertion } from './friend-bot-enrollment.js'
 export type { HostBotIdentity } from './bot-identity.js'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileFriendBotConfirmationRequest, ProfileFriendBotConfirmationResult,
+  ProfileFriendBotEnrollmentRequest, ProfileFriendBotEnrollmentResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'

@@ -87,6 +87,49 @@ function friendConfirmationInput(f: Awaited<ReturnType<typeof fixture>>) {
   return { ...f.account, challenge }
 }
 
+function friendEnrollmentInput(f: Awaited<ReturnType<typeof fixture>>) {
+  const c = friendConfirmationInput(f).challenge
+  const challenge = { schema_version:1 as const,operation:'register_bot' as const,
+    environment_id:c.environment_id,authority_environment_id:f.account.authorityEnvironmentId,
+    request_id:randomUUID(),owner_user_id:c.owner_user_id,
+    account_issuer:c.account_issuer,account_subject:c.account_subject,
+    profile_id:c.profile_id,profile_epoch:c.profile_epoch,
+    identity_id:c.identity_id,identity_epoch:c.identity_epoch,
+    binding_id:c.binding_id,binding_epoch:c.binding_epoch,
+    computer_id:c.computer_id,computer_installation_id:c.computer_installation_id,
+    computer_authorization_version:c.computer_authorization_version,
+    host_installation_id:c.host_installation_id,host_public_key:c.host_public_key,
+    host_instance_id:c.host_instance_id,process_nonce:c.process_nonce,
+    connection_id:c.connection_id,bot_id:c.bot_id,
+    issued_at:c.issued_at,expires_at:c.expires_at,nonce:c.nonce }
+  return { ...f.account,challenge }
+}
+
+it('returns a friend Bot enrollment proof through the authenticated strict wire codec',async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendEnrollmentInput(f)
+  const assertion = await f.client.attestFriendBotEnrollment(input)
+  expect(assertion.challenge).toEqual(input.challenge)
+  expect(assertion.display_name).toBe(f.bot.display_name)
+  const request = f.seen.at(-1)!
+  expect(request.method).toBe('profile.friend_bot_enrollment')
+  expect(JSON.stringify(request)).not.toContain(f.account.keyHandle)
+  expect(JSON.stringify(request)).not.toContain(f.account.unlockMaterial)
+  expect(decodeHostControlFrame(encodeHostControlFrame(request))).toEqual(request)
+  const result = { version:1 as const,type:'result' as const,request_id:request.request_id,
+    method:'profile.friend_bot_enrollment' as const,result:assertion }
+  expect(decodeHostControlFrame(encodeHostControlFrame(result))).toEqual(result)
+  expect(await f.session.handleRequest(request)).toMatchObject({ type:'error',error:{ code:'replayed' } })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_bot_enrollment'
+    ? { ...frame,result:{ ...frame.result,display_name:'Forged Bot' } } : frame)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f))).rejects.toThrow()
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.friend_bot_enrollment')
+  expect(Reflect.set(f.client.inspection,'capabilities',capabilities)).toBe(true)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f)))
+    .rejects.toMatchObject({ code:'upgrade_required' })
+})
+
 it('returns a friend Bot proof through the authenticated control connection and strict wire codec', async () => {
   const f = await fixture(); await f.grant()
   const input = friendConfirmationInput(f)

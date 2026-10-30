@@ -88,6 +88,8 @@ kind: "package-reference"
 
 `profile.friend_bot_confirmation` 在已认证 Host 连接上接收准确的 36 字段 Slark 挑战及当前 Account 绑定。响应是固定 `slark-dsh-friend-bot-confirmation/v1` 载荷上的 64 字节 Ed25519 签名。Host 签名前通过当前 Profile worker 检查选定 Bot。挑战签发、一次性消费、当前路由核验、双方选定 Bot 的在线核验及最终好友关系决策仍由 Slark 负责。
 
+`profile.friend_bot_enrollment` 使用独立的 `slark-dsh-friend-bot-enrollment/v1` 签名载荷，包含 Slark 的准确挑战以及当前 Account Profile worker 返回的 Bot ID、发言者引用和公开显示名。最长 10 秒的挑战绑定主人、Account 与 Person 代次、Computer、当前 Host 对端、指定 Bot ID 和 nonce。挑战签发与消费、注册写入授权由 Slark 负责；这份签名本身不登记 Bot。
+
 `HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
 
 `profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。
