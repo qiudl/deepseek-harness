@@ -51,6 +51,8 @@ The connection starts with `host.inspect`: Desktop supplies a fresh challenge an
 
 ## Profile and execution authority
 
+Account access verification accepts the international production, staging, and domestic `https://accounts.slark.ququclean.com` issuers. Each Host uses one release-pinned public keyring and requires the credential issuer to match that keyring; sharing a public key does not authorize credentials from another issuer.
+
 `profile.skillhub_binding` is a separate signed Host-local Profile fact for Slark SkillHub. The current connection must hold the selected Profile grant and its signed selector must match the current binding generation. The proof includes the Slark actor and Computer supplied by the broker; only Slark can authenticate those remote coordinates and consume its one-use challenge. The method does not write Profile, Session, or credential data.
 
 The Host assembles `profile.skillhub_package_chunk` fragments only while that same connection retains the Profile grant. It checks the complete ZIP against the fixed package and manifest hashes, then writes a private prepared snapshot. Preparation does not change the installed asset revision. A separate `profile.skillhub_package` call checks that grant and the expected revision before atomic activation; current readback returns the Host-signed receipt. A complete receipt can reopen that exact immutable operation after the current pointer advances, with every identity field and file checked again. This receipt proves storage activation, not runtime loading or Slark-side installation authorization.
