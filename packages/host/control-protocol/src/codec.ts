@@ -1585,7 +1585,8 @@ function memoryDirective(value: unknown): unknown {
     'installationId', 'profileId', 'readerKind'])
   if (row.schemaVersion !== 1 || row.purpose !== 'dsh_memory_query'
     || (row.operation !== 'search' && row.operation !== 'evidence')
-    || grant.readerKind !== 'personal_dsh' || generation(grant.generation) < 1
+    || (grant.readerKind !== 'personal_dsh' && grant.readerKind !== 'personal_coordinator')
+    || generation(grant.generation) < 1
     || generation(row.limit) > 10 || timestamp(row.expiresAt) <= timestamp(row.issuedAt)) reject()
   const parsed = {
     schemaVersion: 1, purpose: 'dsh_memory_query', issuer: boundedText(row.issuer, 2048),
@@ -1598,7 +1599,8 @@ function memoryDirective(value: unknown): unknown {
       environmentId: boundedText(grant.environmentId, 256),
       computerId: boundedText(grant.computerId, 256),
       installationId: boundedText(grant.installationId, 256),
-      profileId: boundedText(grant.profileId, 256), readerKind: 'personal_dsh' },
+      profileId: boundedText(grant.profileId, 256),
+      readerKind: grant.readerKind === 'personal_coordinator' ? 'personal_coordinator' : 'personal_dsh' },
     signature: signature(row.signature),
   }
   if (Buffer.byteLength(JSON.stringify(parsed), 'utf8') > 4096) reject()
