@@ -8,6 +8,7 @@ import { MemoryWorkerListener } from '../src/memory-worker-listener.ts'
 
 function parent(): string {
   const root = mkdtempSync(join(process.platform === 'darwin' ? '/private/tmp' : tmpdir(), 'dsh-hy-'))
+  chmodSync(root, 0o711)
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   return root
 }
@@ -53,4 +54,14 @@ it.skipIf(process.platform === 'win32')('rejects a writable parent before creati
   const listener = new MemoryWorkerListener(root, async (socket) => { socket.destroy() }, async () => {})
   await expect(listener.start()).rejects.toThrow()
   expect(readdirSync(root)).toEqual([])
+})
+
+it.skipIf(process.platform === 'win32')('requires a traversable but unlistable parent', async () => {
+  for (const mode of [0o700, 0o755]) {
+    const root = parent()
+    chmodSync(root, mode)
+    const listener = new MemoryWorkerListener(root, async (socket) => { socket.destroy() }, async () => {})
+    await expect(listener.start()).rejects.toThrow()
+    expect(readdirSync(root)).toEqual([])
+  }
 })

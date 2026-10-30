@@ -26,7 +26,7 @@ export class MemoryWorkerListener {
   constructor(private readonly parent: string, private readonly onSocket: (socket: Socket) => Promise<void>,
     private readonly grantAccess: (path: string) => Promise<void> = grantWorkerAccess) {}
 
-  /** Bind behind a 0700 directory, install the worker-only ACL, then expose directory traversal. */
+  /** Require a Host-owned 0711 parent, then bind behind a 0700 directory and expose only traversal. */
   async start(): Promise<string> {
     if (this.server || this.directory) throw new HostAuthorityError('conflict')
     if (process.platform === 'win32') throw new HostAuthorityError('unavailable')
@@ -34,7 +34,7 @@ export class MemoryWorkerListener {
     if (uid === undefined) throw new HostAuthorityError('unavailable')
     const parent = lstatSync(this.parent)
     if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== uid
-      || (parent.mode & 0o022) !== 0 || realpathSync(this.parent) !== this.parent) {
+      || (parent.mode & 0o777) !== 0o711 || realpathSync(this.parent) !== this.parent) {
       throw new HostAuthorityError('unauthorized')
     }
     const directory = join(this.parent, `hy-worker-${randomBytes(12).toString('hex')}`)

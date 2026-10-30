@@ -1,5 +1,5 @@
 import { once } from 'node:events'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { chmodSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { createConnection, Socket } from 'node:net'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MemoryWorkerChannel } from '../src/memory-worker-channel.ts'
@@ -195,6 +195,7 @@ describe('Host-owned HY worker admission', () => {
 
 it.skipIf(process.platform !== 'darwin')('joins a real private socket, native peer check and synthetic worker lease', async () => {
   const root = mkdtempSync('/private/tmp/dsh-hy-opener-')
+  chmodSync(root, 0o711)
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const uid = process.getuid!()
   const item = { sourceRef: 'b'.repeat(64), sourceVersion: 'c'.repeat(64), text: 'synthetic' }
