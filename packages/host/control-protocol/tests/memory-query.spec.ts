@@ -31,6 +31,13 @@ const wire = (value: unknown) => `${JSON.stringify(value)}\n`
 it('round-trips exact signed search and bounded redacted search metadata', () => {
   const parsed = decodeHostControlFrame(wire(request))
   expect(encodeHostControlFrame(parsed)).toBe(wire(parsed))
+  const personalAgent = { ...request, params: { ...params, command: {
+    ...request.params.command, directive: { ...directive,
+      grant: { ...directive.grant, readerKind: 'personal_coordinator' } },
+  } } }
+  expect(decodeHostControlFrame(wire(personalAgent))).toEqual(personalAgent)
+  expect(encodeHostControlFrame(decodeHostControlFrame(wire(personalAgent))))
+    .toBe(wire(personalAgent))
   for (const query of ['需求', '权']) {
     const short = { ...request, params: { ...params, command: { ...request.params.command, query } } }
     expect(decodeHostControlFrame(wire(short))).toEqual(short)
