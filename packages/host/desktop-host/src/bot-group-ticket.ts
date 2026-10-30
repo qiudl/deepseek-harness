@@ -3,6 +3,7 @@ import { createHash, createPublicKey, verify, type KeyObject } from 'node:crypto
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const BOT = /^[A-Za-z0-9_-]{1,200}$/u
+const SLARK_USER = /^[\x21-\x7e]{1,256}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
 const SEGMENT = /^[A-Za-z0-9_-]+$/u
 const REGISTRY = /^h2_[0-9a-f]{64}$/u
@@ -35,7 +36,6 @@ export interface BotGroupPublicKeyring {
   readonly keys: readonly BotGroupPublicKey[]
 }
 export interface BotGroupTicketExpected {
-  readonly ownerUserId: string
   readonly computerId: string
   readonly accountIssuer: string
   readonly accountSubject: string
@@ -57,6 +57,7 @@ export interface BotGroupStopTicketExpected extends Omit<BotGroupTicketExpected,
 }
 export type BotGroupResultTicketExpected = BotGroupTicketExpected
 export interface BotGroupTicket {
+  readonly ownerUserId: string
   readonly workspaceId: string
   readonly sessionId: string
   readonly messageId: string
@@ -64,6 +65,7 @@ export interface BotGroupTicket {
   readonly expiresAt: number
 }
 interface AcceptedClaims {
+  owner_user_id: string
   issued_at: number
   expires_at: number
   workspace_id: string
@@ -106,8 +108,8 @@ function publicKeys(keyring: BotGroupPublicKeyring): Map<string, VerifiedKey> {
 }
 
 /** Derive the exact Host registry from the verified Account binding and installation. */
-export function botGroupHostRegistryId(input: Pick<BotGroupTicketExpected,
-  'ownerUserId' | 'accountIssuer' | 'accountSubject' | 'environmentId' |
+export function botGroupHostRegistryId(input: { readonly ownerUserId: string } & Pick<BotGroupTicketExpected,
+  'accountIssuer' | 'accountSubject' | 'environmentId' |
   'installationId' | 'accountBindingHandle' | 'accountBindingEpoch'>): string {
   const coordinates = JSON.stringify([input.ownerUserId, input.accountIssuer,
     input.accountSubject, input.environmentId, input.installationId,
@@ -143,12 +145,13 @@ function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyrin
         claims.slark_audience !== expected.slarkAudience ||
         claims.environment_id !== expected.environmentId ||
         claims.environment_id !== keyring.environmentId ||
-        claims.owner_user_id !== expected.ownerUserId ||
+        typeof claims.owner_user_id !== 'string' || !SLARK_USER.test(claims.owner_user_id) ||
         claims.computer_id !== expected.computerId ||
         claims.account_issuer !== expected.accountIssuer ||
         claims.account_subject !== expected.accountSubject ||
         claims.account_binding_epoch !== expected.accountBindingEpoch ||
-        claims.host_registry_id !== botGroupHostRegistryId(expected) ||
+        claims.host_registry_id !== botGroupHostRegistryId({ ...expected,
+          ownerUserId: claims.owner_user_id }) ||
         typeof claims.host_registry_id !== 'string' || !REGISTRY.test(claims.host_registry_id) ||
         claims.group_id !== expected.groupId || claims.delivery_id !== expected.deliveryId ||
         claims.bot_id !== expected.botId || claims.member_cycle !== expected.memberCycle ||
@@ -184,6 +187,7 @@ function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyrin
       }
     }
     const accepted: AcceptedClaims = {
+      owner_user_id: claims.owner_user_id as string,
       issued_at: claims.issued_at as number, expires_at: claims.expires_at as number,
       workspace_id: claims.workspace_id as string, session_id: claims.session_id as string,
       message_id: claims.message_id as string, payload_digest: claims.payload_digest as string,
@@ -193,7 +197,8 @@ function verifySignedBotGroupTicket(token: string, keyring: BotGroupPublicKeyrin
     if (!key || key.validFrom > accepted.issued_at || key.validUntil < accepted.expires_at ||
         signature.length !== 64 || signature.toString('base64url') !== signaturePart ||
         !verify(null, Buffer.from(`${headerPart}.${claimsPart}`, 'ascii'), key.key, signature)) fail()
-    return { workspaceId: accepted.workspace_id, sessionId: accepted.session_id,
+    return { ownerUserId: accepted.owner_user_id,
+      workspaceId: accepted.workspace_id, sessionId: accepted.session_id,
       messageId: accepted.message_id, payloadDigest: accepted.payload_digest,
       expiresAt: accepted.expires_at }
   } catch { return fail() }

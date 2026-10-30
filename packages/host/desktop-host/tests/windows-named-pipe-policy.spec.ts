@@ -26,7 +26,7 @@ describe('Windows named-pipe policy', () => {
       securityDescriptor: `O:${userSid}D:P(A;;GRGW;;;${userSid})`,
       openMode: 0x0008_0003,
       pipeMode: 0x0000_0008,
-      maxInstances: 1,
+      maxInstances: 255,
     })
   })
 

@@ -29,6 +29,7 @@ import { ProfileClaimMarker, WindowsProfileClaimMarkerFiles } from './legacy-cla
 import { executeRemoteSessionCommand, SessionCommandAuthority } from './session-command.ts'
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { createHostDiagnostics } from './host-diagnostics.ts'
 import { HostControlAuthority } from './unix-transport.ts'
 import type { HostExtensionKind } from '@deepseek-ai/dsh-host-control-protocol'
 import { loadWindowsCurrentUserSid } from './windows-current-user-native.ts'
@@ -68,7 +69,7 @@ const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 /** Non-secret, embedding-pinned inputs for the private Windows Host composition. */
 export interface WindowsDesktopHostBaseConfig extends Omit<
   StartWindowsHostTransportOptions,
-  'allowedExecutableDigests' | 'initializeOwnedResources' | 'openSession' | 'quiesceOwnedResources'
+  'allowedExecutableDigests' | 'diagnosticsRoot' | 'initializeOwnedResources' | 'openSession' | 'quiesceOwnedResources'
 > {
   readonly root: string
   readonly nodeExecutablePath: string
@@ -292,6 +293,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
   clock: HostClock,
   dependencies: StartWindowsDesktopHostApplicationDependencies,
 ): Promise<WindowsDesktopHostApplication> {
+  const diagnostics = createHostDiagnostics({ root: config.root })
   let pinnedNative: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
   /* v8 ignore next 3 -- the signed native addon loader is exercised by the Windows platform lane. */
   const loadKoffi = () => Promise.resolve(
@@ -353,6 +355,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     processNonce: config.processNonce,
     workerEntry: config.workerEntry,
     workerGeneration: config.workerGeneration,
+    diagnosticsRoot: config.root,
     allowedPublisherThumbprints: config.allowedPublisherThumbprints,
     allowedExecutableDigests: config.allowedDesktopExecutableDigests,
     nativeModule: config.nativeModule,
@@ -552,6 +555,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
             packagesRoot, windowsHostPrivateSecurityDescriptor(userSid)), 'directory', userSid)
           return packagesRoot
         }),
+        diagnostics,
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,

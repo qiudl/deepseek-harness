@@ -1,4 +1,5 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
@@ -63,6 +64,8 @@ import type {
   ProfileOpenResult,
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
+  ProfileSkillHubBotMessageActorRequest,
+  ProfileSkillHubBotMessageActorResult,
   HostSkillHubPackagePlan,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageChunkResult,
@@ -1808,6 +1811,7 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
 
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileSkillHubBindingRequest
+  | ProfileSkillHubBotMessageActorRequest
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageRequest
   | ProfileSkillHubPackageSnapshotRequest
@@ -2100,6 +2104,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...authorized(params), profile_selector: profileSelector(params.profile_selector),
       actor_user_id, computer_id,
       challenge_id: uuid(params.challenge_id),
+    } }
+  }
+  if (frame.method === 'profile.skillhub_bot_message_actor') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'input'])
+    let input
+    try { input = parseSkillHubBotMessageActorInput(params.input) } catch { reject() }
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...authorized(params), profile_selector: profileSelector(params.profile_selector), input,
     } }
   }
   if (frame.method === 'profile.skillhub_package_chunk') {
@@ -2621,6 +2633,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
 
 function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileSkillHubBindingResult
+  | ProfileSkillHubBotMessageActorResult
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageResult
   | ProfileSkillHubPackageSnapshotResult
@@ -2886,6 +2899,14 @@ function decodeProfileResult(frame: Record<string, unknown>):
       bindingGeneration: result.bindingGeneration, challengeId: uuid(result.challengeId),
       signature: signature(result.signature),
     } }
+  }
+  if (frame.method === 'profile.skillhub_bot_message_actor') {
+    exactKeys(result, ['compact_jws'])
+    if (typeof result.compact_jws !== 'string' || result.compact_jws.length < 100
+      || result.compact_jws.length > 16_384
+      || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(result.compact_jws)) reject()
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { compact_jws: result.compact_jws } }
   }
   if (frame.method === 'profile.skillhub_package_chunk') {
     exactKeys(result, ['next_offset', 'prepared'])

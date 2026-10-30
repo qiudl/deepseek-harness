@@ -38,6 +38,12 @@ import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRoo
 import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
   SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
   SKILLHUB_EXECUTION_RECEIPT_DOMAIN, encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import {
+  SKILLHUB_BOT_MESSAGE_ACTOR_SCHEMA, SKILLHUB_BOT_MESSAGE_ACTOR_AUDIENCE,
+  SKILLHUB_BOT_MESSAGE_ACTOR_PURPOSE, SKILLHUB_BOT_MESSAGE_ACTOR_JWS_TYPE,
+  encodeSkillHubBotMessageActorClaims, parseSkillHubBotMessageActorClaims,
+  parseSkillHubBotMessageActorProtectedHeader, matchesSkillHubBotMessageActorInput,
+} from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
@@ -85,6 +91,9 @@ import type {
   ProfileOpenRequest,
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
+  ProfileSkillHubBotMessageActorRequest,
+  SkillHubBotMessageActorInput,
+  SkillHubBotMessageActorClaims,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageRequest,
   ProfileSkillHubPackageSnapshotRequest,
@@ -171,6 +180,7 @@ import type {
 import { HostAuthorityError } from './types.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
 import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import { HostControlServerSession } from './host-control-session.ts'
@@ -319,6 +329,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupResponse>
   /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
   readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
+  /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
+  readonly diagnostics?: HostDiagnostics
   /** Read effective choice only in the Account-authorized Profile worker. */
   readonly inspectWorkspaceModelSelection?: (
     profileId: string,
@@ -582,7 +594,7 @@ async function recheckReferenceSource(
 export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
-    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -615,6 +627,7 @@ const capabilities = [
   'profile.open',
   'profile.open_local',
   'profile.skillhub_binding',
+  'profile.skillhub_bot_message_actor',
   'profile.skillhub_clock_witness',
   'profile.skillhub_clock_v2',
   'profile.restore',
@@ -1151,6 +1164,7 @@ export class HostControlAuthority {
       ownerId,
       now: clock,
       signal,
+      diagnostics: this.options.diagnostics,
       inspect: frame => this.inspect(
         frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
         this.options.host.supportsOfflineAccountRecovery(),
@@ -1522,19 +1536,34 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.bootstrap_local') {
-            profile = await this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId))
+            profile = await hostStepRejection(
+              () => this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId)),
+              'bootstrap_local_rejected',
+            )
           } else {
-            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-            profile = await this.options.host.restoreLocalProfile({
-              profileId: selector.profile_id as never,
-              bindingGeneration: selector.binding_generation,
-              ...profileUnlockFields(frame.params, ownerId),
-            })
+            const selector = await hostStepRejection(
+              () => verifyProfileSelector(this.options.identity, frame.params.profile_selector),
+              'restore_selector_invalid',
+            )
+            profile = await hostStepRejection(
+              () => this.options.host.restoreLocalProfile({
+                profileId: selector.profile_id as never,
+                bindingGeneration: selector.binding_generation,
+                ...profileUnlockFields(frame.params, ownerId),
+              }),
+              'restore_profile_rejected',
+            )
           }
-          const persistenceGeneration = await this.options.profilePersistenceGeneration(profile.profileId)
+          const persistenceGeneration = await hostStepRejection(
+            () => this.options.profilePersistenceGeneration(profile.profileId),
+            'local_persistence_unavailable',
+          )
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
-            result: localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+            result: await hostStepRejection(
+              () => localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+              'local_profile_result_invalid',
+            ),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
@@ -1573,6 +1602,33 @@ export class HostControlAuthority {
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { ...payload, signature },
           })
+        } else if (frame.method === 'profile.skillhub_bot_message_actor') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profileId = this.options.host.authorizeMigrationProfileSelector({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          const issuedAt = (this.options.now ?? Date.now)()
+          const hostKeyId = createHash('sha256').update(Buffer.from(
+            this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+          const claims: SkillHubBotMessageActorClaims = {
+            schema_version: SKILLHUB_BOT_MESSAGE_ACTOR_SCHEMA,
+            issuer: 'slark-dsh-host', audience: SKILLHUB_BOT_MESSAGE_ACTOR_AUDIENCE,
+            purpose: SKILLHUB_BOT_MESSAGE_ACTOR_PURPOSE, token_id: randomUUID(),
+            ...frame.params.input,
+            host_installation_id: this.options.identity.installationId,
+            host_profile_id: profileId, host_binding_generation: selector.binding_generation,
+            host_key_id: hostKeyId,
+            source_principal: { kind: 'human', id: frame.params.input.actor_user_id },
+            issued_at: issuedAt, expires_at: issuedAt + 30_000,
+          }
+          const protectedHeader = Buffer.from(JSON.stringify({
+            alg: 'EdDSA', typ: SKILLHUB_BOT_MESSAGE_ACTOR_JWS_TYPE, version: 3, kid: hostKeyId,
+          })).toString('base64url')
+          const payload = Buffer.from(encodeSkillHubBotMessageActorClaims(claims)).toString('base64url')
+          const signingInput = `${protectedHeader}.${payload}`
+          const signature = signAuthorityPayload(this.options.identity, Buffer.from(signingInput))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { compact_jws: `${signingInput}.${signature}` } })
         } else if (frame.method === 'profile.skillhub_package_chunk') {
           const createStore = this.options.createSkillHubPackageStore
           if (!createStore) throw new HostAuthorityError('upgrade_required')
@@ -2501,15 +2557,19 @@ export class HostControlAuthority {
               // Scan a bounded page window; only the original delivery's result may cross this boundary.
               let after = frame.params.after
               let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              // A result page always carries the validated Slark owner from its result ticket.
+              let slarkOwnerUserId = ''
               for (let scan = 0; scan < 1000; scan++) {
                 const page = await readAccountBotGroupResultPage({ ...groupInput, after })
-                if (page.state !== 'ok' || page.results.length === 0) {
-                  reply = page.state === 'ok' ? { state: 'ok', results: [], next: frame.params.after } : page
+                slarkOwnerUserId = page.ownerUserId
+                if (page.reply.state !== 'ok' || page.reply.results.length === 0) {
+                  reply = page.reply.state === 'ok' ?
+                    { state: 'ok', results: [], next: frame.params.after } : page.reply
                   break
                 }
                 // The worker parser bounds an `ok` page to one valid result, and
                 // the empty page returned above; this entry is present here.
-                const result = page.results[0] as (typeof page.results)[number]
+                const result = page.reply.results[0] as (typeof page.reply.results)[number]
                 if (result.deliveryId === frame.params.command.deliveryId) {
                   reply = { state: 'ok', results: [result], next: result.seq }
                   break
@@ -2526,7 +2586,7 @@ export class HostControlAuthority {
                   account_binding_handle: account.accountBindingHandle,
                   authority_binding_version: account.authorityBindingVersion,
                   account_issuer: account.issuer, account_subject: account.subject,
-                  owner_user_id: account.ownerId, computer_id: frame.params.computer_id,
+                  owner_user_id: slarkOwnerUserId, computer_id: frame.params.computer_id,
                   slark_audience: frame.params.slark_audience,
                   installation_id: this.options.identity.installationId,
                   installation_public_key: this.options.identity.installationPublicKey,
@@ -3386,6 +3446,54 @@ export class UnixHostClient {
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
     return frame.result
+  }
+
+  /**
+   * Sign one exact private Bot message actor with the current Host installation/Profile grant.
+   * @param input - Current Profile selector and Server-resolved actor fields.
+   * @returns Compact JWS and independently parsed claims after local signature verification.
+   */
+  async signSkillHubBotMessageActor(input: {
+    readonly profileSelector: string
+    readonly actor: SkillHubBotMessageActorInput
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly compactJws: string; readonly claims: SkillHubBotMessageActorClaims }> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_bot_message_actor' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubBotMessageActorRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_bot_message_actor',
+      params: { ...this.auth(), profile_selector: input.profileSelector, input: input.actor },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const compactJws = frame.result.compact_jws
+    const segments = compactJws.split('.')
+    if (segments.length !== 3) throw new HostAuthorityError('unavailable')
+    let header
+    let claims
+    try {
+      for (const segment of segments) {
+        if (Buffer.from(segment, 'base64url').toString('base64url') !== segment)
+          throw new Error('noncanonical JWS segment')
+      }
+      header = parseSkillHubBotMessageActorProtectedHeader(JSON.parse(
+        Buffer.from(segments[0] as string, 'base64url').toString('utf8'),
+      ))
+      claims = parseSkillHubBotMessageActorClaims(JSON.parse(
+        Buffer.from(segments[1] as string, 'base64url').toString('utf8'),
+      ))
+    } catch { throw new HostAuthorityError('unavailable') }
+    const hostKeyId = createHash('sha256').update(Buffer.from(
+      this.inspection.installation_public_key, 'base64url')).digest('hex')
+    if (header.kid !== hostKeyId || claims.host_key_id !== hostKeyId
+      || claims.host_installation_id !== this.inspection.installation_id
+      || claims.issuer !== 'slark-dsh-host'
+      || !matchesSkillHubBotMessageActorInput(claims, input.actor)
+      || !verify(null, Buffer.from(`${segments[0]}.${segments[1]}`),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(segments[2] as string, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return { compactJws, claims }
   }
 
   /** Send one complete fixed ZIP through bounded Host frames without activating it.
@@ -5577,6 +5685,7 @@ export class UnixHostClient {
       | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
       | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
       | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
+      | ProfileSkillHubBotMessageActorRequest
       | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
       | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
       | ProfileSkillHubClockWitnessRequest

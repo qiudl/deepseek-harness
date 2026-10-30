@@ -9,7 +9,7 @@ import { join } from 'node:path'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
+import { parseHostCollaborationRegistrationChallenge, parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
   parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
@@ -246,6 +246,18 @@ describe('Windows Desktop Host startup', () => {
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
     await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
+    expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    const registrationChallenge = parseHostCollaborationRegistrationChallenge({
+      registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+      expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+      account_issuer: issuer, account_subject: accountId,
+    })
+    await expect(client.attestCollaborationRegistration({ ...account, challenge: registrationChallenge }))
+      .resolves.toMatchObject({ challenge: registrationChallenge,
+        installation_id: state.options.installationId, host_instance_id: state.options.hostInstanceId })
+    await expect(client.attestCollaborationRegistration({
+      ...account, authorityBindingVersion: 2, challenge: registrationChallenge,
+    })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.inspectWorkspaceModelSelection(selection))
       .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
     expect(await client.collaborationAnalysis({ ...account, command: { action: 'root_feedback', operation: { action: 'read' } } })).toEqual({ kind: 'root_feedback', record: null })
@@ -679,4 +691,23 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   expect(noCatalogOptions.bundledPlugin).toBeUndefined()
   await noCatalogOptions.install(profile, 'fixture@1.0.0', context)
   expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('archivePath')
+})
+
+it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalizer', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  const canonicalize = (token: string): string =>
+    ({ LA: 'S-1-5-21-1-2-3-500', SY: 'S-1-5-18', BA: 'S-1-5-32-544' })[token] ?? token
+  const decoded = decodeEvidenceSddl(
+    'O:LAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)',
+    canonicalize,
+  )
+  expect(decoded.ownerSid).toBe('S-1-5-21-1-2-3-500')
+  expect(decoded.daclProtected).toBe(true)
+  expect(decoded.access.map(entry => entry.sid)).toEqual([
+    'S-1-5-18',
+    'S-1-5-32-544',
+    'S-1-5-21-1-2-3-500',
+  ])
+  const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
+  expect(passthrough.ownerSid).toBe('LA')
 })

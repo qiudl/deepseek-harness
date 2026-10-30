@@ -155,7 +155,7 @@ describe('Windows named-pipe Win32 result adapter', () => {
       policy.path,
       policy.openMode,
       policy.pipeMode,
-      1,
+      255,
       65_536,
       65_536,
       0,
