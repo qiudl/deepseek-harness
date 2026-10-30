@@ -83,12 +83,18 @@ The URL line and browser handoff are readiness signals: supervisors RPC as soon 
 
 `resolveLanTrust` samples the network once at boot: a loopback bind (`127.0.0.1`) derives no LAN addresses, while an all-interfaces bind adds every non-internal IPv4 literal. The derived literals plus the explicit `--trusted-host` authorities form the `/api` browser-trust fence, and the printed LAN URL always matches that fence.
 
+### Desktop memory reads
+
+When the parent Desktop Host supplies a separate `DSH_PROFILE_MEMORY_TOKEN`, the Web Profile registers two loopback-only exact routes for bounded Session inventory and cold logical reads. Browser cookies do not authorize these routes. A read borrows a persistence-validated Session and checks its durable revision before and after observation; live, delegated, and changing Sessions refuse. The parent Host must redact the logical events before indexing. Ordinary `dsh web` launches expose neither route.
+
 ### Source map
 
 | File | Role |
 |---|---|
 | [`src/index.ts`](src/index.ts) | The `web-app` glue plugin: dist resolution, LAN trust sampling, prompt sections, bash variable, URL line, browser handoff |
 | [`src/startup.ts`](src/startup.ts) | The `web-startup` provider: `--host`, `--port`, `--trusted-host`, `--no-open`, `--help` |
+| [`src/desktop-memory-session.ts`](src/desktop-memory-session.ts) | Private Profile Session inventory and revision-checked logical reads |
+| [`src/desktop-private-read.ts`](src/desktop-private-read.ts) | Bounded bearer-only exact-route request handler |
 | [`cordis.patch.yml`](cordis.patch.yml) | The web patch: restated base values, web host rows, browser roster, agent plane behind presets |
 | [`src/invariant.ts`](src/invariant.ts) | Invariant companion: no runtime invariant; every contribution is registry-disposed |
 | [`tests/web-app.spec.ts`](tests/web-app.spec.ts) | Dist resolution, fallback seat, prompt sections, readiness |

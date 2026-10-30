@@ -25,8 +25,10 @@ import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
 import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-session-persistence'
 import { FIRST_PARTY_SECTION_ORDER } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-shell-env'
+import { handleDesktopMemorySessionRequest, handleDesktopMemorySessionsRequest } from './desktop-memory-session.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'web-app'
@@ -240,6 +242,22 @@ export function apply(ctx: Context, config: Config): void {
   // Release dependent rows only after bind-dependent trust has been sampled once.
   ctx.provide(WEB_RUNTIME_SERVICE, runtime)
   ctx.plugin(FrontendStatic, { distIndex: internals.resolveDistIndex() })
+  const memoryToken = process.env.DSH_PROFILE_MEMORY_TOKEN
+  if (memoryToken && /^[A-Za-z0-9_-]{43}$/u.test(memoryToken)) {
+    if (ctx.webServer.host !== '127.0.0.1') throw new Error('web-app: private memory routes require loopback bind')
+    ctx.inject(['sessionPersistence'], (memoryCtx) => {
+      memoryCtx.effect(() => memoryCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-memory-sessions',
+        handler: (req, res) => handleDesktopMemorySessionsRequest(
+          req, res, memoryToken, memoryCtx.sessionPersistence),
+      }))
+      memoryCtx.effect(() => memoryCtx.webServer.register({
+        kind: 'exact', path: '/internal/desktop-memory-session',
+        handler: (req, res) => handleDesktopMemorySessionRequest(
+          req, res, memoryToken, memoryCtx.sessionPersistence),
+      }))
+    })
+  }
   if (config.surfaceContext) {
     ctx.inject(['systemPrompt'], (promptCtx) => {
       addHarnessSourceSection(promptCtx, SOURCE_ROOT)

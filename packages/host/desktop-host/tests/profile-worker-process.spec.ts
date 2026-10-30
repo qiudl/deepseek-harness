@@ -68,6 +68,15 @@ describe('dsh web Profile worker', () => {
       const cookieValue = 'v1.${'b'.repeat(8)}.${'c'.repeat(43)}'
       const server = createServer((request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1')
+        if (url.pathname === '/internal/desktop-memory-sessions') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_MEMORY_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          response.writeHead(200, { 'content-type': 'application/json' })
+          response.end(JSON.stringify({ items: [], nextAfter: null }))
+          return
+        }
         if (url.searchParams.get('token') === 'must-stay-owner-only') {
           response.writeHead(303, {
             location: '/',
@@ -104,6 +113,9 @@ describe('dsh web Profile worker', () => {
     expect(worker.bootstrapCookie).toEqual({
       name: `dsh-auth-${'a'.repeat(43)}`, value: `v1.${'b'.repeat(8)}.${'c'.repeat(43)}`,
     })
+    expect(JSON.stringify(worker)).not.toContain('DSH_PROFILE_MEMORY_TOKEN')
+    await expect(worker.memoryRead?.('list', { after: null }, new AbortController().signal))
+      .resolves.toEqual({ items: [], nextAfter: null })
     worker.closeNotifications(); worker.abort()
     await expect(worker.done).resolves.toBeUndefined()
   })
@@ -113,6 +125,8 @@ describe('dsh web Profile worker', () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
+    await expect(factory.create({ ...spec(root), env: { DSH_PROFILE_MEMORY_TOKEN: 'attacker' } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
     await expect(factory.create({ ...spec(root), env: { DSH_HOME: '/tmp/attacker' } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
   })

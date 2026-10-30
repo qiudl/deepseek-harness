@@ -24,6 +24,8 @@ import type {
   ProfileOpenRequest,
   ProfileViewActivateRequest,
   ProfileStatusRequest,
+  ProfileMemoryQueryRequest,
+  ProfileMemoryQueryResult,
   MigrationExportBeginRequest,
   MigrationExportInventoryRequest,
   MigrationExistingSourceInventoryRequest,
@@ -45,6 +47,11 @@ import type { HostAuthorityErrorCode, PersonProfileId, ProfileOpenResult, Profil
 import { HostAuthorityError } from './types.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { SingleHostLock } from './single-instance.ts'
+import { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
+import { HostMemoryReadController } from './memory-read-controller.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
+import { projectHostMemoryToWorker, searchHostMemoryWithWorker,
+  type MemoryWorkerLink, type MemoryWorkerStamp } from './memory-worker-session.ts'
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -71,6 +78,10 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
+  readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
+  readonly openMemoryWorker?: (profileId: string, stamp: MemoryWorkerStamp,
+    signal: AbortSignal) => Promise<MemoryWorkerLink>
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -442,7 +453,21 @@ export class UnixHostServer {
   private server: Server | undefined
   private socketIdentity?: { dev: number; ino: number }
   private readonly connections = new Set<Socket>()
+  private readonly connectionShutdowns = new Map<Socket, () => Promise<void>>()
+  private readonly memoryWorkerClosures = new Set<Promise<void>>()
+  private readonly memoryProjections = new Set<Promise<unknown>>()
+  private readonly closingMemoryWorkers = new WeakMap<MemoryWorkerLink, Promise<void>>()
   constructor(private readonly options: UnixHostServerOptions) {}
+
+  private closeMemoryWorker(worker: MemoryWorkerLink): Promise<void> {
+    const existing = this.closingMemoryWorkers.get(worker)
+    if (existing) return existing
+    const closing = Promise.resolve().then(() => worker.close())
+    this.closingMemoryWorkers.set(worker, closing)
+    this.memoryWorkerClosures.add(closing)
+    void closing.finally(() => { this.memoryWorkerClosures.delete(closing) }).catch(() => undefined)
+    return closing
+  }
 
   /** Bind the UDS path after refusing link/regular-file substitution. */
   async start(): Promise<void> {
@@ -474,6 +499,7 @@ export class UnixHostServer {
   async close(): Promise<void> {
     const server = this.server
     this.server = undefined
+    const shutdowns = [...this.connectionShutdowns.values()].map(shutdown => shutdown())
     for (const socket of this.connections) socket.destroy()
     if (server) {
       await new Promise<void>((resolve, reject) => {
@@ -483,6 +509,8 @@ export class UnixHostServer {
         })
       })
     }
+    await Promise.allSettled(this.memoryProjections)
+    const workerClosures = await Promise.allSettled([...shutdowns, ...this.memoryWorkerClosures])
     try {
       const stat = lstatSync(this.options.socketPath)
       if (this.socketIdentity && stat.isSocket()
@@ -492,16 +520,35 @@ export class UnixHostServer {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
+    const failures = workerClosures.filter(result => result.status === 'rejected')
+    if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason), 'memory worker shutdown failed')
   }
 
   private async accept(socket: Socket): Promise<void> {
     const ownerId = randomUUID()
     const lifetime = new AbortController()
+    let memorySlot: { readonly key: string
+      readonly profileId: string
+      readonly controller: HostMemoryReadController
+      worker: { readonly stamp: MemoryWorkerStamp; readonly link: MemoryWorkerLink } | undefined } | undefined
+    let memoryBusy = false
+    let shutdownPromise: Promise<void> | undefined
+    const shutdown = (): Promise<void> => {
+      if (shutdownPromise) return shutdownPromise
+      lifetime.abort()
+      memorySlot?.controller.clear()
+      const worker = memorySlot?.worker?.link
+      memorySlot = undefined
+      shutdownPromise = worker ? this.closeMemoryWorker(worker) : Promise.resolve()
+      this.options.host.revokeOwner(ownerId)
+      return shutdownPromise
+    }
+    this.connectionShutdowns.set(socket, shutdown)
     this.connections.add(socket)
     socket.once('close', () => {
-      lifetime.abort()
+      void shutdown().catch(() => undefined)
       this.connections.delete(socket)
-      this.options.host.revokeOwner(ownerId)
+      this.connectionShutdowns.delete(socket)
     })
     socket.pause()
     try {
@@ -566,7 +613,8 @@ export class UnixHostServer {
       if (frame.type !== 'request') { socket.destroy(); return }
       if (!inspected) {
         if (frame.method !== 'host.inspect') { socket.destroy(); return }
-        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled)
+        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
+          this.options.memoryDirectiveVerifier !== undefined && this.options.memoryProfileReader !== undefined)
         inspected = true
         authorizer = new HostRequestAuthorizer({
           clientInstanceId: frame.params.client_instance_id,
@@ -580,7 +628,96 @@ export class UnixHostServer {
       if (!authorizer) { socket.destroy(); return }
       try {
         authorizer.authorize(frame.params)
-        if (frame.method === 'migration.existing_source.inventory') {
+        if (frame.method === 'profile.memory_query') {
+          const verifier = this.options.memoryDirectiveVerifier
+          const readerFor = this.options.memoryProfileReader
+          if (!verifier || !readerFor) throw new HostAuthorityError('upgrade_required')
+          if (memoryBusy) throw new HostAuthorityError('busy')
+          memoryBusy = true
+          try {
+            const params: ProfileMemoryQueryRequest['params'] = frame.params
+            const key = JSON.stringify([params.authority_environment_id, params.account_binding_handle,
+              params.authority_binding_version, params.account_issuer, params.account_subject,
+              params.owner_user_id, params.computer_id])
+            if (memorySlot?.key !== key) {
+              memorySlot?.controller.clear()
+              if (memorySlot?.worker) await this.closeMemoryWorker(memorySlot.worker.link)
+              memorySlot = undefined
+              const profileId = await this.options.host.authorizeMemoryProfile({
+                authorityEnvironmentId: params.authority_environment_id,
+                accountBindingHandle: params.account_binding_handle,
+                authorityBindingVersion: params.authority_binding_version,
+                issuer: params.account_issuer, subject: params.account_subject, ownerId,
+              })
+              const reader = readerFor(profileId)
+              const current = () => {
+                lifetime.signal.throwIfAborted()
+                const status = this.options.host.getProfileStatus({
+                  authorityEnvironmentId: params.authority_environment_id,
+                  accountBindingHandle: params.account_binding_handle,
+                  authorityBindingVersion: params.authority_binding_version, ownerId,
+                })
+                if (status.state !== 'ready' || status.profileId !== profileId)
+                  throw new HostAuthorityError('unauthorized')
+                reader.assertCurrent()
+                return { environmentId: params.authority_environment_id,
+                  ownerUserId: params.owner_user_id, computerId: params.computer_id,
+                  installationId: this.options.identity.installationId, profileId,
+                  hostInstanceId: this.options.identity.hostInstanceId,
+                  processNonce: this.options.identity.processNonce, reader }
+              }
+              memorySlot = { key, profileId, controller: new HostMemoryReadController(verifier, current), worker: undefined }
+            }
+            const slot = memorySlot
+            const controller = slot.controller
+            let result: ProfileMemoryQueryResult['result']
+            if (params.command.action === 'warm') {
+              if (slot.worker) {
+                await this.closeMemoryWorker(slot.worker.link)
+                slot.worker = undefined
+              }
+              const openWorker = this.options.openMemoryWorker
+              if (openWorker) {
+                const projection = projectHostMemoryToWorker(controller,
+                  (stamp, signal) => openWorker(slot.profileId, stamp, signal), lifetime.signal)
+                this.memoryProjections.add(projection)
+                let projected: Awaited<typeof projection>
+                try { projected = await projection }
+                finally { this.memoryProjections.delete(projection) }
+                slot.worker = { stamp: projected.stamp, link: projected.worker }
+                const invalidate = (): void => {
+                  if (slot.worker?.link !== projected.worker) return
+                  controller.clear()
+                  slot.worker = undefined
+                }
+                void projected.worker.done.then(invalidate, invalidate)
+              } else await controller.warm(lifetime.signal)
+              result = { action: 'warm', state: 'ready' }
+            } else if (params.command.action === 'search') {
+              const command = params.command
+              const found = await controller.search(command.directive, command.query, command.limit, lifetime.signal)
+              result = { action: 'search', generation: found.generation, items: found.items as never }
+            } else if (params.command.action === 'semantic_search') {
+              const command = params.command
+              if (!slot.worker) throw new HostAuthorityError('unavailable')
+              const found = await searchHostMemoryWithWorker(controller, slot.worker.link, slot.worker.stamp,
+                command.directive, command.query, command.limit, lifetime.signal)
+              result = { action: 'semantic_search', generation: found.generation, items: found.items as never }
+            } else {
+              const chunk = await controller.evidenceChunk(params.command.directive,
+                params.command.source_ref, params.command.offset, lifetime.signal)
+              result = chunk === null ? { action: 'evidence_chunk', state: 'missing' }
+                : { action: 'evidence_chunk', state: 'ready', chunk: chunk as never }
+            }
+            channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+              request_id: frame.request_id, method: frame.method, result })))
+          } catch (error) {
+            memorySlot?.controller.clear()
+            if (memorySlot?.worker) await this.closeMemoryWorker(memorySlot.worker.link)
+            memorySlot = undefined
+            throw error
+          } finally { memoryBusy = false }
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -814,7 +951,7 @@ export class UnixHostServer {
               bootstrap_cookie: activated.bootstrapCookie,
             },
           })
-        } else {
+        } else if (frame.method === 'profile.lease_close') {
           this.options.host.closeOwnedViewLease({
             viewLeaseId: frame.params.view_lease_id as unknown as ProfileViewLeaseId,
             leaseGeneration: frame.params.lease_generation,
@@ -822,6 +959,8 @@ export class UnixHostServer {
             ownerId,
           })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: 'profile.lease_close', result: { closed: true } })
+        } else {
+          throw new HostAuthorityError('unavailable')
         }
       } catch (error) { channel.send(safeError(authorityCode(error), frame)) }
     })
@@ -833,6 +972,7 @@ export class UnixHostServer {
     migrationExport: boolean,
     migrationImport: boolean,
     legacyMigration: boolean,
+    memoryQuery: boolean,
   ): HostInspectResult {
     if (!request.params.supported_versions.includes(1)) throw new HostAuthorityError('unavailable')
     const identity = this.options.identity
@@ -859,6 +999,8 @@ export class UnixHostServer {
             'migration.import_snapshot.abort', 'migration.import_snapshot.commit',
             'migration.import_snapshot.stage', 'migration.import_snapshot.status', 'migration.import_snapshot.verify',
           ] : []),
+          ...(memoryQuery ? ['profile.memory_query'] : []),
+          ...(memoryQuery && this.options.openMemoryWorker ? ['profile.memory_semantic_search'] : []),
         ]
           .sort().map(value => value as HostControlCapability),
         challenge_signature: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' as HostControlSignature,
@@ -1341,6 +1483,40 @@ export class UnixHostClient {
     return { importId: frame.result.import_id, stageVersion: frame.result.stage_version, state: frame.result.state }
   }
 
+  /** Read a bounded result from the authenticated Profile. Semantic requests require the separate worker capability.
+   * @param input Current Account binding and one signed read command; abort cancels the transport call.
+   * @returns Redacted metadata or an evidence fragment from the current Host generation.
+   */
+  async memoryQuery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerUserId: string
+    readonly computerId: string
+    readonly command: ProfileMemoryQueryRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileMemoryQueryResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (input.command.action === 'semantic_search'
+      && !this.inspection.capabilities.includes('profile.memory_semantic_search' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileMemoryQueryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        account_issuer: input.issuer, account_subject: input.subject,
+        owner_user_id: input.ownerUserId, computer_id: input.computerId,
+        command: input.command },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Verify one inactive migration generation through stage-version CAS.
    * @param input - import id, expected version, target selector, and signal.
@@ -1432,7 +1608,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
-      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest | ProfileMemoryQueryRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

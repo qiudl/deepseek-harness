@@ -28,7 +28,7 @@ kind: "package-reference"
 - 每帧恰好一个 UTF-8 JSON 对象和一个结尾 LF；拒绝 CRLF、多行、重复或乱序键、未知字段、非规范数字和尾随数据。
 - JSON 对象最多 65,536 个 UTF-8 字节，不含 LF。传输层必须在缓冲时执行同一上限；字符串编解码器无法收回调用方已经累积的字节。
 - UUID 使用小写 RFC 变体；nonce 与 Ed25519 材料使用规范无填充 base64url；SHA-256 摘要使用小写十六进制。
-- capability 是排序、去重的点分 token，且必须包含 `host.inspect`；未协商方法显式拒绝。
+- capability 是排序、去重的点分 token，且必须包含 `host.inspect`；未协商方法显式拒绝。记忆动作 `semantic_search` 需要单独签名的 operation 和 `profile.memory_semantic_search` capability；`search` 保持 Host 文字检索。
 - 错误只暴露稳定 code、是否可重试和 correlation id；异常文本和本地路径不得进入帧。
 
 <a id="challenge-authentication"></a>

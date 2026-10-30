@@ -1,7 +1,7 @@
 /** REQ-20261021-0013: process-local index of redacted Profile Session evidence. */
 import { createHash, randomBytes } from 'node:crypto'
-import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import { projectMemorySession, type MemoryProjectedRecord } from './memory-session-projection.ts'
+import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session/types'
+import { projectMemoryLogicalSession, projectMemorySession, type MemoryProjectedRecord } from './memory-session-projection.ts'
 import type { HostMemorySessionPage, HostMemorySessionSnapshot } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -106,7 +106,7 @@ function indexSession(scope: HostMemoryScope, records: readonly MemoryProjectedR
   return { version, records: evidence, postings, textBytes }
 }
 
-/** Keeps only redacted text in memory; raw JSONL is discarded after projection. */
+/** Keeps only redacted text in memory; Session input is discarded after projection. */
 export class HostMemoryEvidenceIndex {
   private readonly sessions = new Map<string, IndexedSession>()
   private readonly scope: HostMemoryScope
@@ -136,7 +136,8 @@ export class HostMemoryEvidenceIndex {
     if (!SESSION_ID.test(snapshot.sessionId)) throw new HostAuthorityError('invalid_input')
     const version = createHash('sha256').update(snapshot.revision).digest('hex')
     if (this.sessions.get(snapshot.sessionId)?.version === version) return this.generation
-    const projected = projectMemorySession(snapshot)
+    const projected = snapshot.text === undefined
+      ? projectMemoryLogicalSession(snapshot) : projectMemorySession(snapshot)
     const indexed = indexSession(this.scope, projected)
     const next = { ...indexed, version }
     const old = this.sessions.get(snapshot.sessionId)

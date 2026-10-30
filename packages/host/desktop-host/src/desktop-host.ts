@@ -78,6 +78,25 @@ export class DesktopHost {
       : { state: 'locked' }
   }
 
+  /** Resolve a memory request only when its Account identity, binding, and connection unlock agree. */
+  async authorizeMemoryProfile(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerId: string
+  }): Promise<PersonProfileId> {
+    const bound = this.options.registry.resolveBinding(input.authorityEnvironmentId,
+      input.accountBindingHandle, input.authorityBindingVersion)
+    if (!bound || !this.ownerUnlocks.get(input.ownerId)?.has(bound.profileId)) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    const account = await this.options.registry.resolveAccount({ issuer: input.issuer, subject: input.subject })
+    if (!account || account.profileId !== bound.profileId) throw new HostAuthorityError('profile_mismatch')
+    return bound.profileId
+  }
+
   /**
    * Idempotently register one account Profile and start its isolated worker.
    * @param input - Main-owned Account token and identity plus opaque binding and Keychain handles.

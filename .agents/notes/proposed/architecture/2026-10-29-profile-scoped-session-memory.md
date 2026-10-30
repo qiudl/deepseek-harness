@@ -14,6 +14,10 @@ Keep Session ownership in the authenticated Desktop Host and its selected Person
 
 The current master stores Session format v0. Its persisted top-level header has `type: "session"` and no seed or parent fields. The projection therefore rejects a header with seed, parent, origin, or nonzero delegation depth and rejects replaced source events. The private reader should use a validated logical `inspect()` view and compare `listSnapshots()` revisions before and after reading. The internal Host modules alone do not enable product reads.
 
+The first private route increment uses `borrowSession()` so a live Session is refused and a cold observation carries its own durable revision. The Web Profile exposes exact loopback routes only when the parent Host supplies a separate random bearer. The Host keeps that bearer in its worker handle closure and pins the reader to that worker instance. Host authorization also resolves the selected environment binding and Account identity to the same connection-unlocked Profile. The authenticated Unix transport now uses those checks before warming a redacted index and requires an optional pinned public keyring to advertise `profile.memory_query`. Each search or evidence read verifies a fresh signed directive, including its owner, computer, Profile, installation, and Host generation. The owner and computer values in this control request are matched to the server signature; a future product adapter must also bind them to its current Slark login and enrolled computer before sending the request.
+
+The Host control wire keeps `search` on its own text index and admits `semantic_search` only with a separately signed operation and an attested worker opener. The separate `profile.memory_semantic_search` capability is absent from the default startup composition. A worker can rank redacted projections, but its references never authorize evidence without current Host resolution.
+
 ## Alternatives considered
 
 **Give the memory agent access to the DSH home.** File access would bypass the selected Profile and expose raw logs, tool results, and unrelated credentials. A Session ID would become an accidental capability.

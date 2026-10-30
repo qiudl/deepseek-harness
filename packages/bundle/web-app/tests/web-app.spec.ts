@@ -110,6 +110,15 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('refuses a private memory bearer on a LAN listener', () => {
+    stageDist()
+    vi.stubEnv('DSH_PROFILE_MEMORY_TOKEN', 'a'.repeat(43))
+    const ctx = new Context()
+    ctx.provide('webServer', fakeHttpServer('0.0.0.0').server)
+    expect(() => apply(ctx, new Config({ openBrowser: false, printUrl: false,
+      surfaceContext: false, trustedHosts: [] }))).toThrow(/loopback bind/u)
+  })
+
   it('mounts dist serving, prompt section, bash variables, and publishes the URL with the LAN snapshot', async () => {
     stageDist()
     const ctx = new Context()

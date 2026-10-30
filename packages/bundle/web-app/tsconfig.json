@@ -39,6 +39,12 @@
       "path": "../../core/system-prompt"
     },
     {
+      "path": "../../core/session"
+    },
+    {
+      "path": "../../session/session-persistence"
+    },
+    {
       "path": "../../shell/shell-env"
     },
     {

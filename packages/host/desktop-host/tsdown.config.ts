@@ -46,7 +46,8 @@ export default defineConfig([
     fixedExtension: false,
     dts: false,
     clean: false,
-    noExternal: [/^@deepseek-ai\/dsh-host-control-protocol(?:\/|$)/u],
+    noExternal: [/^@deepseek-ai\/dsh-host-control-protocol(?:\/|$)/u,
+      /^@deepseek-ai\/dsh-session\/types$/u],
     codeSplitting: false,
   },
 ])

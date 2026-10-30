@@ -41,7 +41,7 @@ export interface MemoryDirectiveContext {
   readonly profileId: string
   readonly hostInstanceId: string
   readonly processNonce: string
-  readonly operation: 'search' | 'evidence'
+  readonly operation: 'search' | 'semantic_search' | 'evidence'
   readonly value: string
   readonly limit: number
 }

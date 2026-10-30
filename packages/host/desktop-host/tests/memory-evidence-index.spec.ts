@@ -17,6 +17,17 @@ function snapshot(message: string, revision = 'r1', sessionId = 'session-one') {
 }
 
 describe('Host local memory Evidence index', () => {
+  it('indexes a logical persistence view and retains only redacted text', () => {
+    const source = snapshot('token=private-value')
+    const [header, ...events] = source.text.trimEnd().split('\n').map(line => JSON.parse(line) as unknown)
+    const index = new HostMemoryEvidenceIndex(scope)
+    index.replace(scope, { sessionId: source.sessionId, revision: source.revision,
+      meta: header, events }, 0)
+    const found = index.search(scope, 'token=', 1)
+    expect(found.items[0]?.snippet).toBe('token=[REDACTED]')
+    expect(JSON.stringify(found)).not.toContain('private-value')
+  })
+
   it('rejects cached results after a Session revision, addition or deletion', async () => {
     const index = new HostMemoryEvidenceIndex(scope)
     index.replace(scope, snapshot('private plan'), 0)

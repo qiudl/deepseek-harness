@@ -9,12 +9,21 @@ export type ProfileViewActivationHandle = Branded<'ProfileViewActivationHandle'>
 /** Session-scoped enterprise context lease. */
 export type ContextLeaseId = Branded<'ContextLeaseId'>
 
-/** Raw Session snapshot confined to the Host until local redaction. */
-export interface HostMemorySessionSnapshot {
+/** A physical JSONL observation used by synthetic diagnostics. */
+export interface HostMemoryRawSessionSnapshot {
   readonly sessionId: string
   readonly revision: string
   readonly text: string
+  readonly meta?: never
+  readonly events?: never
 }
+/** One bounded Session observation confined to the Host until local redaction. */
+export type HostMemorySessionSnapshot = HostMemoryRawSessionSnapshot
+  | { readonly sessionId: string
+    readonly revision: string
+    readonly meta: unknown
+    readonly events: readonly unknown[]
+    readonly text?: never }
 /** Bounded metadata from the current Profile worker. */
 export interface HostMemorySessionPage {
   readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
@@ -89,6 +98,8 @@ export interface ProfileWorkerHandle {
   readonly generation?: number
   /** Signed browser cookie exchanged owner-side; it never enters Renderer or logs. */
   readonly bootstrapCookie?: { readonly name: string; readonly value: string }
+  /** Parent Host-only private memory request; the bearer remains in the worker handle closure. */
+  readonly memoryRead?: (kind: 'list' | 'read', target: unknown, signal: AbortSignal) => Promise<unknown>
 }
 
 /** Factory that starts one isolated profile worker. */
