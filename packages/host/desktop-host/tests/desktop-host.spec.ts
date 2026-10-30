@@ -252,11 +252,12 @@ describe('authenticated Unix transport', () => {
         text: `${rows.map(row => JSON.stringify(row)).join('\n')}\n` }) }
     const projected: Array<{ sourceRef: string; sourceVersion: string; text: string }> = []
     const workerQueries: Array<{ text: string; limit: number }> = []
+    const finishWorker: Array<() => void> = []
     let workerCloses = 0
     const enabled = await fixture(undefined, undefined, undefined, clock.now, {
       verifier: new MemoryDirectiveVerifier(ring, clock.now), reader: () => reader,
       openWorker: async (_profileId, _stamp, _signal) => ({
-        done: new Promise<void>(() => {}),
+        done: new Promise<void>((resolve) => { finishWorker.push(resolve) }),
         async project(items) { projected.push(...items) },
         async query(text, limit) {
           workerQueries.push({ text, limit })
@@ -270,34 +271,49 @@ describe('authenticated Unix transport', () => {
       accountAccessToken: accountToken(slarkIssuer, 'u1'), keyHandle: 'keychain:u1', unlockMaterial })
     expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
       .toEqual({ action: 'warm', state: 'ready' })
+    expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
+      .toEqual({ action: 'warm', state: 'ready' })
+    finishWorker[0]?.()
+    await new Promise(resolve => setImmediate(resolve))
     const grant = { grantId: '11111111-1111-4111-8111-111111111111', generation: 1,
       ownerUserId: binding.ownerUserId, environmentId: stagingEnvironmentId,
       computerId: binding.computerId, installationId: identity.installationId,
       profileId: profile.profileId, readerKind: 'personal_dsh' }
-    const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
-      keyId: 'test', requestId: '33333333-3333-4333-8333-333333333333',
-      nonce: Buffer.alloc(32, 7).toString('base64url'),
-      hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce,
-      issuedAt: 1_000, expiresAt: 15_000, operation: 'search',
-      queryDigest: createHash('sha256').update(JSON.stringify(['search', 'private', 1])).digest('hex'),
-      limit: 1, grant }
-    const payload = Buffer.from('slark.dsh-memory-query/v1\0' + JSON.stringify([
-      unsigned.schemaVersion, unsigned.purpose, unsigned.issuer, unsigned.keyId,
-      unsigned.requestId, unsigned.nonce, unsigned.hostInstanceId, unsigned.processNonce,
-      unsigned.issuedAt, unsigned.expiresAt, unsigned.operation, unsigned.queryDigest,
-      unsigned.limit, grant.grantId, grant.generation, grant.ownerUserId, grant.environmentId,
-      grant.computerId, grant.installationId, grant.profileId, grant.readerKind,
-    ]))
-    const directive = { ...unsigned, signature: sign(null, payload, signing.privateKey).toString('base64url') }
+    const signSearch = (requestId: string, nonceByte: number) => {
+      const unsigned = { schemaVersion: 1, purpose: 'dsh_memory_query', issuer: 'https://slark.example',
+        keyId: 'test', requestId, nonce: Buffer.alloc(32, nonceByte).toString('base64url'),
+        hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce,
+        issuedAt: 1_000, expiresAt: 15_000, operation: 'search',
+        queryDigest: createHash('sha256').update(JSON.stringify(['search', 'private', 1])).digest('hex'),
+        limit: 1, grant }
+      const payload = Buffer.from('slark.dsh-memory-query/v1\0' + JSON.stringify([
+        unsigned.schemaVersion, unsigned.purpose, unsigned.issuer, unsigned.keyId,
+        unsigned.requestId, unsigned.nonce, unsigned.hostInstanceId, unsigned.processNonce,
+        unsigned.issuedAt, unsigned.expiresAt, unsigned.operation, unsigned.queryDigest,
+        unsigned.limit, grant.grantId, grant.generation, grant.ownerUserId, grant.environmentId,
+        grant.computerId, grant.installationId, grant.profileId, grant.readerKind,
+      ]))
+      return { ...unsigned, signature: sign(null, payload, signing.privateKey).toString('base64url') }
+    }
+    const directive = signSearch('33333333-3333-4333-8333-333333333333', 7)
     const search = { ...binding, command: { action: 'search' as const, directive, query: 'private', limit: 1 } }
     const found = await client.memoryQuery(search)
     expect(found).toMatchObject({ action: 'search', items: [{ source: { profileId: profile.profileId },
       snippet: 'private plan token=[REDACTED]' }] })
-    expect(projected).toHaveLength(1)
-    expect(projected[0]?.text).toBe('private plan token=[REDACTED]')
+    expect(projected).toHaveLength(2)
+    expect(projected.every(item => item.text === 'private plan token=[REDACTED]')).toBe(true)
     expect(workerQueries).toEqual([{ text: 'private', limit: 1 }])
     await expect(client.memoryQuery(search)).rejects.toMatchObject({ code: 'replayed' })
     expect(workerCloses).toBeGreaterThan(0)
+    expect(await client.memoryQuery({ ...binding, command: { action: 'warm' } }))
+      .toEqual({ action: 'warm', state: 'ready' })
+    finishWorker[2]?.()
+    await new Promise(resolve => setImmediate(resolve))
+    await expect(client.memoryQuery({ ...binding, command: {
+      action: 'search', directive: signSearch('44444444-4444-4444-8444-444444444444', 8),
+      query: 'private', limit: 1,
+    } })).rejects.toMatchObject({ code: 'unavailable' })
+    expect(workerQueries).toHaveLength(1)
     await expect(client.memoryQuery({ ...binding, subject: 'other', command: { action: 'warm' } }))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
     client.close()
