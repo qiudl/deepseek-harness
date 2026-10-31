@@ -533,7 +533,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const extensionOperations = extensionExecutor && config.maximumExtensionReceiptBytes !== undefined
         ? new ProfileExtensionOperations(new WindowsExtensionReceipts({
           root: win32.join(config.root, 'control'), userSid, bindings, maximumBytes: config.maximumExtensionReceiptBytes,
-        }), extensionExecutor, clock) : undefined
+        }), extensionExecutor, clock, profileId => workers.isProfileBlocked(profileId)) : undefined
       const remoteSession = (profileId: string, command: Parameters<typeof executeRemoteSessionCommand>[0]['command'], signal: AbortSignal) =>
         executeRemoteSessionCommand({ authority: commandAuthority, workers, profileId, command, signal })
       const authority = new HostControlAuthority({

@@ -787,6 +787,7 @@ export async function startDesktopHostApplication(
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
+      profileId => workers.isProfileBlocked(profileId),
     )
     const socketPath = join(root, 'host.sock')
     let modelClaimCoordinator: LegacyClaimCoordinator | undefined

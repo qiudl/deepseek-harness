@@ -32,6 +32,28 @@ it('holds the original Profile stopped until the isolated reader releases its re
   await workers.disposeAll()
 })
 
+it('does not stop a live worker when the requester becomes stale while queued', async () => {
+  const stop = vi.fn()
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort: stop, done: Promise.resolve() }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await workers.start(input)
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const busy = workers.withPreparation('profile', async () => { enter(); await new Promise<void>(resolve => { release = resolve }) })
+  await entered
+  let current = true
+  const rejected = workers.withQuiescent('profile', async () => {}, () => {
+    if (!current) throw new Error('request stale')
+  })
+  const failed = expect(rejected).rejects.toThrow('request stale')
+  current = false
+  release()
+  await busy
+  await failed
+  expect(stop).not.toHaveBeenCalled()
+  await workers.disposeAll()
+})
+
 it('serializes Profile preparation before any isolated reader can start', async () => {
   const events: string[] = []
   const workers = new ProfileWorkerSupervisor(async () => {

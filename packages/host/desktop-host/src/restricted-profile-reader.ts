@@ -1,4 +1,6 @@
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { ProfileExtensionOperations } from './extension-operations.ts'
+import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
 import { executeRestrictedSessionCommand } from './session-command.ts'
 import { stageRestrictedProfile } from './restricted-profile-staging.ts'
 import type { ProfileWorkerFactory } from './types.ts'
@@ -107,53 +109,73 @@ export async function startRestrictedProfileReader(input: StagingInput & {
 }
 
 /**
- * Keep the regular Profile worker stopped for the whole isolated reader lifetime.
+ * Reserve an inactive Profile for the whole isolated reader lifetime.
  * The caller still owns the Host lock, identity checks, connection lifetime and any external
  * process exclusion. The callback must return its result without sending it independently;
  * its result is discarded after connection cancellation.
  * @param workers - Supervisor of the regular Profile worker.
+ * @param extensions - The Host's shared extension-operation owner.
+ * @param claims - The Host's shared Profile model-claim gate.
  * @param input - Authenticated, Host-owned staging and worker inputs.
  * @param use - Reader operation, including all responses and connection handling.
  * @returns The callback result after the isolated worker is stopped and its staging is removed.
  */
 export async function withRestrictedProfileReader<T>(
   workers: ProfileWorkerSupervisor,
+  extensions: ProfileExtensionOperations,
+  claims: LegacyClaimWorkerGate,
   input: Parameters<typeof startRestrictedProfileReader>[0],
   use: (reader: RestrictedProfileReader) => Promise<T>,
 ): Promise<T> {
-  return workers.withQuiescent(input.profileId, async () => {
-    let reader: RestrictedProfileReader
+  return extensions.withRestrictedAccess(input.profileId, async () => {
     try {
-      reader = await startRestrictedProfileReader(input)
-    } catch (error) {
-      if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError)
-        workers.blockProfile(input.profileId)
-      throw error
-    }
-    let abort: (() => void) | undefined
-    try {
-      input.signal.throwIfAborted()
-      const cancelled = new Promise<never>((_resolve, reject) => {
-        abort = () => reject(input.signal.reason)
-        input.signal.addEventListener('abort', abort, { once: true })
-      })
-      const operation = Promise.resolve().then(() => {
+      const fencedInput = { ...input, assertCurrent: () => {
+        claims.assertOpen(input.profileId)
+        input.assertCurrent()
+      } }
+      const guard = () => {
         input.signal.throwIfAborted()
-        return use(reader)
-      })
-      const result = await Promise.race([operation, cancelled])
-      input.signal.throwIfAborted()
-      input.ownership.assertOwner()
-      input.assertCurrent()
-      return result
-    } finally {
-      if (abort) input.signal.removeEventListener('abort', abort)
-      try {
-        await reader.close()
-      } catch (error) {
-        workers.blockProfile(input.profileId)
-        throw error
+        input.ownership.assertOwner()
+        fencedInput.assertCurrent()
       }
+      guard()
+      return await workers.withInactiveProfile(input.profileId, async () => {
+        let reader: RestrictedProfileReader
+        try {
+          reader = await startRestrictedProfileReader(fencedInput)
+        } catch (error) {
+          if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError)
+            workers.blockProfile(input.profileId)
+          throw error
+        }
+        let abort: (() => void) | undefined
+        try {
+          input.signal.throwIfAborted()
+          const cancelled = new Promise<never>((_resolve, reject) => {
+            abort = () => reject(input.signal.reason)
+            input.signal.addEventListener('abort', abort, { once: true })
+          })
+          const operation = Promise.resolve().then(() => {
+            input.signal.throwIfAborted()
+            return use(reader)
+          })
+          const result = await Promise.race([operation, cancelled])
+          input.signal.throwIfAborted()
+          input.ownership.assertOwner()
+          fencedInput.assertCurrent()
+          return result
+        } finally {
+          if (abort) input.signal.removeEventListener('abort', abort)
+          try {
+            await reader.close()
+          } catch (error) {
+            workers.blockProfile(input.profileId)
+            throw error
+          }
+        }
+      }, guard)
+    } finally {
+      if (workers.isProfileBlocked(input.profileId)) extensions.blockProfile(input.profileId)
     }
   })
 }

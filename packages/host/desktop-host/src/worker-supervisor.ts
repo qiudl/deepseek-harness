@@ -646,12 +646,14 @@ export class ProfileWorkerSupervisor {
    * This fence does not by itself authenticate the owner or lock out external processes.
    * @param profileId - Profile whose regular worker must remain stopped.
    * @param operation - Isolated operation, including all of its cleanup.
+   * @param guard - Optional synchronous authority check before stopping the worker.
    * @returns The isolated operation's result.
    */
-  async withQuiescent<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
+  async withQuiescent<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
     if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(profileId, async () => {
       if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      guard?.()
       try {
         await this.disposeOwned(profileId)
       } catch (error) {
@@ -663,11 +665,32 @@ export class ProfileWorkerSupervisor {
     })
   }
 
+  /** Run a fallback only when no regular worker is running; never interrupt a healthy workspace.
+   * @param profileId - Profile whose worker slot is reserved.
+   * @param operation - Isolated operation, including all cleanup.
+   * @param guard - Synchronous authority check after acquiring the Profile slot.
+   * @returns The isolated operation's result.
+   */
+  async withInactiveProfile<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
+    if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+    return this.serial(profileId, async () => {
+      if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      guard?.()
+      if (this.workers.has(profileId)) throw new HostAuthorityError('conflict')
+      return operation()
+    })
+  }
+
   /** Fail closed for this Host lifetime when isolated worker cleanup cannot be confirmed.
    * @param profileId - Profile that must not start another writer.
    */
   blockProfile(profileId: string): void {
     this.blockedProfiles.add(profileId)
+  }
+
+  /** @param profileId - Host-resolved Profile. @returns Whether its worker state is uncertain. */
+  isProfileBlocked(profileId: string): boolean {
+    return this.blockedProfiles.has(profileId)
   }
 
   private async disposeOwned(profileId: string): Promise<void> {
