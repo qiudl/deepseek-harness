@@ -39,6 +39,7 @@ interface Bench {
 async function liveAgent(ctx: Context, session: Session): Promise<Agent> {
   const status: AgentStatus = 'idle'
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: session.id,
     options: {},
     session,

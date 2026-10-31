@@ -5,12 +5,14 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import {
+  ReasoningEffortId,
   boundContextSummary,
   createUserMessage,
   type LlmCallConfig,
-  type ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from './runtime-types.ts'
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { ModelSelectionProjectionState, ModelSelectionValue } from './types.ts'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 declare module '@deepseek-ai/dsh-llm' {
   interface MessageSourceMap {
@@ -34,6 +36,74 @@ export interface ModelSelectionRef {
   current: ModelSelection | undefined
   /** Selection captured when the current step entered prompt assembly. */
   assembled: ModelSelection | undefined
+}
+
+/** Session-backed selection used by an Agent and its request scope. */
+export class AgentModel implements ModelSelectionRef {
+  /** Selection captured by request assembly. */
+  assembled: ModelSelection | undefined
+  private turnSelection: { turn: number; selection: ModelSelection } | undefined
+
+  /**
+   * @param session - Session that records explicit selections.
+   * @param readState - reader of the Session's model-selection projection.
+   * @param fallback - deployment selection for a Session without recorded choices.
+   */
+  constructor(
+    private readonly session: Session,
+    private readonly readState: () => ModelSelectionProjectionState,
+    private fallback: () => ModelSelection | undefined,
+  ) {}
+
+  /** Selection for request assembly, including any active turn pin. */
+  get current(): ModelSelection | undefined {
+    return this.turnSelection?.selection ?? this.selected()
+  }
+
+  /** Replace the fallback used before a Session records a selection.
+   * @param fallback - current deployment selection when no choice is recorded.
+   */
+  setFallback(fallback: () => ModelSelection | undefined): void {
+    this.fallback = fallback
+  }
+
+  /** Read the next unpinned choice.
+   * @returns the recorded next selection, or the deployment fallback.
+   */
+  selected(): ModelSelection | undefined {
+    const state = this.readState()
+    const value: ModelSelectionValue | null = state.pending ?? state.lastUsed
+    if (value === null) return this.fallback()
+    return { provider: value.provider, model: value.model,
+      ...(value.reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(value.reasoningEffort) }) }
+  }
+
+  /** Record an explicit selection for a future request.
+   * @param selection - explicit choice recorded before the next request.
+   */
+  select(selection: ModelSelection): void {
+    const state = this.readState()
+    const existing = state.pending ?? state.lastUsed
+    if (existing !== null && existing.provider === selection.provider && existing.model === selection.model
+      && existing.reasoningEffort === selection.reasoningEffort) return
+    this.session.append('model/selection', selection)
+  }
+
+  /**
+   * Pin request routing to an admitted turn's selection.
+   * @param turn - turn owning the pin.
+   * @param selection - route captured at prompt admission.
+   */
+  pinTurn(turn: number, selection: ModelSelection): void {
+    this.turnSelection = { turn, selection: { ...selection } }
+  }
+
+  /** Release the matching turn pin.
+   * @param turn - turn whose pin may be released.
+   */
+  releaseTurn(turn: number): void {
+    if (this.turnSelection?.turn === turn) this.turnSelection = undefined
+  }
 }
 
 function sameRoute(left: ModelSelection, right: ModelSelection): boolean {

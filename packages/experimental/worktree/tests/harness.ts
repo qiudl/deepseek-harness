@@ -42,6 +42,7 @@ export function testAgent(ctx: Context, cwd: string, name = 'worktree-test'): Ag
   const id = SessionId(name)
   const session = Session.create(id, [], { version: SESSION_FORMAT_VERSION, id, createdAt: 0, isSeeded: false, cwd })
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id, session, options: {}, status: 'idle', ctx: scope.ctx, inbox: unsupportedInbox(),
     send() {}, followup() {}, steer() {}, inject() {}, cancel() {},
     whenIdle: async () => {}, runMaintenance: task => task(new AbortController().signal),

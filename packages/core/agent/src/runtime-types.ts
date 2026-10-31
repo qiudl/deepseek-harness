@@ -13,6 +13,7 @@ import type {
 import type { AgentCancelCause, Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 export type { AgentCancelCause } from '@deepseek-ai/dsh-session'
 import type { Agent, InboxTarget } from './types.ts'
+import type { AgentModel } from './model-selection.ts'
 export type { Agent } from './types.ts'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 declare module '@deepseek-ai/dsh-system-prompt' {
@@ -164,6 +165,8 @@ declare module './types.ts' {
   interface Agent {
     /** The provider route and model this agent's requests use. */
     readonly options: AgentOptions
+    /** Session-backed model selection used by this Agent. */
+    readonly model: AgentModel
     /** The live session this agent drives; its log is the durable source of truth. */
     readonly session: Session
     /** Agent-owned access to durable pending work. */

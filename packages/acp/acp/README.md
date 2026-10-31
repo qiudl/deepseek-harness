@@ -113,6 +113,8 @@ Each session permits one in-flight prompt. Admission validates the whole prompt 
 
 ### Teardown and connection ownership
 
+The Agent owns durable model choices; ACP pins the admitted selection through the original prompt turn.
+
 Each session module owns its Agent handle, MCP mounts, future and turn-pinned model selections, prompt slot, update chain, and memoized close operation. Explicit close, client disconnect, and Cordis disposal use the same quiescent teardown: stop new work, cancel prompt admission and Agent activity, drain committed updates, dispose continuable descendants child-first, flush persistence, and release the owned Agent scope. A session close leaves persisted state available for list and resume, and other sessions or frontends sharing the Context remain untouched.
 
 </details>

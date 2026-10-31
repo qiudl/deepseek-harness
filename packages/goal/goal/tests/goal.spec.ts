@@ -54,6 +54,7 @@ function stubAgentForSession(session: Session, suppliedCtx?: Context): StubAgent
   }
   const inbox = createInboxStub()
   const agent: Agent = {
+    model: {} as Agent['model'],
     id,
     options: {},
     session,

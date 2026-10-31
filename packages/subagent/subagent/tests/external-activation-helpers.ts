@@ -33,6 +33,7 @@ export async function externalTestParent(ctx: Context, cwd?: string): Promise<Ag
   })
   const inbox = createInboxStub()
   const parent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: session.id,
     session,
     ctx,

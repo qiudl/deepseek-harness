@@ -35,6 +35,7 @@ function stubAgent(ctx: Context, rawId: string, presetScope?: ScopeKey): Agent {
   }
   const session = Session.create(id)
   const agent = {
+    model: {} as Agent['model'],
     id,
     options: {},
     session,

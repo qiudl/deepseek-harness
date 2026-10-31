@@ -2,7 +2,6 @@
 
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {
   Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
 } from '@deepseek-ai/dsh-agent'
@@ -68,7 +67,7 @@ export type ApiSessionAgentResult =
 
 type InstalledSelection = ModelSelectionRef & {
   current: AgentModelSelection
-  consume(provider: string, model: string, reasoningEffort: string | undefined): boolean
+  select(selection: AgentModelSelection): void
 }
 
 /**
@@ -141,7 +140,6 @@ export async function inspectApiSession(
 export class ApiSessionAgentController {
   private readonly resumes = new Map<SessionId, Promise<Agent>>()
   private readonly creations = new Map<SessionId, Promise<Agent>>()
-  private readonly selections = new WeakMap<Agent, InstalledSelection>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
@@ -282,38 +280,10 @@ export class ApiSessionAgentController {
    * @returns the installed mutable selection reference.
    */
   selectionFor(agent: Agent): InstalledSelection {
-    const installed = this.selections.get(agent)
-    if (installed !== undefined) return installed
-    const projectionState = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
-    if (projectionState === undefined) {
-      throw new Error('api-session: required modelSelection projection is not registered')
-    }
-    let picked = projectionState.pending === null
-      ? undefined
-      : agentModelSelection(projectionState.pending)
-    const defaultModel = this.ctx.agentDefaultModel
-    const selection: InstalledSelection = {
-      get current(): AgentModelSelection {
-        if (picked !== undefined) return picked
-        return agentModelSelection(resolveModelSelection(
-          null, agent.session.requestHeader(), () => defaultModel.currentSelection(),
-        ))
-      },
-      set current(next: AgentModelSelection) {
-        picked = next
-      },
-      consume(provider: string, model: string, reasoningEffort: string | undefined): boolean {
-        if (picked?.provider !== provider
-          || picked.model !== model
-          || picked.reasoningEffort !== reasoningEffort) return false
-        picked = undefined
-        return true
-      },
-      assembled: undefined,
-    }
-    installModelSelection(agent.ctx, selection)
-    this.selections.set(agent, selection)
-    return selection
+    const model = agent.model
+    model.setFallback(() => agentModelSelection(this.ctx.agentDefaultModel.currentSelection()))
+    if (model.current === undefined) throw new Error('api-session: model selection is unavailable')
+    return model as InstalledSelection
   }
 
   /**
@@ -322,8 +292,8 @@ export class ApiSessionAgentController {
    * @returns installed choice, durable pending intent, or the current default.
    */
   inspectSelectionFor(agent: Agent): ModelSelection {
-    const installed = this.selections.get(agent)
-    if (installed !== undefined) return installed.current
+    const installed = agent.model.current
+    if (installed !== undefined) return installed
     const state = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
     if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
     return resolveModelSelection(state.pending, agent.session.requestHeader(), () => this.ctx.agentDefaultModel.currentSelection())
@@ -335,25 +305,7 @@ export class ApiSessionAgentController {
    * @param selection - validated selection to record and apply.
    */
   selectForNextRequest(agent: Agent, selection: AgentModelSelection): void {
-    agent.session.append('model/selection', selection)
-    this.selectionFor(agent).current = selection
-  }
-
-  /**
-   * Let a matching durable request header retire the execution cache.
-   * @param agent - live Agent whose request was recorded.
-   * @param provider - provider route used by the request.
-   * @param model - provider-owned model used by the request.
-   * @param reasoningEffort - adapter-owned effort used by the request.
-   * @returns whether the pending selection was consumed.
-   */
-  consumeSelection(
-    agent: Agent,
-    provider: string,
-    model: string,
-    reasoningEffort: string | undefined,
-  ): boolean {
-    return this.selections.get(agent)?.consume(provider, model, reasoningEffort) ?? false
+    this.selectionFor(agent).select(selection)
   }
 
   /**

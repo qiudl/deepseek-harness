@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { AgentModel, agentEvents, installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -124,9 +124,16 @@ async function harness(logged?: {
       reason: 'initial',
     })
   }
+  const model = new AgentModel(session, () => {
+    const state = ctx.sessionProjections.stateOf(session, 'modelSelection')
+    if (state === undefined) throw new Error('required modelSelection projection')
+    return state
+  }, () => undefined)
+  installModelSelection(ctx, model)
   const agent = {
     id: session.id,
     session,
+    model,
     status: 'running',
     ctx,
     inbox: { nextTurn: [], nextStep: [] },

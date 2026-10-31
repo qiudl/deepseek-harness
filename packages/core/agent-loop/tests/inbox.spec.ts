@@ -22,6 +22,7 @@ function stubAgent(rawId: string, overrides: Partial<Agent> = {}): Agent {
   const session = overrides.session ?? Session.create(id)
   const ctx = overrides.ctx ?? new Context()
   return {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session,

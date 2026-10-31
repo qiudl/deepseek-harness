@@ -54,6 +54,7 @@ function stubAgent(rawId: string, supplied?: Session, suppliedCtx?: Context): St
   const inbox = createInboxStub()
   let status: AgentStatus = 'running'
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: session.id,
     options: {},
     session,

@@ -26,6 +26,7 @@ async function harness(): Promise<Harness> {
 /** A registered idle Agent double: the gate reads only its Session header. */
 async function liveAgent(ctx: Context, session: Session): Promise<Agent> {
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: session.id,
     options: {},
     session,

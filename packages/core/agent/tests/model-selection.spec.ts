@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import {
+  AgentModel,
   agentEvents,
   installModelSelection,
+  foldModelSelection,
   type Agent,
   type ModelSelection,
   type ModelSelectionRef,
@@ -187,5 +189,26 @@ describe('installModelSelection()', () => {
       messages: [{ source: { summary: 'a0 → a1' } }],
     })
     await ctx.fiber.dispose()
+  })
+})
+
+
+describe('AgentModel durable selection', () => {
+  it('keeps explicit selections durable while a turn pin controls request routing', () => {
+    const session = Session.create(SessionId('model-owner'))
+    const model = new AgentModel(session, () => foldModelSelection(session.snapshotEvents()), () => ({ provider: 'default', model: 'default' }))
+    const selected = { provider: 'new', model: 'model' }
+    model.pinTurn(4, { provider: 'old', model: 'model' })
+    model.select(selected)
+    expect(session.snapshotEvents().at(-1)).toMatchObject({ type: 'model/selection', data: selected })
+    const count = session.snapshotEvents().length
+    model.select(selected)
+    expect(session.snapshotEvents()).toHaveLength(count)
+    expect(model.current).toEqual({ provider: 'old', model: 'model' })
+    model.releaseTurn(4)
+    expect(model.current).toEqual(selected)
+    const restored = Session.create(SessionId('model-restored'), session.snapshotEvents())
+    const resumed = new AgentModel(restored, () => foldModelSelection(restored.snapshotEvents()), () => undefined)
+    expect(resumed.current).toEqual(selected)
   })
 })

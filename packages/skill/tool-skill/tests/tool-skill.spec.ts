@@ -69,6 +69,7 @@ function agentForCwd(cwd: string): Agent {
     version: SESSION_FORMAT_VERSION, id, createdAt: 0, cwd, isSeeded: false,
   })
   return {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     ctx: new Context(),
     id,
     options: {},
@@ -87,6 +88,7 @@ function agentForCwd(cwd: string): Agent {
 
 function sessionAgent(session: Session, id = 'tool-skill-agent'): Agent {
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: SessionId(id),
     options: {},
     session,
