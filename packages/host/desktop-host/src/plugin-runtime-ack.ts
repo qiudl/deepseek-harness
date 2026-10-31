@@ -25,17 +25,31 @@ export async function waitForPluginRuntime(
   while (true) {
     lifetime.throwIfAborted()
     const rpcId = randomUUID()
-    const response = await fetch(`${worker.origin}/api/pluginInventory/list`, {
-      method: 'POST', redirect: 'error', signal: lifetime,
-      headers: { 'content-type': 'application/json', cookie: `${worker.bootstrapCookie.name}=${worker.bootstrapCookie.value}` },
-      body: JSON.stringify({ type: 'client-request', rpcId, method: 'pluginInventory/list', payload: { args: {} } }),
-    })
-    const result = await readWorkerRuntimeResponse(response, 524_288)
-    if (!result || typeof result !== 'object') throw new Error('invalid_runtime_response')
-    const envelope = result as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: { entries?: unknown } } }
-    const entries = envelope.result?.value?.entries
-    if (envelope.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true || !Array.isArray(entries)) {
-      throw new Error('invalid_runtime_response')
+    let entries: unknown[]
+    try {
+      const response = await fetch(`${worker.origin}/api/pluginInventory/list`, {
+        method: 'POST', redirect: 'error', signal: lifetime,
+        headers: { 'content-type': 'application/json', cookie: `${worker.bootstrapCookie.name}=${worker.bootstrapCookie.value}` },
+        body: JSON.stringify({ type: 'client-request', rpcId, method: 'pluginInventory/list', payload: { args: {} } }),
+      })
+      const result = await readWorkerRuntimeResponse(response, 524_288)
+      if (!result || typeof result !== 'object') throw new Error('invalid_runtime_response')
+      const envelope = result as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: { entries?: unknown } } }
+      const value = envelope.result?.value?.entries
+      if (envelope.type !== 'server-response' || envelope.rpcId !== rpcId || envelope.result?.ok !== true || !Array.isArray(value)) {
+        throw new Error('invalid_runtime_response')
+      }
+      entries = value
+    } catch (error) {
+      // REQ-20261028-0021: the worker stops accepting connections while the runtime reloads the
+      // composition; a refused connection or a not-yet-registered endpoint is not an install
+      // failure. Malformed or contradictory answers from a reachable worker stay fatal.
+      lifetime.throwIfAborted()
+      const transient = error instanceof TypeError
+        || (error instanceof Error && error.message === 'runtime_unavailable')
+      if (!transient) throw error
+      await setTimeout(100, undefined, { signal: lifetime })
+      continue
     }
     const matching = expected.map(({ entryId }) => {
       const matches = entries.filter((entry: unknown) => typeof entry === 'object' && entry !== null
