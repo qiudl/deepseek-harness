@@ -762,6 +762,23 @@ it.skipIf(process.platform === 'win32')('composes and closes restricted history 
   }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
+it.skipIf(process.platform === 'win32')('stops Profile workers and retains ownership when server close fails', async () => {
+  const { config, root } = fixture()
+  const failure = new Error('server close failed')
+  const stopWorker = vi.fn()
+  const server = { start: async () => undefined, close: async () => { throw failure } } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async () => ({ closeNotifications() {}, abort: stopWorker, done: Promise.resolve() }),
+  })
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  await application.workers.start({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
+  await expect(application.close()).rejects.toBe(failure)
+  expect(stopWorker).toHaveBeenCalledOnce()
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
 it.skipIf(process.platform === 'win32')('keeps Host ownership when startup cleanup is unconfirmed', async () => {
   const { config, root } = fixture()
   const failure = new Error('server start failed')

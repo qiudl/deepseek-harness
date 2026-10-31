@@ -1047,8 +1047,8 @@ export async function startDesktopHostApplication(
       host, server, workers, commandAuthority, ...(restrictedHistory ? { restrictedHistory } : {}),
       close() {
         if (!closing) closing = Promise.resolve().then(async () => {
-          await server?.close()
           const failures: unknown[] = []
+          try { await server?.close() } catch (error) { failures.push(error) }
           try { await restrictedHistory?.close() } catch (error) { failures.push(error) }
           try { await workers.disposeAll() } catch (error) { failures.push(error) }
           if (failures.length === 1) throw failures[0]
