@@ -66,6 +66,7 @@ function privateTopLevel(header: {
  * @param persistence - Persistence bound to the current Account Profile worker.
  * @param rawSessionId - Exact Session identity selected by the authenticated Host.
  * @param signal - Request lifetime, including binding and Host connection cancellation.
+ * @param isLive - Refuse an attached Session that may still change in memory.
  * @returns A current-format bounded snapshot; missing, changed, delegated or oversized sessions refuse.
  */
 export async function readDesktopMemorySession(
@@ -119,6 +120,7 @@ export async function readDesktopMemorySession(
  * @param persistence - Current Profile's session inventory.
  * @param after - Last returned Session ID, or null for the first page.
  * @param signal - Request cancellation.
+ * @param isLive - Exclude attached Sessions that may still change in memory.
  * @returns At most 64 sorted Session identities and revisions.
  */
 export async function listDesktopMemorySessions(
@@ -191,6 +193,7 @@ export function parseDesktopMemorySessionResult(value: unknown): DesktopMemorySe
  * @param res - Noncacheable worker response.
  * @param token - Bearer shared only with the parent Host.
  * @param persistence - Current Profile's session inventory.
+ * @param isLive - Current Profile's live Session membership check.
  * @returns Resolution after the response settles.
  */
 export function handleDesktopMemorySessionsRequest(
@@ -221,6 +224,7 @@ export function handleDesktopMemorySessionsRequest(
  * @param res - Noncacheable bounded raw snapshot or sanitized refusal.
  * @param token - Random memory-only token held by this worker and its parent Host.
  * @param persistence - Current Profile's validating persistence service.
+ * @param isLive - Current Profile's live Session membership check.
  * @returns Resolution when the private response settles.
  */
 export function handleDesktopMemorySessionRequest(
