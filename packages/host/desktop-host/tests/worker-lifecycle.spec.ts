@@ -149,6 +149,53 @@ it('does not infer process exit from an ordinary worker error', async () => {
   await expect(workers.disposeAll()).rejects.toThrow('worker error without confirmed exit')
 })
 
+it('does not infer process exit from a rejected exit notification', async () => {
+  let failExit!: (error: Error) => void
+  const exited = new Promise<void>((_resolve, reject) => { failExit = reject })
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), exited }))
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  failExit(new Error('exit notification failed'))
+  await expect(exited).rejects.toThrow('exit notification failed')
+  await expect(workers.withInactiveProfile('profile', async () => {})).rejects.toMatchObject({ code: 'conflict' })
+  await workers.disposeAll()
+})
+
+it('rejects new isolated work immediately for a blocked Profile', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  workers.blockProfile('profile')
+  await expect(workers.withInactiveProfile('profile', async () => {})).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('refuses multiple queued scoped starts when the Profile becomes blocked', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await expect(workers.withPreparation('profile', async (scope) => {
+    workers.blockProfile('profile')
+    const first = scope.ensure(input)
+    const second = scope.ensure(input)
+    await Promise.allSettled([first, second])
+  })).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('does not begin isolated work if the supervisor closes while the worker stops', async () => {
+  let finish!: () => void, stopping!: () => void
+  const done = new Promise<void>((resolve) => { finish = resolve })
+  const stopped = new Promise<void>((resolve) => { stopping = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort: stopping, done }))
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  const use = vi.fn(async () => 'must not return')
+  const isolated = workers.withQuiescent('profile', use)
+  const rejected = expect(isolated).rejects.toMatchObject({ code: 'unavailable' })
+  await stopped
+  const closed = workers.disposeAll()
+  finish()
+  await rejected
+  await closed
+  expect(use).not.toHaveBeenCalled()
+})
+
 it('serializes Profile preparation before any isolated reader can start', async () => {
   const events: string[] = []
   const workers = new ProfileWorkerSupervisor(async () => {
