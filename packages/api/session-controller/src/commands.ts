@@ -101,9 +101,10 @@ export class SessionCommandController {
   ) {}
 
   /**
-   * Create or idempotently adopt one ordinary Session.
-   * @param request - requested identity, location, and Agent preset.
-   * @returns the Session identity and resolved preset when configured.
+   * Create one ordinary Session for a new conversation, reusing the named
+   * blank Session while it is an unarchived member of the requested Workspace.
+   * @param request - optional blank Session to reuse, location, and Agent preset.
+   * @returns the created or reused Session identity and its preset when configured.
    */
   async create(request: SessionCreateRequest): Promise<SessionCreateValue> {
     if (request.workspaceId !== undefined && request.cwd !== undefined) {
@@ -112,7 +113,9 @@ export class SessionCommandController {
     if (request.dedicatedCollaboration === true && request.workspaceId === undefined) {
       throw new RemoteError('gateway/bad-request', 'dedicated collaboration requires workspaceId', {})
     }
-    const sessionId = request.sessionId ?? brandString<SessionId>(`session-${randomUUID()}`)
+    if (request.exactAdopt === true && request.sessionId === undefined) {
+      throw new RemoteError('gateway/bad-request', 'exact adoption requires sessionId', {})
+    }
     let workspace: Workspace | undefined
     if (request.workspaceId !== undefined) {
       workspace = this.ctx.workspaceRegistry.get(request.workspaceId)
@@ -124,16 +127,26 @@ export class SessionCommandController {
     }
     const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd
     let adopted: Agent
+    let agentPreset: string | undefined
     try {
-      adopted = await this.agents.ensureSession(
-        sessionId,
-        cwd,
-        request.sessionId !== undefined,
-        request.agentPreset,
-      )
+      if (request.exactAdopt === true && request.sessionId !== undefined) {
+        adopted = await this.agents.adoptExactSession(request.sessionId, cwd, true, request.agentPreset)
+        agentPreset = this.agents.presetForSession(adopted.session)
+      } else {
+        const created = await this.agents.createSession({
+          ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+          cwd,
+          ...(request.agentPreset === undefined ? {} : { agentPreset: request.agentPreset }),
+          reusable: sessionId => !this.ctx.workspaceRegistry.archivedSessionIds.includes(sessionId)
+            && (workspace === undefined || workspace.sessionIds.includes(sessionId)),
+        })
+        adopted = created.agent
+        agentPreset = created.agentPreset
+      }
     } catch (error) {
-      this.rejectCreation(sessionId, error)
+      this.rejectCreation(request.sessionId, error)
     }
+    const sessionId = adopted.id
     if (workspace !== undefined) {
       try {
         await workspace.attachSession(sessionId)
@@ -145,10 +158,13 @@ export class SessionCommandController {
         )
       }
     }
-    if (request.dedicatedCollaboration === true) {
-      await this.ctx.workspaceRegistry.markDedicatedCollaborationSession(sessionId)
+    if (request.dedicatedCollaboration === true && workspace !== undefined) {
+      try {
+        await this.ctx.workspaceRegistry.markDedicatedCollaborationSession(sessionId)
+      } catch (error: unknown) {
+        throw new RemoteError('session/workspace-attach-failed', `session "${sessionId}" was attached but collaboration marking failed: ${String(error)}`, { sessionId, workspaceId: workspace.id, workspaceAttached: true })
+      }
     }
-    const agentPreset = this.agents.presetForSession(adopted.session)
     return { sessionId, ...(agentPreset === undefined ? {} : { agentPreset }) }
   }
 
@@ -574,11 +590,11 @@ export class SessionCommandController {
     return found.agent
   }
 
-  private rejectCreation(sessionId: SessionId, error: unknown): never {
-    if (remoteErrorOf(error) !== undefined) throw error
-    if (error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
+  private rejectCreation(sessionId: SessionId | undefined, error: unknown): never {
+    if (sessionId !== undefined && error instanceof Error && error.name === 'SessionAlreadyOwnedError') {
       throw new RemoteError('session/writer-held', error.message, { sessionId })
     }
+    if (remoteErrorOf(error) !== undefined) throw error
     if (error instanceof ApiSessionPresetConflict) {
       throw new RemoteError('agent-preset/conflict', error.message, {
         sessionId: error.sessionId,
@@ -596,7 +612,7 @@ export class SessionCommandController {
     if (error instanceof ApiSessionSubagentOwnership) {
       throw apiSessionSubagentOwnershipError(error.sessionId)
     }
-    throw new RemoteError('gateway/internal', `failed to create session "${sessionId}": ${String(error)}`, {})
+    throw new RemoteError('gateway/internal', `failed to create session: ${String(error)}`, {})
   }
 
   private async readSessionState(sessionId: SessionId): Promise<SessionReadState> {

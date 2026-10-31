@@ -20,7 +20,8 @@ async function expectFailure(operation: Promise<unknown>, code: string): Promise
 
 function controllerAgents(overrides: object = {}): ApiSessionAgentController {
   return {
-    ensureSession: () => Promise.resolve(),
+    createSession: ({ sessionId = SessionId('session-created'), cwd }: { sessionId?: SessionId; cwd: string }) => Promise.resolve({ agent: { id: sessionId, session: { header: { cwd } } } }),
+    adoptExactSession: () => Promise.resolve(),
     composeAgent: () => Promise.resolve({ setup: () => {} }),
     presetForSession: () => undefined,
     presetForObservation: () => undefined,
@@ -41,6 +42,34 @@ async function baseContext(): Promise<Context> {
 }
 
 describe('Session creation failures', () => {
+  it('routes exact adoption to the named identity and never mints a replacement', async () => {
+    const ctx = await baseContext()
+    const id = SessionId('exact-adoption')
+    const session = ctx.sessions.create(id, { meta: { cwd: '/workspace' } })
+    const adoptExactSession = vi.fn(() => Promise.resolve({ id, session } as Agent))
+    const createSession = vi.fn()
+    const controller = new SessionCommandController(ctx, controllerAgents({ adoptExactSession, createSession }), '/default')
+    await expect(controller.create({ sessionId: id, cwd: '/workspace', exactAdopt: true })).resolves.toEqual({ sessionId: id })
+    expect(adoptExactSession).toHaveBeenCalledWith(id, '/workspace', true, undefined)
+    expect(createSession).not.toHaveBeenCalled()
+    await expectFailure(controller.create({ exactAdopt: true }), 'gateway/bad-request')
+    await ctx.fiber.dispose()
+  })
+
+  it('reports the actual identity if dedicated collaboration marking fails', async () => {
+    const ctx = await baseContext()
+    const id = SessionId('created-before-mark')
+    const workspace = { id: 'workspace-1' as WorkspaceId, path: '/workspace', attachSession: vi.fn().mockResolvedValue(undefined) }
+    ctx.provide('workspaceRegistry', { get: () => workspace, archivedSessionIds: [],
+      markDedicatedCollaborationSession: () => Promise.reject(new Error('mark failed')) } as never)
+    const session = ctx.sessions.create(id, { meta: { cwd: '/workspace' } })
+    const controller = new SessionCommandController(ctx, controllerAgents({ createSession: () => Promise.resolve({ agent: { id, session } as Agent }) }), '/default')
+    await expect(controller.create({ workspaceId: workspace.id, dedicatedCollaboration: true }))
+      .rejects.toMatchObject({ code: 'session/workspace-attach-failed', details: { sessionId: id, workspaceId: workspace.id, workspaceAttached: true } })
+    expect(workspace.attachSession).toHaveBeenCalledWith(id)
+    await ctx.fiber.dispose()
+  })
+
   it('rejects a dedicated collaboration without a Workspace before creating a Session', async () => {
     const ctx = await baseContext()
     const controller = new SessionCommandController(ctx, controllerAgents(), '/default')
@@ -55,11 +84,11 @@ describe('Session creation failures', () => {
       attachSession: async () => { calls.push('attached') } } as Pick<Workspace, 'id' | 'path' | 'attachSession'>
     ctx.provide('workspaceRegistry', { get: () => workspace, list: () => [workspace],
       markDedicatedCollaborationSession: async () => { calls.push('marked') } } as never)
-    const ensureSession = async (sessionId: SessionId, cwd: string) => {
+    const createSession = async ({ sessionId = SessionId('session-created'), cwd }: { sessionId?: SessionId; cwd: string }) => {
       const session = ctx.sessions.create(sessionId, { meta: { cwd } })
-      return { id: sessionId, session } as Agent
+      return { agent: { id: sessionId, session } as Agent }
     }
-    const controller = new SessionCommandController(ctx, controllerAgents({ ensureSession }), '/default')
+    const controller = new SessionCommandController(ctx, controllerAgents({ createSession }), '/default')
     await controller.create({ workspaceId: workspace.id, dedicatedCollaboration: true })
     expect(calls).toEqual(['attached', 'marked'])
     await ctx.fiber.dispose()
@@ -68,13 +97,13 @@ describe('Session creation failures', () => {
   it('mints an identity with the default cwd when no explicit target is supplied', async () => {
     const ctx = await baseContext()
     ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
-    const ensureSession = vi.fn((sessionId: SessionId, cwd: string) => {
+    const createSession = vi.fn(({ sessionId = SessionId('session-created'), cwd }: { sessionId?: SessionId; cwd: string }) => {
       const session = ctx.sessions.create(sessionId, { meta: { cwd } })
-      return Promise.resolve({ id: sessionId, session } as Agent)
+      return Promise.resolve({ agent: { id: sessionId, session } as Agent })
     })
     const controller = new SessionCommandController(
       ctx,
-      controllerAgents({ ensureSession }),
+      controllerAgents({ createSession }),
       '/default-workspace',
     )
 
@@ -82,12 +111,7 @@ describe('Session creation failures', () => {
 
     expect(created.sessionId).toMatch(/^session-/)
     expect(created).not.toHaveProperty('agentPreset')
-    expect(ensureSession).toHaveBeenCalledWith(
-      created.sessionId,
-      '/default-workspace',
-      false,
-      undefined,
-    )
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ cwd: '/default-workspace' }))
     await ctx.fiber.dispose()
   })
 
@@ -156,7 +180,7 @@ describe('Session creation failures', () => {
     ctx.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)
     const controller = new SessionCommandController(
       ctx,
-      controllerAgents({ ensureSession: () => Promise.reject(error) }),
+      controllerAgents({ createSession: () => Promise.reject(error) }),
       '/default',
     )
 

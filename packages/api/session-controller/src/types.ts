@@ -222,7 +222,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/writer-held': { readonly sessionId: SessionId }
     'session/agent-busy': { readonly reason: string }
     'session/invalid-time-zone': { readonly value: string }
-    'session/workspace-attach-failed': { readonly sessionId: SessionId; readonly workspaceId: string }
+    'session/workspace-attach-failed': { readonly sessionId: SessionId; readonly workspaceId: string; readonly workspaceAttached?: true }
     'agent-preset/conflict': {
       readonly sessionId: SessionId
       readonly requestedPreset: string
