@@ -10,7 +10,7 @@ import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveState
   HostGroupInputFenceChallenge, HostGroupInputFenceValue,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
-import { HostAuthorityError } from './types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
@@ -25,7 +25,7 @@ interface StartProfileWorkerInput {
   readonly signal?: AbortSignal
 }
 
-interface ProfilePreparationScope {
+export interface ProfilePreparationScope {
   ensure(input: StartProfileWorkerInput): Promise<void>
   dispose(): Promise<void>
 }
@@ -155,7 +155,12 @@ export class ProfileWorkerSupervisor {
       pluginRoots: [...input.pluginRoots],
       env: {},
     }
-    this.workers.set(input.profileId, await (signal === undefined ? this.factory(spec) : this.factory(spec, signal)))
+    try {
+      this.workers.set(input.profileId, await (signal === undefined ? this.factory(spec) : this.factory(spec, signal)))
+    } catch (error) {
+      if (error instanceof ProfileWorkerExitUnconfirmedError) this.blockProfile(input.profileId)
+      throw error
+    }
   }
 
   /**

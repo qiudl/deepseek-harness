@@ -16,6 +16,7 @@ import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
+import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -555,7 +556,28 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
 
   const exporter = await serverOptions.createMigrationExport?.('owner', profile.profileId)
   if (!exporter) throw new Error('missing current exporter')
-  const inventory = await exporter.inventory()
+  let enterExport!: () => void, releaseExport!: () => void
+  const exportEntered = new Promise<void>(resolve => { enterExport = resolve })
+  const originalApply = MigrationOwnerStateApplicator.prototype.apply
+  const applySpy = vi.spyOn(MigrationOwnerStateApplicator.prototype, 'apply').mockImplementationOnce(async function (this: MigrationOwnerStateApplicator, ...args) {
+    enterExport()
+    await new Promise<void>(resolve => { releaseExport = resolve })
+    return originalApply.apply(this, args)
+  })
+  const pendingInventory = exporter.inventory()
+  await exportEntered
+  let isolatedEntered = false
+  const isolated = application.workers.withQuiescent(profile.profileId, async () => { isolatedEntered = true })
+  let inventory: Awaited<typeof pendingInventory>
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(isolatedEntered).toBe(false)
+  } finally {
+    releaseExport()
+    inventory = await pendingInventory
+    await isolated
+    applySpy.mockRestore()
+  }
   expect(inventory.schemaVersion).toBe(0)
   const receipt = await exporter.begin({
     expectedInventoryDigest: inventory.inventoryDigest,
@@ -602,7 +624,34 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     transferId: receipt.transferId, targetGeneration: 2,
     sourceInstallationId: config.installationId, targetProfileSelectorHash: 'a'.repeat(64),
   })
-  await importer.commit(verified.importId, verified.version, 1)
+  const failedCutover = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'commitGeneration')
+    .mockRejectedValueOnce(new Error('fixture generation switch failed'))
+  try {
+    await expect(importer.commit(verified.importId, verified.version, 1)).rejects.toThrow('fixture generation switch failed')
+    expect((await application.workers.activate(profile.profileId)).origin).toBe('http://127.0.0.1:43123')
+  } finally { failedCutover.mockRestore() }
+  let enterCommit!: () => void, releaseCommit!: () => void
+  const commitEntered = new Promise<void>(resolve => { enterCommit = resolve })
+  const originalCommit = FileOwnerJsonlMigrationGenerationTarget.prototype.commitGeneration
+  const commitSpy = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'commitGeneration')
+    .mockImplementationOnce(async function (this: FileOwnerJsonlMigrationGenerationTarget, ...args) {
+      enterCommit()
+      await new Promise<void>(resolve => { releaseCommit = resolve })
+      return originalCommit.apply(this, args)
+    })
+  const pendingCommit = importer.commit(verified.importId, verified.version, 1)
+  await commitEntered
+  let isolatedDuringCommit = false
+  const commitIsolation = application.workers.withQuiescent(profile.profileId, async () => { isolatedDuringCommit = true })
+  try {
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(isolatedDuringCommit).toBe(false)
+  } finally {
+    releaseCommit()
+    await pendingCommit
+    await commitIsolation
+    commitSpy.mockRestore()
+  }
   await expect(importer.abort(staged.importId, staged.version)).rejects.toThrow()
 
   const accountSubject = randomUUID()

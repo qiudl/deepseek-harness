@@ -74,6 +74,7 @@ import {
   type UnixPeerAttestor,
 } from './unix-transport.ts'
 import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
+import type { ProfilePreparationScope } from './worker-supervisor.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type WindowsDesktopHostApplication,
@@ -500,8 +501,7 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> =>
-      workers.withPreparation(profile.profileId, async scoped => {
+    const prepareWorker = async (profile: PersonProfileRecord, scoped: ProfilePreparationScope, claimRestart = false): Promise<void> => {
       const profilesRoot = join(root, 'profiles')
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
@@ -534,7 +534,9 @@ export async function startDesktopHostApplication(
       }),
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
       () => scoped.dispose(), claimRestart)
-    })
+    }
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> =>
+      workers.withPreparation(profile.profileId, scoped => prepareWorker(profile, scoped, claimRestart))
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -933,23 +935,49 @@ export async function startDesktopHostApplication(
             },
           })
         }
-        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> => {
-          host.revokeProfile(profile.profileId)
-          await workers.dispose(profileId)
-          try { return await operation() } finally { await ensureWorker(profile) }
-        }
+        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> =>
+          workers.withPreparation(profileId, async scoped => {
+            host.revokeProfile(profile.profileId)
+            await scoped.dispose()
+            try { return await operation() } finally { await prepareWorker(profile, scoped) }
+          })
         return new CurrentMigrationExportService(currentExporter, quiesced)
       },
       createMigrationImport: (_ownerId, profileId) => {
         let migrationImport = imports.get(profileId)
         if (!migrationImport) {
           const target = targetFor(profileId)
+          let activeCutover: { readonly scoped: ProfilePreparationScope; restarted: boolean } | undefined
           const restartingTarget = new RestartingMigrationTarget(target, async () => {
             const profile = requiredProfile(registry, profileId)
+            if (!activeCutover) throw new HostAuthorityError('unavailable')
+            await prepareWorker(profile, activeCutover.scoped)
+            activeCutover.restarted = true
+          }, async (operation, expectedGeneration) => workers.withPreparation(profileId, async scoped => {
+            const profile = requiredProfile(registry, profileId)
             host.revokeProfile(profile.profileId)
-            await workers.dispose(profileId)
-            await ensureWorker(profile)
-          })
+            await scoped.dispose()
+            const cutover = { scoped, restarted: false }
+            activeCutover = cutover
+            try {
+              await operation()
+            } finally {
+              try {
+                if (!cutover.restarted) {
+                  const active = await target.activeGeneration().catch(error => {
+                    workers.blockProfile(profileId)
+                    throw error
+                  })
+                  if (active !== expectedGeneration) {
+                    workers.blockProfile(profileId)
+                    throw new HostAuthorityError('unavailable')
+                  }
+                  await prepareWorker(requiredProfile(registry, profileId), scoped)
+                }
+              }
+              finally { activeCutover = undefined }
+            }
+          }))
           migrationImport = new OwnerMigrationImportService(
             transferStore, restartingTarget,
             new FileOwnerMigrationImportJournal(join(root, 'profiles', profileId, 'migration-journal'), uid),

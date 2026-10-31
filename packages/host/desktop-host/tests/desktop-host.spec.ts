@@ -1959,6 +1959,33 @@ describe('worker and Desktop-only bundle', () => {
     expect(active).toBe(4)
   })
 
+  it('keeps migration cutover fenced through a failed activation and rollback', async () => {
+    const events: string[] = []
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        events.push(`commit:${next}`)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async generation => {
+      events.push(`activate:${generation}`)
+      if (generation === 5) throw new Error('replacement failed')
+    }, async operation => {
+      events.push('fence-enter')
+      try { await operation() } finally { events.push('fence-exit') }
+    })
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement failed')
+    expect(active).toBe(4)
+    expect(events).toEqual(['fence-enter', 'commit:5', 'activate:5', 'commit:4', 'activate:4', 'fence-exit'])
+  })
+
   it('isolates worker inputs and waits for quiescence after closing notifications', async () => {
     const events: string[] = []
     let finish!: () => void
