@@ -922,8 +922,9 @@ export async function startDesktopHostApplication(
           : await profileImport.commit(context.base)
         if (committed.phase === 'committed') {
           return { operationId: committed.operationId, phase: committed.phase }
+        } else {
+          throw Error('profile_import_commit_mismatch')
         }
-        throw Error('profile_import_commit_mismatch')
       },
       abortProfileImport: async (input) => {
         const context = await importCommand(input)
@@ -947,8 +948,9 @@ export async function startDesktopHostApplication(
               target: context.base.target, assertAuthority: input.assertAuthority })
         if (aborted.phase === 'aborted') {
           return { operationId: aborted.operationId, phase: aborted.phase }
+        } else {
+          throw Error('profile_import_abort_mismatch')
         }
-        throw Error('profile_import_abort_mismatch')
       },
       createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
