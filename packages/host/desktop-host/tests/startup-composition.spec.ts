@@ -565,11 +565,13 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const exporter = await serverOptions.createMigrationExport?.('owner', profile.profileId)
   if (!exporter) throw new Error('missing current exporter')
   let enterExport!: () => void, releaseExport!: () => void
-  const exportEntered = new Promise<void>(resolve => { enterExport = resolve })
+  const exportEntered = new Promise<void>((resolve) => { enterExport = resolve })
+  // The saved method is invoked with the original receiver using apply below.
+  // oxlint-disable-next-line typescript/unbound-method
   const originalApply = MigrationOwnerStateApplicator.prototype.apply
   const applySpy = vi.spyOn(MigrationOwnerStateApplicator.prototype, 'apply').mockImplementationOnce(async function (this: MigrationOwnerStateApplicator, ...args) {
     enterExport()
-    await new Promise<void>(resolve => { releaseExport = resolve })
+    await new Promise<void>((resolve) => { releaseExport = resolve })
     return originalApply.apply(this, args)
   })
   const pendingInventory = exporter.inventory()
@@ -639,12 +641,14 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     expect((await application.workers.activate(profile.profileId)).origin).toBe('http://127.0.0.1:43123')
   } finally { failedCutover.mockRestore() }
   let enterCommit!: () => void, releaseCommit!: () => void
-  const commitEntered = new Promise<void>(resolve => { enterCommit = resolve })
+  const commitEntered = new Promise<void>((resolve) => { enterCommit = resolve })
+  // The saved method is invoked with the original receiver using apply below.
+  // oxlint-disable-next-line typescript/unbound-method
   const originalCommit = FileOwnerJsonlMigrationGenerationTarget.prototype.commitGeneration
   const commitSpy = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'commitGeneration')
     .mockImplementationOnce(async function (this: FileOwnerJsonlMigrationGenerationTarget, ...args) {
       enterCommit()
-      await new Promise<void>(resolve => { releaseCommit = resolve })
+      await new Promise<void>((resolve) => { releaseCommit = resolve })
       return originalCommit.apply(this, args)
     })
   const pendingCommit = importer.commit(verified.importId, verified.version, 1)
@@ -743,7 +747,7 @@ it.skipIf(process.platform === 'win32')('composes and closes restricted history 
   let capturedOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: options => { capturedOptions = options; return Object.assign(new UnixHostServer(options), server) },
+    platform: 'darwin', createServer: (options) => { capturedOptions = options; return Object.assign(new UnixHostServer(options), server) },
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => operation(),
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
@@ -772,7 +776,7 @@ it.skipIf(process.platform === 'win32')('stops Profile workers and retains owner
     platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     profileWorkerFactory: async () => ({ closeNotifications() {}, abort: stopWorker, done: Promise.resolve() }),
   })
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   await application.workers.start({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
   await expect(application.close()).rejects.toBe(failure)
   expect(stopWorker).toHaveBeenCalledOnce()
@@ -789,7 +793,7 @@ it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation be
     phase: 'reserved', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
   const server = { start: async () => undefined, close: async () => undefined }
   let enter!: () => void
-  const entered = new Promise<void>(resolve => { enter = resolve })
+  const entered = new Promise<void>((resolve) => { enter = resolve })
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
     platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
@@ -797,8 +801,8 @@ it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation be
       withAllWritersExcluded: async (_profileId, _operation, signal) => {
         enter()
         return await new Promise<never>((_resolve, reject) => {
-          if (signal.aborted) reject(signal.reason)
-          else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          if (signal.aborted) reject(signal.reason as Error)
+          else signal.addEventListener('abort', () => { reject(signal.reason as Error) }, { once: true })
         })
       },
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
@@ -811,7 +815,7 @@ it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation be
   await entered
   await application.close()
   await rejected
-  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
   expect(existsSync(join(root, 'host.lock'))).toBe(false)
 })
 
@@ -832,10 +836,10 @@ it.skipIf(process.platform === 'win32')('retains the fence and Host ownership if
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
     },
   })
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   if (!application.restrictedHistory) throw new Error('missing restricted reader')
   await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toThrow('release failed')
-  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
   expect(application.workers.isProfileBlocked(profileId)).toBe(true)
   await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
@@ -864,10 +868,10 @@ it.skipIf(process.platform === 'win32')('fails closed when the reconciliation gu
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
     },
   })
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   if (!application.restrictedHistory) throw new Error('missing restricted reader')
   await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toMatchObject({ code: 'unavailable' })
-  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
   expect(readFileSync(sentinel, 'utf8')).toBe('existing')
   await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
@@ -906,7 +910,7 @@ it.skipIf(process.platform === 'win32')('keeps Host ownership when startup clean
   const { config, root } = fixture()
   const failure = new Error('server start failed')
   const server = { start: async () => { throw failure }, close: async () => { throw new Error('server close failed') } }
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   await expect(startDesktopHostApplication(config, { now: () => NOW }, {
     platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
@@ -927,7 +931,7 @@ it.skipIf(process.platform === 'win32')('keeps Host ownership when restricted re
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
     },
   })
-  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   if (!application.restrictedHistory) throw new Error('missing restricted reader')
   await application.workers.start({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
   vi.spyOn(application.restrictedHistory, 'close').mockRejectedValue(new Error('cleanup unconfirmed'))
@@ -940,6 +944,8 @@ it.skipIf(process.platform === 'win32')('keeps Host ownership when restricted re
 
 it.skipIf(process.platform === 'win32')('shares one Host close when server shutdown reenters it', async () => {
   const { config, root } = fixture()
+  // The server callback closes over the application initialized by startup.
+  // oxlint-disable-next-line eslint/prefer-const
   let application: Awaited<ReturnType<typeof import('../src/startup.ts').startDesktopHostApplication>>
   let nested: Promise<void> | undefined
   let entered = false
@@ -969,7 +975,7 @@ it.skipIf(process.platform === 'win32')('restores a per-Profile restricted fence
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
     platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
-    profileWorkerFactory: async spec => {
+    profileWorkerFactory: async (spec) => {
       started.push(spec.profileId)
       return { closeNotifications() {}, abort() {}, done: Promise.resolve() }
     },

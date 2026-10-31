@@ -5,7 +5,9 @@ import { executeRemoteSessionCommand, executeRestrictedSessionCommand, SessionCo
 describe('remote Session command authority', () => {
   it('allows only session list and history in a restricted workbench', async () => {
     const remoteSession = vi.fn(async () => ({ items: [] }))
-    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    const workers = new ProfileWorkerSupervisor(async () => ({
+      closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession,
+    }))
     onTestFinished(() => workers.disposeAll())
     await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
     const request = { workers, profileId: 'profile-1', signal: new AbortController().signal }
@@ -26,7 +28,9 @@ describe('remote Session command authority', () => {
   it('does not return a restricted read after the owning connection is cancelled', async () => {
     const controller = new AbortController()
     const remoteSession = vi.fn(async () => { controller.abort(); return { items: ['private'] } })
-    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    const workers = new ProfileWorkerSupervisor(async () => ({
+      closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession,
+    }))
     onTestFinished(() => workers.disposeAll())
     await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
     await expect(executeRestrictedSessionCommand({ workers, profileId: 'profile-1', signal: controller.signal,
@@ -35,7 +39,9 @@ describe('remote Session command authority', () => {
   })
   it('does not start a restricted read for an already cancelled connection', async () => {
     const remoteSession = vi.fn(async () => ({ items: [] }))
-    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    const workers = new ProfileWorkerSupervisor(async () => ({
+      closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession,
+    }))
     onTestFinished(() => workers.disposeAll())
     await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
     await expect(executeRestrictedSessionCommand({ workers, profileId: 'profile-1', signal: AbortSignal.abort(),

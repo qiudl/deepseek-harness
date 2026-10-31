@@ -25,7 +25,7 @@ describe.skipIf(process.platform === 'win32')('restricted Profile durable fence 
     fence.markWorkerPossible(profile, operation)
     expect(fence.reserved(profile)).toBeUndefined()
     expect(fence.pending(profile)).toBe(operation)
-    expect(() => fence.markWorkerPossible(profile, operation)).toThrow('stale')
+    expect(() => { fence.markWorkerPossible(profile, operation) }).toThrow('stale')
     await writeFile(join(root, `${other}.json`), JSON.stringify({ version: 1, profileId: other,
       operationId: operation, state: 'pending' }), { mode: 0o600 })
     expect(fence.pending(other)).toBe(operation)
@@ -121,7 +121,7 @@ describe.skipIf(process.platform === 'win32')('restricted Profile durable fence 
     expect(new RestrictedProfileFence(root, uid, lock).pending(profile)).toBe(operation)
     finalize()
     expect(fence.pending(profile)).toBeUndefined()
-    expect(() => finalize()).toThrow('stale')
+    expect(() => { finalize() }).toThrow('stale')
   })
 
   it('survives reopening and requires exact operation and proven quiescence to clear', async () => {
@@ -136,14 +136,14 @@ describe.skipIf(process.platform === 'win32')('restricted Profile durable fence 
     expect(reopened.pending(profile)).toBe(operation)
     expect(reopened.pending(other)).toBeUndefined()
     expect(() => reopened.begin(profile)).toThrow('conflict')
-    expect(() => reopened.clear(profile, other, () => {})).toThrow('conflict')
-    expect(() => reopened.clear(profile, operation, () => { throw Error('writer_alive') })).toThrow('writer_alive')
+    expect(() => { reopened.clear(profile, other, () => {}) }).toThrow('conflict')
+    expect(() => { reopened.clear(profile, operation, () => { throw Error('writer_alive') }) }).toThrow('writer_alive')
     expect(reopened.pending(profile)).toBe(operation)
     reopened.clear(profile, operation, () => {})
     expect(new RestrictedProfileFence(root, uid, lock).pending(profile)).toBeUndefined()
     const next = reopened.begin(profile)
     expect(next).not.toBe(operation)
-    expect(() => reopened.clear(profile, operation, () => {})).toThrow('conflict')
+    expect(() => { reopened.clear(profile, operation, () => {}) }).toThrow('conflict')
     expect(reopened.pending(profile)).toBe(next)
   })
 
@@ -168,7 +168,7 @@ describe.skipIf(process.platform === 'win32')('restricted Profile durable fence 
     const fence = new RestrictedProfileFence(root, uid, lock)
     const operation = fence.begin(profile)
     const starts: string[] = []
-    const supervisor = new ProfileWorkerSupervisor(async spec => {
+    const supervisor = new ProfileWorkerSupervisor(async (spec) => {
       starts.push(spec.profileId)
       return { closeNotifications() {}, abort() {}, done: Promise.resolve() }
     }, id => fence.pending(id) !== undefined)

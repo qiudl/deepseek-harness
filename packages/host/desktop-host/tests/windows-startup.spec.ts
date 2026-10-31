@@ -404,20 +404,26 @@ describe('Windows Desktop Host startup', () => {
         keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner',
       })
       let enter!: () => void
-      const entered = new Promise<void>(resolve => { enter = resolve })
+      const entered = new Promise<void>((resolve) => { enter = resolve })
       const held = application.workers.withQuiescent(local.profileId, async () => {
         enter()
-        await new Promise<void>(resolve => { release = resolve })
+        await new Promise<void>((resolve) => { release = resolve })
       })
       await entered
+      // This is a Vitest mock inspected without invoking it.
+      // oxlint-disable-next-line typescript/unbound-method
       vi.mocked(state.bindings.ensurePrivateDirectory).mockClear()
       const restore = application.host.restoreLocalProfile({ ...local,
         keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner' })
       await new Promise(resolve => setTimeout(resolve, 0))
+      // This is a Vitest mock inspected without invoking it.
+      // oxlint-disable-next-line typescript/unbound-method
       expect(state.bindings.ensurePrivateDirectory).not.toHaveBeenCalled()
       release()
       await held
       await restore
+      // This is a Vitest mock inspected without invoking it.
+      // oxlint-disable-next-line typescript/unbound-method
       expect(state.bindings.ensurePrivateDirectory).toHaveBeenCalled()
     } finally { release(); await application.close() }
   })

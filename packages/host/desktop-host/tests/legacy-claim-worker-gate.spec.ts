@@ -6,7 +6,7 @@ describe('legacy model claim worker gate', () => {
     let blocked = true
     const gate = new LegacyClaimWorkerGate(() => false, () => blocked)
     const dispose = vi.fn(async () => undefined)
-    expect(() => gate.assertOpen('profile')).toThrow(/unavailable/u)
+    expect(() => { gate.assertOpen('profile') }).toThrow(/unavailable/u)
     await expect(gate.stop('profile', dispose)).rejects.toThrow(/unavailable/u)
     expect(dispose).not.toHaveBeenCalled()
     blocked = false

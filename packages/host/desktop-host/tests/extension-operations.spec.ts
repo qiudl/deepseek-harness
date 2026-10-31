@@ -267,10 +267,10 @@ describe('Profile extension operations', () => {
     onTestFinished(async () => { await f.operations.dispose() })
     const plan = await f.operations.prepare(f.authority, 'mcp', '{}')
     let enter!: () => void, release!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
     const fenced = f.operations.withRestrictedAccess(f.profileId, async () => {
       enter()
-      await new Promise<void>(resolve => { release = resolve })
+      await new Promise<void>((resolve) => { release = resolve })
     })
     await entered
     const operationId = randomUUID()
@@ -286,10 +286,10 @@ describe('Profile extension operations', () => {
   it('refuses restricted access while a Profile mutation is queued or running', async () => {
     const f = setup()
     let enter!: () => void, release!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
     const owner = new ProfileExtensionOperations(f.store, { ...f.executor, execute: async () => {
       enter()
-      await new Promise<void>(resolve => { release = resolve })
+      await new Promise<void>((resolve) => { release = resolve })
       return { state: 'succeeded' as const }
     } }, { now: () => 1000 })
     onTestFinished(async () => { release?.(); await owner.dispose(); await f.operations.dispose() })

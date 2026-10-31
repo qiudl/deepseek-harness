@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
 const fault = vi.hoisted(() => ({ close: false, stat: false }))
-vi.mock('node:fs', async importOriginal => {
+vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
   return {
     ...actual,
