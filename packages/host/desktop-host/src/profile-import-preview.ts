@@ -134,7 +134,6 @@ export async function inspectProfileImportInventory(input: {
   const snapshotDigest = digest({ generation: before.generation,
     persistence: before.inventoryDigest, manifest: digest(manifest),
     lockfile: lockfile === null ? null : digest(lockfile), sessions, plugins })
-  if (!HEX_256.test(snapshotDigest)) throw new Error('profile_import_inventory_invalid')
   return { generation: before.generation, snapshotDigest, sessions, plugins }
 }
 

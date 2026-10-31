@@ -281,6 +281,20 @@ describe.skipIf(process.platform === 'win32')('Slark Profile import preview inve
     expect(await source.target.activeGeneration()).toBe(1)
   })
 
+  it('keeps owner-state reads unavailable during the read-only import preview', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-preview-owner-state-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [])
+    const scan = vi.spyOn(FileJsonlMigrationExportSource.prototype, 'listImportInventory')
+      .mockImplementationOnce(async function (this: FileJsonlMigrationExportSource) {
+        await this.readOwnerState()
+        return []
+      })
+    onTestFinished(() => { scan.mockRestore() })
+    await expect(inspectProfileImportInventory({ ...source, uid }))
+      .rejects.toThrow('profile_import_owner_state_unavailable')
+  })
+
   it('previews a released V3 compressed generation without modifying its bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-import-preview-v3-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
