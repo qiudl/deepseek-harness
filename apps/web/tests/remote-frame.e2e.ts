@@ -108,7 +108,10 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
       })
       return response.status
     })).toBe(200)
-    expect(await page.evaluate(() => Reflect.get(window, 'uploads') as unknown)).toEqual([
+    expect(await page.evaluate(() => {
+      const uploads: unknown = Reflect.get(window, 'uploads')
+      return uploads
+    })).toEqual([
       { blob: true, size: 3, contentType: 'application/octet-stream' },
     ])
     expect(await child.locator('body').evaluate(async () => {

@@ -382,10 +382,6 @@ export class SessionCommandController {
           receiptId => this.ctx.fileUploads.resolve(agent, receiptId),
           async (attachment) => {
             const limit = 20 * 1024 * 1024
-            if (attachment.bytes > limit) throw new RemoteError(
-              'session/attachment-invalid', 'Image exceeds the remote receipt limit.',
-              { reason: 'IMAGE_TOO_LARGE' },
-            )
             const chunks: Buffer[] = []
             let bytes = 0
             for await (const chunk of this.ctx.attachments.readFileStream(attachment)) {

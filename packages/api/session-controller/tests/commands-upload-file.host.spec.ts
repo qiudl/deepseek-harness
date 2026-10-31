@@ -198,6 +198,68 @@ describe('Session file uploads', () => {
     ])
   })
 
+  it('rejects image receipts when the selected model has no image input', async () => {
+    const { ctx, controller, uploads, agent, followup } = await uploadHarness()
+    const receipt = await uploads.upload(agent, { data: 'AAAA', name: 'screen.png' },
+      new AbortController().signal)
+    vi.spyOn(ctx.llm, 'resolveModelInfo').mockResolvedValueOnce({
+      provider: 'fixture', id: 'fixture-model', name: 'Fixture', inputModalities: ['text'],
+    })
+    await expect(controller.prompt(promptRequest([
+      { type: 'image', receiptId: receipt.receiptId, mediaType: 'image/png' },
+    ]))).rejects.toMatchObject({
+      code: 'session/attachment-invalid', details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('rejects oversized and changed image receipts before prompt admission', async () => {
+    const { ctx, controller, uploads, agent, followup } = await uploadHarness()
+    const receipt = await uploads.upload(agent, { data: 'AAAA', name: 'screen.png' },
+      new AbortController().signal)
+    const content = [{ type: 'image' as const, receiptId: receipt.receiptId,
+      mediaType: 'image/png' as const }]
+    const resolve = vi.spyOn(ctx.fileUploads, 'resolve')
+    const read = vi.spyOn(ctx.attachments, 'readFileStream')
+    resolve.mockReturnValueOnce({ ...receipt.file, bytes: 20 * 1024 * 1024 + 1 })
+    await expect(controller.prompt(promptRequest(content))).rejects.toMatchObject({
+      code: 'session/attachment-invalid', details: { reason: 'IMAGE_TOO_LARGE' },
+    })
+    expect(read).not.toHaveBeenCalled()
+
+    read.mockImplementationOnce(async function* () { yield new Uint8Array(20 * 1024 * 1024 + 1) })
+    await expect(controller.prompt(promptRequest(content))).rejects.toMatchObject({
+      code: 'session/attachment-invalid', details: { reason: 'IMAGE_TOO_LARGE' },
+    })
+
+    read.mockImplementationOnce(async function* () { yield Uint8Array.of(0, 0) })
+    await expect(controller.prompt(promptRequest(content))).rejects.toMatchObject({
+      code: 'session/attachment-invalid', details: { reason: 'IMAGE_SIZE_MISMATCH' },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
+  it('rejects image receipt batches whose combined size exceeds the limit', async () => {
+    const { ctx, controller, uploads, agent, followup } = await uploadHarness()
+    const first = await uploads.upload(agent, { data: 'AA==', name: 'first.png' },
+      new AbortController().signal)
+    const second = await uploads.upload(agent, { data: 'AA==', name: 'second.png' },
+      new AbortController().signal)
+    vi.spyOn(ctx.fileUploads, 'resolve')
+      .mockReturnValueOnce(first.file)
+      .mockReturnValueOnce({ ...second.file, bytes: 20 * 1024 * 1024 })
+    vi.spyOn(ctx.attachments, 'readFileStream').mockImplementation(async function* () {
+      yield Uint8Array.of(0)
+    })
+    await expect(controller.prompt(promptRequest([
+      { type: 'image', receiptId: first.receiptId, mediaType: 'image/png' },
+      { type: 'image', receiptId: second.receiptId, mediaType: 'image/png' },
+    ]))).rejects.toMatchObject({
+      code: 'session/attachment-invalid', details: { reason: 'IMAGE_TOO_LARGE' },
+    })
+    expect(followup).not.toHaveBeenCalled()
+  })
+
   it('stages a bounded byte stream and forwards cancellation to storage', async () => {
     const { controller, uploads, followup, saveFileStream } = await uploadHarness()
     const abort = new AbortController()
