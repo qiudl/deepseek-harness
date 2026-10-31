@@ -51,4 +51,19 @@ describe.skipIf(process.platform === 'win32')('existing session lock cleanup fai
     const next = await ExistingSessionLock.acquire(first, process.getuid!())
     next.close()
   })
+
+  it('releases remaining locks even when closing one lock reports a failure', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-lock-close-failure-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const first = join(root, 'a'); const second = join(root, 'b')
+    await mkdir(first); await mkdir(second)
+    await writeFile(join(first, 'session.lock'), '', { mode: 0o600 })
+    await writeFile(join(second, 'session.lock'), '', { mode: 0o600 })
+    const set = await ExistingSessionLockSet.acquire([first, second], process.getuid!())
+    fault.close = true
+    expect(() => { set.close() }).toThrow('session_fence_cleanup_failed')
+    set.close()
+    const next = await ExistingSessionLockSet.acquire([first, second], process.getuid!())
+    next.close()
+  })
 })

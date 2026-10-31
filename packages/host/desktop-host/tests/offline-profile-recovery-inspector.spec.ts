@@ -586,6 +586,25 @@ describe('offline Profile existing-only inspector', () => {
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
 
+  it('accepts an empty restricted plugin manifest without changing the Profile', async () => {
+    const value = await fixture()
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: {} }))
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 0 })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('rejects an oversized restricted plugin manifest without touching the Profile', async () => {
+    const value = await fixture()
+    const dependencies = Object.fromEntries(Array.from({ length: 129 }, (_, index) => [`fixture-${index}`, '1.0.0']))
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies }))
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
   it('quarantines an external plugin link during restricted inspection without following or executing it', async () => {
     const value = await fixture()
     const external = join(value.hostRoot, 'untrusted-plugin')
@@ -794,6 +813,27 @@ describe('offline Profile existing-only inspector', () => {
     await expect(regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] }))
       .rejects.toMatchObject({ code: 'unavailable' })
     expect(() => extensions.commit(authority, plan.planId, randomUUID())).toThrow('busy')
+  })
+
+  it('blocks the Profile if acquiring existing Session locks cannot confirm cleanup', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-lock-cleanup-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
+    const extensions = extensionBarrier()
+    onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    let cleanupFailures = 0
+    const failure = new AggregateError([new Error('lock release uncertain')], 'session_fence_cleanup_failed')
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => { cleanupFailures++ },
+      acquireSessionLocks: async () => { throw failure },
+      createWorker: async () => { throw new Error('unexpected isolated worker') },
+    }, async () => 'must not return')).rejects.toBe(failure)
+    expect(cleanupFailures).toBe(1)
+    expect(regular.isLocallyBlocked(profileId)).toBe(true)
   })
 
   it.each([
@@ -1369,6 +1409,29 @@ describe('offline Profile existing-only inspector', () => {
     expect(writerBlockedDuringRead).toBe(true)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
+
+  it.each(['relative-root', 'relative-session', 'outside-session', 'duplicate-session', 'generation'] as const)(
+    'refuses invalid persistence inventory before starting the restricted worker (%s)', async (fault) => {
+      const value = await bundledFixture()
+      const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+      const service = await accountService(value, createWorker, async () => {
+        const inventory = await value.target.inspectRestrictedPersistence()
+        switch (fault) {
+          case 'relative-root': return { ...inventory, root: 'relative' }
+          case 'relative-session': return { ...inventory, sessionCount: 1, sessionDirectories: ['relative'] }
+          case 'outside-session': return { ...inventory, sessionCount: 1, sessionDirectories: ['/outside/session'] }
+          case 'duplicate-session': return { ...inventory, sessionCount: 2, sessionDirectories: ['/a/b', '/a/b'] }
+          case 'generation': return { ...inventory, generation: inventory.generation + 1 }
+        }
+      })
+      const record = profile()
+      const command = { operation: 'session.list' as const,
+        command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+      await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+        .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+      expect(createWorker).not.toHaveBeenCalled()
+    },
+  )
 
   it('does not return restricted history after a held session lock is replaced', async () => {
     const value = await bundledFixture()

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdirSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmodSync, mkdirSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -14,6 +14,107 @@ const profile = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
 const other = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3151'
 
 describe.skipIf(process.platform === 'win32')('restricted Profile durable fence (Unix Host)', () => {
+  it('fails closed on invalid identifiers and never clears an unrelated reservation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-invalid-'))
+    const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-invalid-test' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    expect(() => new RestrictedProfileFence('relative', uid, lock)).toThrow('invalid_input')
+    expect(() => new RestrictedProfileFence(root, -1, lock)).toThrow('invalid_input')
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const operation = fence.begin(profile)
+    expect(() => fence.pending('../escape')).toThrow('invalid_input')
+    expect(() => { fence.assertOwned(profile, 'invalid') }).toThrow('stale')
+    expect(() => { fence.clear(profile, 'invalid', () => {}) }).toThrow('invalid_input')
+    expect(() => { fence.markWorkerGone(other, operation) }).toThrow('stale')
+    expect(fence.pending(profile)).toBe(operation)
+  })
+
+  it('rejects malformed and unsafe durable records without changing their bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-corrupt-'))
+    const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-corrupt-test' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const path = join(root, `${profile}.json`)
+    const cases = [Buffer.from([0xff]), Buffer.from('{'), Buffer.from('null'), Buffer.from('[]'),
+      Buffer.from(JSON.stringify({ version: 1, profileId: other, operationId: other, state: 'pending' })),
+      Buffer.from(JSON.stringify({ version: 1, profileId: profile, operationId: 'invalid', state: 'pending' })),
+      Buffer.from(JSON.stringify({ version: 1, profileId: profile, operationId: other, state: 'unknown' })),
+      Buffer.alloc(513, 0x61)]
+    for (const bytes of cases) {
+      await writeFile(path, bytes, { mode: 0o600 })
+      expect(() => fence.begin(profile)).toThrow('unavailable')
+      expect(await readFile(path)).toEqual(bytes)
+    }
+    await writeFile(path, JSON.stringify({ version: 1, profileId: profile, operationId: other, state: 'pending' }))
+    await chmod(path, 0o666)
+    expect(() => fence.pending(profile)).toThrow('unavailable')
+  })
+
+  it('rejects an unsafe fence directory before touching a marker', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-directory-'))
+    const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-directory-test' })
+    const directory = join(root, 'fences')
+    await mkdir(directory, { mode: 0o700 })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const fence = new RestrictedProfileFence(directory, uid, lock)
+    await chmod(directory, 0o777)
+    expect(() => fence.begin(profile)).toThrow('unavailable')
+    await chmod(directory, 0o700)
+    expect(fence.pending(profile)).toBeUndefined()
+  })
+
+  it('keeps a recovered reservation fenced if its owner becomes live before finalization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-late-owner-'))
+    let lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-late-owner-first' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const operation = new RestrictedProfileFence(root, uid, lock).begin(profile)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-late-owner-next' })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    let alive = false
+    const finish = fence.prepareEmptyReservationClear(profile, root, () => {}, () => alive)
+    expect(finish).toBeDefined()
+    alive = true
+    expect(() => finish?.()).toThrow('stale')
+    expect(fence.pending(profile)).toBe(operation)
+  })
+
+  it('refuses invalid staging parents and keeps repeated clears idempotent', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-parent-'))
+    let lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-parent-first' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const operation = new RestrictedProfileFence(root, uid, lock).begin(profile)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-parent-next' })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    expect(() => fence.prepareEmptyReservationClear(profile, 'relative', () => {}, () => false)).toThrow('invalid_input')
+    const parent = join(root, 'staging')
+    await mkdir(parent, { mode: 0o700 })
+    await chmod(parent, 0o777)
+    expect(() => fence.prepareEmptyReservationClear(profile, parent, () => {}, () => false)).toThrow('unavailable')
+    await chmod(parent, 0o700)
+    fence.clear(profile, operation, () => {})
+    fence.clear(profile, operation, () => { throw new Error('must not check an already cleared fence') })
+    expect(fence.pending(profile)).toBeUndefined()
+  })
+
+  it.skipIf(process.getuid?.() === 0)('preserves the reservation if staging becomes inaccessible mid-check', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-permission-'))
+    let lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-permission-first' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const operation = new RestrictedProfileFence(root, uid, lock).begin(profile)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-permission-next' })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const parent = join(root, 'staging')
+    await mkdir(parent, { mode: 0o700 })
+    try {
+      expect(() => fence.prepareEmptyReservationClear(profile, parent, () => { chmodSync(parent, 0) }, () => false))
+        .toThrow()
+    } finally { await chmod(parent, 0o700) }
+    expect(fence.pending(profile)).toBe(operation)
+  })
+
   it('distinguishes reservations before worker spawn and conservatively handles old records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-fence-phase-'))
     const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-phase-test' })

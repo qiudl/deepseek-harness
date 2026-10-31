@@ -131,6 +131,9 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
     await expect(ExistingSessionLockSet.acquire([root, root], uid)).rejects.toThrow('session_fence_invalid')
     await expect(ExistingSessionLockSet.acquire(['relative'], uid)).rejects.toThrow('session_fence_invalid')
     await expect(ExistingSessionLockSet.acquire([], -1)).rejects.toThrow('session_fence_unavailable')
+    await expect(ExistingSessionLock.acquire('relative', uid)).rejects.toThrow('session_fence_unavailable')
+    await expect(ExistingSessionLock.acquire(root, -1)).rejects.toThrow('session_fence_unavailable')
+    await expect(ExistingSessionLock.acquire(root, Number.NaN)).rejects.toThrow('session_fence_unavailable')
   })
 
   it('does not touch session files when already cancelled', async () => {
