@@ -206,28 +206,28 @@ export class DshWebProfileWorkerFactory {
     const sandbox = `(version 1) (allow default) (deny process-fork) (deny file-write*) (allow file-write* (subpath ${JSON.stringify(root)})) (deny network-outbound) (allow network-outbound (remote ip "localhost:*"))`
     const child = spawn(denyFork ? '/usr/bin/sandbox-exec' : this.options.nodeExecutablePath,
       denyFork ? ['-p', sandbox, this.options.nodeExecutablePath, '--import', RESTRICTED_WORKER_PARENT_MONITOR, ...args] : args, {
-      cwd: root,
-      env: {
-        ...spec.env,
-        DSH_HOME: root,
-        DSH_PROFILE_ID: spec.profileId,
-        DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
-        DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
-        DSH_PROFILE_MODEL_TOKEN: modelToken,
-        DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
-        DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN: archiveTransitionToken,
-        DSH_PROFILE_SOURCE_TOKEN: sourceToken,
-        DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
-        DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
-        DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
-        DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
-        DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
-        ...(this.options.pnpmEntrypointPath === undefined
-          ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
-        DSH_SLARK_EMBEDDED: '1',
-      },
-      stdio: denyFork ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
-    })
+        cwd: root,
+        env: {
+          ...spec.env,
+          DSH_HOME: root,
+          DSH_PROFILE_ID: spec.profileId,
+          DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
+          DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
+          DSH_PROFILE_MODEL_TOKEN: modelToken,
+          DSH_PROFILE_WORKSPACE_MODEL_TOKEN: workspaceModelToken,
+          DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN: archiveTransitionToken,
+          DSH_PROFILE_SOURCE_TOKEN: sourceToken,
+          DSH_PROFILE_REFERENCE_TOKEN: referenceToken,
+          DSH_PROFILE_ANALYSIS_TOKEN: analysisToken,
+          DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
+          DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
+          DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+          ...(this.options.pnpmEntrypointPath === undefined
+            ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
+          DSH_SLARK_EMBEDDED: '1',
+        },
+        stdio: denyFork ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
+      })
     const activated = await this.waitForOrigin(child, signal)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
@@ -249,7 +249,7 @@ export class DshWebProfileWorkerFactory {
     if (!child.stdout) {
       const exited = child.exitCode !== null || child.signalCode !== null
         ? Promise.resolve()
-        : new Promise<void>(resolve => child.once('close', () => resolve()))
+        : new Promise<void>(resolve => child.once('close', () => { resolve() }))
       try { child.kill('SIGKILL') } catch (error) { throw new ProfileWorkerExitUnconfirmedError(error) }
       await exited
       throw new HostAuthorityError('unavailable')
@@ -289,7 +289,7 @@ export class DshWebProfileWorkerFactory {
       if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
       let abortAttestation!: () => void
       const aborted = new Promise<never>((_resolve, reject) => {
-        abortAttestation = () => reject(new HostAuthorityError('unavailable'))
+        abortAttestation = () => { reject(new HostAuthorityError('unavailable')) }
         deadline.signal.addEventListener('abort', abortAttestation, { once: true })
       })
       try {
@@ -305,7 +305,7 @@ export class DshWebProfileWorkerFactory {
       // Subscribe before signalling so a fast exit cannot be missed.
       const exited = child.exitCode !== null || child.signalCode !== null
         ? Promise.resolve()
-        : new Promise<void>(resolve => child.once('close', () => resolve()))
+        : new Promise<void>(resolve => child.once('close', () => { resolve() }))
       try { child.kill('SIGKILL') } catch (failure) { throw new ProfileWorkerExitUnconfirmedError(failure) }
       await exited
       if (timedOut) throw new HostAuthorityError('unavailable')
@@ -340,7 +340,7 @@ export class DshWebProfileWorkerFactory {
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
     const exited = new Promise<void>((resolve) => {
       if (typeof child.exitCode === 'number' || child.signalCode != null) resolve()
-      else child.once('exit', () => resolve())
+      else child.once('exit', () => { resolve() })
     })
     child.once('error', (error) => { if (!settled) { settled = true; rejectDone(error) } })
     child.once('exit', (code, signal) => {
@@ -460,13 +460,15 @@ export class DshWebProfileWorkerFactory {
         const timer = setTimeout(() => {
           if (settled) return
           try {
+            // kill() may synchronously trigger an exit handler which settles the worker.
+            // oxlint-disable-next-line typescript/no-unnecessary-condition
             if (!child.kill('SIGKILL') && !settled) throw new Error('worker_kill_unconfirmed')
           } catch (error) {
             settled = true
             rejectDone(new ProfileWorkerExitUnconfirmedError(error))
           }
         }, this.options.abortTimeoutMs ?? 5_000)
-        void done.then(() => clearTimeout(timer), () => clearTimeout(timer))
+        void done.then(() => { clearTimeout(timer) }, () => { clearTimeout(timer) })
       },
       done,
     }

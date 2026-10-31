@@ -39,7 +39,7 @@ export class RestrictedProfileReader {
   }
 
   private readonly onAbort = () => {
-    void this.close().catch(() => this.onCleanupFailure())
+    void this.close().catch(() => { this.onCleanupFailure() })
   }
 
   /**
@@ -120,7 +120,8 @@ export async function startRestrictedProfileReader(input: StagingInput & {
 /**
  * Reserve an inactive Profile for the whole isolated reader lifetime.
  * The caller must hold external writer exclusion for the entire operation. A point-in-time
- * quiescence check alone cannot prevent another process from starting. The callback must return its result without sending it independently;
+ * quiescence check alone cannot prevent another process from starting. The callback must
+ * return its result without sending it independently;
  * its result is discarded after connection cancellation.
  * @param workers - Supervisor of the regular Profile worker.
  * @param extensions - The Host's shared extension-operation owner.
@@ -206,18 +207,19 @@ export async function withRestrictedProfileReader<T>(
                 const operationId = input.fence.begin(input.profileId)
                 let cleanupConfirmed = true
                 const fencedInput = { ...input, signal: activeSignal, stagingOperationId: operationId,
-                beforeWorkerStart: () => input.fence.markWorkerPossible(input.profileId, operationId), assertCurrent: () => {
-                  assertLocks()
-                  input.fence.assertOwned(input.profileId, operationId)
-                  claims.assertClaimOpen(input.profileId)
-                  input.assertCurrent()
-                } }
+                  beforeWorkerStart: () => { input.fence.markWorkerPossible(input.profileId, operationId) }, assertCurrent: () => {
+                    assertLocks()
+                    input.fence.assertOwned(input.profileId, operationId)
+                    claims.assertClaimOpen(input.profileId)
+                    input.assertCurrent()
+                  } }
                 try {
                   let reader: RestrictedProfileReader
                   try {
                     reader = await startRestrictedProfileReader(fencedInput)
                   } catch (error) {
-                    if (error instanceof RestrictedStagingCleanupError || error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
+                    if (error instanceof RestrictedStagingCleanupError || error instanceof RestrictedStartupCleanupError
+                      || error instanceof ProfileWorkerExitUnconfirmedError) {
                       cleanupConfirmed = false
                       workers.blockProfile(input.profileId)
                     }
@@ -227,7 +229,9 @@ export async function withRestrictedProfileReader<T>(
                   try {
                     activeSignal.throwIfAborted()
                     const cancelled = new Promise<never>((_resolve, reject) => {
-                      abort = () => reject(activeSignal.reason)
+                      // AbortSignal permits an arbitrary caller-provided reason; preserve it.
+                      // oxlint-disable-next-line typescript/prefer-promise-reject-errors
+                      abort = () => { reject(activeSignal.reason) }
                       activeSignal.addEventListener('abort', abort, { once: true })
                     })
                     const operation = Promise.resolve().then(() => {
@@ -250,10 +254,14 @@ export async function withRestrictedProfileReader<T>(
                     }
                   }
                 } finally {
+                  // Reader shutdown and its catch handler can change this flag while awaiting.
+                  // oxlint-disable-next-line typescript/no-unnecessary-condition
                   if (cleanupConfirmed) {
                     try {
                       input.fence.markWorkerGone(input.profileId, operationId)
-                      finalizeFence = input.fence.prepareClear(input.profileId, operationId, () => { assertLocks(); input.assertAllWritersQuiescent() })
+                      finalizeFence = input.fence.prepareClear(input.profileId, operationId, () => {
+                        assertLocks(); input.assertAllWritersQuiescent()
+                      })
                     } catch (error) {
                       workers.blockProfile(input.profileId)
                       throw error
@@ -281,8 +289,12 @@ export async function withRestrictedProfileReader<T>(
         return operationPromise
       }, activeSignal)
       await settleAdapter()
+      // The awaited adapter can invoke the operation and update these flags.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!operationPromise || duplicateInvocation || violation.signal.aborted) throw new HostAuthorityError('unavailable')
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (operationFailed) { finishFence(); throw operationFailure }
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!operationReturned || !Object.is(result, operationResult)) {
         workers.blockProfile(input.profileId)
         throw new HostAuthorityError('unavailable')
@@ -294,6 +306,8 @@ export async function withRestrictedProfileReader<T>(
       return result
     } catch (error) {
       await settleAdapter()
+      // The adapter may have populated the finalizer or changed operationFailed.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if ((finalizeFence && (!operationFailed || error !== operationFailure))
         || error instanceof RestrictedWriterExclusionCleanupError
         || (typeof error === 'object' && error !== null && 'code' in error

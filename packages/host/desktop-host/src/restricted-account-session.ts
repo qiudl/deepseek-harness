@@ -26,7 +26,7 @@ function validSessionDirectories(value: RestrictedPersistenceInspection): boolea
     || !Number.isSafeInteger(value.sessionCount) || value.sessionCount < 0 || !Array.isArray(value.sessionDirectories)
     || value.sessionDirectories.length !== value.sessionCount
     || new Set(value.sessionDirectories).size !== value.sessionDirectories.length) return false
-  return value.sessionDirectories.every(directory => {
+  return value.sessionDirectories.every((directory) => {
     if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory) return false
     const parts = relative(value.root, directory).split(sep)
     return parts.length === 2 && parts.every(part => part !== '' && part !== '.' && part !== '..')
@@ -87,6 +87,8 @@ export class RestrictedAccountSessionService {
     this.active.add(operation)
     try {
       const value = await operation
+      // close() may run while the owned operation is awaiting.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (this.closed) throw new HostAuthorityError('unavailable')
       signal.throwIfAborted()
       return value
@@ -110,13 +112,15 @@ export class RestrictedAccountSessionService {
       let finalize: (() => void) | undefined
       let result: boolean
       try {
+        // The adapter requires an async callback so thrown errors become rejections.
+        // oxlint-disable-next-line typescript/require-await
         result = await this.options.withAllWritersExcluded(profileId, async () => {
           if (closed || invoked) throw new HostAuthorityError('unavailable')
           invoked = true
           try {
             combined.throwIfAborted()
             finalize = this.options.fence.prepareEmptyReservationClear(profileId, this.options.hostRoot,
-              () => this.options.assertAllWritersQuiescent(profileId), processMayBeAlive)
+              () => { this.options.assertAllWritersQuiescent(profileId) }, processMayBeAlive)
             completed = true
             return finalize !== undefined
           } catch (error) {
@@ -126,6 +130,8 @@ export class RestrictedAccountSessionService {
           }
         }, combined)
       } catch (error) {
+        // The adapter invokes the callback asynchronously and can change these flags.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (completed || (callbackFailed && error !== callbackFailure) || error instanceof RestrictedWriterExclusionCleanupError
           || (typeof error === 'object' && error !== null && 'code' in error
             && error.code === 'restricted_writer_exclusion_cleanup_unconfirmed')) {
@@ -135,7 +141,10 @@ export class RestrictedAccountSessionService {
         }
         throw error
       } finally { closed = true }
+      // Callback completion and the finalizer are determined by the awaited adapter.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (!invoked || !completed || result !== (finalize !== undefined)) {
+        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (invoked) {
           this.options.workers.blockProfile(profileId)
           this.cleanupUnconfirmed = true
@@ -199,7 +208,8 @@ export class RestrictedAccountSessionService {
     const profileRoot = join(this.options.hostRoot, 'profiles', expectedProfileId)
     const ownerPaths = await this.options.ownerStateApplicator.inspectExisting(profileRoot, preflight.persistenceGeneration)
     const persistence = await this.options.inspectPersistence(expectedProfileId)
-    if (!validSessionDirectories(persistence) || persistence.generation !== preflight.persistenceGeneration || persistence.compression !== preflight.compression
+    if (!validSessionDirectories(persistence) || persistence.generation !== preflight.persistenceGeneration
+      || persistence.compression !== preflight.compression
       || persistence.inventoryDigest !== preflight.persistenceInventoryDigest) {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
@@ -217,7 +227,7 @@ export class RestrictedAccountSessionService {
         fence: this.options.fence,
         withAllWritersExcluded: (operation, exclusionSignal) =>
           this.options.withAllWritersExcluded(expectedProfileId, operation, exclusionSignal),
-        acquireSessionLocks: async exclusionSignal => {
+        acquireSessionLocks: async (exclusionSignal) => {
           const current = await this.options.inspectPersistence(expectedProfileId)
           exclusionSignal.throwIfAborted()
           if (!samePersistence(current, persistence)) throw new HostAuthorityError('recovery_preflight_stale')
@@ -252,7 +262,7 @@ export class RestrictedAccountSessionService {
             throw error
           }
         },
-        assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
+        assertAllWritersQuiescent: () => { this.options.assertAllWritersQuiescent(expectedProfileId) },
         profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
         onCleanupFailure: () => { this.cleanupUnconfirmed = true; this.options.onCleanupFailure() },
       }, reader => reader.read(command, signal))

@@ -391,23 +391,23 @@ async function startWindowsDesktopHostApplicationWithTrust(
         profilesRoot: win32.join(config.root, 'profiles'), userSid, bindings,
       }))
       const ensureWorker = async (profile: PersonProfileRecord): Promise<void> =>
-        workers.withPreparation(profile.profileId, async scoped => {
-        const prepared = prepareWindowsIsolatedProfile({
-          root: config.root,
-          profileId: profile.profileId,
-          userSid,
-          maximumManagedFileBytes: config.maximumManagedFileBytes,
-          prepareMcpStorage: config.maximumExtensionReceiptBytes !== undefined,
-          bindings,
+        workers.withPreparation(profile.profileId, async (scoped) => {
+          const prepared = prepareWindowsIsolatedProfile({
+            root: config.root,
+            profileId: profile.profileId,
+            userSid,
+            maximumManagedFileBytes: config.maximumManagedFileBytes,
+            prepareMcpStorage: config.maximumExtensionReceiptBytes !== undefined,
+            bindings,
+          })
+          if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
+          await scoped.ensure({
+            profileId: profile.profileId,
+            profileRoot: prepared.profileRoot,
+            credentialHandle: profile.keyHandle,
+            pluginRoots: prepared.pluginRoots,
+          })
         })
-        if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
-        await scoped.ensure({
-          profileId: profile.profileId,
-          profileRoot: prepared.profileRoot,
-          credentialHandle: profile.keyHandle,
-          pluginRoots: prepared.pluginRoots,
-        })
-      })
       const host = new DesktopHost({
         registry,
         clock,

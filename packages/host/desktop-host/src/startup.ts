@@ -581,7 +581,7 @@ export async function startDesktopHostApplication(
       preflight: OfflineProfileRecoveryPreflight,
     ): Promise<void> => {
       await restrictedHistory?.reconcileEmptyFence(profile.profileId)
-      return workers.withPreparation(profile.profileId, async scoped => {
+      return workers.withPreparation(profile.profileId, async (scoped) => {
         claimWorkerGate.assertOpen(profile.profileId)
         await recoveryInspector.prepareConfirmedProfile(profile, preflight)
         try {
@@ -977,7 +977,7 @@ export async function startDesktopHostApplication(
           })
         }
         const quiesced = async <T>(operation: () => Promise<T>): Promise<T> =>
-          workers.withPreparation(profileId, async scoped => {
+          workers.withPreparation(profileId, async (scoped) => {
             host.revokeProfile(profile.profileId)
             await scoped.dispose()
             try { return await operation() } finally { await prepareWorker(profile, scoped) }
@@ -994,7 +994,7 @@ export async function startDesktopHostApplication(
             if (!activeCutover) throw new HostAuthorityError('unavailable')
             await prepareWorker(profile, activeCutover.scoped)
             activeCutover.restarted = true
-          }, async (operation, expectedGeneration) => workers.withPreparation(profileId, async scoped => {
+          }, async (operation, expectedGeneration) => workers.withPreparation(profileId, async (scoped) => {
             const profile = requiredProfile(registry, profileId)
             host.revokeProfile(profile.profileId)
             await scoped.dispose()
@@ -1005,7 +1005,7 @@ export async function startDesktopHostApplication(
             } finally {
               try {
                 if (!cutover.restarted) {
-                  const active = await target.activeGeneration().catch(error => {
+                  const active = await target.activeGeneration().catch((error: unknown) => {
                     workers.blockProfile(profileId)
                     throw error
                   })
