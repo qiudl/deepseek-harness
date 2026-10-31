@@ -132,8 +132,8 @@
   en: 9edf4ef31e60e880
   zh: 9edf4ef31e60e880
 /session-persistence-event-catalog/events/model/model-selection-log-only:
-  en: ea963e9ec025c667
-  zh: f6eea77d22442cd8
+  en: 0116a0d08fd544f5
+  zh: 425ec5c37578cff9
 /session-persistence-event-catalog/events/permission:
   en: 19917bc5438e60af
   zh: 19917bc5438e60af
@@ -1101,11 +1101,11 @@
   en: b7397e590a5ed688
   zh: c6e1b9d6abc7f518
 /session-persistence-event-catalog/resolved-persistence-types/modelmessagesource:
-  en: 3b677f021d7dd4d3
-  zh: 2a875742b22879a2
-/session-persistence-event-catalog/resolved-persistence-types/modelselection:
-  en: 771e9ab3e64076bc
-  zh: 30d5095a93549d55
+  en: 7faf8f5c8eecdf22
+  zh: 1fa9505563e6005b
+/session-persistence-event-catalog/resolved-persistence-types/modelselectionvalue:
+  en: 5cdfdfc0d9f469dc
+  zh: ea06ce6b27c08977
 /session-persistence-event-catalog/resolved-persistence-types/oneshotscheduledispatchchange:
   en: a3300babe57b6b67
   zh: 4aaf06a149b399c3
@@ -1302,8 +1302,8 @@
   en: 386989934d1bb62e
   zh: 69b8bc182a5acbd3
 /session-persistence-event-catalog/resolved-persistence-types/string:
-  en: 1cced4153c62d356
-  zh: ad422778ce29fbd3
+  en: afecc48f6d89d8a4
+  zh: 5b9f6268df9232ee
 /session-persistence-event-catalog/resolved-persistence-types/string~2:
   en: 0089620bf4638263
   zh: 1922bef1713094bb
@@ -1788,8 +1788,8 @@
   en: 79db83dd2c430faf
   zh: 173f568241f5ce86
 /session-persistence-event-catalog/resolved-persistence-types/kind-user:
-  en: 214883fbd9639d8b
-  zh: 29e55c9a5c7445c2
+  en: 637a86fff21ca5de
+  zh: 35513fac783a0f01
 /session-persistence-event-catalog/resolved-persistence-types/kind-user-approval:
   en: a52d2dfbaf844127
   zh: 4c5306ca40f20873
@@ -1959,8 +1959,8 @@
   en: c0ad371b1f636530
   zh: 6b79634088e8d9da
 /session-persistence-event-catalog/resolved-persistence-types/type-model-selection:
-  en: 0c6a1ef6a38ac10b
-  zh: 0522b4477e992088
+  en: 97fb82388fe2111e
+  zh: c0f24a3e8a5e2f36
 /session-persistence-event-catalog/resolved-persistence-types/type-permission-preset:
   en: 965e836b012404b3
   zh: 0ab923cc8a41e7f2
