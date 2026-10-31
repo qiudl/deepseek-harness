@@ -123,7 +123,8 @@ it('refuses stale, expired, and aborted lease signing before releasing a signatu
   const authorizeCollaborationRegistration = vi.fn()
   const input = { host:{ authorizeCollaborationRegistration },account,challenge,
     identity:f.identity,signal:new AbortController().signal,now:()=>f.time.value }
-  const signs = (changes:Partial<typeof input> = {}) => signAccountFriendOnlineLease({ ...input,...changes })
+  const signs = (changes:Partial<Parameters<typeof signAccountFriendOnlineLease>[0]> = {}) =>
+    signAccountFriendOnlineLease({ ...input,...changes })
   expect(signs().challenge).toEqual(challenge)
   expect(authorizeCollaborationRegistration).toHaveBeenCalledTimes(2)
   expect(()=>signs({ challenge:{ ...challenge,owner_user_id:randomUUID() } }))
@@ -152,6 +153,12 @@ it('signs one current friend device lease through the strict Host control connec
     method:'profile.friend_online_lease' as const,result:assertion }
   expect(decodeHostControlFrame(encodeHostControlFrame(result))).toEqual(result)
   expect(await f.session.handleRequest(request)).toMatchObject({ type:'error',error:{ code:'replayed' } })
+  await expect(f.client.attestFriendOnlineLease({ ...input,issuer:'https://other.example.test' }))
+    .rejects.toMatchObject({ code:'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_online_lease'
+    ? { ...frame,method:'profile.friend_bot_enrollment' } as never : frame)
+  await expect(f.client.attestFriendOnlineLease({ ...input,challenge:{ ...challenge,
+    request_id:randomUUID() } })).rejects.toMatchObject({ code:'unavailable' })
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_online_lease'
     ? { ...frame,result:{ ...frame.result,signature:Buffer.alloc(64,7).toString('base64url') } } : frame)
   await expect(f.client.attestFriendOnlineLease({ ...input,challenge:{ ...challenge,

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'vitest'
+import { decodeHostControlFrame, encodeHostControlFrame } from '../src/codec.ts'
 import { encodeHostFriendOnlineLeasePayload, parseHostFriendOnlineLeaseChallenge,
   parseHostFriendOnlineLeaseAssertion, type HostFriendOnlineLeaseChallenge } from '../src/friend-online-lease-proof.ts'
 
@@ -59,4 +60,28 @@ test('friend lease proof rejects malformed objects and noncanonical authority fi
     signature:'bad' }),/invalid_friend_online_lease_proof/u)
   assert.equal(parseHostFriendOnlineLeaseAssertion({ schema_version:1,challenge,signature })
     .signature,signature)
+})
+
+test('friend lease Host control frames roundtrip and reject extra private fields',()=>{
+  const request={ version:1,type:'request',request_id:challenge.request_id,
+    method:'profile.friend_online_lease',params:{
+      client_instance_id:challenge.request_id,host_instance_id:challenge.host_instance_id,
+      process_nonce:challenge.process_nonce,jti:challenge.connection_id,
+      issued_at:1000,expires_at:2000,
+      authority_environment_id:challenge.authority_environment_id,
+      account_binding_handle:challenge.binding_id,authority_binding_version:4,
+      account_issuer:challenge.account_issuer,account_subject:challenge.account_subject,
+      challenge,
+    } }
+  const result={ version:1,type:'result',request_id:request.request_id,
+    method:request.method,result:{ schema_version:1,challenge,
+      signature:Buffer.alloc(64).toString('base64url') } }
+  for (const frame of [request,result]) {
+    const encoded=`${JSON.stringify(frame)}\n`
+    assert.equal(encodeHostControlFrame(decodeHostControlFrame(encoded)),encoded)
+  }
+  assert.throws(()=>decodeHostControlFrame(`${JSON.stringify({ ...request,
+    params:{ ...request.params,private_key:'secret' } })}\n`))
+  assert.throws(()=>decodeHostControlFrame(`${JSON.stringify({ ...result,
+    result:{ ...result.result,signature:'bad' } })}\n`))
 })
