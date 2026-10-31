@@ -233,7 +233,7 @@ export class DesktopRemoteSessionExecutor {
         try {
           return await this.invoke('create', { request: {
             ...(command.workspace_id === undefined ? {} : { workspaceId: command.workspace_id }),
-            ...(command.session_id === undefined ? {} : { sessionId: command.session_id }),
+            ...(command.session_id === undefined ? {} : { sessionId: command.session_id, exactAdopt: true }),
           } }, signal)
         } catch (error) {
           // Keep the native UI's blank-session fallback tied to the actual Host refusal.

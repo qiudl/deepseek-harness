@@ -1194,6 +1194,36 @@ describe('remaining branches', () => {
     expect(await manager.create()).toMatchObject({ ok: false })
   })
 
+  it('forwards creation options and catalogs the Host-returned identity', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S2 }))
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+
+    const result = await manager.create({ workspaceId: 'w1' as never, sessionId: S1,
+      dedicatedCollaboration: true, agentPreset: 'fixture' })
+
+    expect(remote.session.create).toHaveBeenCalledExactlyOnceWith({ workspaceId: 'w1', sessionId: S1,
+      dedicatedCollaboration: true, agentPreset: 'fixture' })
+    expect(result).toEqual(ok({ sessionId: S2 }))
+    expect(manager.getListSnapshot().items.map(item => item.sessionId)).toEqual([S2])
+  })
+
+  it('forwards dedicated collaboration without hiding an invalid target from the Host', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(err(new RemoteError('gateway/bad-request', 'workspace required', {})))
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    await manager.create({ cwd: '/tmp/w', dedicatedCollaboration: true })
+    expect(remote.session.create).toHaveBeenCalledExactlyOnceWith({ cwd: '/tmp/w', dedicatedCollaboration: true })
+  })
+
+  it('forwards an exact adoption request for the named identity', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(ok({ sessionId: S1 }))
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    await manager.create({ cwd: '/tmp/w', sessionId: S1, exactAdopt: true })
+    expect(remote.session.create).toHaveBeenCalledExactlyOnceWith({ cwd: '/tmp/w', sessionId: S1, exactAdopt: true })
+  })
+
   it.for(['create', 'fork'] as const)('preserves pushed running state when a %s response arrives later', async (operation, { mock, remote }) => {
     const response = Promise.withResolvers<Awaited<ReturnType<typeof remote.session.create>>>()
     remote.session[operation].mockImplementation(() => response.promise)

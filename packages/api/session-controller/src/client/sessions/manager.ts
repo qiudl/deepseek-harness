@@ -515,12 +515,18 @@ export class SessionManager {
       cwd?: string
       sessionId?: SessionId
       dedicatedCollaboration?: true
+      agentPreset?: string
+      exactAdopt?: true
     } = {},
   ): Promise<RemoteResult<{ sessionId: SessionId }>> {
-    const shared = opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }
+    const shared = {
+      ...(opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }),
+      ...(opts.agentPreset === undefined ? {} : { agentPreset: opts.agentPreset }),
+      ...(opts.exactAdopt === undefined ? {} : { exactAdopt: opts.exactAdopt }),
+      ...(opts.dedicatedCollaboration === undefined ? {} : { dedicatedCollaboration: opts.dedicatedCollaboration }),
+    }
     const payload = opts.workspaceId !== undefined
-      ? { workspaceId: opts.workspaceId, ...shared,
-        ...(opts.dedicatedCollaboration ? { dedicatedCollaboration: true as const } : {}) }
+      ? { workspaceId: opts.workspaceId, ...shared }
       : { ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }), ...shared }
     const result = await this.remote.session.create(payload)
     if (result.ok) {
