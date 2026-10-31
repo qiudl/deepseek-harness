@@ -172,6 +172,7 @@ describe('web-app runtime glue', () => {
       list: async () => [], stat: async () => undefined,
       open: async () => { throw Error('unexpected Session open') },
     } as never)
+    ctx.provide('sessions', { get: () => undefined } as never)
     provideConnection(ctx)
     const gateway = new TypertGatewayService(gatewayCtx, {})
     let browserAdmission: Parameters<typeof gateway.registerBrowserAdmission>[0] | undefined

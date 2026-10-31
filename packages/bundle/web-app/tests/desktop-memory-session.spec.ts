@@ -53,6 +53,24 @@ describe('private Desktop memory session reader', () => {
       .rejects.toThrow('memory_session_unavailable')
   })
 
+  it('rejects an attached live Session before and after a persistence read', async () => {
+    const f = fixture()
+    let live = true
+    await expect(readDesktopMemorySession(f.persistence, id, new AbortController().signal, () => live))
+      .rejects.toThrow('memory_session_unavailable')
+    expect(f.closed()).toBe(false)
+    live = false
+    const open = f.persistence.open
+    const changing = { ...f.persistence, open: async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      live = true
+      return handle
+    } }
+    await expect(readDesktopMemorySession(changing, id, new AbortController().signal, () => live))
+      .rejects.toThrow('memory_session_unavailable')
+    expect(f.closed()).toBe(true)
+  })
+
   it('pages only top-level Session IDs and revisions through the independent memory bearer', async () => {
     const rows = Array.from({ length: 70 }, (_, index) => ({
       header: { ...header, id: SessionId(`session-${String(index).padStart(3, '0')}`) },
@@ -60,6 +78,9 @@ describe('private Desktop memory session reader', () => {
     }))
     rows.push({ header: { ...header, id: SessionId('session-seeded'), isSeeded: true }, revision: 'hidden' })
     const persistence = { list: async () => rows } satisfies Pick<DesktopMemorySessionPersistence, 'list'>
+    const withoutLive = await listDesktopMemorySessions(persistence, null, new AbortController().signal,
+      sessionId => sessionId === SessionId('session-000'))
+    expect(withoutLive.items.some(item => item.sessionId === 'session-000')).toBe(false)
     const first = await listDesktopMemorySessions(persistence, null, new AbortController().signal)
     expect(first.items).toHaveLength(64)
     expect(first.nextAfter).toBe('session-063')
@@ -69,7 +90,7 @@ describe('private Desktop memory session reader', () => {
     expect(JSON.stringify([first, second])).not.toContain('session-seeded')
     const token = 'm'.repeat(43)
     const server = createServer((req, res) => {
-      void handleDesktopMemorySessionsRequest(req, res, token, persistence)
+      void handleDesktopMemorySessionsRequest(req, res, token, persistence, () => false)
     })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
@@ -217,7 +238,7 @@ describe('private Desktop memory session reader', () => {
     const f = fixture()
     const token = 'a'.repeat(43)
     const server = createServer((req, res) => {
-      void handleDesktopMemorySessionRequest(req, res, token, f.persistence)
+      void handleDesktopMemorySessionRequest(req, res, token, f.persistence, () => false)
     })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
@@ -247,8 +268,8 @@ describe('private Desktop memory session reader', () => {
     const token = 'm'.repeat(43)
     const f = fixture()
     const server = createServer((req, res) => {
-      if (req.url === '/list') void handleDesktopMemorySessionsRequest(req, res, token, { list: async () => [] })
-      else void handleDesktopMemorySessionRequest(req, res, token, f.persistence)
+      if (req.url === '/list') void handleDesktopMemorySessionsRequest(req, res, token, { list: async () => [] }, () => false)
+      else void handleDesktopMemorySessionRequest(req, res, token, f.persistence, () => false)
     })
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
