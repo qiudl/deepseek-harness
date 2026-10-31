@@ -9,6 +9,7 @@ const processFault = vi.hoisted(() => ({
   exit: 'success' as 'success' | 'nonzero' | 'launch' | 'manual',
   pid: undefined as number | undefined,
   child: null as EventEmitter | null,
+  onSpawn: null as ((child: EventEmitter) => void) | null,
 }))
 
 vi.mock('node:child_process', async (importOriginal) => {
@@ -17,6 +18,8 @@ vi.mock('node:child_process', async (importOriginal) => {
   return { ...actual, spawn: () => {
     const child = Object.assign(new EventEmitter(), { pid: processFault.pid })
     processFault.child = child
+    processFault.onSpawn?.(child)
+    processFault.onSpawn = null
     if (processFault.exit === 'success') queueMicrotask(() => child.emit('close', 0))
     if (processFault.exit === 'nonzero') queueMicrotask(() => child.emit('close', 1))
     if (processFault.exit === 'launch') queueMicrotask(() => {
@@ -33,6 +36,7 @@ async function sandbox() {
     processFault.exit = 'success'
     processFault.pid = undefined
     processFault.child = null
+    processFault.onSpawn = null
     vi.restoreAllMocks()
     vi.useRealTimers()
     await rm(root, { recursive: true, force: true })
@@ -45,11 +49,8 @@ async function sandbox() {
 }
 
 async function spawnedChild(): Promise<EventEmitter> {
-  for (let attempt = 0; attempt < 100 && !processFault.child; attempt += 1) {
-    await new Promise<void>(resolve => setImmediate(resolve))
-  }
-  if (!processFault.child) throw Error('mock process was not spawned')
-  return processFault.child
+  if (processFault.child) return processFault.child
+  return new Promise((resolve) => { processFault.onSpawn = resolve })
 }
 
 describe.skipIf(process.platform === 'win32')('isolated Profile import pnpm process policy', () => {
