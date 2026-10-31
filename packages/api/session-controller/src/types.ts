@@ -379,6 +379,8 @@ export interface SessionCreateRequest {
   readonly sessionId?: SessionId
   readonly agentPreset?: string
   readonly dedicatedCollaboration?: true
+  /** Adopt the named Session without substituting another identity. */
+  readonly exactAdopt?: true
 }
 
 /** Session creation response value. */

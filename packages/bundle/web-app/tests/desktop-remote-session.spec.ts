@@ -194,7 +194,7 @@ describe('Desktop remote Session bridge', () => {
     await executor.execute({ operation: 'session.create', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
       workspace_id: 'workspace-1', session_id: 'session-existing' }, signal)
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'create',
-      args: { request: { workspaceId: 'workspace-1', sessionId: 'session-existing' } }, signal })
+      args: { request: { workspaceId: 'workspace-1', sessionId: 'session-existing', exactAdopt: true } }, signal })
   })
 
   it('returns the actual native writer refusal without fabricating other failures', async () => {

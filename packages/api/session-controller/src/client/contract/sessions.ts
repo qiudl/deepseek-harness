@@ -106,6 +106,8 @@ export interface ISessions {
     cwd?: string
     sessionId?: SessionId
     dedicatedCollaboration?: true
+    agentPreset?: string
+    exactAdopt?: true
   }): Promise<SessionId>
   /**
    * Resolve an already discovered direct-parent address without opening it.
