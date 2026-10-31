@@ -19,6 +19,8 @@ import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 import { RestrictedAccountSessionService } from '../src/restricted-account-session.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
+import { RestartingMigrationTarget } from '../src/restarting-migration-target.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -638,10 +640,25 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   const failedCutover = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'commitGeneration')
     .mockRejectedValueOnce(new Error('fixture generation switch failed'))
+  let migrationTarget: RestartingMigrationTarget | undefined
+  // Preserve the migration target receiver while observing the failed cutover.
+  // oxlint-disable-next-line typescript/unbound-method
+  const targetCommit = RestartingMigrationTarget.prototype.commitGeneration
+  const observeTarget = vi.spyOn(RestartingMigrationTarget.prototype, 'commitGeneration')
+    .mockImplementationOnce(async function (this: RestartingMigrationTarget, ...args) {
+      // The test probes the same private cutover after the surrounding operation releases it.
+      // oxlint-disable-next-line typescript/no-this-alias
+      migrationTarget = this
+      return targetCommit.apply(this, args)
+    })
   try {
     await expect(importer.commit(verified.importId, verified.version, 1)).rejects.toThrow('fixture generation switch failed')
     expect((await application.workers.activate(profile.profileId)).origin).toBe('http://127.0.0.1:43123')
-  } finally { failedCutover.mockRestore() }
+    if (!migrationTarget) throw new Error('missing migration target')
+    const activate: unknown = Reflect.get(migrationTarget, 'activate')
+    if (typeof activate !== 'function') throw new Error('missing migration activation')
+    await expect(Reflect.apply(activate, migrationTarget, [2]) as Promise<void>).rejects.toMatchObject({ code: 'unavailable' })
+  } finally { failedCutover.mockRestore(); observeTarget.mockRestore() }
   let enterCommit!: () => void, releaseCommit!: () => void
   const commitEntered = new Promise<void>((resolve) => { enterCommit = resolve })
   // The saved method is invoked with the original receiver using apply below.
@@ -758,6 +775,19 @@ it.skipIf(process.platform === 'win32')('composes and closes restricted history 
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   const reader = application.restrictedHistory
   if (!reader) throw new Error('missing restricted reader')
+  const options = Reflect.get(reader, 'options') as {
+    inspectPersistence(profileId: string): Promise<unknown>
+    createWorker(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle>
+  }
+  const persistence = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'inspectRestrictedPersistence')
+    .mockRejectedValueOnce(new Error('fixture inventory failure'))
+  const createWorker = vi.spyOn(DshWebProfileWorkerFactory.prototype, 'createRestricted')
+    .mockRejectedValueOnce(new Error('fixture restricted worker failure'))
+  try {
+    await expect(options.inspectPersistence(randomUUID())).rejects.toThrow('fixture inventory failure')
+    await expect(options.createWorker({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture',
+      pluginRoots: [], env: {} })).rejects.toThrow('fixture restricted worker failure')
+  } finally { persistence.mockRestore(); createWorker.mockRestore() }
   await expect(reader.reconcileEmptyFence('../invalid')).rejects.toMatchObject({ code: 'unavailable' })
   expect(capturedOptions).not.toHaveProperty('restrictedHistory')
   const readerClose = vi.spyOn(reader, 'close')
@@ -821,6 +851,55 @@ it.skipIf(process.platform === 'win32')('retains Host ownership when startup and
     errors: [startupFailure, readerFailure, workerFailure] })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
 })
+
+it.skipIf(process.platform === 'win32').each(['unreadable', 'changed'] as const)(
+  'blocks the Profile if migration cutover fails and the active generation is %s', async (mode) => {
+    const { config, root } = fixture()
+    let options: UnixHostServerOptions | undefined
+    const { startDesktopHostApplication } = await import('../src/startup.ts')
+    const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+      platform: 'darwin', createServer: (value) => {
+        options = value
+        return Object.assign(new UnixHostServer(value), { start: async () => {}, close: async () => {} })
+      },
+      profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+        bootstrapCookie: { name: 'fixture', value: 'private' }, closeNotifications() {}, abort() {}, done: Promise.resolve() }),
+    })
+    onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+    if (!options) throw new Error('missing server options')
+    const profile = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:cutover',
+      unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner' })
+    const exporter = await options.createMigrationExport?.('owner', profile.profileId)
+    if (!exporter) throw new Error('missing migration exporter')
+    const inventory = await exporter.inventory()
+    const receipt = await exporter.begin({ expectedInventoryDigest: inventory.inventoryDigest,
+      maxRecords: inventory.requiredMaxRecords, maxBytes: inventory.requiredMaxBytes })
+    const importer = options.createMigrationImport?.('owner', profile.profileId)
+    if (!importer) throw new Error('missing migration importer')
+    const staged = await importer.stage({ transferId: receipt.transferId, transferDigest: receipt.transferDigest,
+      sourceInstallationId: config.installationId, sourceInventoryDigest: inventory.inventoryDigest,
+      targetProfileSelectorHash: 'a'.repeat(64), sourceGeneration: receipt.sourceGeneration,
+      sourceSchemaVersion: receipt.schemaVersion, targetGeneration: 2, recordCount: receipt.recordCount,
+      semanticDigest: receipt.semanticDigest })
+    await importer.verify(staged.importId, staged.version)
+    const verified = await importer.status({ transferId: receipt.transferId, targetGeneration: 2,
+      sourceInstallationId: config.installationId, targetProfileSelectorHash: 'a'.repeat(64) })
+    const commit = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'commitGeneration')
+      .mockRejectedValueOnce(new Error('fixture cutover failure'))
+    // Preserve the receiver for the initial generation check; fault the check after cutover.
+    // oxlint-disable-next-line typescript/unbound-method
+    const original = FileOwnerJsonlMigrationGenerationTarget.prototype.activeGeneration
+    const active = vi.spyOn(FileOwnerJsonlMigrationGenerationTarget.prototype, 'activeGeneration')
+      .mockImplementationOnce(async function (this: FileOwnerJsonlMigrationGenerationTarget) { return original.call(this) })
+    if (mode === 'unreadable') active.mockRejectedValueOnce(new Error('generation unreadable'))
+    else active.mockResolvedValueOnce(99)
+    try {
+      await expect(importer.commit(verified.importId, verified.version, 1))
+        .rejects.toMatchObject(mode === 'unreadable' ? { message: 'generation unreadable' } : { code: 'unavailable' })
+      expect(application.workers.isLocallyBlocked(profile.profileId)).toBe(true)
+    } finally { commit.mockRestore(); active.mockRestore() }
+  },
+)
 
 it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation before releasing Host ownership', async () => {
   const { config, root } = fixture()
