@@ -1295,8 +1295,8 @@ describe('offline Profile existing-only inspector', () => {
     const service = await accountService(value, async () => { throw new Error('unexpected worker') })
     let finish!: (value: { items: string[] }) => void
     const pending = new Promise<{ items: string[] }>(resolve => { finish = resolve })
-    vi.spyOn(service as unknown as { readOwned: () => Promise<{ items: string[] }> }, 'readOwned')
-      .mockReturnValueOnce(pending)
+    const readOwned = vi.spyOn(Object.getPrototypeOf(service), 'readOwned').mockReturnValueOnce(pending)
+    onTestFinished(() => readOwned.mockRestore())
     const command = { operation: 'session.list' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174010' as HostControlRequestId }
     const reading = restrictedAccountRead(service, () => profile(), command, new AbortController().signal)

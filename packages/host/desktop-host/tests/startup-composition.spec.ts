@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
-import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
+import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
@@ -242,7 +242,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const server = {
     start: serverStart,
     close: serverClose,
-  } as unknown as UnixHostServer
+  }
   const profileWorkerFactory = async (spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> => {
     workerSpecs.push(spec)
     if (spec.credentialHandle === 'keychain:startup') {
@@ -278,7 +278,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     platform: 'darwin',
     profileWorkerFactory,
     attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
-    createServer: (options) => { serverOptions = options; return server },
+    createServer: (options) => { serverOptions = options; return Object.assign(new UnixHostServer(options), server) },
   })
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
@@ -722,11 +722,11 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   const ledgerRoot = join(root, 'control', 'legacy-model-claims')
   mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
   writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   let serverOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
-    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return Object.assign(new UnixHostServer(options), server) },
   })
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   expect(serverOptions?.modelClaimRecovery).toBeDefined()
@@ -739,11 +739,11 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
 it.skipIf(process.platform === 'win32')('composes and closes restricted history only with an explicit trusted adapter', async () => {
   const { config, root } = fixture()
   const serverClose = vi.fn(async () => undefined)
-  const server = { start: async () => undefined, close: serverClose } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: serverClose }
   let capturedOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: options => { capturedOptions = options; return server },
+    platform: 'darwin', createServer: options => { capturedOptions = options; return Object.assign(new UnixHostServer(options), server) },
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => operation(),
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
@@ -766,10 +766,10 @@ it.skipIf(process.platform === 'win32')('stops Profile workers and retains owner
   const { config, root } = fixture()
   const failure = new Error('server close failed')
   const stopWorker = vi.fn()
-  const server = { start: async () => undefined, close: async () => { throw failure } } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => { throw failure } }
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     profileWorkerFactory: async () => ({ closeNotifications() {}, abort: stopWorker, done: Promise.resolve() }),
   })
   onTestFinished(() => rmSync(root, { recursive: true, force: true }))
@@ -787,12 +787,12 @@ it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation be
   const path = join(directory, `${profileId}.json`)
   writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
     phase: 'reserved', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   let enter!: () => void
   const entered = new Promise<void>(resolve => { enter = resolve })
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, _operation, signal) => {
         enter()
@@ -823,10 +823,10 @@ it.skipIf(process.platform === 'win32')('retains the fence and Host ownership if
   const path = join(directory, `${profileId}.json`)
   writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
     phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => { await operation(); throw new Error('release failed') },
       assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
@@ -853,10 +853,10 @@ it.skipIf(process.platform === 'win32')('fails closed when the reconciliation gu
   mkdirSync(staged, { mode: 0o700 })
   const sentinel = join(staged, 'preserve')
   writeFileSync(sentinel, 'existing', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => {
         try { return await operation() } catch { return false as never }
@@ -875,11 +875,11 @@ it.skipIf(process.platform === 'win32')('fails closed when the reconciliation gu
 
 it.skipIf(process.platform === 'win32')('recovers an empty old-Host fence before restoring the original Profile', async () => {
   const { config, root } = fixture()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   let starts = 0, exclusions = 0
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     profileWorkerFactory: async () => { starts += 1; return { closeNotifications() {}, abort() {}, done: Promise.resolve() } },
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => { exclusions += 1; return operation() },
@@ -905,11 +905,11 @@ it.skipIf(process.platform === 'win32')('recovers an empty old-Host fence before
 it.skipIf(process.platform === 'win32')('keeps Host ownership when startup cleanup is unconfirmed', async () => {
   const { config, root } = fixture()
   const failure = new Error('server start failed')
-  const server = { start: async () => { throw failure }, close: async () => { throw new Error('server close failed') } } as unknown as UnixHostServer
+  const server = { start: async () => { throw failure }, close: async () => { throw new Error('server close failed') } }
   onTestFinished(() => rmSync(root, { recursive: true, force: true }))
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   await expect(startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
   })).rejects.toMatchObject({ message: 'host_startup_cleanup_unconfirmed', errors: [failure, expect.any(Error)] })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
 })
@@ -917,10 +917,10 @@ it.skipIf(process.platform === 'win32')('keeps Host ownership when startup clean
 it.skipIf(process.platform === 'win32')('keeps Host ownership when restricted reader cleanup is unconfirmed', async () => {
   const { config, root } = fixture()
   const stopWorker = vi.fn()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     profileWorkerFactory: async () => ({ closeNotifications() {}, abort: stopWorker, done: Promise.resolve() }),
     restrictedHistory: {
       withAllWritersExcluded: async (_profileId, operation) => operation(),
@@ -945,10 +945,10 @@ it.skipIf(process.platform === 'win32')('shares one Host close when server shutd
   let entered = false
   const server = { start: async () => undefined, close: async () => {
     if (!entered) { entered = true; nested = application.close() }
-  } } as unknown as UnixHostServer
+  } }
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
   })
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   const closing = application.close()
@@ -964,11 +964,11 @@ it.skipIf(process.platform === 'win32')('restores a per-Profile restricted fence
   mkdirSync(directory, { mode: 0o700 })
   writeFileSync(join(directory, `${profileId}.json`), JSON.stringify({ version: 1, profileId,
     operationId: randomUUID(), state: 'pending' }), { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   const started: string[] = []
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: () => server,
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
     profileWorkerFactory: async spec => {
       started.push(spec.profileId)
       return { closeNotifications() {}, abort() {}, done: Promise.resolve() }
@@ -983,12 +983,12 @@ it.skipIf(process.platform === 'win32')('restores a per-Profile restricted fence
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
   const { config, root, accountPrivateKey } = fixture()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = { start: async () => undefined, close: async () => undefined }
   let serverOptions: UnixHostServerOptions | undefined
   let workerStarts = 0
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: (options) => { serverOptions = options; return server },
+    platform: 'darwin', createServer: (options) => { serverOptions = options; return Object.assign(new UnixHostServer(options), server) },
     profileWorkerFactory: async (): Promise<ProfileWorkerHandle> => {
       workerStarts += 1
       return { viewOrigin: 'http://127.0.0.1:43123', generation: workerStarts,
