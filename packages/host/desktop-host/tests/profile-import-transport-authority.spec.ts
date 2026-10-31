@@ -246,6 +246,7 @@ it('maps changed and unreadable old inventory to distinct preview errors', async
     ['profile_import_inventory_changed', 'stale'],
     ['profile_import_schema_unsupported', 'schema_unsupported'],
     ['profile_import_inventory_invalid', 'profile_integrity_failed'],
+    ['unexpected_inventory_fault', 'internal_error'],
   ] as const
   for (const [failure, code] of cases) {
     f.inspect.mockRejectedValueOnce(Error(failure))

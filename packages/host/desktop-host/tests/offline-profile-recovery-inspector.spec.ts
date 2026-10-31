@@ -12,7 +12,8 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
 const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, fstatCalls: 0,
   archiveFd: -1, installError: false }))
-const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0 }))
+const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0,
+  invalidDependenciesAt: 0 }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -72,10 +73,14 @@ vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/posix-extension-files.ts')>()
   return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
     const value = actual.readExtensionStateFile(...args)
-    if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt || trustManifestFaults.changedAt)) {
+    if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt
+      || trustManifestFaults.changedAt || trustManifestFaults.invalidDependenciesAt)) {
       trustManifestFaults.count += 1
       if (trustManifestFaults.count === trustManifestFaults.nullAt) return null
       if (trustManifestFaults.count === trustManifestFaults.changedAt) return `${value} `
+      if (trustManifestFaults.count === trustManifestFaults.invalidDependenciesAt) {
+        return JSON.stringify({ dependencies: [] })
+      }
     }
     return value
   } }
@@ -902,6 +907,32 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_target_install_incomplete')
     expect(layer.installationRoot).toBe(resolved.resolutionRoot)
     expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toEqual(layer)
+    trustManifestFaults.count = 0
+    trustManifestFaults.nullAt = Number.MAX_SAFE_INTEGER
+    await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+    const manifestReads = trustManifestFaults.count
+    trustManifestFaults.nullAt = 0
+    let lateManifestRead = 0
+    for (let at = 1; at <= manifestReads; at++) {
+      trustManifestFaults.count = 0
+      trustManifestFaults.nullAt = at
+      try {
+        await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+        throw Error('missing manifest fault rejection')
+      } catch (error) {
+        expect((error as Error).message).not.toBe('missing manifest fault rejection')
+        if ((error as Error).message === 'profile_import_plugin_target_install_invalid') {
+          lateManifestRead = at
+        }
+      } finally { trustManifestFaults.nullAt = 0 }
+    }
+    expect(lateManifestRead).toBeGreaterThan(0)
+    trustManifestFaults.count = 0
+    trustManifestFaults.invalidDependenciesAt = lateManifestRead
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_invalid')
+    trustManifestFaults.invalidDependenciesAt = 0
+    trustManifestFaults.count = 0
     const layerReceiptPath = join(layer.installationRoot, 'layer-receipt.json')
     const layerReceipt = await readFile(layerReceiptPath)
     await unlink(layerReceiptPath)

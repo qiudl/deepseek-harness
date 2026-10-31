@@ -712,6 +712,25 @@ it('keeps old Account import proof off the wire when import capabilities are abs
   } finally { client.close() }
 })
 
+it('keeps Slark Profile identity off an older Host without federated ensure capability', async () => {
+  const sent = vi.fn((frame: HostControlFrame) => result(frame, {}))
+  const { client } = await makeClient(sent,
+    allCapabilities.filter(capability => capability !== 'profile.ensure_slark_federated'))
+  try {
+    await expect(client.ensureSlarkAccountProfile({ ...binding,
+      issuer: 'https://accounts.dsh.colorbuyai.com',
+      subject: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3184',
+      accountAccessToken: 'header.payload.signature',
+      keyHandle: 'keychain:one', unlockMaterial: 'material',
+      expected: { slarkUserId: 'user-1', environmentId: binding.authorityEnvironmentId,
+        profileId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+        deviceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+        deviceKeyThumbprint: 'A'.repeat(43), loginEpoch: 0, bindingEpoch: 1 },
+    })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(sent).not.toHaveBeenCalled()
+  } finally { client.close() }
+})
+
 it('uses authenticated import capabilities for preview, status, prepare, commit, and abort', async () => {
   const seen: HostControlFrame[] = []
   const operation_id = installationId
