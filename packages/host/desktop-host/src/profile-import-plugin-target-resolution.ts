@@ -299,6 +299,7 @@ export async function inspectResolvedProfileImportTargetPluginsInIsolation(input
   if (!receipt?.equals(receiptBytes(input, lockfileDigest))) {
     throw Error('profile_import_plugin_target_resolution_incomplete')
   }
+  const merged = lockSections(lockfile)
   const expectedArchives = new Set<string>()
   for (const [name, spec] of Object.entries(dependencies)) {
     expectedArchives.add(await verifyCopiedBaselineArchive(input, targetWeb, archiveDirectory,
@@ -318,7 +319,6 @@ export async function inspectResolvedProfileImportTargetPluginsInIsolation(input
     !== JSON.stringify([...expectedArchives].sort())) {
     throw Error('profile_import_plugin_target_resolution_invalid')
   }
-  const merged = lockSections(lockfile)
   assertMergedLockfile(old, merged, plan)
   if (JSON.stringify(await planProfileImportPluginTargetManifest(manifestInput))
     !== JSON.stringify(input.manifestPlan)

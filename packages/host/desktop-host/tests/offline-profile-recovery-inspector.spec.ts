@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
+import { parseDocument } from 'yaml'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
 const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
@@ -877,6 +878,41 @@ describe('offline Profile existing-only inspector', () => {
       lockfileDigest: createHash('sha256').update(arrayPackages).digest('hex') })}\n`)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const rejectChangedLock = async (mutate: (document: ReturnType<typeof parseDocument>) => void,
+      reason: string, expectedFrame?: string) => {
+      const document = parseDocument(lock)
+      mutate(document)
+      const changed = String(document)
+      await writeFile(mergedLockPath, changed)
+      await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+        lockfileDigest: createHash('sha256').update(changed).digest('hex') })}\n`)
+      const error = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+        .then(() => null, (failure: unknown) => failure as Error)
+      expect(error?.message).toContain(reason)
+      if (expectedFrame) expect(error?.stack).toContain(expectedFrame)
+    }
+    await rejectChangedLock((document) => { document.set('importers', null) },
+      'profile_import_plugin_target_resolution_invalid', 'lockSections')
+    await rejectChangedLock((document) => { document.set('packages', []) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.set('snapshots', []) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.set('lockfileVersion', '8.0') },
+      'profile_import_plugin_target_resolution_invalid', 'lockSections')
+    await rejectChangedLock((document) => { document.deleteIn(['importers', '.', 'dependencies']) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.delete('packages') },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.delete('snapshots') },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.setIn(['importers', '.', 'dependencies',
+      'baseline-plugin'], 'changed') }, 'profile_import_plugin_target_resolution_changed')
+    await rejectChangedLock((document) => { document.setIn(['packages',
+      `baseline-plugin@${baselineSpec}`, 'resolution'], { integrity: 'changed' }) },
+    'profile_import_plugin_target_resolution_changed')
+    await rejectChangedLock((document) => { document.setIn(['snapshots',
+      `baseline-plugin@${baselineSpec}`, 'dependencies'], { changed: '1.0.0' }) },
+    'profile_import_plugin_target_resolution_changed')
     await writeFile(mergedLockPath, lock)
     await writeFile(receiptPath, receipt)
     const copiedBaselineArchive = join(resolved.resolutionRoot, '.bundled-plugins', `${baselineDigest}.tgz`)
