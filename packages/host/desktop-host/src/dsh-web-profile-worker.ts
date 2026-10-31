@@ -28,7 +28,7 @@ import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
 const execFileAsync = promisify(execFile)
 const gzipAsync = promisify(gzip)
-const REMOTE_UI_ASSET_MAX_BYTES = 8 * 1024 * 1024
+const REMOTE_UI_ASSET_MAX_BYTES = 16 * 1024 * 1024
 const REMOTE_UI_ASSET_CHUNK_BYTES = 24 * 1024
 const REMOTE_UI_GZIP_MAX_BYTES = REMOTE_UI_ASSET_MAX_BYTES + 64 * 1024
 type RemoteUiAssetEntry = { readonly url: string; readonly bytes: Buffer; gzip?: Promise<Buffer> }

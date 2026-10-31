@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createWindowsHostPipeWorkerBootData } from '../src/windows-host-pipe-worker-boot.ts'
 import type { WindowsHostPipeWorkerRunnerOptions } from '../src/windows-host-pipe-worker-runner.ts'
-import { runWindowsHostPipeWorkerMain } from '../src/windows-host-pipe-worker-main.ts'
+import { runWindowsHostPipeWorkerMain, type WindowsHostPipeWorkerMainDependencies } from '../src/windows-host-pipe-worker-main.ts'
 import { WindowsNamedPipeFrameChannel } from '../src/windows-named-pipe-frame-channel.ts'
 import { resolveWindowsNamedPipePolicy } from '../src/windows-named-pipe-policy.ts'
 import type { WindowsPeerEvidence } from '../src/windows-peer-attestor.ts'
@@ -23,6 +23,7 @@ function fixture() {
       path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
       sha256: 'c'.repeat(64),
     },
+    diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
   })
   const cancellation = {
     openCurrentThreadHandle: vi.fn(() => 91n),
@@ -50,7 +51,7 @@ function fixture() {
     loadCancellation: vi.fn(async () => cancellation),
     loadLifecycle: vi.fn(async () => lifecycle),
     loadIo: vi.fn(async () => io),
-    loadAttestor: vi.fn(async () => attest),
+    loadAttestor: vi.fn<WindowsHostPipeWorkerMainDependencies['loadAttestor']>(async () => attest),
     createConnectionId: vi.fn(() => '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122'),
     runWorker,
   }
@@ -78,10 +79,13 @@ describe('Windows Host pipe Worker composition root', () => {
     expect(state.dependencies.loadCancellation).toHaveBeenCalledOnce()
     expect(state.dependencies.loadLifecycle).toHaveBeenCalledOnce()
     expect(state.dependencies.loadIo).toHaveBeenCalledOnce()
-    expect(state.dependencies.loadAttestor).toHaveBeenCalledWith({
+    expect(state.dependencies.loadAttestor).toHaveBeenCalledOnce()
+    const attestorOptions = state.dependencies.loadAttestor.mock.calls[0]?.[0]
+    expect(attestorOptions).toMatchObject({
       allowedPublisherThumbprints: new Set(['A'.repeat(64)]),
       allowedExecutableDigests: new Set(['b'.repeat(64)]),
     })
+    expect(typeof attestorOptions?.diagnostics?.record).toBe('function')
     const options = state.receivedRunnerOptions()
     expect(options).toBeDefined()
     if (options === undefined) throw new Error('runner options missing')

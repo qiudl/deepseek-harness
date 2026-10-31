@@ -26,6 +26,7 @@ import { webcrypto, createHash } from 'node:crypto'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
+import { NativeDuetButton } from '../src/client/NativeDuetButton.tsx'
 import { DraftPersistence } from '../src/client/DraftPersistence.tsx'
 import type { DraftBridge } from '../src/client/draft-persistence.ts'
 import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
@@ -51,8 +52,15 @@ type InvokeInput = Parameters<NonNullable<NonNullable<Window['__DSH_DESKTOP_HOST
 
 async function bench(collaboration = false, remoteAvailable = true, servicesAvailable = collaboration,
   executionAvailable = collaboration, navigationAvailable = true, pluginRemote = false, conversationDraft?: DraftBridge,
-  accountIdentity?: NonNullable<Window['__DSH_DESKTOP_HOST__']>['accountIdentity']) {
+  accountIdentity?: NonNullable<Window['__DSH_DESKTOP_HOST__']>['accountIdentity'],
+  native?: Window['__DSH_NATIVE_WORKBENCH__']) {
   vi.stubGlobal('crypto', webcrypto)
+  const priorNative = Object.getOwnPropertyDescriptor(window, '__DSH_NATIVE_WORKBENCH__')
+  onTestFinished(() => {
+    if (priorNative) Object.defineProperty(window, '__DSH_NATIVE_WORKBENCH__', priorNative)
+    else Reflect.deleteProperty(window, '__DSH_NATIVE_WORKBENCH__')
+  })
+  if (native) Reflect.set(window, '__DSH_NATIVE_WORKBENCH__', native)
   const directory = await mkdtemp(join(tmpdir(), 'req0004-composer-'))
   const ctx = new Context(), id = SessionId('session-1')
   const prompt = vi.fn<SessionFace['prompt']>(async () => ({ ok: true, value: { accepted: true } }))
@@ -208,6 +216,7 @@ async function bench(collaboration = false, remoteAvailable = true, servicesAvai
     anchor: { inject: ['slots'], apply(c: Context) {
       c.slots.register({ name: 'root', children: {
         'settings.launcher': { kind: 'single', scope: 'root' },
+        'conversation.input.right': { kind: 'list', scope: 'session' },
         'conversation.input.overlay': { kind: 'list', scope: 'session' },
         'conversation.input.dock': { kind: 'list', scope: 'session' },
         'conversation.input.toolbar': { kind: 'list', scope: 'session' },
@@ -2335,4 +2344,41 @@ it('publishes the current Slark identity, discards superseded reads and clears i
   expect(injected.hooks.slarkAccount.getSnapshot()).toEqual({ name: 'Current account', avatarUrl: null })
   await injected.refreshAccount()
   expect(injected.hooks.slarkAccount.getSnapshot()).toBeNull()
+})
+
+
+it('YAML-loaded native composer keeps the original Session target and removes contributions on disposal', async () => {
+  const pending = Promise.withResolvers<undefined>()
+  const start = vi.fn(() => pending.promise)
+  const nativeDraft: DraftBridge = vi.fn(async () => ({ ok: true, value: { revision: 0, text: '' } }))
+  const desktopDraft: DraftBridge = vi.fn(async () => { throw Error('desktop draft must not own native storage') })
+  const f = await bench(false, true, false, false, true, false, desktopDraft, undefined,
+    { duetStart: start, conversationDraft: nativeDraft })
+  const slots = f.ctx.slots
+  const entry = slots.entries('conversation.input.right').find(item => item.options.id === 'slark-native-duet')
+  if (!entry?.inject) throw Error('missing native Duet action')
+  expect(entry.component).toBe(NativeDuetButton)
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as { start(sessionId: string): Promise<void> }
+  const draft = slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
+  if (!draft?.inject) throw Error('missing native draft')
+  expect(Reflect.apply(draft.inject, undefined, [SessionId('session-1')])).toMatchObject({ bridge: nativeDraft })
+  const view = render(createElement(NativeDuetButton, { ...dockRuntime('session-1'), t: dockTranslate, ...bindings }))
+  onTestFinished(() => { view.unmount(); pending.resolve(undefined) })
+  fireEvent.click(view.getByRole('button', { name: 'Duet 语音对话' }))
+  expect(start).toHaveBeenCalledExactlyOnceWith('session-1')
+  view.unmount()
+  const plugin = [...f.ctx.loader.entries()].find(item => item.options.name === 'composer-test:source')
+  if (!plugin) throw Error('missing loaded source')
+  await plugin.fiber?.dispose()
+  expect(slots.entries('conversation.input.right')).toEqual([])
+  expect(slots.entries('conversation.input.dock')).toEqual([])
+  pending.resolve(undefined); await pending.promise
+  expect(start).toHaveBeenCalledTimes(1)
+  expect(desktopDraft).not.toHaveBeenCalled()
+  expect(f.prompt).not.toHaveBeenCalled()
+})
+
+it('YAML-loaded browser composer exposes no native call without a native capability', async () => {
+  const f = await bench()
+  expect(f.ctx.slots.entries('conversation.input.right')).toEqual([])
 })

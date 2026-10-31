@@ -140,11 +140,11 @@ function base64(value: string): string {
 }
 
 /** Replace a tunnel-only map reference with a self-contained Base64 data URL. */
-async function localizeSourceMap(source: string, bundleUrl: string, fetch: TunnelFetch): Promise<string> {
+async function localizeSourceMap(source: string, bundleUrl: string, fetch: TunnelFetch, origin: string): Promise<string> {
   const match = SOURCE_MAP_TRAILER.exec(source)
   if (match?.[1] === undefined) return source
   try {
-    const response = await fetch(new URL(match[1], new URL(bundleUrl, globalThis.location.origin)))
+    const response = await fetch(new URL(match[1], new URL(bundleUrl, origin)))
     if (!response.ok) return source.replace(SOURCE_MAP_TRAILER, '')
     const dataUrl = `data:application/json;charset=utf-8;base64,${base64(await response.text())}`
     return source.replace(SOURCE_MAP_TRAILER, `//# sourceMappingURL=${dataUrl}`)
@@ -176,6 +176,7 @@ const NULL_BODY_STATUS = new Set([101, 204, 205, 304])
 /** The page half of the tunnel: one `fetch`-shaped face over `postMessage`. */
 export class WorkerTunnel {
   private readonly worker: TunnelEndpoint
+  private readonly origin: string
   private nextId = 1
   private readonly unary = new Map<TunnelRequestId, PendingUnary>()
   private readonly bodyStreams = new Map<TunnelRequestId, ReadableStreamDefaultController<Uint8Array>>()
@@ -199,9 +200,11 @@ export class WorkerTunnel {
   /**
    * Attach to an endpoint and start consuming response frames.
    * @param worker - Worker or isolated parent-frame endpoint.
+   * @param origin - Carrier URL namespace; opaque native frames receive it from their authenticated parent.
    */
-  constructor(worker: TunnelEndpoint) {
+  constructor(worker: TunnelEndpoint, origin: string = globalThis.location.origin) {
     this.worker = worker
+    this.origin = origin
     worker.addEventListener('message', (event: MessageEvent<ResponseFrame>) => {
       this.receive(event.data)
     })
@@ -246,7 +249,7 @@ export class WorkerTunnel {
       t: 'req',
       id,
       method: init?.method ?? 'GET',
-      url: new URL(input, globalThis.location.origin).toString(),
+      url: new URL(input, this.origin).toString(),
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
       ...(body === undefined ? {} : { body }),
     }
@@ -403,7 +406,7 @@ export class WorkerTunnel {
     if (!response.ok) {
       throw new Error(`web-preview tunnel: bundle ${url} failed with HTTP ${String(response.status)}`)
     }
-    const source = await localizeSourceMap(await response.text(), url, this.fetch)
+    const source = await localizeSourceMap(await response.text(), url, this.fetch, this.origin)
     const blob = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
     try {
       await new Promise<void>((resolve, reject) => {

@@ -98,3 +98,13 @@ it('decodes Markdown URL escapes once before encoding the file query', () => {
   ]) expect(new URL(localPathMediaUrl(BASE, authored!)!).searchParams.get('path')).toBe(path)
   expect(localPathMediaUrl(BASE, '/work/bad%escape.png')).toBeUndefined()
 })
+
+it('native conversation shows the answer while reasoning remains available to the independent trajectory view', () => {
+  const { container } = render(<AssistantMarkdown renderSlot={() => null} useDisclosure={useDisclosure}
+    useGroupAction={useSearchableHidden}
+    usePresentation={selector => useDetailedPresentation(policy => selector({ ...policy, separateProcess: true }))}
+    blocks={[{ kind: 'reasoning', text: 'execution detail' }, { kind: 'text', text: 'visible answer' }]}
+    streaming={false} renderMessageImages={renderMessageImages} t={t} />)
+  expect(container.textContent).toContain('visible answer')
+  expect(container.textContent).not.toContain('execution detail')
+})

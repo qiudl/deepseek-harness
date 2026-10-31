@@ -3,8 +3,12 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
+import { parseWorkbenchTerminalStreamPayload, parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { readDesktopWorkbenchResponse } from './desktop-remote-workbench-read.ts'
 import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { openDesktopRemotePrivateRequest, readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
+
+import type { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 
 const SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,199}$/u
 
@@ -93,16 +97,33 @@ export class DesktopRemoteApprovalEvents {
 /** Opens only the selected Profile's native Session, Workspace, and forwarded event streams. */
 export class DesktopRemoteUiStreamExecutor {
   constructor(private readonly gateway: TypertGateway,
-    private readonly approvals?: DesktopRemoteApprovalEvents) {}
+    private readonly approvals?: DesktopRemoteApprovalEvents,
+    private readonly readResponse?: (request: Request) => Promise<Response>,
+    private readonly terminalStreams?: DesktopRemoteTerminalStreams) {}
 
   /**
    * Open the selected Profile's native Session event stream without granting another Gateway endpoint.
-   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, or `$events`.
+   * @param endpoint - `session/list`, `session/follow`, `workspace/follow`, `$events`, or `workbench/read`.
    * @param payload - Validated arguments for the selected stream.
    * @param signal - Host-owned cancellation signal.
    * @returns Gateway events until cancellation or normal completion.
    */
   async open(endpoint: string, payload: unknown, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
+    if (endpoint === 'terminal/stream') {
+      const request = parseWorkbenchTerminalStreamPayload(payload)
+      if (!request || !this.terminalStreams) throw new Error('desktop remote UI: terminal stream unavailable')
+      return this.terminalStreams.open(this.gateway, request.args.grantId, signal)
+    }
+    if (endpoint === 'workspaceFiles/changes') {
+      const request = parseWorkbenchChangesPayload(payload)
+      if (!request) throw new Error('desktop remote UI: invalid file observation')
+      return this.gateway.stream({ namespace: 'workspaceFiles', method: 'changes', args: request.args, signal })
+    }
+    if (endpoint === 'workbench/read') {
+      const request = parseWorkbenchReadPayload(payload)
+      if (!request || !this.readResponse) throw new Error('desktop remote UI: file read unavailable')
+      return readDesktopWorkbenchResponse(this.readResponse, request, signal)
+    }
     if (endpoint === 'session/list') {
       if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args) ||
         Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
@@ -209,12 +230,16 @@ export async function handleDesktopRemoteUiStreamRequest(
     const request = await readDesktopRemotePrivateBody(req)
     if (!record(request) ||
       !Object.keys(request).every(key => ['endpoint', 'payload', 'itemChunks'].includes(key)) ||
-      (request.itemChunks !== undefined && (request.itemChunks !== true || request.endpoint !== 'session/follow')) ||
+      (request.itemChunks !== undefined && (request.itemChunks !== true || (request.endpoint !== 'session/follow' && request.endpoint !== 'terminal/stream'))) ||
       (request.endpoint !== 'session/list' && request.endpoint !== 'session/follow' &&
-        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events') ||
-      (request.endpoint === 'session/follow' ? !followPayload(request.payload) :
-        !record(request.payload) || Object.keys(request.payload).length !== 1 ||
-        !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
+        request.endpoint !== 'workspace/follow' && request.endpoint !== '$events'
+        && request.endpoint !== 'terminal/stream' && request.endpoint !== 'workbench/read' && request.endpoint !== 'workspaceFiles/changes') ||
+      (request.endpoint === 'terminal/stream' ? !parseWorkbenchTerminalStreamPayload(request.payload)
+        : request.endpoint === 'workspaceFiles/changes' ? !parseWorkbenchChangesPayload(request.payload)
+          : request.endpoint === 'workbench/read' ? !parseWorkbenchReadPayload(request.payload)
+            : request.endpoint === 'session/follow' ? !followPayload(request.payload) :
+              !record(request.payload) || Object.keys(request.payload).length !== 1 ||
+          !record(request.payload.args) || Object.keys(request.payload.args).length !== 0))
       throw new Error('invalid stream request')
     const stream = await open(request.endpoint, request.payload, controller.signal)
     controller.signal.throwIfAborted()

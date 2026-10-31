@@ -42,6 +42,8 @@ kind: "package-reference"
 
 `profile.remote_ui_read` 将启动、资源、Session、命令、技能、提供方和启动元数据读取绑定到同一有效视图租约。`cotTranslation/limits` 读取翻译偏好、可用提供方和文本上限，不授予翻译执行或设置写入。启动读取及无参数元数据读取要求空 `args`；`credentials/describe` 最多接受 64 个校验过的引用，只返回状态，不返回密钥值。`asset/read` 只接受插件 URL 和字节偏移；`asset/describe` 只接受最长 4096 字符的插件 URL，返回 SHA-256 和长度。Host worker 只为当前启动项列出的 URL 返回分块或摘要。请求不能指定 Profile 路径、cookie、worker token、任意 URL 或可修改状态的 Gateway 方法。每个结果仍受 64 KiB 控制帧限制。Host 仅在安装 worker 执行器后发布此 capability。 `session/collaborationSources` 只接受 `{ request: { sessionId, cursor? } }`；游标为不可变的 SHA-256 快照摘要。所属 worker 每次控制读取返回一条完整原消息，JSON 最多60 KiB；继续读取使用该消息摘要，不截断正文。
 
+原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
+
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
@@ -212,3 +214,15 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 首条回复凭据使用 `dsh-collaboration-continuation-observation-v1` 签名域。commit 嵌套原消费 commit，并独立绑定观察 ID、`assistant_message_committed`、助手事件序号和观察到的持久前缀。消费签名不能证明此域；凭据不包含回复正文或完成声明。
 
 `profile.remote_ui_stream.session_list` 声明支持 `args` 为空的 `session/list` 游标。每次打开、轮询和关闭仍由所属视图租约授权；结果通过现有的 16 KiB 分块传输，不提高 64 KiB 控制帧上限。
+
+闭合的会话命令集还包含 `session.select_model`（提供方、模型和可选思考强度）与 `session.select_agent`（预设）。两者均携带精确会话 ID 和必需的控制权证明；执行前校验文本上限并拒绝未知字段。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。
+
+个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
+
+受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。

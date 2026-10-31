@@ -421,3 +421,14 @@ it('disables repeated history actions only while an explicit lookup is pending',
   await act(async () => { held.resolve({ ok: false }); await selected })
   for (const id of ids) expect(screen.getByTestId<HTMLButtonElement>(id).disabled).toBe(false)
 })
+
+it('keeps the original message beside finite local planning failure observations', () => {
+  const f = fixture()
+  const state = { phase: 'ready' as const, groups: [{ original: f.original, phase: 'ready' as const, replies: [],
+    planningState: 'planning', planningFailure: { reason: 'timeout' as const, observedAt: '2026-10-19T00:00:00.000Z' } }] }
+  render(<CollaborationResultsDock {...f.props} useSlarkResults={selector => selector(state)} />)
+  expect(screen.getByText(f.original.original_message)).toBeTruthy()
+  expect(screen.getByText(/本机识别任务曾失败/).textContent).toContain(zh['task.planningFailure.timeout'])
+  expect(screen.queryByText(zh['task.planning'])).toBeNull()
+  expect(screen.queryByRole('button', { name: /重试|retry/i })).toBeNull()
+})
