@@ -21,7 +21,7 @@ import { ProfileExtensionOperations, type ExtensionReceipt } from '../src/extens
 import { LegacyClaimWorkerGate } from '../src/legacy-claim-worker-gate.ts'
 import { MessageId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
-import type { HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostControlRequestId, HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { generationLogPath } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
@@ -196,6 +196,15 @@ async function accountService(value: Awaited<ReturnType<typeof bundledFixture>>,
     runtimeGeneration: 5, schemaGeneration: 1, ownership, workers, extensions,
     claims: new LegacyClaimWorkerGate(() => false), inspector: value.inspector,
     ownerStateApplicator: value.ownerStateApplicator, inspectPersistence, createWorker, onCleanupFailure: () => {} })
+}
+
+function restrictedAccountRead(service: RestrictedAccountSessionService, authorize: () => PersonProfileRecord,
+  command: HostRemoteSessionCommand, signal: AbortSignal) {
+  return service.read({ authorizeRestrictedAccountHistory: authorize }, {
+    issuer: 'fixture', subject: 'fixture', accountAccessToken: 'fixture',
+    authorityEnvironmentId: 'fixture', accountBindingHandle: 'fixture', authorityBindingVersion: 1,
+    keyHandle: 'fixture', unlockMaterial: 'fixture',
+  }, () => {}, command, signal)
 }
 
 function verifyBundle(value: Awaited<ReturnType<typeof bundledFixture>>) {
@@ -840,13 +849,27 @@ describe('offline Profile existing-only inspector', () => {
     const before = await treeInventory(value.profileRoot)
     const command = { operation: 'session.list' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
-    await expect(service.read(authorize, command, new AbortController().signal)).resolves.toEqual({ items: ['fixture history'] })
+    await expect(restrictedAccountRead(service, authorize, command, new AbortController().signal)).resolves.toEqual({ items: ['fixture history'] })
     expect(authorize.mock.calls.length).toBeGreaterThan(3)
     expect(stop).toHaveBeenCalledOnce()
     expect(await treeInventory(value.profileRoot)).toEqual(before)
-    await expect(service.read(authorize, { operation: 'session.create',
+    await expect(restrictedAccountRead(service, authorize, { operation: 'session.create',
       command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
+  it('requires the trusted broker authority guard before consulting local Account proof', async () => {
+    const value = await bundledFixture()
+    const host = { authorizeRestrictedAccountHistory: vi.fn(() => profile()) }
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker)
+    await expect(service.read(host, { issuer: 'fixture', subject: 'fixture', accountAccessToken: 'fixture',
+      authorityEnvironmentId: 'fixture', accountBindingHandle: 'fixture', authorityBindingVersion: 1,
+      keyHandle: 'fixture', unlockMaterial: 'fixture' }, () => { throw new HostAuthorityError('unauthorized') },
+    { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId },
+    new AbortController().signal)).rejects.toMatchObject({ code: 'unauthorized' })
+    expect(host.authorizeRestrictedAccountHistory).not.toHaveBeenCalled()
+    expect(createWorker).not.toHaveBeenCalled()
   })
 
   it('does not return restricted history if Account authorization is revoked during the read', async () => {
@@ -858,7 +881,7 @@ describe('offline Profile existing-only inspector', () => {
     onTestFinished(() => release())
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
       remoteSession: async () => { enter(); await new Promise<void>(resolve => { release = resolve }); return { items: ['private'] } } }))
-    const pending = service.read(() => {
+    const pending = restrictedAccountRead(service, () => {
       if (!authorized) throw new HostAuthorityError('unauthorized')
       return record
     }, { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId },
@@ -880,7 +903,7 @@ describe('offline Profile existing-only inspector', () => {
     onTestFinished(() => finish())
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort: enter, done,
       remoteSession: async () => ({ items: ['private'] }) }))
-    const pending = service.read(() => {
+    const pending = restrictedAccountRead(service, () => {
       if (!authorized) throw new HostAuthorityError('unauthorized')
       return record
     }, { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId },
@@ -902,7 +925,7 @@ describe('offline Profile existing-only inspector', () => {
       inspections += 1
       return inspections === 1 ? current : { ...current, inventoryDigest: 'f'.repeat(64) }
     })
-    await expect(service.read(() => record, { operation: 'session.list',
+    await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
       command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     expect(createWorker).not.toHaveBeenCalled()
@@ -918,7 +941,7 @@ describe('offline Profile existing-only inspector', () => {
       if (++checks === 2) Object.assign(record, { bindingGeneration: record.bindingGeneration + 1 })
       return record
     }
-    await expect(service.read(authorize, { operation: 'session.list',
+    await expect(restrictedAccountRead(service, authorize, { operation: 'session.list',
       command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'stale' })
     expect(createWorker).not.toHaveBeenCalled()
@@ -1004,7 +1027,7 @@ describe('offline Profile existing-only inspector', () => {
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
     const service = await accountService(value, (spec, signal) => factory.create(spec, signal))
     const account = profile()
-    const history = await service.read(() => account, { operation: 'session.history',
+    const history = await restrictedAccountRead(service, () => account, { operation: 'session.history',
       command_id: '123e4567-e89b-42d3-a456-426614174004' as HostControlRequestId,
       session_id: id, max_events: 100 }, AbortSignal.timeout(30_000))
     expect(JSON.stringify(history)).toContain('old-writer historical prompt')

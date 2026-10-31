@@ -1,13 +1,14 @@
 import { join } from 'node:path'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { RestrictedPersistenceInspection } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import type { DesktopHost, ExistingAccountProof } from './desktop-host.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
 import type { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 import type { OfflineProfileRecoveryInspector } from './offline-profile-recovery.ts'
 import { withRestrictedProfileReader } from './restricted-profile-reader.ts'
 import type { SingleHostLock } from './single-instance.ts'
-import { HostAuthorityError, type PersonProfileRecord, type ProfileWorkerFactory } from './types.ts'
+import { HostAuthorityError, type ProfileWorkerFactory } from './types.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
@@ -32,18 +33,26 @@ export class RestrictedAccountSessionService {
 
   /**
    * Read one bounded history command after a trusted caller proves Account ownership.
-   * The caller must revalidate online authority, binding, local unlock proof, and its connection
-   * whenever `authorize` runs. This service cannot establish those facts on its own.
-   * @param authorize - Synchronous live authorization returning the current registry record.
+   * The trusted broker must verify fresh server authority and bind its lifetime to the connection.
+   * @param host - The Host that independently verifies token, binding and local unlock proof.
+   * @param proof - Account proof captured from the trusted broker, never a Renderer payload.
+   * @param assertFreshAuthority - Live check of verified server authority and owning connection.
    * @param command - Session list or history only.
    * @param signal - Authenticated connection lifetime.
    * @returns A private, bounded Session response after isolated worker cleanup.
    */
-  async read(authorize: () => PersonProfileRecord, command: HostRemoteSessionCommand,
+  async read(host: Pick<DesktopHost, 'authorizeRestrictedAccountHistory'>, proof: ExistingAccountProof,
+    assertFreshAuthority: () => void, command: HostRemoteSessionCommand,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     signal.throwIfAborted()
     if (command.operation !== 'session.list' && command.operation !== 'session.history') {
       throw new HostAuthorityError('unauthorized')
+    }
+    const capturedProof = Object.freeze({ ...proof })
+    const authorize = () => {
+      signal.throwIfAborted()
+      assertFreshAuthority()
+      return host.authorizeRestrictedAccountHistory(capturedProof)
     }
     const profile = authorize()
     if (profile.kind !== 'account' || !PROFILE_ID.test(profile.profileId)) throw new HostAuthorityError('unauthorized')

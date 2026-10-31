@@ -752,6 +752,16 @@ it.skipIf(process.platform === 'win32')('restores a partially written Account cl
   const account = { issuer: 'https://accounts.dsh.colorbuyai.com', subject,
     accountAccessToken: token, keyHandle: 'keychain:claim-recovery', unlockMaterial: material, ...binding }
   const profile = await application.host.ensureAccountProfile({ ...account, ownerId: 'owner' })
+  await application.workers.dispose(profile.profileId)
+  const startsBeforeRestrictedAuthorization = workerStarts
+  expect(application.host.authorizeRestrictedAccountHistory(account).profileId).toBe(profile.profileId)
+  expect(() => application.host.authorizeRestrictedAccountHistory({ ...account, accountAccessToken: 'invalid' })).toThrow()
+  expect(() => application.host.authorizeRestrictedAccountHistory({ ...account, subject: randomUUID() })).toThrow()
+  expect(() => application.host.authorizeRestrictedAccountHistory({ ...account, authorityBindingVersion: 2 })).toThrow()
+  expect(() => application.host.authorizeRestrictedAccountHistory({ ...account, keyHandle: 'keychain:other' })).toThrow()
+  expect(() => application.host.authorizeRestrictedAccountHistory({ ...account,
+    unlockMaterial: Buffer.alloc(32, 8).toString('base64url') })).toThrow()
+  expect(workerStarts).toBe(startsBeforeRestrictedAuthorization)
   expect(serverOptions?.listBotRoster).toBeDefined()
   await expect(serverOptions!.listBotRoster!(profile.profileId, '', 50, new AbortController().signal))
     .rejects.toThrow()
