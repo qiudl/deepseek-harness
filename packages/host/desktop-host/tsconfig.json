@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
+  "include": ["src"],
+  "references": [
+    { "path": "../../util/brand" },
+    { "path": "../control-protocol" },
+    { "path": "../../session/session-persistence-jsonl" },
+    { "path": "../../runtime-diagnostics/invariants" },
+    { "path": "../../../vendor/cordis" }
+  ]
+}

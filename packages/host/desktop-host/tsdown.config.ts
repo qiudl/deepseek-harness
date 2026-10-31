@@ -1,0 +1,52 @@
+import { defineConfig } from 'tsdown'
+
+/** Build Host authority entries plus the standalone Main-only client artifact. */
+export default defineConfig([
+  {
+    entry: { index: 'lib/types/index.js' },
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    codeSplitting: false,
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+  },
+  {
+    entry: { invariant: 'lib/types/invariant.js' },
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    codeSplitting: false,
+  },
+  {
+    entry: { startup: 'lib/types/startup.js' },
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    codeSplitting: false,
+    noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
+  },
+  {
+    entry: { 'host-control-client': 'lib/types/client.js' },
+    outDir: 'lib',
+    format: ['esm'],
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    noExternal: [/^@deepseek-ai\/dsh-host-control-protocol(?:\/|$)/u],
+    codeSplitting: false,
+  },
+])
