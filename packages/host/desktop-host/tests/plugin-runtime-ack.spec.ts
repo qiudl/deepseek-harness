@@ -22,9 +22,9 @@ it('does not mistake another module or a disabled row for an active installation
     await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(30))).rejects.toThrow()
   }
 })
-it('rejects failed and duplicate runtime identities', async () => {
+it('waits out a transiently failed fiber and rejects duplicate runtime identities', async () => {
   response([{ ...expected[0], enabled: true, fiberPhase: 'failed' }])
-  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('plugin_startup_failed')
+  await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(250))).rejects.toThrow()
   response([{ ...expected[0], enabled: true, fiberPhase: 'active' }, { ...expected[0], enabled: true, fiberPhase: 'failed' }])
   await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('invalid_runtime_response')
 })

@@ -57,7 +57,13 @@ export async function waitForPluginRuntime(
       if (matches.length > 1) throw new Error('invalid_runtime_response')
       return matches[0] as { moduleName?: unknown; enabled?: unknown; fiberPhase?: unknown } | undefined
     })
-    if (matching.some(entry => entry?.fiberPhase === 'failed')) throw new Error('plugin_startup_failed')
+    // REQ-20261028-0021: a fiber can report failed during the same boot that later activates it
+    // (the runtime retries startup while the composition settles); only the bounded lifetime
+    // decides a genuine startup failure.
+    if (matching.some(entry => entry?.fiberPhase === 'failed')) {
+      await setTimeout(100, undefined, { signal: lifetime })
+      continue
+    }
     const removed = absent.every(id => !entries.some((entry: unknown) => typeof entry === 'object' && entry !== null
       && (entry as { entryId?: unknown }).entryId === id))
     const inactive = disabled.every(({ entryId, moduleName }) => {
