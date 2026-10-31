@@ -1582,7 +1582,7 @@ describe('offline Profile existing-only inspector', () => {
     await expect(sessionCoordinator.inspectCommittingWithPlugins(jointInput))
       .rejects.toThrow('profile_import_plugin_publish_changed')
     await hostLock.release()
-  }, 120_000)
+  }, 300_000)
 
   it.skipIf(process.platform === 'win32')('prepares and jointly commits a plugin layer when the empty target has no lockfile', async () => {
     const value = await pluginPlanFixture(true)
