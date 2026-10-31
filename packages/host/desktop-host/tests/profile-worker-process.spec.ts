@@ -158,6 +158,23 @@ describe('profile worker child process', () => {
       .rejects.toMatchObject({ code: 'unavailable' })
   })
 
+  it.each(['already-exited', 'wait-for-close', 'kill-fails'] as const)(
+    'handles a worker without a readiness stream (%s)', async (mode) => {
+      const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+      const child = Object.assign(new EventEmitter(), {
+        pid: 42, stdout: null, exitCode: mode === 'already-exited' ? 1 : null, signalCode: null,
+        kill: () => {
+          if (mode === 'kill-fails') throw new Error('cannot terminate worker')
+          if (mode === 'wait-for-close') queueMicrotask(() => { child.emit('close') })
+          return true
+        },
+      })
+      const ready = privateMethod(factory, 'waitForOrigin')(child)
+      if (mode === 'kill-fails') await expect(ready).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+      else await expect(ready).rejects.toMatchObject({ code: 'unavailable' })
+    },
+  )
+
   it('reports confirmed process exit separately from an earlier worker error', async () => {
     const child = new ControlledChild()
     const handle = await readyHandle(child)
@@ -170,6 +187,16 @@ describe('profile worker child process', () => {
     child.emit('exit', 1, null)
     await handle.exited
     expect(exited).toBe(true)
+  })
+
+  it('recognizes a Web child that already exited before the handle was created', async () => {
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    const child = Object.assign(controlledWebChild(), { exitCode: 1, signalCode: null })
+    const handle = privateMethod(factory, 'handle')(child, 'http://127.0.0.1:1', { name: 'cookie', value: 'fixture' }, 1)
+    await expect(handle.exited).resolves.toBeUndefined()
+    const done = expect(handle.done).rejects.toThrow()
+    child.emit('exit', 1, null)
+    await done
   })
 
   it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
@@ -327,6 +354,9 @@ describe('profile worker child process', () => {
       .rejects.toMatchObject({ code: 'unavailable' })
     calls = 0
     await expect(read({ args: { url: asset, offset: 0 } }, () => ++calls === 3))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    calls = 0
+    await expect(read({ args: { url: asset, offset: 0 } }, () => ++calls === 4))
       .rejects.toMatchObject({ code: 'unavailable' })
     const cache = { current: { url: asset, bytes: Buffer.from('registered();') } }
     calls = 0
@@ -654,6 +684,32 @@ describe('dsh web Profile worker', () => {
     } finally { clearTimeout(timer) }
     expect(killed).toBe(true)
   }, 15_000)
+
+  it('stops the startup child when its owning connection was already cancelled', async () => {
+    const child = Object.assign(controlledWebChild(), { pid: 12345, exitCode: null, signalCode: null })
+    let killed = false
+    child.kill = () => { killed = true; child.emit('close', null, 'SIGKILL'); return true }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    controller.abort()
+    await expect(privateMethod(factory, 'waitForOrigin')(child, controller.signal)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(killed).toBe(true)
+  })
+
+  it('rejects readiness if the owner disconnects before the ready result is consumed', async () => {
+    const child = Object.assign(controlledWebChild(), { pid: 12345, exitCode: null, signalCode: null })
+    let killed = false
+    child.kill = () => { killed = true; child.emit('close', null, 'SIGKILL'); return true }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    const wait = privateMethod(factory, 'waitForOrigin')(child, controller.signal)
+    child.stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
+    controller.abort()
+    await expect(wait).rejects.toMatchObject({ code: 'unavailable' })
+    expect(killed).toBe(true)
+  })
 
   it('reports an unconfirmed worker exit when the startup child cannot be killed', async () => {
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {

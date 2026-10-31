@@ -17,6 +17,8 @@ import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
+import { RestrictedAccountSessionService } from '../src/restricted-account-session.ts'
+import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -781,6 +783,42 @@ it.skipIf(process.platform === 'win32')('stops Profile workers and retains owner
   await application.workers.start({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
   await expect(application.close()).rejects.toBe(failure)
   expect(stopWorker).toHaveBeenCalledOnce()
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('retains Host ownership and reports all shutdown failures', async () => {
+  const { config, root } = fixture()
+  const serverFailure = new Error('server close failed')
+  const workerFailure = new Error('worker stop failed')
+  const server = { start: async () => undefined, close: async () => { throw serverFailure } }
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
+  })
+  const dispose = vi.spyOn(application.workers, 'disposeAll').mockRejectedValue(workerFailure)
+  onTestFinished(() => { dispose.mockRestore(); rmSync(root, { recursive: true, force: true }) })
+  await expect(application.close()).rejects.toMatchObject({ name: 'AggregateError', message: 'host_cleanup_unconfirmed',
+    errors: [serverFailure, workerFailure] })
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('retains Host ownership when startup and cleanup both fail', async () => {
+  const { config, root } = fixture()
+  const startupFailure = new Error('server startup failed')
+  const readerFailure = new Error('reader cleanup failed')
+  const workerFailure = new Error('worker cleanup failed')
+  const readerClose = vi.spyOn(RestrictedAccountSessionService.prototype, 'close').mockRejectedValue(readerFailure)
+  const workerClose = vi.spyOn(ProfileWorkerSupervisor.prototype, 'disposeAll').mockRejectedValue(workerFailure)
+  onTestFinished(() => { readerClose.mockRestore(); workerClose.mockRestore(); rmSync(root, { recursive: true, force: true }) })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  await expect(startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), {
+      start: async () => { throw startupFailure }, close: async () => {},
+    }),
+    restrictedHistory: { withAllWritersExcluded: async (_profileId, operation) => operation(),
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {} },
+  })).rejects.toMatchObject({ name: 'AggregateError', message: 'host_startup_cleanup_unconfirmed',
+    errors: [startupFailure, readerFailure, workerFailure] })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
 })
 
