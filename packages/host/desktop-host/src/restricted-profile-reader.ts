@@ -1,6 +1,7 @@
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
+import type { RestrictedProfileFence } from './restricted-profile-fence.ts'
 import { executeRestrictedSessionCommand } from './session-command.ts'
 import { stageRestrictedProfile } from './restricted-profile-staging.ts'
 import type { ProfileWorkerFactory } from './types.ts'
@@ -110,8 +111,8 @@ export async function startRestrictedProfileReader(input: StagingInput & {
 
 /**
  * Reserve an inactive Profile for the whole isolated reader lifetime.
- * The caller still owns the Host lock, identity checks, connection lifetime and any external
- * process exclusion. The callback must return its result without sending it independently;
+ * The caller must hold external writer exclusion for the entire operation. A point-in-time
+ * quiescence check alone cannot prevent another process from starting. The callback must return its result without sending it independently;
  * its result is discarded after connection cancellation.
  * @param workers - Supervisor of the regular Profile worker.
  * @param extensions - The Host's shared extension-operation owner.
@@ -124,53 +125,76 @@ export async function withRestrictedProfileReader<T>(
   workers: ProfileWorkerSupervisor,
   extensions: ProfileExtensionOperations,
   claims: LegacyClaimWorkerGate,
-  input: Parameters<typeof startRestrictedProfileReader>[0],
+  input: Parameters<typeof startRestrictedProfileReader>[0] & {
+    readonly fence: RestrictedProfileFence
+    /** Verify worker and externally fenced writers are quiescent before admission and after cleanup. */
+    readonly assertAllWritersQuiescent: () => void
+  },
   use: (reader: RestrictedProfileReader) => Promise<T>,
 ): Promise<T> {
   return extensions.withRestrictedAccess(input.profileId, async () => {
     try {
-      const fencedInput = { ...input, assertCurrent: () => {
-        claims.assertOpen(input.profileId)
-        input.assertCurrent()
-      } }
       const guard = () => {
         input.signal.throwIfAborted()
         input.ownership.assertOwner()
-        fencedInput.assertCurrent()
+        claims.assertOpen(input.profileId)
+        input.assertAllWritersQuiescent()
+        input.assertCurrent()
       }
       guard()
       return await workers.withInactiveProfile(input.profileId, async () => {
-        let reader: RestrictedProfileReader
+        const operationId = input.fence.begin(input.profileId)
+        let cleanupConfirmed = true
+        const fencedInput = { ...input, assertCurrent: () => {
+          input.fence.assertOwned(input.profileId, operationId)
+          claims.assertClaimOpen(input.profileId)
+          input.assertCurrent()
+        } }
         try {
-          reader = await startRestrictedProfileReader(fencedInput)
-        } catch (error) {
-          if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError)
-            workers.blockProfile(input.profileId)
-          throw error
-        }
-        let abort: (() => void) | undefined
-        try {
-          input.signal.throwIfAborted()
-          const cancelled = new Promise<never>((_resolve, reject) => {
-            abort = () => reject(input.signal.reason)
-            input.signal.addEventListener('abort', abort, { once: true })
-          })
-          const operation = Promise.resolve().then(() => {
-            input.signal.throwIfAborted()
-            return use(reader)
-          })
-          const result = await Promise.race([operation, cancelled])
-          input.signal.throwIfAborted()
-          input.ownership.assertOwner()
-          fencedInput.assertCurrent()
-          return result
-        } finally {
-          if (abort) input.signal.removeEventListener('abort', abort)
+          let reader: RestrictedProfileReader
           try {
-            await reader.close()
+            reader = await startRestrictedProfileReader(fencedInput)
           } catch (error) {
-            workers.blockProfile(input.profileId)
+            if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
+              cleanupConfirmed = false
+              workers.blockProfile(input.profileId)
+            }
             throw error
+          }
+          let abort: (() => void) | undefined
+          try {
+            input.signal.throwIfAborted()
+            const cancelled = new Promise<never>((_resolve, reject) => {
+              abort = () => reject(input.signal.reason)
+              input.signal.addEventListener('abort', abort, { once: true })
+            })
+            const operation = Promise.resolve().then(() => {
+              input.signal.throwIfAborted()
+              return use(reader)
+            })
+            const result = await Promise.race([operation, cancelled])
+            input.signal.throwIfAborted()
+            input.ownership.assertOwner()
+            fencedInput.assertCurrent()
+            return result
+          } finally {
+            if (abort) input.signal.removeEventListener('abort', abort)
+            try {
+              await reader.close()
+            } catch (error) {
+              cleanupConfirmed = false
+              workers.blockProfile(input.profileId)
+              throw error
+            }
+          }
+        } finally {
+          if (cleanupConfirmed) {
+            try {
+              input.fence.clear(input.profileId, operationId, input.assertAllWritersQuiescent)
+            } catch (error) {
+              workers.blockProfile(input.profileId)
+              throw error
+            }
           }
         }
       }, guard)

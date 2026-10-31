@@ -8,6 +8,7 @@ import type { MigrationOwnerStateApplicator } from './migration-owner-state-appl
 import type { OfflineProfileRecoveryInspector } from './offline-profile-recovery.ts'
 import { withRestrictedProfileReader } from './restricted-profile-reader.ts'
 import type { SingleHostLock } from './single-instance.ts'
+import type { RestrictedProfileFence } from './restricted-profile-fence.ts'
 import { HostAuthorityError, type ProfileWorkerFactory } from './types.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
@@ -21,6 +22,8 @@ export class RestrictedAccountSessionService {
     readonly runtimeGeneration: number
     readonly schemaGeneration: number
     readonly ownership: SingleHostLock
+    readonly fence: RestrictedProfileFence
+    readonly assertAllWritersQuiescent: (profileId: string) => void
     readonly workers: ProfileWorkerSupervisor
     readonly extensions: ProfileExtensionOperations
     readonly claims: LegacyClaimWorkerGate
@@ -85,6 +88,7 @@ export class RestrictedAccountSessionService {
       inspectPersistence: () => this.options.inspectPersistence(expectedProfileId),
       expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
       ownership: this.options.ownership, assertCurrent, signal,
+      fence: this.options.fence, assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
       profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
       onCleanupFailure: this.options.onCleanupFailure,
     }, reader => reader.read(command, signal))

@@ -66,6 +66,7 @@ import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeA
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { executeRemoteSessionCommand, FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
+import { RestrictedProfileFence } from './restricted-profile-fence.ts'
 import type { HostClock, OfflineProfileRecoveryPreflight, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import {
@@ -466,6 +467,7 @@ export async function startDesktopHostApplication(
   if (uid === undefined) throw new HostAuthorityError('unavailable')
   ownerDirectory(root, uid)
   let ownership: SingleHostLock | undefined
+  let restrictedFence: RestrictedProfileFence | undefined
   let server: UnixHostServer | undefined
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
@@ -475,9 +477,16 @@ export async function startDesktopHostApplication(
     ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })
   /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
-  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))
+  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)),
+    profileId => restrictedFence?.pending(profileId) !== undefined)
   try {
     ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
+    const restrictedFencesRoot = join(root, 'restricted-fences')
+    ownerDirectory(restrictedFencesRoot, uid)
+    // Persist the directory entry before any fence inside it can be relied on after a crash.
+    const rootFd = openSync(root, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(rootFd) } finally { closeSync(rootFd) }
+    restrictedFence = new RestrictedProfileFence(restrictedFencesRoot, uid, ownership)
     const registry = new ProfileRegistry({
       root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, uid, 32), clock,
     })
@@ -491,7 +500,8 @@ export async function startDesktopHostApplication(
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
     const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
-    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId))
+    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId),
+      profileId => restrictedFence?.pending(profileId) !== undefined)
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing

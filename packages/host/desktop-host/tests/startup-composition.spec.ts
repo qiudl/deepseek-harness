@@ -304,6 +304,13 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   expect(serverOptions.modelClaimTransaction).toBeDefined()
   expect(serverOptions.modelClaimTransaction?.retry).toBeDefined()
   expect(workerSpecs).toHaveLength(1)
+  const fencePath = join(root, 'restricted-fences', `${profile.profileId}.json`)
+  writeFileSync(fencePath, JSON.stringify({ version: 1, profileId: profile.profileId,
+    operationId: randomUUID(), state: 'pending' }), { mode: 0o600 })
+  expect(application.workers.isProfileBlocked(profile.profileId)).toBe(true)
+  await expect(application.workers.withPreparation(profile.profileId, async () => {}))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  unlinkSync(fencePath)
   const opened = await application.host.openLocalProfile({ profileId: profile.profileId, ownerId: 'owner' })
   expect((await application.host.activateView({
     ...opened,
@@ -726,6 +733,31 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
   expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)
+})
+
+it.skipIf(process.platform === 'win32')('restores a per-Profile restricted fence when Host starts again', async () => {
+  const { config, root } = fixture()
+  const profileId = randomUUID()
+  const otherId = randomUUID()
+  const directory = join(root, 'restricted-fences')
+  mkdirSync(directory, { mode: 0o700 })
+  writeFileSync(join(directory, `${profileId}.json`), JSON.stringify({ version: 1, profileId,
+    operationId: randomUUID(), state: 'pending' }), { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const started: string[] = []
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async spec => {
+      started.push(spec.profileId)
+      return { closeNotifications() {}, abort() {}, done: Promise.resolve() }
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const input = (id: string) => ({ profileId: id, profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
+  await expect(application.workers.start(input(profileId))).rejects.toMatchObject({ code: 'unavailable' })
+  await application.workers.start(input(otherId))
+  expect(started).toEqual([otherId])
 })
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {

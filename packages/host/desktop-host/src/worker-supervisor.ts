@@ -37,7 +37,8 @@ export class ProfileWorkerSupervisor {
   private readonly exitedWorkers = new WeakSet<ProfileWorkerHandle>()
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
-  constructor(private readonly factory: ProfileWorkerFactory) {}
+  constructor(private readonly factory: ProfileWorkerFactory,
+    private readonly durableBlocked: (profileId: string) => boolean = () => false) {}
 
   /**
    * Read a Bot identity from the same live exclusive-writer Profile worker.
@@ -142,12 +143,12 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile root, credential handle, and allowed plugin roots.
    */
   async start(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed || this.blockedProfiles.has(input.profileId)) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(input.profileId, () => this.startOwned(input))
   }
 
   private async startOwned(input: StartProfileWorkerInput): Promise<void> {
-    if (this.blockedProfiles.has(input.profileId)) throw new HostAuthorityError('unavailable')
+    if (this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     if (this.workers.has(input.profileId)) throw new HostAuthorityError('conflict')
     input.signal?.throwIfAborted()
     const { signal, ...profile } = input
@@ -172,9 +173,9 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile-owned runtime inputs.
    */
   async ensure(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed || this.blockedProfiles.has(input.profileId)) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     await this.serial(input.profileId, async () => {
-      if (this.blockedProfiles.has(input.profileId)) throw new HostAuthorityError('unavailable')
+      if (this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
       if (!this.workers.has(input.profileId)) await this.startOwned(input)
     })
   }
@@ -609,9 +610,9 @@ export class ProfileWorkerSupervisor {
    * @returns The operation's result after queued scoped work settles.
    */
   async withPreparation<T>(profileId: string, operation: (scope: ProfilePreparationScope) => Promise<T>): Promise<T> {
-    if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(profileId, async () => {
-      if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
       let active = true
       let tail = Promise.resolve()
       let failed = false
@@ -626,7 +627,7 @@ export class ProfileWorkerSupervisor {
         ensure: input => {
           if (input.profileId !== profileId) return Promise.reject(new HostAuthorityError('profile_mismatch'))
           return enqueue(async () => {
-            if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+            if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
             if (!this.workers.has(profileId)) await this.startOwned(input)
           })
         },
@@ -654,9 +655,9 @@ export class ProfileWorkerSupervisor {
    * @returns The isolated operation's result.
    */
   async withQuiescent<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
-    if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(profileId, async () => {
-      if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
       guard?.()
       try {
         await this.disposeOwned(profileId)
@@ -676,9 +677,9 @@ export class ProfileWorkerSupervisor {
    * @returns The isolated operation's result.
    */
   async withInactiveProfile<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
-    if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(profileId, async () => {
-      if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
       guard?.()
       const worker = this.workers.get(profileId)
       if (worker) {
@@ -703,7 +704,7 @@ export class ProfileWorkerSupervisor {
    * @returns Whether its worker state is uncertain.
    */
   isProfileBlocked(profileId: string): boolean {
-    return this.blockedProfiles.has(profileId)
+    return this.blockedProfiles.has(profileId) || this.durableBlocked(profileId)
   }
 
   private async disposeOwned(profileId: string): Promise<void> {
