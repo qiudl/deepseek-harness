@@ -128,6 +128,7 @@ export class RestrictedProfileFence {
     const record = this.read(profileId)
     if (!record || record.ownerGeneration === this.ownership.generation || record.ownerPid === undefined
       || isProcessAlive(record.ownerPid)) return undefined
+    const ownerPid = record.ownerPid
     if (!isAbsolute(stagingParent) || resolve(stagingParent) !== stagingParent) throw new HostAuthorityError('invalid_input')
     const parent = lstatSync(stagingParent)
     if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== this.uid || (parent.mode & 0o077) !== 0) {
@@ -146,13 +147,13 @@ export class RestrictedProfileFence {
     assertQuiescent()
     this.ownership.assertOwner()
     assertAbsent()
-    if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(record.ownerPid)) throw new HostAuthorityError('stale')
+    if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(ownerPid)) throw new HostAuthorityError('stale')
     let used = false
     return () => {
       if (used) throw new HostAuthorityError('stale')
       this.ownership.assertOwner()
       assertAbsent()
-      if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(record.ownerPid!)) {
+      if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(ownerPid)) {
         throw new HostAuthorityError('stale')
       }
       this.clear(profileId, operationId, () => {})

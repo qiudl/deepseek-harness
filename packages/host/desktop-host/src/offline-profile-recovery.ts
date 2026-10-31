@@ -422,7 +422,6 @@ export class OfflineProfileRecoveryInspector {
         keyHandleDigest: hash(profile.keyHandle),
         persistenceGeneration: persistence.generation,
         persistenceInventoryDigest: persistence.inventoryDigest,
-        ...(restricted ? { restrictedCompression: persistence.compression } : {}),
         runtimeGeneration: expected.runtimeGeneration,
         schemaGeneration: expected.schemaGeneration,
         ownerStateGeneration: ownerPaths.generation,
@@ -437,18 +436,16 @@ export class OfflineProfileRecoveryInspector {
         state,
         compatibility,
       }))
-      if (!restricted) {
-        this.plans.delete(this.planDigestByProfile.get(profile.profileId) as string)
-        this.plans.set(preflightDigest, {
+      this.plans.delete(this.planDigestByProfile.get(profile.profileId) as string)
+      this.plans.set(preflightDigest, {
         profileId: profile.profileId,
         profileRoot,
         ...(sourceRuntimeRoots.size === 0 ? {} : { sourceRuntimeRoot: [...sourceRuntimeRoots][0] }),
         ...(sourceRuntimeDigest === undefined ? {} : { sourceRuntimeDigest }),
         links,
         bundledPlugins,
-        })
-        this.planDigestByProfile.set(profile.profileId, preflightDigest)
-      }
+      })
+      this.planDigestByProfile.set(profile.profileId, preflightDigest)
       return {
         state, persistenceGeneration: persistence.generation,
         sessionCount, pluginCount, unverifiedPluginCount, compression: persistence.compression,
