@@ -14,8 +14,9 @@ import { initProfile, loadProfileDirectory, PROFILE_TEMPLATES } from '@deepseek-
 import { fileURLToPath } from 'node:url'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
-import { startRestrictedProfileReader, withRestrictedProfileReader } from '../src/restricted-profile-reader.ts'
+import { withRestrictedProfileReader } from '../src/restricted-profile-reader.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { RestrictedAccountSessionService } from '../src/restricted-account-session.ts'
 import { ProfileExtensionOperations, type ExtensionReceipt } from '../src/extension-operations.ts'
 import { LegacyClaimWorkerGate } from '../src/legacy-claim-worker-gate.ts'
 import { MessageId } from '@deepseek-ai/dsh-llm'
@@ -60,8 +61,8 @@ import {
   OfflineProfileRecoveryInspector,
   packagedRuntimeAppRoot,
 } from '../src/offline-profile-recovery.ts'
-import type { PersonProfileRecord } from '../src/types.ts'
-import { ProfileWorkerExitUnconfirmedError } from '../src/types.ts'
+import type { PersonProfileRecord, ProfileWorkerFactory } from '../src/types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from '../src/types.ts'
 import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
 
 const uid = process.getuid?.() ?? 0
@@ -182,6 +183,19 @@ async function bundledFixture(archiveBytes?: Buffer, files: Record<string, strin
   }
   return { ...value, installed, archive, digest, inspector: new OfflineProfileRecoveryInspector(options), files,
     catalog: options.bundledCatalog }
+}
+
+async function accountService(value: Awaited<ReturnType<typeof bundledFixture>>, createWorker: ProfileWorkerFactory,
+  inspectPersistence = () => value.target.inspectRestrictedPersistence()) {
+  const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+    processNonce: 'restricted-account-service-fixture' })
+  const workers = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
+  const extensions = extensionBarrier()
+  onTestFinished(async () => { await extensions.dispose(); await workers.disposeAll(); await ownership.release() })
+  return new RestrictedAccountSessionService({ hostRoot: value.hostRoot, expectedUid: uid,
+    runtimeGeneration: 5, schemaGeneration: 1, ownership, workers, extensions,
+    claims: new LegacyClaimWorkerGate(() => false), inspector: value.inspector,
+    ownerStateApplicator: value.ownerStateApplicator, inspectPersistence, createWorker, onCleanupFailure: () => {} })
 }
 
 function verifyBundle(value: Awaited<ReturnType<typeof bundledFixture>>) {
@@ -816,6 +830,100 @@ describe('offline Profile existing-only inspector', () => {
     await claim
   })
 
+  it('revalidates Account ownership around a one-shot restricted history read', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    const authorize = vi.fn(() => record)
+    const stop = vi.fn()
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort: stop,
+      done: Promise.resolve(), remoteSession: async () => ({ items: ['fixture history'] }) }))
+    const before = await treeInventory(value.profileRoot)
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
+    await expect(service.read(authorize, command, new AbortController().signal)).resolves.toEqual({ items: ['fixture history'] })
+    expect(authorize.mock.calls.length).toBeGreaterThan(3)
+    expect(stop).toHaveBeenCalledOnce()
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+    await expect(service.read(authorize, { operation: 'session.create',
+      command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
+  it('does not return restricted history if Account authorization is revoked during the read', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    let authorized = true
+    let enter!: () => void, release = () => {}
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    onTestFinished(() => release())
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      remoteSession: async () => { enter(); await new Promise<void>(resolve => { release = resolve }); return { items: ['private'] } } }))
+    const pending = service.read(() => {
+      if (!authorized) throw new HostAuthorityError('unauthorized')
+      return record
+    }, { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId },
+    new AbortController().signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+    await entered
+    authorized = false
+    release()
+    await denied
+  })
+
+  it('rechecks Account authorization after the isolated worker exits', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    let authorized = true, finish = () => {}
+    let enter!: () => void
+    const stopping = new Promise<void>(resolve => { enter = resolve })
+    const done = new Promise<void>(resolve => { finish = resolve })
+    onTestFinished(() => finish())
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort: enter, done,
+      remoteSession: async () => ({ items: ['private'] }) }))
+    const pending = service.read(() => {
+      if (!authorized) throw new HostAuthorityError('unauthorized')
+      return record
+    }, { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId },
+    new AbortController().signal)
+    const denied = expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+    await stopping
+    authorized = false
+    finish()
+    await denied
+  })
+
+  it('rejects changed persistence between Account preflight and reader staging', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    let inspections = 0
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker, async () => {
+      const current = await value.target.inspectRestrictedPersistence()
+      inspections += 1
+      return inspections === 1 ? current : { ...current, inventoryDigest: 'f'.repeat(64) }
+    })
+    await expect(service.read(() => record, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
+  it('rejects an in-place Account binding generation change during preflight', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker)
+    let checks = 0
+    const authorize = () => {
+      if (++checks === 2) Object.assign(record, { bindingGeneration: record.bindingGeneration + 1 })
+      return record
+    }
+    await expect(service.read(authorize, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'stale' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
   it.runIf(process.env.DSH_RUN_ISOLATION_SPIKE === '1')('starts a separate default worker without loading the original composition', async () => {
     const value = await bundledFixture()
     const sentinel = join(value.hostRoot, 'plugin-executed')
@@ -892,22 +1000,14 @@ describe('offline Profile existing-only inspector', () => {
     const preflight = await value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
     expect(preflight).toMatchObject({ state: 'compatibility_blocked', compression: 'zstd', unverifiedPluginCount: 1 })
     const before = await treeInventory(value.profileRoot)
-    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
-      processNonce: 'restricted-fixture-lock' })
-    onTestFinished(() => ownership.release())
     const entry = fileURLToPath(new URL('../../../../apps/cli/lib/bin.js', import.meta.url))
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
-    const reader = await startRestrictedProfileReader({ stagingParent: value.hostRoot, expectedUid: uid,
-      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence, ownership, profileId,
-      inspectPersistence: () => value.target.inspectRestrictedPersistence(),
-      credentialHandle: 'fixture', createWorker: (spec, signal) => factory.create(spec, signal), onCleanupFailure: () => {},
-      assertCurrent: () => {}, signal: new AbortController().signal })
-    onTestFinished(() => reader.close())
-    const history = await reader.read({ operation: 'session.history',
+    const service = await accountService(value, (spec, signal) => factory.create(spec, signal))
+    const account = profile()
+    const history = await service.read(() => account, { operation: 'session.history',
       command_id: '123e4567-e89b-42d3-a456-426614174004' as HostControlRequestId,
-      session_id: id, max_events: 100 }, AbortSignal.timeout(10_000))
+      session_id: id, max_events: 100 }, AbortSignal.timeout(30_000))
     expect(JSON.stringify(history)).toContain('old-writer historical prompt')
-    await reader.close()
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   }, 45_000)
 

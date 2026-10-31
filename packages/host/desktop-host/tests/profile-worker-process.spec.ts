@@ -56,6 +56,20 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('reports confirmed process exit separately from an earlier worker error', async () => {
+    const child = new ControlledChild()
+    const handle = await readyHandle(child)
+    const failure = expect(handle.done).rejects.toThrow('worker error')
+    let exited = false
+    void handle.exited!.then(() => { exited = true })
+    child.emit('error', new Error('worker error'))
+    await failure
+    expect(exited).toBe(false)
+    child.emit('exit', 1, null)
+    await handle.exited
+    expect(exited).toBe(true)
+  })
+
   it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
     const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
     const absolute = `/${relative}`

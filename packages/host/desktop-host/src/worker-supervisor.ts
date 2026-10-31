@@ -34,6 +34,7 @@ export interface ProfilePreparationScope {
 export class ProfileWorkerSupervisor {
   private closed = false
   private readonly blockedProfiles = new Set<string>()
+  private readonly exitedWorkers = new WeakSet<ProfileWorkerHandle>()
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
@@ -156,7 +157,10 @@ export class ProfileWorkerSupervisor {
       env: {},
     }
     try {
-      this.workers.set(input.profileId, await (signal === undefined ? this.factory(spec) : this.factory(spec, signal)))
+      const worker = await (signal === undefined ? this.factory(spec) : this.factory(spec, signal))
+      this.workers.set(input.profileId, worker)
+      void worker.done.catch(() => {})
+      if (worker.exited) void worker.exited.then(() => { this.exitedWorkers.add(worker) }, () => {})
     } catch (error) {
       if (error instanceof ProfileWorkerExitUnconfirmedError) this.blockProfile(input.profileId)
       throw error
@@ -676,7 +680,12 @@ export class ProfileWorkerSupervisor {
     return this.serial(profileId, async () => {
       if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
       guard?.()
-      if (this.workers.has(profileId)) throw new HostAuthorityError('conflict')
+      const worker = this.workers.get(profileId)
+      if (worker) {
+        if (!this.exitedWorkers.has(worker)) throw new HostAuthorityError('conflict')
+        try { worker.closeNotifications() } catch (error) { this.blockProfile(profileId); throw error }
+        this.workers.delete(profileId)
+      }
       return operation()
     })
   }

@@ -29,6 +29,7 @@ export async function stageRestrictedProfile(input: {
   readonly ownerPaths: AppliedMigrationOwnerState
   readonly persistence: { readonly root: string; readonly compression: 'none' | 'zstd' }
   readonly inspectPersistence: () => Promise<RestrictedPersistenceInspection>
+  readonly expectedPersistenceInventoryDigest?: string
   readonly ownership: SingleHostLock
   readonly assertCurrent: () => void
   readonly signal: AbortSignal
@@ -58,6 +59,8 @@ export async function stageRestrictedProfile(input: {
   const persistence = await input.inspectPersistence()
   if (await realpath(persistence.root) !== await realpath(input.persistence.root)
     || persistence.compression !== input.persistence.compression || persistence.generation !== input.ownerPaths.generation
+    || (input.expectedPersistenceInventoryDigest !== undefined
+      && persistence.inventoryDigest !== input.expectedPersistenceInventoryDigest)
     || !Number.isSafeInteger(persistence.sessionCount) || persistence.sessionCount < 0
     || !/^[a-f0-9]{64}$/u.test(persistence.inventoryDigest)) throw new HostAuthorityError('recovery_preflight_stale')
   const source = new MaterializedMigrationOwnerStateSource(input.ownerPaths, input.expectedUid)

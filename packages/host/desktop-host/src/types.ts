@@ -132,6 +132,8 @@ export interface ProfileWorkerHandle {
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>
+  /** Resolves only when the operating system confirms the direct child has exited; not a process-tree guarantee. */
+  readonly exited?: Promise<void>
   /** Host-verified loopback origin when this worker owns a personal Web view. */
   readonly viewOrigin?: string
   /** Monotonic worker generation associated with `viewOrigin`. */

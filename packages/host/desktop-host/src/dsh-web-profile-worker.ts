@@ -310,6 +310,10 @@ export class DshWebProfileWorkerFactory {
     let resolveDone!: () => void
     let rejectDone!: (error: Error) => void
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
+    const exited = new Promise<void>((resolve) => {
+      if (typeof child.exitCode === 'number' || child.signalCode != null) resolve()
+      else child.once('exit', () => resolve())
+    })
     child.once('error', (error) => { if (!settled) { settled = true; rejectDone(error) } })
     child.once('exit', (code, signal) => {
       if (settled) return
@@ -318,6 +322,7 @@ export class DshWebProfileWorkerFactory {
       else rejectDone(new Error(`Profile Web worker exited unexpectedly with code ${String(code)} and signal ${String(signal)}`))
     })
     return {
+      exited,
       viewOrigin,
       generation,
       bootstrapCookie,

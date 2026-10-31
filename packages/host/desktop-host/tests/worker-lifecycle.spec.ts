@@ -54,6 +54,34 @@ it('does not stop a live worker when the requester becomes stale while queued', 
   await workers.disposeAll()
 })
 
+it('admits inactive fallback after the previous worker is confirmed exited', async () => {
+  let markExited!: () => void
+  const exited = new Promise<void>(resolve => { markExited = resolve })
+  const close = vi.fn(), abort = vi.fn()
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications: close, abort,
+    done: Promise.resolve(), exited }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await workers.start(input)
+  await expect(workers.withInactiveProfile('profile', async () => 'fallback')).rejects.toMatchObject({ code: 'conflict' })
+  markExited()
+  await exited
+  await expect(workers.withInactiveProfile('profile', async () => 'fallback')).resolves.toBe('fallback')
+  expect(close).toHaveBeenCalledOnce()
+  expect(abort).not.toHaveBeenCalled()
+  await workers.disposeAll()
+})
+
+it('does not infer process exit from an ordinary worker error', async () => {
+  const error = Promise.reject(new Error('worker error without confirmed exit'))
+  void error.catch(() => {})
+  const stop = vi.fn()
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort: stop, done: error }))
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  await expect(workers.withInactiveProfile('profile', async () => {})).rejects.toMatchObject({ code: 'conflict' })
+  expect(stop).not.toHaveBeenCalled()
+  await expect(workers.disposeAll()).rejects.toThrow('worker error without confirmed exit')
+})
+
 it('serializes Profile preparation before any isolated reader can start', async () => {
   const events: string[] = []
   const workers = new ProfileWorkerSupervisor(async () => {

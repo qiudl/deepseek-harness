@@ -287,7 +287,7 @@ export class OfflineProfileRecoveryInspector {
   async inspectRestricted(
     profile: PersonProfileRecord,
     expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
-  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd' }> {
+  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd'; readonly persistenceInventoryDigest: string }> {
     return this.inspectMode(profile, expected, true)
   }
 
@@ -295,7 +295,7 @@ export class OfflineProfileRecoveryInspector {
     profile: PersonProfileRecord,
     expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
     restricted: boolean,
-  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd' }> {
+  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd'; readonly persistenceInventoryDigest: string }> {
     try {
       const profilesRoot = await checkedDirectory(join(this.options.hostRoot, 'profiles'), this.options.expectedUid, true)
       const profileRoot = await checkedDirectory(join(profilesRoot, profile.profileId), this.options.expectedUid, true)
@@ -342,6 +342,7 @@ export class OfflineProfileRecoveryInspector {
         }))
         return { state, persistenceGeneration: persistence.generation, sessionCount: persistence.sessionCount,
           pluginCount, unverifiedPluginCount: pluginCount, compression: persistence.compression,
+          persistenceInventoryDigest: persistence.inventoryDigest,
           compatibility, preflightDigest,
           ...(pluginCount === 0 ? {} : { reasonCode: 'dsh_recovery_runtime_incompatible' }) }
       }
@@ -450,7 +451,8 @@ export class OfflineProfileRecoveryInspector {
       }
       return {
         state, persistenceGeneration: persistence.generation,
-        sessionCount, pluginCount, unverifiedPluginCount, compression: persistence.compression, compatibility, preflightDigest,
+        sessionCount, pluginCount, unverifiedPluginCount, compression: persistence.compression,
+        persistenceInventoryDigest: persistence.inventoryDigest, compatibility, preflightDigest,
         ...(hasUnverifiedDependencies ? { reasonCode: 'dsh_recovery_runtime_incompatible' } : {}),
       }
     } catch (error) {
