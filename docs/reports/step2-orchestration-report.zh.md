@@ -6,7 +6,7 @@
 
 ## 结果
 
-Host 创建、客户端字段传递以及由 Agent 持有的模型选择实现已集成。完成仍受原始上游标签合并阻塞：`dsh-v0.2.2-alpha.2` 不是当前分支的祖先。各 worktree 保留提交，未推送任何分支。
+Host 创建、客户端字段传递以及由 Agent 持有的模型选择实现已集成。本地 pin 分支正在合并 `dsh-v0.2.2-alpha.2`；冲突已解决，合并提交仍等待其余检查。未推送任何分支。
 
 ## 子任务
 
@@ -35,8 +35,32 @@ CPython 3.13.13 的 macOS arm64 测试使用锁定的 `pydantic-core 2.46.5` whe
 
 在 macOS 执行 `pnpm exec vitest run packages/subprocess/subprocess-local/tests/linux-scope.spec.ts packages/subprocess/subprocess-local/tests/linux-scope-selector.spec.ts packages/subprocess/subprocess-local/tests/native-containment.spec.ts`，99 项通过、5 项跳过，其中包括 Linux 原生隔离套件。Docker 无法连接守护进程，现有 Colima 虚拟机重置 SSH 连接，因此 Linux user-systemd 运行时验证仍待完成；Windows 打包验证已搁置。
 
+## Pin 分支验证
+
+进行中的合并保留了内部 Host control client、Host startup 和 subprocess-local 安装 allowlist。`pnpm run build:artifacts` 的八个阶段全部通过，`pnpm run build:check` 的 Host 和 Client 两项聚合检查通过，重建产物后的 `pnpm exec vitest run packages/experimental/webworker-packer/tests/image-loadable.spec.ts` 通过 15 项。
+
+`pnpm exec vitest run packages/subprocess/subprocess-local/tests/control.spec.ts packages/host/desktop-host/tests/startup.spec.ts packages/host/desktop-host/tests/startup-safety.spec.ts packages/host/desktop-host/tests/startup-composition.spec.ts packages/host/desktop-host/tests/host-control-authority.spec.ts packages/host/desktop-host/tests/host-control-session.spec.ts packages/host/desktop-host/tests/unix-transport-client.spec.ts packages/host/desktop-host/tests/unix-transport-server-faults.spec.ts packages/host/desktop-host/tests/unix-transport-authority-faults.spec.ts` 通过 84 项。
+
+`pnpm exec vitest run packages/host/desktop-host/tests/client-artifact.spec.ts packages/host/desktop-host/tests/startup-platform.spec.ts packages/host/desktop-host/tests/collaboration-worker-process.spec.ts packages/subprocess/subprocess-local/tests` 通过 437 项、跳过 16 项平台相关测试。完整单测在发现失败后中止；输入和销毁相关失败修复后的针对性回归通过。Slark 字典现已补入日语、西班牙语、法语、德语、俄语和葡萄牙语各 238 条经校对的文案。`pnpm exec vitest run scripts/locale-dictionary-parity.spec.ts` 两项测试通过；`node node_modules/typescript/bin/tsc -b packages/client/ui-slark-agent/tsconfig.json --pretty false` 通过。
+
+合并树的 Python SDK 测试组新增锁定依赖 `pillow==12.3.0`，已将其 macOS arm64 wheel 下载到 uv 缓存。`UV_PROJECT_ENVIRONMENT="$PWD/tmp/py-sdk-venv" uv run --project python/sdk --group test --locked --offline pytest` 通过 251 项、跳过 3 项。打包启动测试遵循上游策略：可选插件不可用时，初始化成功并输出包含插件名的告警。
+
+`pnpm exec tsx scripts/build-exe-for-python-sdk.ts --targets=node24-macos-arm64 --skip-build` 使用已验证的本地产物重建 macOS runtime；打包扫描报告未解析模块警告。`UV_PROJECT_ENVIRONMENT="$PWD/tmp/py-sdk-venv" uv run --project python/sdk --group test --locked --offline python scripts/smoke-python-runtime.py --scenario <scenario> --exe dist-exe/deepseek-harness-sdk-runtime-macos-arm64` 的 `sdk-snapshot`、`sdk-restart`、`sdk-minimal`、`sdk-minimal-in-history` 和 `sdk-dynamic-tools` 均通过，未更新快照。
+
+`pnpm exec vitest run packages/api/session-controller/tests` 在进行中的合并树上通过 72 个文件、1674 项测试。
+
+`pnpm exec vitest run packages/client/ui-conversation/tests packages/client/ui-chat/tests packages/client/ui-sidebar/tests packages/client/ui-slark-agent/tests` 在更新引用草稿测试以适配分离发送后，通过 148 个文件、2643 项测试。
+
+直接使用 `classifyPersistenceChange`，将 `2026-10-11-slark-alpha2-integration` 和 `2026-10-13-liveshare-share-viewer-principal` 的四个共同事件根与 `docs/persistence-schema.json` 比较。相对 fork 快照，分类结果为上游可选 principal、skill-catalog 字段以及 action-cards attribution；相对上游快照，结果为 collaboration-result attribution。这些分类均未要求额外兼容性复核。显式双父确认记录 `2026-10-31-upstream-fork-merge` 保留双方已提交记录；`pnpm run verify-persistence-changes` 通过，覆盖 65 个根和 22 条记录，持久化历史测试文件通过 85 项。
+
+在进行中的合并树上，`pnpm run test:snapshot snapshots/sdk/sdk.snapshot.ts -t multi-turn` 和 `pnpm run test:snapshot snapshots/session/headless.snapshot.ts -t model-switch-notice` 各通过所选的录制会话用例。
+
+历史合流后，`pnpm run doc-sync` 的 43 项检查全部通过，`pnpm run lint` 通过，并在实验性 CoT 翻译包中报告一条未使用抑制指令的警告。之后的 `pnpm run build:check` 通过 Host 和 Client 聚合检查。
+
+首轮完整 `pnpm run test` 结果为 55,131 项通过、12 项失败、1 项预期失败、258 项跳过。修复后的发布工作流、桌面 MCP、持久化、工作区、悬停样式和打包配置等针对性测试通过；第二轮完整单测通过 55,142 项，另有一项真实 Git/pnpm 测试超时；将该测试超时从 5 秒调整到 30 秒后单独重跑通过，第三轮完整 `pnpm run test` 通过：55,143 项通过、1 项预期失败、258 项跳过。
+
 ## 剩余工作
 
-将上游标签合并及其余包、构建、文档和版本策略冲突作为单独评审的工作完成；不能假定选择性集成的提交包含上游独有的 3,166 个提交。在最终合并树上重跑受影响检查，保留已发布 Session 代际且不承诺降级支持。
+生成验证通过的合并提交后，单独更新 qiu-slark 的 config、ref 和 SHA。
 
 执行证据和各任务日志位于 `~/coding/logs/step2-orch-*.log`；SDK 诊断及离线依赖错误分别记录于 `step2-orch-sdk-validation.log` 和 `step2-orch-python-offline.log`。

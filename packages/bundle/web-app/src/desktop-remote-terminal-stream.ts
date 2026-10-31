@@ -1,6 +1,6 @@
+import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 /** One-use terminal stream permits issued only after native Session control validation. */
 import { randomUUID } from 'node:crypto'
-import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopSessionCredential } from './desktop-session-control.ts'
 import { DesktopSessionControl } from './desktop-session-control.ts'
@@ -44,7 +44,7 @@ export class DesktopRemoteTerminalStreams {
    * @param signal View/transport cancellation; shell lifetime remains owned by terminalController.
    * @returns Original terminal frames with existing Gateway semantics.
    */
-  async *open(gateway: TypertGateway, grantId: string, signal: AbortSignal): AsyncGenerator {
+  async *open(gateway: DesktopRemoteGateway, grantId: string, signal: AbortSignal): AsyncGenerator {
     const permit = this.permits.get(grantId)
     this.permits.delete(grantId)
     if (!permit || permit.expiresAt <= this.now() || this.active >= 8) throw new Error('terminal stream unavailable')

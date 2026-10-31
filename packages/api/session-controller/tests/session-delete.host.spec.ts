@@ -24,7 +24,7 @@ describe('session.delete', () => {
     const archiveSession = vi.fn(() => Promise.resolve())
     ctx.provide('workspaceRegistry', { archiveSession } as never)
     ctx.provide('agents', { get: () => undefined } as never)
-    const remote = createSessionTestRemote(ctx, {
+    const remote = await createSessionTestRemote(ctx, {
       cwd: '/tmp',
       defaultModelSelection: () => ({ provider: 'deepseek', model: 'chat' }),
     })

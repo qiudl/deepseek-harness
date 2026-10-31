@@ -14,7 +14,6 @@ kind: "package-library"
 ## 目录
 
 - [语言选择](#language-selection)
-- [模型体验](#model-experience)
 - [已知限制与暂缓事项](#known-limitations-and-deferred-work)
 - [开发备注](#dev-note)
 
@@ -29,12 +28,7 @@ kind: "package-library"
 
 -----
 
-<a id="model-experience"></a>
-## 模型体验
-
-间接影响：read 工具可把文件路径对应的语言提示写入工具结果。
-
-#### KV Cache effect
+## KV Cache effect
 
 此表不改变请求前缀；消费方可能在工具结果中包含语言提示。
 

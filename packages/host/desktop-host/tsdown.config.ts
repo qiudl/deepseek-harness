@@ -8,8 +8,12 @@ function deferredTypertPlugin() {
     .then(({ typertPlugin }) => typertPlugin({ mode: 'package', faces: ['host'] }))
   return {
     name: 'dsh-typert-generator',
-    async transform(code: string, id: string) { return (await load()).transform(code, id) },
-    async writeBundle(options: { dir?: string }) { (await load()).writeBundle(options) },
+    async buildStart(options: { cwd: string }) { (await load()).buildStart(options) },
+    transform: {
+      filter: { id: /^[^?]*\.[cm]?tsx?(?:\?|$)/ },
+      async handler(code: string, id: string) { return (await load()).transform.handler(code, id) },
+    },
+    async writeBundle(options: { dir?: string }) { await (await load()).writeBundle(options) },
   }
 }
 

@@ -1,3 +1,5 @@
+import { bindDesktopRemoteGateway } from '../../../packages/bundle/web-app/src/desktop-remote-gateway.ts'
+import type { PeerScope } from '@deepseek-ai/dsh-client-connection'
 import { randomUUID } from 'node:crypto'
 import { DesktopRemoteTerminalStreams } from '../../../packages/bundle/web-app/src/desktop-remote-terminal-stream.ts'
 import { DesktopRemoteSessionExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-session.ts'
@@ -19,6 +21,7 @@ import { afterAll, beforeAll, expect, it, onTestFailed } from 'vitest'
 import { launchWebScaffold, seedSession, type WebScaffold } from './scaffold.ts'
 
 let scaffold: WebScaffold
+let nativePeer: PeerScope
 let browser: Browser
 let page: Page
 let sessionId: SessionId
@@ -41,6 +44,7 @@ beforeAll(async () => {
       '--config', 'vite.native.config.ts', '--mode', 'native', '--outDir', buildDirectory],
     { cwd: fileURLToPath(new URL('..', import.meta.url)), timeout: 120000, maxBuffer: 2 * 1024 * 1024 })
   scaffold = await launchWebScaffold({ deepSeekMissingCredential: true })
+  nativePeer = scaffold.ctx.connection.createPeer({ principal: { kind: 'owner' } })
   const fixture = await readFile(new URL('../../../snapshots/web/seeded-history/session.v3.jsonl', import.meta.url), 'utf8')
   sessionId = await seedSession(scaffold, fixture, 'native-workbench-history')
   otherSessionId = await seedSession(scaffold, fixture, 'native-workbench-other')
@@ -79,7 +83,7 @@ beforeAll(async () => {
         streams.set(frame.id, abort)
         try {
           const uplink = (async function* () { /* No client stream items in this reading scenario. */ })()
-          const source = await scaffold.ctx.typertGateway.wireStream.open(frame.endpoint, frame.payload, uplink, undefined, abort.signal)
+          const source = await scaffold.ctx.typertGateway.wireStream.open(frame.endpoint, frame.payload, uplink, nativePeer, abort.signal)
           for await (const value of source) await send({ t: 'stream-item', id: frame.id, value })
           if (!abort.signal.aborted) await send({ t: 'stream-end', id: frame.id })
         } catch (error) {
@@ -93,7 +97,7 @@ beforeAll(async () => {
       const observed: { path: string; done?: number; bytes?: number } = { path }
       requests.push(observed)
       let response: Response
-      if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections() })
+      if (path === '/__boot__') response = Response.json({ injections: scaffold.ctx.webServer.collectIndexInjections(nativePeer) })
       else if (path === '/__native_workbench__') response = Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false,
         personalInbox: false, botPending: false, dictation: true })
       else if (path === '/__native_dictation__') {
@@ -261,7 +265,8 @@ it('reads actual Host workspace bytes through the native file stream and existin
   const binary = new Uint8Array(70 * 1024).map((_, index) => index % 256)
   await writeFile(join(scaffold.workspaceCwd, 'native-fixture.bin'), binary)
   const handler = scaffold.ctx.connection.createSharedFetchHandler('/api')
-  const executor = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, request => handler.fetch(request))
+  const executor = new DesktopRemoteUiStreamExecutor(
+    bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer), undefined, request => handler.fetch(request, nativePeer))
   const rpc = createWebConnectionRpc(async (_path, init) => {
     const request = new Request('http://localhost', init)
     const envelope = await request.json() as { rpcId: string; method: string; payload: { args: object } }
@@ -360,7 +365,7 @@ it('operates a real Host shell with controlled input, streamed output and attach
     controller.abort()
     await iterator.return?.()
     await expect.poll(async () => {
-      const items: unknown = await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'list', args: { sessionId }, signal: new AbortController().signal })
+      const items: unknown = await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'list', args: { sessionId }, peer: nativePeer, signal: new AbortController().signal })
       return Array.isArray(items) && (items as unknown[]).some(item => item !== null && typeof item === 'object' && 'id' in item
         && item.id === terminalId && !Object.hasOwn(item, 'controllerId'))
     }).toBe(true)
@@ -368,6 +373,6 @@ it('operates a real Host shell with controlled input, streamed output and attach
     clearInterval(renewal)
     controller.abort()
     await iterator?.return?.()
-    await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, signal: new AbortController().signal })
+    await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, peer: nativePeer, signal: new AbortController().signal })
   }
 }, 70000)

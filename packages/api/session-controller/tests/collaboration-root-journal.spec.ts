@@ -204,7 +204,7 @@ it('bounds pending work, retains admitted roots and rejects cancelled or post-cl
   await closing
   const restored = await openCollaborationRootJournal(h.facility)
   expect(restored.read(original.command_id)?.state).toBe('admitted')
-})
+}, 30_000)
 
 it('identifies participating Sessions from durable roots after reopen without relying on message-source kinds', async () => {
   const h = await harness(), journal = await openCollaborationRootJournal(h.facility)

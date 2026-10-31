@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-10-31-convergent-persistence-history.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/process/2026-10-31-convergent-persistence-history.md
+/agent-note-convergent-persistence-history:
+  en: 1df0cd2593a1470d
+  zh: 120291238b5e4224
+/agent-note-convergent-persistence-history/problem:
+  en: bf0bd0cc0478470f
+  zh: 515559f3e2bedecd
+/agent-note-convergent-persistence-history/decision:
+  en: 0588fa149ec43a02
+  zh: d6de868c45b0234f
+/agent-note-convergent-persistence-history/alternatives-considered:
+  en: 70149b49d0032204
+  zh: 454739f281c2e9af
+/agent-note-convergent-persistence-history/consequences:
+  en: 0da08a643fc1795b
+  zh: 9158e0954e867142

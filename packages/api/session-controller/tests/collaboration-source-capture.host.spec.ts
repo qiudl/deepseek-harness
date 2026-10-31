@@ -84,7 +84,7 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
   const controllerContext = isolateDomain === 'owners' ? domainContext.isolate('sessionPersistence') : domainContext
   const removeDomain = isolateDomain === 'owners' ? controllerContext.provide('storageDomain', facility) : undefined
   const removePersistence = isolateDomain === 'owners' ? controllerContext.provide('sessionPersistence', ctx.get('sessionPersistence')) : undefined
-  const controller = createSessionTestController(controllerContext, {
+  const controller = await createSessionTestController(controllerContext, {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'default' }), cwd,
   })
   const resume = vi.spyOn(controller, 'resolveAgent')
@@ -1428,12 +1428,12 @@ it('refuses a different prepared reasoning choice even if the Session choice cha
   const h = await harness()
   h.adapter.defaultEffort = true
   const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
-  session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+  session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('max') })
   const prepare = h.controller.prepareWorkspaceModelSnapshot.bind(h.controller)
   vi.spyOn(h.controller, 'prepareWorkspaceModelSnapshot').mockImplementation(async (...args) => {
-    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'high' })
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('high') })
     const captured = await prepare(...args)
-    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('max') })
     return captured
   })
   try {

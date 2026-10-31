@@ -6,14 +6,17 @@
   en: 10b1a762c6ed5a82
   zh: 1d5e8981cf1cf2f9
 /step2-orchestration-report/outcome:
-  en: 79007f52e9380577
-  zh: 970c6915da0219de
+  en: 3fa31bfbd710cd22
+  zh: e9a212341cc41034
 /step2-orchestration-report/subtasks:
   en: fd60c54a5be349d2
   zh: be5a8cfc24989ceb
 /step2-orchestration-report/validation:
   en: a4832591eac6b231
   zh: 3570495368e0b4b0
+/step2-orchestration-report/pin-branch-verification:
+  en: a60d5d3433bf3c89
+  zh: e0d28fada590cabf
 /step2-orchestration-report/remaining-work:
-  en: 4bd79af1d972969a
-  zh: 623d10cbbdd5a546
+  en: a63c3fd861b3884e
+  zh: 411bc55cfd18bee6

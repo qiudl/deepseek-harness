@@ -3,15 +3,15 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AssistantMarkdown, localPathMediaUrl } from '../src/client/chat/AssistantMarkdown.tsx'
 import { useDetailedPresentation } from './presentation-fixture.client.ts'
+import { unusedImageLoader } from './reasoning-component-fixture.tsx'
 import { useDisclosure } from '../src/client/chat/use-disclosure.ts'
 import { useSearchableHidden } from '../src/client/chat/searchable-hidden.ts'
-import type { ChatNodeOwnerProps, ChatViewSlotProps } from '../src/client/contract/slots.ts'
+import type { ChatViewSlotProps } from '../src/client/contract/slots.ts'
 import type { AssistantBlock } from '../src/client/contract/snapshot.ts'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const t = ((_key: string) => 'label') as ChatViewSlotProps['t']
-const renderMessageImages = (() => null) as ChatNodeOwnerProps['renderMessageImages']
 
 function textBlock(text: string): AssistantBlock {
   return { kind: 'text', text }
@@ -63,7 +63,7 @@ describe('AssistantMarkdown local-path images', () => {
         usePresentation={useDetailedPresentation}
         blocks={[textBlock('See ![diagram](/tmp/graph.png) for the layout.')]}
         streaming={false}
-        renderMessageImages={renderMessageImages}
+        loadImage={unusedImageLoader}
         t={t}
       />,
     )
@@ -81,7 +81,7 @@ describe('AssistantMarkdown local-path images', () => {
         usePresentation={useDetailedPresentation}
         blocks={[textBlock('See ![diagram](relative.png).')]}
         streaming={false}
-        renderMessageImages={renderMessageImages}
+        loadImage={unusedImageLoader}
         t={t}
       />,
     )
@@ -104,7 +104,7 @@ it('native conversation shows the answer while reasoning remains available to th
     useGroupAction={useSearchableHidden}
     usePresentation={selector => useDetailedPresentation(policy => selector({ ...policy, separateProcess: true }))}
     blocks={[{ kind: 'reasoning', text: 'execution detail' }, { kind: 'text', text: 'visible answer' }]}
-    streaming={false} renderMessageImages={renderMessageImages} t={t} />)
+    streaming={false} loadImage={unusedImageLoader} t={t} />)
   expect(container.textContent).toContain('visible answer')
   expect(container.textContent).not.toContain('execution detail')
 })

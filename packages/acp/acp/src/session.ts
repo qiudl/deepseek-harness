@@ -11,6 +11,7 @@ import {
   type StopReason,
 } from '@agentclientprotocol/sdk'
 import type { Agent, AgentHandle, AgentOptions, AgentStatus, ModelSelection } from '@deepseek-ai/dsh-agent'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, errorChain, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { type Session, type SessionEvent, type SessionId, type TurnEndReason } from '@deepseek-ai/dsh-session'
 import { AcpContentError, admitAcpPrompt } from './content.ts'
@@ -32,7 +33,6 @@ interface AcpSessionBuildOptions {
   cwd: string
   mcpServers: readonly McpServer[]
   agentOptions: AgentOptions
-  fallbackSelection: ModelSelection | undefined
   signal: AbortSignal
   notify: (notification: SessionNotification) => Promise<void>
 }
@@ -74,29 +74,20 @@ function internalError(detail: string): RequestError {
   return RequestError.internalError(undefined, detail)
 }
 
-/** Restore the latest logged route before falling back to deployment config. */
-function selectionFor(
-  logged: {
-    config: { provider: string; model: string; reasoningEffort?: ModelSelection['reasoningEffort'] }
-    adapterDefaults?: { reasoningEffort?: boolean }
-  } | undefined,
-  fallback: ModelSelection | undefined,
-): ModelSelection | undefined {
-  return logged === undefined
-    ? fallback
-    : {
-      provider: logged.config.provider,
-      model: logged.config.model,
-      ...logged.config.reasoningEffort === undefined || logged.adapterDefaults?.reasoningEffort === true
-        ? {}
-        : { reasoningEffort: logged.config.reasoningEffort },
-    }
+/**
+ * Install switch notices and mount the requested MCP clients in the unpublished Agent scope.
+ * @param agentCtx - unpublished Agent scope.
+ * @param options - workspace and MCP servers requested for the session.
+ */
+async function composeAgent(agentCtx: Context, options: AcpSessionBuildOptions): Promise<void> {
+  installModelSelection(agentCtx)
+  await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
 }
 
 /**
- * Per-session ACP module. It owns the unpublished Agent composition, selected
- * route, one-prompt admission slot, ordered standard updates, and memoized
- * quiescent teardown.
+ * Per-session ACP module. It owns the unpublished Agent composition, model
+ * configuration view, one-prompt admission slot, ordered standard updates,
+ * and memoized quiescent teardown.
  */
 export class AcpSession {
   /** The exact top-level Agent owned by this ACP session. */
@@ -110,11 +101,10 @@ export class AcpSession {
   private constructor(
     private readonly ctx: Context,
     handle: AgentHandle,
-    modelControl: AcpModelControl,
     private readonly notify: (notification: SessionNotification) => Promise<void>,
   ) {
     this.agent = handle.agent
-    this.modelControl = modelControl
+    this.modelControl = new AcpModelControl(ctx.llm, handle.agent.model)
     this.disposeAgent = () => handle.dispose()
   }
 
@@ -127,48 +117,32 @@ export class AcpSession {
    * @returns the fully composed per-session module.
    */
   static async create(ctx: Context, options: CreateAcpSessionOptions): Promise<AcpSession> {
-    const modelControl = new AcpModelControl(ctx.llm, options.fallbackSelection)
     const handle = await ctx.agents.create({
       sessionId: options.sessionId,
       meta: { cwd: options.cwd },
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: async (agentCtx, agent) => {
-        modelControl.install(agentCtx, agent)
-        await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
-      },
+      setup: agentCtx => composeAgent(agentCtx, options),
     })
-    return new AcpSession(ctx, handle, modelControl, options.notify)
+    return new AcpSession(ctx, handle, options.notify)
   }
 
   /**
    * Restore a persisted Agent and compose the request's fresh MCP connections.
+   * The Session's recorded model selection survives; deployment options supply
+   * the route only when the Session records neither a selection nor a request.
    * @param ctx - ACP plugin context with Agent, LLM, and persistence services.
-   * @param options - persisted identity, workspace, fallback route, MCP, and notifier.
+   * @param options - persisted identity, workspace, initial route, MCP, and notifier.
    * @returns the restored per-session module.
    */
   static async resume(ctx: Context, options: ResumeAcpSessionOptions): Promise<AcpSession> {
-    let modelControl: AcpModelControl | undefined
     const handle = await ctx.agents.resume({
       resumeSessionId: options.sessionId,
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: async (agentCtx, agent) => {
-        modelControl = new AcpModelControl(
-          ctx.llm,
-          selectionFor(agent.session.requestHeader(), options.fallbackSelection),
-        )
-        modelControl.install(agentCtx, agent)
-        await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
-      },
+      setup: agentCtx => composeAgent(agentCtx, options),
     })
-    /* v8 ignore start -- a fulfilled Agent resume necessarily ran setup to completion. */
-    if (modelControl === undefined) {
-      await handle.dispose()
-      throw internalError('session/resume did not compose model selection')
-    }
-    /* v8 ignore stop */
-    return new AcpSession(ctx, handle, modelControl, options.notify)
+    return new AcpSession(ctx, handle, options.notify)
   }
 
   /**
@@ -200,7 +174,7 @@ export class AcpSession {
   }
 
   /**
-   * Apply one standard configuration option to later ACP turns.
+   * Apply one standard configuration option from the next model step.
    * @param configId - advertised standard option id.
    * @param value - selected standard option value.
    * @param signal - optional request cancellation.
@@ -398,7 +372,7 @@ export class AcpSession {
   }
 
   /**
-   * Correlate an accepted user message with its Agent turn and pinned route.
+   * Correlate an accepted user message with its Agent turn.
    * @param message - claimed durable inbox message.
    * @param turn - allocated Agent turn.
    */

@@ -1,6 +1,6 @@
+import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 /** Host-only, read-only RPC seam for the remote Web DSH transport. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { parseWorkbenchTerminalRequest, parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -20,7 +20,7 @@ function record(value: unknown): value is Record<string, unknown> {
 
 /** Invoke bounded Session reads and collect the current Profile's Web boot rows. */
 export class DesktopRemoteUiExecutor {
-  constructor(private readonly gateway: TypertGateway,
+  constructor(private readonly gateway: DesktopRemoteGateway,
     private readonly bootInjections: () => IndexInjection[],
     private readonly readBotChat?: (botId: string | null, signal: AbortSignal) => Promise<unknown>) {}
 

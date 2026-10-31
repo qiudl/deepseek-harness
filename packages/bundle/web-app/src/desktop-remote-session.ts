@@ -1,9 +1,10 @@
+import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
-  RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
+  RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId,
 } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatSubmission, parseHostBotChatReceipt,
@@ -80,7 +81,7 @@ export class DesktopRemoteSessionExecutor {
   private readonly cursors = new Map<string, ApprovalCursor>()
   private readonly approvals = new Map<string, PendingApproval>()
 
-  constructor(private readonly gateway: TypertGateway,
+  constructor(private readonly gateway: DesktopRemoteGateway,
     private readonly remoteApprovals?: DesktopRemoteApprovalEvents,
     private readonly control = new DesktopSessionControl(),
     private readonly terminalStreams = new DesktopRemoteTerminalStreams(control),

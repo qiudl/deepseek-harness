@@ -6,7 +6,8 @@
 .group { margin-bottom: 15px; }
 .groupTitle { display: flex; justify-content: space-between; padding: 0 8px 5px; color: var(--dsw-alias-label-secondary); font-size: 11px; font-weight: 600; }
 .rowShell { border-radius: var(--dsw-radius-sm); }
-.rowShell:hover, .rowShell:focus-within { background: var(--dsw-alias-interactive-bg-hover); }
+.rowShell:focus-within { background: var(--dsw-alias-interactive-bg-hover); }
+@media (hover: hover) { .rowShell:hover { background: var(--dsw-alias-interactive-bg-hover); } }
 .row { display: grid; width: 100%; gap: 2px; padding: 9px 8px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); text-align: left; cursor: pointer; }
 .row:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); }
 .rowTitle { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
@@ -20,7 +21,7 @@
 .unknownBadge { min-width: 15px; padding: 1px 4px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 14px; text-align: center; }
 .actions { display: flex; gap: 3px; padding: 0 7px 5px; }
 .actions button, .inlineForm button { padding: 3px 5px; border: 0; border-radius: var(--dsw-radius-xs); background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 10px; cursor: pointer; }
-.actions button:hover, .inlineForm button:hover { background: var(--dsw-alias-button-floating-hover); color: var(--dsw-alias-label-primary); }
+@media (hover: hover) { .actions button:hover, .inlineForm button:hover { background: var(--dsw-alias-button-floating-hover); color: var(--dsw-alias-label-primary); } }
 .inlineForm { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 7px 8px; color: var(--dsw-alias-label-secondary); font-size: 11px; }
 .inlineForm input { min-width: 0; flex: 1; padding: 4px 5px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); background: var(--dsw-specific-sidebar-fill); color: var(--dsw-alias-label-primary); font: inherit; }
 .note { margin: 24px 10px; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.5; }

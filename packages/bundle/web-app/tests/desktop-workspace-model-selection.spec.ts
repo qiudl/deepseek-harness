@@ -1,3 +1,5 @@
+import { Peer } from '@deepseek-ai/dsh-client-connection'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -83,6 +85,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       return () => { routes.delete(route.path) }
     },
   } as never)
+  ctx.provide('connection', { createPeer: () => new Peer(ctx, { principal: { kind: 'owner' } }), fetch: { register: () => () => {} } } as never)
   const groupOperations = {
     deliver: vi.fn(async () => ({ state: 'accepted', deliveryId: '10000000-0000-4000-8000-000000000001',
       groupId: '20000000-0000-4000-8000-000000000002', botId: 'bot_1', memberCycle: 2,
@@ -150,10 +153,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     ? { id, path: cwd, sessionIds: [target.session_id] } : undefined, archivedSessionIds: [], ...archiveMethods } as never)
   const workspace = ctx.workspaceRegistry.get(target.workspace_id)!
   ctx.workspaceRegistry.get = id => id === target.workspace_id ? workspace : undefined
-  const controller = createSessionTestController(ctx, { defaultModelSelection: () => ({ provider: 'default', model: 'default' }), cwd })
+  const controller = await createSessionTestController(ctx, { defaultModelSelection: () => ({ provider: 'default', model: 'default' }), cwd })
   const resume = vi.spyOn(controller, 'resolveAgent')
   const session = ctx.sessions.create(target.session_id, { meta: { cwd } })
-  session.append('model/selection', { provider: 'actual', model: 'next', reasoningEffort: 'high' })
+  session.append('model/selection', { provider: 'actual', model: 'next', reasoningEffort: ReasoningEffortId('high') })
   const seq = session.seq
   await writeFile(join(directory, 'cordis.yml'), JSON.stringify([{ id: 'web-app', name: '@deepseek-ai/dsh-web-app',
     config: { openBrowser: false, printUrl: false, surfaceContext: false, trustedHosts: [] } }]))

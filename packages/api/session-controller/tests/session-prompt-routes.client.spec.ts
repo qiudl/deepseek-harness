@@ -17,7 +17,7 @@ const it = createClientTest({ roster: webApp.closure(['@deepseek-ai/dsh-api-gate
 async function bench(mock: RemoteMock, start: () => Promise<TestClient>) {
   const client = await start(), ctx = new Context(), sessions = new ClientSessions(ctx, client.ctx.remote)
   onTestFinished(async () => { await ctx.fiber.dispose() })
-  mock.stream(FOLLOW, followScript(ok({ records: [], hasMore: false })))
+  mock.stream(FOLLOW, followScript(ok({ cursor: -1, records: [], hasMore: false })))
   mock.remote.session.list.mockResolvedValue(ok({ items: [ID, OTHER].map(sessionId => ({
     sessionId, updatedAt: 1, running: false, blank: true, agentAvailable: true,
   })) }))

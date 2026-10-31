@@ -1,3 +1,4 @@
+import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { fileURLToPath } from 'node:url'
 import { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
@@ -5,7 +6,7 @@ import { boot, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-tools'
-import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
+import { unsupportedModel, unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
 const overlayPath = process.argv[2]
 if (overlayPath === undefined) throw new Error('dsh-badge snapshot requires an overlay path')
@@ -27,11 +28,11 @@ try {
   const agentId = SessionId('dsh-badge-snapshot')
   const session = ctx.sessions.create(agentId, { meta: { cwd: process.cwd() } })
   const agent: Agent = {
-    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     ctx,
     id: agentId,
     options: {},
     session,
+    model: unsupportedModel(),
     inbox: unsupportedInbox(),
     status: 'idle',
     send: () => {},
@@ -44,7 +45,7 @@ try {
   }
   const decision = await agentEvents(ctx, agent).waterfall(
     'agent/pre-step',
-    { messages: [], turn: 1, step: 1, signal: new AbortController().signal },
+    { modelSelection: { provider: 'mock', model: 'mock' }, messages: [], turn: 1, step: 1, signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'enter' as const, messages: [] }),
   )
   const catalog = decision.kind === 'enter'
@@ -52,7 +53,7 @@ try {
       && message.source.kind === 'skill-catalog')?.content
     : undefined
   const summary = (await ctx.skills.list()).find(skill => skill.name === 'dsh-badge')
-  const result = await ctx.tools.execute({
+  const result = await executeToolFixture(ctx, {
     callId: ToolCallId('dsh-badge-snapshot'),
     name: 'skill',
     arguments: { name: 'dsh-badge' },

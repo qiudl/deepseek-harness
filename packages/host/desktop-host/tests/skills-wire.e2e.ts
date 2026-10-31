@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { boot } from '@deepseek-ai/dsh-app-boot'
+import { Peer } from '@deepseek-ai/dsh-client-connection'
 import { SessionSkillCatalog } from '@deepseek-ai/dsh-api-session-controller'
 import type { Context } from '@deepseek-ai/cordis'
 import { DesktopHost } from '../src/desktop-host.ts'
@@ -43,7 +44,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
         expect(['skills/inspectProfile', 'skills/profileCatalog']).toContain(request.method)
         try {
           if (!loaded) throw Error('missing runtime')
-          const value = await loaded.typertGateway.invoke({ namespace: 'skills', method: request.method.split('/')[1]!, args: request.payload.args, signal: new AbortController().signal })
+          const value = await loaded.typertGateway.invoke({ namespace: 'skills', method: request.method.split('/')[1]!, args: request.payload.args, peer: new Peer(loaded, { principal: { kind: 'owner' } }), signal: new AbortController().signal })
           res.end(JSON.stringify({ type: 'server-response', rpcId: request.rpcId, result: { ok: true, value } }))
         } catch (error) { failures.push(String(error)); res.writeHead(500); res.end() }
       })()

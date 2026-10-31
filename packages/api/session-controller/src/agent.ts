@@ -1,22 +1,19 @@
-/** Agent activation, composition, and model-selection policy owned by API Session. */
+/** Agent activation, composition, and initial model route owned by API Session. */
 
 import { randomUUID } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
-import type {
-  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
-} from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions, AgentSetup } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type {} from '@deepseek-ai/dsh-typert-registry'
 import type { ModelSelection } from './types.ts'
-import { resolveModelSelection } from './model-selection-projection.ts'
 
 /** Cold Session identity absent from persistence. */
 export class ApiSessionNotFound extends Error {}
@@ -44,18 +41,17 @@ export class ApiSessionCwdConflict extends Error {
   }
 }
 
-/** Explicit-id creation attempted to adopt a Session under another preset. */
+/** Reuse of a Session named an Agent preset while the deployment composes no preset roster. */
 export class ApiSessionPresetConflict extends Error {
   constructor(
     readonly sessionId: SessionId,
     readonly requestedPreset: string,
-    readonly existingPreset: string | undefined,
+    readonly existingPreset?: string,
+    mismatch = false,
   ) {
-    super(
-      existingPreset === undefined
-        ? `session "${sessionId}" records no agent preset and cannot be adopted under "${requestedPreset}"`
-        : `session "${sessionId}" runs agent preset "${existingPreset}", not "${requestedPreset}"`,
-    )
+    super(mismatch
+      ? `session "${sessionId}" runs agent preset "${existingPreset ?? '(none)'}", not "${requestedPreset}"`
+      : `the deployment composes no agent preset roster, so session "${sessionId}" cannot run preset "${requestedPreset}"`)
   }
 }
 
@@ -78,10 +74,12 @@ export interface ApiSessionCreateRequest {
   readonly reusable: (sessionId: SessionId) => boolean
 }
 
-/** Agent and preset captured before another create can change the Session. */
+/** The Session one creation request created or reused. */
 export interface ApiSessionCreated {
+  /** Live Agent of the Session. */
   readonly agent: Agent
-  readonly agentPreset?: string
+  /** Preset the Session ran when the request finished, before a later request for the same identity; absent without a roster. */
+  readonly agentPreset: string | undefined
 }
 
 /** Resolved preset and pre-publication Agent setup for one create or resume. */
@@ -97,11 +95,6 @@ export type ApiSessionAgentError = RemoteError<'session/not-found' | 'session/ag
 export type ApiSessionAgentResult =
   | { readonly agent: Agent }
   | { readonly error: ApiSessionAgentError }
-
-type InstalledSelection = ModelSelectionRef & {
-  current: AgentModelSelection
-  select(selection: AgentModelSelection): void
-}
 
 /**
  * Test whether generic Session routing must leave an identity to subagent routing.
@@ -176,7 +169,13 @@ export class ApiSessionAgentController {
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
-  constructor(private readonly ctx: Context) {
+  constructor(private readonly ctx: Context) {}
+
+  /**
+   * Configure Session and Agent lookups for Typert.
+   */
+  initialize(): void {
+    const ctx = this.ctx
     ctx.typert.lookups.configure('agent', async (sessionId: SessionId) => {
       const found = await this.resolveAgent(sessionId)
       if ('error' in found) throw found.error
@@ -320,47 +319,21 @@ export class ApiSessionAgentController {
     })
   }
 
-  /**
-   * Install or return the Session-local model selection used by prompt assembly.
-   * @param agent - live Agent that owns the selection.
-   * @returns the installed mutable selection reference.
-   */
-  selectionFor(agent: Agent): InstalledSelection {
-    const model = agent.model
-    model.setFallback(() => agentModelSelection(this.ctx.agentDefaultModel.currentSelection()))
-    if (model.current === undefined) throw new Error('api-session: model selection is unavailable')
-    return model as InstalledSelection
-  }
-
-  /**
-   * Read live selection without installing a model reference or activating the Agent.
-   * @param agent - already-live Agent whose next choice is inspected.
-   * @returns installed choice, durable pending intent, or the current default.
+  /** Read the next unpinned selection of a live Agent.
+   * @param agent - live Agent whose choice is inspected.
+   * @returns its selection or the current Host default.
    */
   inspectSelectionFor(agent: Agent): ModelSelection {
-    const installed = agent.model.current
-    if (installed !== undefined) return installed
-    const state = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
-    if (state === undefined) throw new Error('api-session: required modelSelection projection is not registered')
-    return resolveModelSelection(state.pending, agent.session.requestHeader(), () => this.ctx.agentDefaultModel.currentSelection())
-  }
-
-  /**
-   * Commit and cache one validated selection for the next prompt assembly.
-   * @param agent - live Agent that owns the selection.
-   * @param selection - validated selection to record and apply.
-   */
-  selectForNextRequest(agent: Agent, selection: AgentModelSelection): void {
-    this.selectionFor(agent).select(selection)
+    return agent.model.selected() ?? this.ctx.agentDefaultModel.currentSelection()
   }
 
   /**
    * Read the current Agent preset from the Session projection.
    * @param session - live Session whose projection state is available.
-   * @returns the current preset, or undefined when the capability is absent.
+   * @returns the current preset, or undefined without a preset service or recorded selection.
    */
   presetForSession(session: Session): string | undefined {
-    return this.ctx.sessionProjections.stateOf(session, 'agentPreset') ?? undefined
+    return this.ctx.get('agentPresets')?.presetForSession(session) ?? undefined
   }
 
   /**
@@ -383,13 +356,13 @@ export class ApiSessionAgentController {
   async composeAgent(presetId: string | undefined): Promise<ApiSessionComposition> {
     const presets = this.ctx.get('agentPresets')
     if (presets === undefined) {
-      return { setup: (_agentCtx, agent) => { this.installSelection(agent) } }
+      return { setup: (agentCtx) => { installModelSelection(agentCtx) } }
     }
     const resolvedId = (await presets.resolve(presetId)).id
     return {
       agentPreset: resolvedId,
-      setup: async (agentCtx, agent) => {
-        this.installSelection(agent)
+      setup: async (agentCtx) => {
+        installModelSelection(agentCtx)
         await presets.mount(agentCtx, resolvedId)
       },
     }
@@ -561,9 +534,6 @@ export class ApiSessionAgentController {
     request: ApiSessionCreateRequest,
     composition: ApiSessionComposition,
   ): Promise<Agent | undefined> {
-    if (live.session.header.cwd !== request.cwd) {
-      throw new ApiSessionCwdConflict(live.id, request.cwd, live.session.header.cwd)
-    }
     if (!request.reusable(live.id) || !this.isBlank(live.session)) return undefined
     this.assertPresetApplicable(live.id, request.agentPreset)
     const current = this.presetForSession(live.session)
@@ -594,21 +564,18 @@ export class ApiSessionAgentController {
 
   /** Whether no turn has started, by the predicate the preset registry's `select` enforces. */
   private isBlank(session: Session): boolean {
-    const boundary = this.ctx.sessionProjections.stateOf(session, 'turnBoundary')
-    return boundary === undefined
-      ? !session.snapshotEvents().some(event => event.type === 'turn/start')
-      : boundary.openTurnStartSeq === null && boundary.lastTurn === 0
+    const boundary = this.ctx.agents.turnBoundaryOf(session)
+    return boundary.openTurnStartSeq === null && boundary.lastTurn === 0
   }
 
   /** Without a roster, reuse cannot apply a named preset. */
   private assertPresetApplicable(sessionId: SessionId, requested: string | undefined): void {
     if (requested === undefined || this.ctx.get('agentPresets') !== undefined) return
-    throw new ApiSessionPresetConflict(sessionId, requested, undefined)
+    throw new ApiSessionPresetConflict(sessionId, requested)
   }
 
   private created(agent: Agent): ApiSessionCreated {
-    const agentPreset = this.presetForSession(agent.session)
-    return { agent, ...(agentPreset === undefined ? {} : { agentPreset }) }
+    return { agent, agentPreset: this.presetForSession(agent.session) }
   }
 
   private createMinted(cwd: string, composition: ApiSessionComposition): Promise<Agent> {
@@ -633,12 +600,13 @@ export class ApiSessionAgentController {
   }
 
   private agentOptions(): AgentOptions {
-    const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
-    return { provider, model }
-  }
-
-  private installSelection(agent: Agent): void {
-    this.selectionFor(agent)
+    const defaults = this.ctx.agentDefaultModel
+    // A Session that records no selection or request follows default changes.
+    return {
+      get provider() { return defaults.currentSelection().provider },
+      get model() { return defaults.currentSelection().model },
+      get reasoningEffort() { return defaults.currentSelection().reasoningEffort },
+    }
   }
 
   /**
@@ -658,16 +626,6 @@ export class ApiSessionAgentController {
     existing: string | undefined,
   ): void {
     if (requested === undefined || requested === existing) return
-    throw new ApiSessionPresetConflict(sessionId, requested, existing)
-  }
-}
-
-function agentModelSelection(selection: ModelSelection): AgentModelSelection {
-  return {
-    provider: selection.provider,
-    model: selection.model,
-    ...(selection.reasoningEffort === undefined
-      ? {}
-      : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
+    throw new ApiSessionPresetConflict(sessionId, requested, existing, true)
   }
 }

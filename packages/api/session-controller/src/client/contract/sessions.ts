@@ -97,9 +97,11 @@ export interface ISessions {
    */
   readonly searchResultLimit: number
   /**
-   * Create or adopt a Session on the Host.
-   * @param opts - target workspace, directory, and optional preallocated identity.
-   * @returns the catalogued identity; retain it before borrowing its binding.
+   * Create a Session for a new conversation on the Host. The Host reuses the
+   * named blank Session while it is reusable and otherwise creates another; the
+   * Session runs the named preset, or the Host default when none is named.
+   * @param opts - target workspace or directory, an optional blank Session to reuse, and an optional Agent preset.
+   * @returns the catalogued identity the Host created or reused; retain it before borrowing its binding.
    */
   create(opts?: {
     workspaceId?: WorkspaceId

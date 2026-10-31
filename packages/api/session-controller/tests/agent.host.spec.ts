@@ -1,3 +1,4 @@
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,12 +15,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiSessionAgentController,
   ApiSessionCwdConflict,
-  ApiSessionNotFound,
   ApiSessionPresetConflict,
   ApiSessionSubagentOwnership,
-  inspectApiSession,
 } from '../src/agent.ts'
-import { foldModelSelection, installModelSelectionProjection } from '../src/model-selection-projection.ts'
+import { foldModelSelection } from '@deepseek-ai/dsh-agent'
 import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
 
@@ -38,15 +37,18 @@ async function harness(): Promise<{ ctx: Context; agents: ApiSessionAgentControl
   roots.push(ctx)
   await ctx.plugin(TypertRegistry)
   await ctx.plugin(SessionStore)
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   installSessionReadTestServices(ctx)
-  ctx.sessionProjections.register(agentPresetProjectionDefinition)
-  installModelSelectionProjection(ctx)
+  await ctx.sessionProjections.register(agentPresetProjectionDefinition)
+  await ctx.sessionProjections.register(modelSelectionProjectionDefinition)
   ctx.provide('agentDefaultModel', {
     currentSelection: () => ({ provider: 'fixture', model: 'fixture-model' }),
     saveSelection: () => Promise.resolve(),
   } as never)
-  return { ctx, agents: new ApiSessionAgentController(ctx) }
+  const agents = new ApiSessionAgentController(ctx)
+  agents.initialize()
+  return { ctx, agents }
 }
 
 function header(id: string, cwd: string | null = '/workspace'): SessionHeader {
@@ -65,12 +67,13 @@ function providePersistence(ctx: Context, persistence: Record<string, unknown>):
 
 function agent(ctx: Context, meta: SessionHeader): Agent {
   const session = ctx.sessions.create(meta.id, { meta })
-  const model = new AgentModel(session, () => {
+  const model = new AgentModel(() => {
+    // oxlint-disable-next-line typescript/no-deprecated -- this fixture tests a missing projection registration.
     const state = ctx.sessionProjections.stateOf(session, 'modelSelection')
     if (state === undefined) throw new Error('required modelSelection projection')
-    return state
-  }, () => ({ provider: 'fixture', model: 'fixture-model' }))
-  return { id: meta.id, session, model, status: 'idle', ctx } as Agent
+    return modelSelectionProjectionDefinition.stateSchema.parse(state)
+  }, session, { provider: 'fixture', model: 'fixture-model' })
+  return { id: meta.id, session, model, status: 'idle', ctx } as Partial<Agent> as Agent
 }
 
 function unpublishedAgent(ctx: Context, meta: SessionHeader): Agent {
@@ -88,61 +91,6 @@ describe('ApiSession identity failures', () => {
       .toContain('records no cwd')
     expect(new ApiSessionCwdConflict(SessionId('wrong-cwd'), '/wanted', '/existing').message)
       .toContain('belongs to "/existing"')
-  })
-
-  it('maps absent and cwd-less point observations to not found', async () => {
-    const ctx = new Context()
-    roots.push(ctx)
-    await ctx.plugin(SessionStore)
-    installSessionReadTestServices(ctx)
-    await expect(inspectApiSession(ctx, SessionId('missing')))
-      .rejects.toBeInstanceOf(ApiSessionNotFound)
-
-    const inspect = vi.fn(() => Promise.resolve(undefined))
-    const stat = vi.fn(() => Promise.resolve(undefined))
-    const disposeMissing = providePersistence(ctx, {
-      list: () => Promise.resolve([]),
-      stat,
-      inspect,
-    })
-    await expect(inspectApiSession(ctx, SessionId('missing'))).rejects.toBeInstanceOf(ApiSessionNotFound)
-    // Absence is decided by the stat preflight; the log itself is never opened.
-    expect(stat).toHaveBeenCalledOnce()
-    expect(inspect).not.toHaveBeenCalled()
-    disposeMissing()
-
-    const listed = header('cwd-less-catalog', null)
-    const disposeListed = providePersistence(ctx, {
-      list: () => Promise.resolve([listed]),
-      inspect: () => Promise.resolve({ meta: listed, events: [] }),
-    })
-    await expect(inspectApiSession(ctx, listed.id)).rejects.toBeInstanceOf(ApiSessionNotFound)
-    disposeListed()
-
-    const catalog = header('cwd-less-inspect')
-    const inspected = header('cwd-less-inspect', null)
-    providePersistence(ctx, {
-      list: () => Promise.resolve([catalog]),
-      inspect: () => Promise.resolve({ meta: inspected, events: [] }),
-    })
-    await expect(inspectApiSession(ctx, catalog.id)).rejects.toBeInstanceOf(ApiSessionNotFound)
-  })
-
-  it('forwards an explicit inspection signal', async () => {
-    const ctx = new Context()
-    roots.push(ctx)
-    await ctx.plugin(SessionStore)
-    installSessionReadTestServices(ctx)
-    const meta = header('signalled-inspection')
-    const inspect = vi.fn(() => Promise.resolve({ meta, inheritedEventCount: SessionLogOffset(0), events: [] }))
-    providePersistence(ctx, {
-      list: () => Promise.resolve([meta]),
-      inspect,
-    })
-    const signal = new AbortController().signal
-
-    await expect(inspectApiSession(ctx, meta.id, signal)).resolves.toEqual({ meta, inheritedEventCount: SessionLogOffset(0), events: [] })
-    expect(inspect).toHaveBeenCalledWith(meta.id, signal)
   })
 })
 
@@ -325,7 +273,7 @@ describe('ApiSession model selection', () => {
     const live = agent(ctx, header('missing-model-projection'))
     vi.spyOn(ctx.sessionProjections, 'stateOf').mockReturnValue(undefined)
 
-    expect(() => agents.selectionFor(live)).toThrow('required modelSelection projection')
+    expect(() => live.model.current()).toThrow('required modelSelection projection')
     expect(() => agents.inspectSelectionFor(live)).toThrow('required modelSelection projection')
   })
 
@@ -336,30 +284,30 @@ describe('ApiSession model selection', () => {
       header: { config: { provider: 'logged-provider', model: 'logged-model' } },
       reason: 'initial',
     })
-    expect(agents.selectionFor(logged).current).toEqual({
+    expect(logged.model.current()).toEqual({
       provider: 'logged-provider',
       model: 'logged-model',
     })
     expect(agents.inspectSelectionFor(logged)).toEqual({ provider: 'logged-provider', model: 'logged-model' })
 
     const pending = agent(ctx, header('pending-model'))
-    const selection = agents.selectionFor(pending)
-    agents.selectForNextRequest(pending, {
+    const selection = pending.model
+    selection.select({
       provider: 'selected-provider',
       model: 'selected-model',
       reasoningEffort: 'high' as never,
     })
-    expect(selection.current).toMatchObject({
+    expect(selection.current()).toMatchObject({
       provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high',
     })
     const seqBeforeRead = pending.session.seq
-    expect(agents.inspectSelectionFor(pending)).toEqual(selection.current)
+    expect(agents.inspectSelectionFor(pending)).toEqual(selection.current())
     expect(pending.session.seq).toBe(seqBeforeRead)
     pending.session.append('request/header', {
       header: { config: { provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high' as never } },
       reason: 'initial',
     })
-    expect(selection.current).toEqual({ provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high' })
+    expect(selection.current()).toEqual({ provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high' })
 
     const untouched = agent(ctx, header('uninstalled-model'))
     expect(agents.inspectSelectionFor(untouched)).toEqual({ provider: 'fixture', model: 'fixture-model' })
@@ -459,6 +407,7 @@ describe('ApiSession create or adoption', () => {
     })
     ctx.provide('agentPresets', {
       resolve: (id?: string) => Promise.resolve({ id: id ?? 'minimal' }),
+      presetForSession: () => 'minimal',
       mount: () => Promise.resolve(),
     } as never)
     const resumed = {
@@ -579,9 +528,12 @@ describe('ApiSession create or adoption', () => {
     let release!: () => void
     const entered = new Promise<void>((resolve) => { enter = resolve })
     const gate = new Promise<void>((resolve) => { release = resolve })
+    let selectedPreset = 'first'
     ctx.provide('agentPresets', {
       resolve: (id?: string) => Promise.resolve({ id: id ?? 'first' }),
+      presetForSession: () => selectedPreset,
       select: async (_agent: Agent, id: string) => {
+        selectedPreset = id
         existing.session.append('agent-preset/selected', { agentPreset: id })
         enter()
         await gate

@@ -24,7 +24,7 @@ import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { InputTriggerServiceContract, InputTriggerSource } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
-import { en, NS, zh } from './locales.ts'
+import { de, en, es, fr, ja, NS, pt, ru, zh } from './locales.ts'
 import { AgentTaskDock } from './AgentTaskDock.tsx'
 import { ProjectScopeModel } from './project-scope.ts'
 import type { WorkspaceBridge } from './project-scope.ts'
@@ -188,7 +188,7 @@ function agentLabel(item: Pick<AgentItem, 'name'> & { project_name?: unknown }):
 
 /** Register a stable-reference source; ordinary model serialization refuses the Agent chip. */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-slark-agent: dictionaries')
+  ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, pt, ru }), 'ui-slark-agent: dictionaries')
   const accountHost = typeof window === 'undefined' ? undefined : window.__DSH_DESKTOP_HOST__
   const readAccountIdentity = accountHost?.accountIdentity
   if (readAccountIdentity) {

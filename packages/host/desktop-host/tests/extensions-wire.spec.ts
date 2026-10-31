@@ -40,6 +40,7 @@ it('installs MCP through the authenticated socket into the leased Profile and re
     writeFileSync(config, JSON.stringify([
       { id: 'prompt', name: '@deepseek-ai/dsh-system-prompt' },
       { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+      { id: 'executor', name: '@deepseek-ai/dsh-tool-executor-native' },
     ]))
     loaded = await boot('host-wire-test', config, loadOptionalPatches('host-wire-test', join(home(id), 'profiles/web/cordis.patch.yml')),
       (context) => {
@@ -49,6 +50,7 @@ it('installs MCP through the authenticated socket into the leased Profile and re
           async import(specifier: string) {
             if (specifier === '@deepseek-ai/dsh-system-prompt') return import('@deepseek-ai/dsh-system-prompt')
             if (specifier === '@deepseek-ai/dsh-tools') return import('@deepseek-ai/dsh-tools')
+            if (specifier === '@deepseek-ai/dsh-tool-executor-native') return import('@deepseek-ai/dsh-tool-executor-native')
             if (specifier === '@deepseek-ai/dsh-mcp-client') return import('@deepseek-ai/dsh-mcp-client')
             throw Error(`unexpected Loader import: ${specifier}`)
           },
@@ -94,10 +96,9 @@ it('installs MCP through the authenticated socket into the leased Profile and re
   await client.extensions({ ...lease, command })
   expect(reloads).toBe(1)
   if (!loaded) throw Error('MCP was not loaded')
-  const toolResult = await loaded.tools.execute({ signal: new AbortController().signal, callId: ToolCallId('wire-installed-ping'),
-    name: 'mcp__demo__ping', arguments: {} })
-  expect(toolResult.isError).toBe(false)
-  expect(toolResult.content).toContainEqual({ type: 'text', text: 'pong' })
+  const toolResult = await loaded.tools.execute({ signal: new AbortController().signal, calls: [{ type: 'tool-call', id: ToolCallId('wire-installed-ping'), name: 'mcp__demo__ping', arguments: '{}' }] })
+  expect(toolResult.results[0]!.result.isError).toBe(false)
+  expect(toolResult.results[0]!.result.content).toContainEqual({ type: 'text', text: 'pong' })
   expect(readFileSync(join(home(local.profileId), 'profiles/web/cordis.patch.yml'), 'utf8')).toContain('mcp-demo')
   const second = await UnixHostClient.connect(options); clients.push(second)
   await expect(second.extensions({ ...lease, command: { action: 'status', operation_id: operationId as never } })).rejects.toMatchObject({ code: 'stale' })
