@@ -495,7 +495,9 @@ export async function startDesktopHostApplication(
     (profileId) =>{  importWorkerFence.assertOpen(profileId) },
   )
   try {
-    ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
+    const hostOwnership = await acquireSingleHostLock({ root, pid: process.pid, uid,
+      processNonce: config.processNonce })
+    ownership = hostOwnership
     const registry = new ProfileRegistry({
       root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, uid, 32), clock,
     })
@@ -835,9 +837,8 @@ export async function startDesktopHostApplication(
       if (operation.selectedPluginNames.length === 0) return { operation, base }
       const publishJournal = new FileProfileImportPluginPublishJournal(
         join(profiles.target.profileRoot, 'profile-import-plugin-publish'), uid)
-      if (!ownership) throw new HostAuthorityError('unavailable')
       const pluginPublisher = { journal: publishJournal, fence: importWorkerFence,
-        hostLock: ownership, profileRoot: profiles.target.profileRoot, operationId: operation.operationId,
+        hostLock: hostOwnership, profileRoot: profiles.target.profileRoot, operationId: operation.operationId,
         sourceProfileId: profiles.source.profileId, targetProfileId: profiles.target.profileId, uid,
         assertAuthority: input.assertAuthority,
         assertQuiescent: () => importQuiescent(profiles.source.profileId, profiles.target.profileId),
@@ -919,8 +920,10 @@ export async function startDesktopHostApplication(
               await input.assertAuthority()
             } })
           : await profileImport.commit(context.base)
-        if (committed.phase !== 'committed') throw Error('profile_import_commit_mismatch')
-        return { operationId: committed.operationId, phase: committed.phase }
+        if (committed.phase === 'committed') {
+          return { operationId: committed.operationId, phase: committed.phase }
+        }
+        throw Error('profile_import_commit_mismatch')
       },
       abortProfileImport: async (input) => {
         const context = await importCommand(input)
@@ -942,8 +945,10 @@ export async function startDesktopHostApplication(
           : joint ? await profileImport.abortWithPlugins(joint)
             : await profileImport.abort({ operationId: input.operationId,
               target: context.base.target, assertAuthority: input.assertAuthority })
-        if (aborted.phase !== 'aborted') throw Error('profile_import_abort_mismatch')
-        return { operationId: aborted.operationId, phase: aborted.phase }
+        if (aborted.phase === 'aborted') {
+          return { operationId: aborted.operationId, phase: aborted.phase }
+        }
+        throw Error('profile_import_abort_mismatch')
       },
       createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')

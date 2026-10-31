@@ -19,6 +19,7 @@ import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files
 import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
+import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -52,6 +53,17 @@ const mocks = vi.hoisted(() => ({
   packagedRuntimeAppRoot: vi.fn(() => '/fixture/runtime-app'),
 }))
 const importWiring = vi.hoisted(() => ({ enabled: false }))
+const startupFsFaults = vi.hoisted(() => ({ deniedProfilePath: '' }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, lstatSync: (...args: unknown[]) => {
+    if (String(args[0]) === startupFsFaults.deniedProfilePath) {
+      throw Object.assign(Error('simulated profile lstat denial'), { code: 'EACCES' })
+    }
+    return Reflect.apply(actual.lstatSync, actual, args) as ReturnType<typeof actual.lstatSync>
+  } }
+})
 
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
   loadProfileDirectory: mocks.loadProfileDirectory,
@@ -215,6 +227,57 @@ it.skipIf(process.platform === 'win32')('keeps an import-fenced Profile closed a
   expect(lstatSync(patchPath).ino).toBe(patchBefore.ino)
   const migration = transportOptions!.createMigrationImport!('owner', profile.profileId)
   await expect(migration.verify(randomUUID(), 1)).rejects.toThrow('unavailable')
+})
+
+it.skipIf(process.platform === 'win32')('uses the packaged worker factory when no worker is injected', async () => {
+  const { config, root } = fixture()
+  const create = vi.spyOn(DshWebProfileWorkerFactory.prototype, 'create').mockResolvedValue({
+    viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+    bootstrapCookie: { name: 'fixture', value: 'private' },
+    closeNotifications: () => {}, abort: () => {}, done: Promise.resolve(),
+  })
+  const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+  })
+  onTestFinished(async () => {
+    await application.close()
+    create.mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  })
+  await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:packaged-worker',
+    unlockMaterial: Buffer.alloc(32, 5).toString('base64url'), ownerId: 'owner' })
+  expect(create).toHaveBeenCalledOnce()
+})
+
+it.skipIf(process.platform === 'win32')('fails closed when a Profile marker stat fails for a reason other than absence', async () => {
+  const { config, root } = fixture()
+  const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+  const dependencies: StartDesktopHostApplicationDependencies = {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => {}, abort: () => {}, done: Promise.resolve() }),
+  }
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const first = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  onTestFinished(async () => {
+    startupFsFaults.deniedProfilePath = ''
+    await first.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const keyHandle = 'keychain:marker-stat-fault'
+  const unlockMaterial = Buffer.alloc(32, 6).toString('base64url')
+  const profile = await first.host.bootstrapLocalProfile({ keyHandle, unlockMaterial, ownerId: 'owner' })
+  await first.close()
+  const restarted = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  onTestFinished(async () => { await restarted.close() })
+  startupFsFaults.deniedProfilePath = join(root, 'profiles', profile.profileId)
+  const failure = await restarted.host.restoreLocalProfile({ ...profile, keyHandle, unlockMaterial,
+    ownerId: 'owner' }).then(() => null, (error: unknown) => error as Error)
+  expect(failure?.message).toBe('simulated profile lstat denial')
+  expect(failure?.stack).toContain('ProfileImportActivity.assertOpen')
 })
 
 it.skipIf(process.platform === 'win32')('wires a session import through prepare, commit, and durable status', async () => {
