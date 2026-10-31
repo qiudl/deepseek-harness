@@ -600,6 +600,29 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
+  it('consumes a defaulted-effort selection and reconstructs it after replay', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const controller = createSessionTestController(ctx, {
+      defaultModelSelection: () => ({ provider: 'duplicate', model: 'same' }), cwd: '/tmp',
+    })
+    const selected = await controller.selectModel({ sessionId, provider: 'deepseek-official', model: 'deepseek-reasoner' })
+    expect(selected.selected).toEqual({ provider: 'deepseek-official', model: 'deepseek-reasoner' })
+    agent.session.append('request/header', {
+      header: { config: { provider: 'deepseek-official', model: 'deepseek-reasoner', reasoningEffort: ReasoningEffortId('high') },
+        adapterDefaults: { reasoningEffort: true } }, reason: 'initial',
+    })
+    const state = ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
+    expect(state).toEqual({ pending: null, lastUsed: { provider: 'deepseek-official', model: 'deepseek-reasoner' } })
+    const events = agent.session.snapshotEvents()
+    const { ctx: restarted } = await harness()
+    createSessionTestController(restarted, { defaultModelSelection: () => ({ provider: 'duplicate', model: 'same' }), cwd: '/tmp' })
+    const replayed = restarted.sessions.create(undefined, { seed: events })
+    expect(restarted.sessionProjections.stateOf(replayed, 'modelSelection'))
+      .toEqual({ pending: null, lastUsed: { provider: 'deepseek-official', model: 'deepseek-reasoner' } })
+    await restarted.fiber.dispose()
+    await ctx.fiber.dispose()
+  })
+
   it('does not reinterpret an adapter-owned reasoning default as an explicit Web selection', async () => {
     const { ctx, agent } = await harness({
       provider: 'deepseek-official',
@@ -679,9 +702,9 @@ describe('Web session model selection', () => {
     const stillAccepted = expectValue(await remote.selectModel(request({
       sessionId, provider: 'deepseek-official', model: 'deepseek-chat',
     })))
-    expect(stillAccepted.selected).toEqual({ provider: 'deepseek-official', model: 'deepseek-chat', reasoningEffort: 'high' })
+    expect(stillAccepted.selected).toEqual({ provider: 'deepseek-official', model: 'deepseek-chat' })
     expect(currentSelection(ctx, sessionId))
-      .toEqual({ provider: 'deepseek-official', model: 'deepseek-chat', reasoningEffort: 'high' })
+      .toEqual({ provider: 'deepseek-official', model: 'deepseek-chat' })
     await expect.poll(() => warn.mock.calls).toContainEqual([
       'session-controller: model selection changed for the Session but the default was not saved: Error: read-only document',
     ])
