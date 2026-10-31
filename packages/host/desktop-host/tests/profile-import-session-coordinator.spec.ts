@@ -1518,16 +1518,13 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     clear.mockRestore()
     const committed = await journal.load(base.operationId)
     if (!committed) throw Error('missing committed intent')
-    const internal = coordinator as unknown as { inspectCommitEvidence(): Promise<{
-      operation: typeof committed
-      pointer: 'old' | 'staged'
-      sessionCount: number }> }
-    const inspect = vi.spyOn(internal, 'inspectCommitEvidence')
-      .mockResolvedValueOnce({ operation: committed, pointer: 'old', sessionCount: 2 })
+    if (Object.hasOwn(coordinator, 'inspectCommitEvidence')) throw Error('unexpected own method')
+    Object.defineProperty(coordinator, 'inspectCommitEvidence', { configurable: true,
+      value: async () => ({ operation: committed, pointer: 'old', sessionCount: 2 }) })
     try {
       await expect(coordinator.commit(input)).rejects.toThrow('profile_import_generation_changed')
       expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
-    } finally { inspect.mockRestore() }
+    } finally { Reflect.deleteProperty(coordinator, 'inspectCommitEvidence') }
   })
 
   it('keeps the old pointer and both fences when staged data changes before commit', async () => {
