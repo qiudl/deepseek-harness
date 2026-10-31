@@ -1,8 +1,48 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
-import { executeRemoteSessionCommand, SessionCommandAuthority, type JournalEvent } from '../src/session-command.ts'
+import { executeRemoteSessionCommand, executeRestrictedSessionCommand, SessionCommandAuthority, type JournalEvent } from '../src/session-command.ts'
 
 describe('remote Session command authority', () => {
+  it('allows only session list and history in a restricted workbench', async () => {
+    const remoteSession = vi.fn(async () => ({ items: [] }))
+    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    onTestFinished(() => workers.disposeAll())
+    await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+    const request = { workers, profileId: 'profile-1', signal: new AbortController().signal }
+    const commandId = '123e4567-e89b-42d3-a456-426614174000' as never
+    await expect(executeRestrictedSessionCommand({ ...request,
+      command: { operation: 'session.list', command_id: commandId } })).resolves.toEqual({ items: [] })
+    await expect(executeRestrictedSessionCommand({ ...request,
+      command: { operation: 'session.history', command_id: commandId, session_id: 's1', max_events: 100 } }))
+      .resolves.toEqual({ items: [] })
+    await expect(executeRestrictedSessionCommand({ ...request,
+      command: { operation: 'directory.pick', command_id: commandId, client_id: '123e4567-e89b-42d3-a456-426614174001' } }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(executeRestrictedSessionCommand({ ...request,
+      command: { operation: 'session.create', command_id: commandId } }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(remoteSession).toHaveBeenCalledTimes(2)
+  })
+  it('does not return a restricted read after the owning connection is cancelled', async () => {
+    const controller = new AbortController()
+    const remoteSession = vi.fn(async () => { controller.abort(); return { items: ['private'] } })
+    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    onTestFinished(() => workers.disposeAll())
+    await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+    await expect(executeRestrictedSessionCommand({ workers, profileId: 'profile-1', signal: controller.signal,
+      command: { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never } }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+  })
+  it('does not start a restricted read for an already cancelled connection', async () => {
+    const remoteSession = vi.fn(async () => ({ items: [] }))
+    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession }))
+    onTestFinished(() => workers.disposeAll())
+    await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+    await expect(executeRestrictedSessionCommand({ workers, profileId: 'profile-1', signal: AbortSignal.abort(),
+      command: { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never } }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+    expect(remoteSession).not.toHaveBeenCalled()
+  })
   it('journals Profile creation and fails closed when replaying a failed mutation', async () => {
     const events: JournalEvent[] = []
     const authority = new SessionCommandAuthority({ append: (event) => { events.push(event) }, read: () => [] }, { now: () => 1 })

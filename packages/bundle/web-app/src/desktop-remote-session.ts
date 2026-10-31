@@ -292,24 +292,28 @@ export class DesktopRemoteSessionExecutor {
       if (first.done || !row(first.value) || first.value.type !== 'snapshot' || !Array.isArray(first.value.records)) {
         throw new Error('desktop remote session: invalid history snapshot')
       }
+      if (first.value.hasMore !== undefined && typeof first.value.hasMore !== 'boolean') {
+        throw new Error('desktop remote session: invalid history snapshot')
+      }
       const records = first.value.records
       const events: HostRemoteSessionJson[] = []
+      let truncated = first.value.hasMore === true
       const budget = HOST_CONTROL_MAX_FRAME_BYTES * 3 / 4
       let bytes = Buffer.byteLength('{"events":[]}')
       for (const raw of records.toReversed()) {
         const record = projectHistoryRecord(raw)
         if (!record) continue
         const nextBytes = Buffer.byteLength(JSON.stringify(record)) + (events.length === 0 ? 0 : 1)
-        if (bytes + nextBytes > budget) break
+        if (bytes + nextBytes > budget) { truncated = true; break }
         try {
           encodeHostControlFrame({ version: 1, type: 'result',
             request_id: '123e4567-e89b-42d3-a456-426614174000' as never,
             method: 'profile.remote_session', result: { value: { events: [record, ...events] } } })
-        } catch { continue }
+        } catch { truncated = true; continue }
         events.unshift(record)
         bytes += nextBytes
       }
-      return { events }
+      return { events, ...(truncated ? { truncated: true } : {}) }
     } finally {
       lifetime.abort()
       await iterator.return?.()

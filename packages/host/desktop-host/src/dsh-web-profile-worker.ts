@@ -35,8 +35,9 @@ import { parseHostCollaborationArchiveStateValue,
   type HostCollaborationArchiveStateTarget, type HostCollaborationArchiveTransitionTarget,
   type HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
-import { HostAuthorityError } from './types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
+import { RESTRICTED_WORKER_PARENT_MONITOR } from './restricted-worker-parent-monitor.ts'
 
 const execFileAsync = promisify(execFile)
 const gzipAsync = promisify(gzip)
@@ -87,7 +88,7 @@ export async function attestMacOSListener(pid: number, origin: string): Promise<
   const port = new URL(origin).port
   const { stdout } = await execFileAsync('/usr/sbin/lsof', [
     '-nP', '-a', '-p', String(pid), `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-Fn',
-  ], { encoding: 'utf8', maxBuffer: 64 * 1024 })
+  ], { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 30_000 })
   if (!stdout.split(/\r?\n/u).includes(`p${String(pid)}`)) throw new HostAuthorityError('unavailable')
 }
 
@@ -164,9 +165,30 @@ export class DshWebProfileWorkerFactory {
   /**
    * Launch an existing Web profile with a Profile-scoped DSH home and attest its listener.
    * @param spec - selected Person Profile root and opaque local handles.
+   * @param signal - optional owning connection cancellation during startup.
    * @returns lifecycle plus a Host-verified token-free loopback origin.
    */
-  async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
+  async create(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
+    return this.createWorker(spec, signal, false)
+  }
+
+  /**
+   * Start a macOS history-only worker that cannot fork, make direct outbound IP
+   * connections outside loopback, or write outside its staged Profile.
+   * This is only one containment layer; the caller must also fence external writers.
+   * @param spec - isolated, Host-owned Profile and no original plugin roots.
+   * @param signal - owning connection cancellation.
+   * @returns lifecycle and the attested loopback origin, held privately by Host.
+   */
+  async createRestricted(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
+    if (process.platform !== 'darwin' || spec.pluginRoots.length !== 0 || Object.keys(spec.env).length !== 0) {
+      throw new HostAuthorityError('unavailable')
+    }
+    return this.createWorker(spec, signal, true)
+  }
+
+  private async createWorker(spec: ProfileWorkerSpec, signal: AbortSignal | undefined, denyFork: boolean): Promise<ProfileWorkerHandle> {
+    signal?.throwIfAborted()
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
@@ -178,9 +200,12 @@ export class DshWebProfileWorkerFactory {
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
-    const child = spawn(this.options.nodeExecutablePath, [
+    const args = [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
-    ], {
+    ]
+    const sandbox = `(version 1) (allow default) (deny process-fork) (deny file-write*) (allow file-write* (subpath ${JSON.stringify(root)})) (deny network-outbound) (allow network-outbound (remote ip "localhost:*"))`
+    const child = spawn(denyFork ? '/usr/bin/sandbox-exec' : this.options.nodeExecutablePath,
+      denyFork ? ['-p', sandbox, this.options.nodeExecutablePath, '--import', RESTRICTED_WORKER_PARENT_MONITOR, ...args] : args, {
       cwd: root,
       env: {
         ...spec.env,
@@ -201,21 +226,34 @@ export class DshWebProfileWorkerFactory {
           ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: denyFork ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
     })
-    const activated = await this.waitForOrigin(child)
+    const activated = await this.waitForOrigin(child, signal)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
       sourceToken, analysisToken, deliveryToken, referenceToken)
   }
 
-  private async waitForOrigin(child: ChildProcess): Promise<{
+  private async waitForOrigin(child: ChildProcess, signal?: AbortSignal): Promise<{
     readonly origin: string
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
     const pid = child.pid
-    if (!pid || !child.stdout) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
+    if (!pid) {
+      // A failed spawn emits its error asynchronously even though it never had a PID.
+      child.once('error', () => {})
+      child.kill('SIGKILL')
+      throw new HostAuthorityError('unavailable')
+    }
+    if (!child.stdout) {
+      const exited = child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>(resolve => child.once('close', () => resolve()))
+      try { child.kill('SIGKILL') } catch (error) { throw new ProfileWorkerExitUnconfirmedError(error) }
+      await exited
+      throw new HostAuthorityError('unavailable')
+    }
     child.stdout.setEncoding('utf8')
     let buffer = ''
     const deadline = new AbortController()
@@ -243,17 +281,38 @@ export class DshWebProfileWorkerFactory {
     const timer = setTimeout(() => {
       deadline.abort(); rejectReady(new HostAuthorityError('unavailable'))
     }, this.options.readyTimeoutMs ?? 30_000)
+    const onOwnerAbort = () => { deadline.abort(); rejectReady(new HostAuthorityError('unavailable')) }
+    if (signal?.aborted) onOwnerAbort()
+    else signal?.addEventListener('abort', onOwnerAbort, { once: true })
     try {
       const { authenticatedUrl, origin } = await ready
-      await (this.options.attestListener ?? attestMacOSListener)(pid, origin)
+      if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
+      let abortAttestation!: () => void
+      const aborted = new Promise<never>((_resolve, reject) => {
+        abortAttestation = () => reject(new HostAuthorityError('unavailable'))
+        deadline.signal.addEventListener('abort', abortAttestation, { once: true })
+      })
+      try {
+        await Promise.race([(this.options.attestListener ?? attestMacOSListener)(pid, origin), aborted])
+      } finally {
+        deadline.signal.removeEventListener('abort', abortAttestation)
+      }
       const bootstrapCookie = await exchangeBootstrap(authenticatedUrl, origin, deadline.signal)
       return { origin, bootstrapCookie }
     } catch (error) {
-      child.kill('SIGKILL')
-      if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
+      const timedOut = deadline.signal.aborted
+      // Startup failure must not release the Profile fence while its child can still run.
+      // Subscribe before signalling so a fast exit cannot be missed.
+      const exited = child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>(resolve => child.once('close', () => resolve()))
+      try { child.kill('SIGKILL') } catch (failure) { throw new ProfileWorkerExitUnconfirmedError(failure) }
+      await exited
+      if (timedOut) throw new HostAuthorityError('unavailable')
       throw error
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onOwnerAbort)
       child.stdout.off('data', onData)
     }
   }
@@ -279,6 +338,10 @@ export class DshWebProfileWorkerFactory {
     let resolveDone!: () => void
     let rejectDone!: (error: Error) => void
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
+    const exited = new Promise<void>((resolve) => {
+      if (typeof child.exitCode === 'number' || child.signalCode != null) resolve()
+      else child.once('exit', () => resolve())
+    })
     child.once('error', (error) => { if (!settled) { settled = true; rejectDone(error) } })
     child.once('exit', (code, signal) => {
       if (settled) return
@@ -287,6 +350,7 @@ export class DshWebProfileWorkerFactory {
       else rejectDone(new Error(`Profile Web worker exited unexpectedly with code ${String(code)} and signal ${String(signal)}`))
     })
     return {
+      exited,
       viewOrigin,
       generation,
       bootstrapCookie,
@@ -393,8 +457,16 @@ export class DshWebProfileWorkerFactory {
         if (requestedStop || settled) return
         requestedStop = true
         child.kill('SIGTERM')
-        const timer = setTimeout(() => { if (!settled) child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
-        void done.finally(() => { clearTimeout(timer) })
+        const timer = setTimeout(() => {
+          if (settled) return
+          try {
+            if (!child.kill('SIGKILL') && !settled) throw new Error('worker_kill_unconfirmed')
+          } catch (error) {
+            settled = true
+            rejectDone(new ProfileWorkerExitUnconfirmedError(error))
+          }
+        }, this.options.abortTimeoutMs ?? 5_000)
+        void done.then(() => clearTimeout(timer), () => clearTimeout(timer))
       },
       done,
     }
@@ -854,11 +926,12 @@ export class DshWebProfileWorkerFactory {
     stopped: () => boolean,
   ): Promise<unknown> {
     if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(40_000)])
     const response = await fetch(`${viewOrigin}/internal/${route}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+      signal: active,
     })
     if (!response.ok) {
       await response.body?.cancel()
@@ -866,15 +939,14 @@ export class DshWebProfileWorkerFactory {
         ? 'conflict' : route === 'desktop-remote-session' && response.status === 429
           ? 'busy' : 'unavailable')
     }
-    const body = await response.text()
-    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
-    let parsed: unknown
-    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
-      throw new HostAuthorityError('unavailable')
-    }
-    return (parsed as { value: unknown }).value
+    return this.readPrivateResponse(response, active, signal, stopped, 512 * 1024, (bytes) => {
+      const parsed: unknown = JSON.parse(bytes.toString('utf8'))
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
+        throw new HostAuthorityError('unavailable')
+      }
+      return (parsed as { value: unknown }).value
+    }, 'detach')
   }
 
   private async remoteUiAssetRead(

@@ -1,14 +1,21 @@
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
-import type { ChildProcess } from 'node:child_process'
-import type { ProfileWorkerHandle } from '../src/types.ts'
+import { ProfileWorkerExitUnconfirmedError, type ProfileWorkerHandle } from '../src/types.ts'
+import { RESTRICTED_WORKER_PARENT_MONITOR } from '../src/restricted-worker-parent-monitor.ts'
+
+function privateMethod(target: object, name: string) {
+  const method: unknown = Reflect.get(target, name)
+  if (typeof method !== 'function') throw new Error(`missing fixture method ${name}`)
+  return method.bind(target)
+}
 
 function fixture(source: string): string {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-worker-')), 'worker.mjs')
@@ -24,6 +31,18 @@ const spec = (root: string) => ({
   pluginRoots: [join(root, 'plugins')],
   env: {},
 })
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (true) {
+    try { process.kill(pid, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    if (Date.now() >= deadline) throw new Error('fixture process did not exit')
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
 
 class ControlledChild extends EventEmitter {
   readonly stderr = new PassThrough()
@@ -49,13 +68,93 @@ function controlledWebChild(): EventEmitter & {
 
 async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle> {
   const factory = new ProfileWorkerProcessFactory({ executablePath: process.execPath, arguments: () => [] })
-  const pending = (factory as unknown as { readyHandle(child: ChildProcess): Promise<ProfileWorkerHandle> })
-    .readyHandle(child as unknown as ChildProcess)
+  const pending = privateMethod(factory, 'readyHandle')(child)
   child.emit('message', { type: 'ready' })
   return await pending
 }
 
 describe('profile worker child process', () => {
+  it('does not keep an otherwise idle restricted child alive', async () => {
+    const child = spawn(process.execPath, ['--import', RESTRICTED_WORKER_PARENT_MONITOR, '-e', ''],
+      { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10_000) })
+    onTestFinished(async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await exited.catch(() => {})
+    })
+    await expect(exited).resolves.toEqual([0, null])
+  })
+
+  it('terminates a restricted child after the owning IPC channel closes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-parent-monitor-'))
+    const program = join(root, 'worker.mjs')
+    writeFileSync(program, "process.send('ready'); setInterval(() => {}, 1000)")
+    const child = spawn(process.execPath, ['--import', RESTRICTED_WORKER_PARENT_MONITOR, program],
+      { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10_000) })
+    onTestFinished(async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await exited.catch(() => {})
+      rmSync(root, { recursive: true, force: true })
+    })
+    const [message] = await once(child, 'message', { signal: AbortSignal.timeout(10_000) })
+    expect(message).toBe('ready')
+    child.disconnect()
+    await expect(exited).resolves.toEqual([70, null])
+  })
+
+  it.skipIf(process.platform === 'win32')('terminates the restricted child after its Host is killed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-parent-crash-'))
+    const marker = join(root, 'worker-exited')
+    const workerProgram = join(root, 'worker.cjs')
+    writeFileSync(workerProgram, `process.on('exit', () => require('node:fs').mkdirSync(${JSON.stringify(marker)}));
+      process.send('ready'); setInterval(() => {}, 1000)`)
+    const parentProgram = `const {spawn}=require('node:child_process');
+      const child=spawn(process.execPath,['--import',${JSON.stringify(RESTRICTED_WORKER_PARENT_MONITOR)},${JSON.stringify(workerProgram)}],
+        {stdio:['ignore','ignore','ignore','ipc']});
+      child.once('message',()=>process.send(child.pid)); setInterval(()=>{},1000)`
+    const parent = spawn(process.execPath, ['-e', parentProgram], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const parentExited = once(parent, 'exit', { signal: AbortSignal.timeout(10_000) })
+    let workerPid: number | undefined
+    onTestFinished(async () => {
+      if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
+      await parentExited.catch(() => {})
+      if (workerPid !== undefined && !existsSync(marker)) {
+        try { process.kill(workerPid, 'SIGKILL') } catch { /* already exited */ }
+      }
+      if (workerPid !== undefined) await waitForProcessExit(workerPid)
+      rmSync(root, { recursive: true, force: true })
+    })
+    const [pid] = await once(parent, 'message', { signal: AbortSignal.timeout(10_000) })
+    expect(typeof pid).toBe('number')
+    workerPid = pid as number
+    parent.kill('SIGKILL')
+    await parentExited
+    await waitForProcessExit(workerPid)
+    expect(existsSync(marker)).toBe(true)
+  })
+
+  it('rejects original plugin roots before starting a restricted worker', async () => {
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    await expect(factory.createRestricted(spec(tmpdir()))).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(factory.createRestricted({ ...spec(tmpdir()), pluginRoots: [], env: { NODE_OPTIONS: '--require=untrusted' } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it('reports confirmed process exit separately from an earlier worker error', async () => {
+    const child = new ControlledChild()
+    const handle = await readyHandle(child)
+    const failure = expect(handle.done).rejects.toThrow('worker error')
+    let exited = false
+    void handle.exited!.then(() => { exited = true })
+    child.emit('error', new Error('worker error'))
+    await failure
+    expect(exited).toBe(false)
+    child.emit('exit', 1, null)
+    await handle.exited
+    expect(exited).toBe(true)
+  })
+
   it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
     const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
     const absolute = `/${relative}`
@@ -130,16 +229,11 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteSession(origin: string, token: string, command: object, signal: AbortSignal,
-        stopped: () => boolean): Promise<unknown>
-      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
-        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
-    }
+    })
     const signal = new AbortController().signal
     const readers = [
-      (stopped: () => boolean) => factory.remoteSession(origin, 'token', { operation: 'session.list' }, signal, stopped),
-      (stopped: () => boolean) => factory.remoteUiRead(origin, 'token', 'session/list', { args: {} }, signal, stopped),
+      (stopped: () => boolean) => privateMethod(factory, 'remoteSession')(origin, 'token', { operation: 'session.list' }, signal, stopped),
+      (stopped: () => boolean) => privateMethod(factory, 'remoteUiRead')(origin, 'token', 'session/list', { args: {} }, signal, stopped),
     ]
     for (const read of readers) {
       await expect(read(() => true)).rejects.toMatchObject({ code: 'unavailable' })
@@ -159,6 +253,26 @@ describe('profile worker child process', () => {
     }
   })
 
+  it('rejects an oversized Session response before the worker finishes streaming', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.write('x'.repeat(512 * 1024 + 1))
+      // Deliberately leave the response open: buffering the whole response cannot complete.
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    onTestFinished(async () => {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath })
+    await expect(privateMethod(factory, 'remoteSession')(`http://127.0.0.1:${address.port}`, 'token',
+      { operation: 'session.list' }, AbortSignal.timeout(10_000), () => false))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  }, 15_000)
+
   it('fences plugin asset reads to boot-injected scripts and a live Host lease', async () => {
     const asset = '/plugins/??a/client.js&rev=1'
     let bootValue: unknown = { injections: [{ kind: 'script-src', src: asset }] }
@@ -177,15 +291,11 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
-        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
-    }
+    })
     const signal = new AbortController().signal
     const read = (payload: unknown, stopped: () => boolean = () => false,
       cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
-      factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+      privateMethod(factory, 'remoteUiAssetRead')(origin, { name: 'cookie', value: 'private' }, 'token',
         'asset/read', payload, selectedSignal, stopped, cache)
     for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
       await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })
@@ -413,48 +523,149 @@ describe('dsh web Profile worker', () => {
 
   it('kills a child without a usable PID or stdout before accepting readiness', async () => {
     const signals: (string | number | undefined)[] = []
-    const child = {
+    const child = Object.assign(new EventEmitter(), {
       pid: undefined,
       stdout: null,
       kill: (signal?: string | number) => { signals.push(signal); return true },
-    } as unknown as ChildProcess
+    })
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
-    const waitForOrigin = (factory as unknown as {
-      waitForOrigin(child: ChildProcess): Promise<unknown>
-    }).waitForOrigin.bind(factory)
+    const waitForOrigin = privateMethod(factory, 'waitForOrigin')
     await expect(waitForOrigin(child)).rejects.toMatchObject({ code: 'unavailable' })
     expect(signals).toEqual(['SIGKILL'])
+    expect(() => child.emit('error', new Error('spawn failed'))).not.toThrow()
+  })
+
+  it('waits for the failed startup child to close before reporting failure', async () => {
+    let killed!: () => void
+    const killObserved = new Promise<void>(resolve => { killed = resolve })
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    child.kill = () => { killed(); return true }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10 })
+    const wait = privateMethod(factory, 'waitForOrigin')(child)
+    let settled = false
+    void wait.then(() => { settled = true }, () => { settled = true })
+    const failure = expect(wait).rejects.toMatchObject({ code: 'unavailable' })
+    await killObserved
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    child.emit('close', null, 'SIGKILL')
+    await failure
+  })
+
+  it('preserves an attestation failure after stopping the startup child', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    child.kill = () => { child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
+    const failure = new Error('attestation rejected')
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, attestListener: async () => { throw failure } })
+    const wait = privateMethod(factory, 'waitForOrigin')(child)
+    child.stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
+    await expect(wait).rejects.toBe(failure)
+  })
+
+  it('bounds a stalled listener attestation and waits for its worker to exit', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    let killed = false
+    child.kill = () => { killed = true; child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
+    let enter!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 500,
+      attestListener: async () => { enter(); await new Promise<void>(() => {}) } })
+    const wait = privateMethod(factory, 'waitForOrigin')(child)
+    child.stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
+    await entered
+    let timer!: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('attestation was not bounded')), 10_000)
+      timer.unref()
+    })
+    try {
+      await expect(Promise.race([wait, timeout])).rejects.toMatchObject({ code: 'unavailable' })
+    } finally { clearTimeout(timer) }
+    expect(killed).toBe(true)
+  }, 15_000)
+
+  it('cancels worker startup when its owning connection closes', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    let killed = false
+    child.kill = () => { killed = true; child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
+    onTestFinished(() => { if (!killed) child.emit('exit', null, 'SIGKILL') })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    const wait = privateMethod(factory, 'waitForOrigin')(child, controller.signal)
+    controller.abort()
+    let timer!: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('startup cancellation was ignored')), 3_000)
+      timer.unref()
+    })
+    try {
+      await expect(Promise.race([wait, timeout])).rejects.toMatchObject({ code: 'unavailable' })
+    } finally { clearTimeout(timer) }
+    expect(killed).toBe(true)
+  }, 15_000)
+
+  it('reports an unconfirmed worker exit when the startup child cannot be killed', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    child.kill = () => { throw new Error('kill failed') }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    const wait = privateMethod(factory, 'waitForOrigin')(child, controller.signal)
+    controller.abort()
+    await expect(wait).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
   })
 
   it('settles Web worker handles once across error, exit, and forced abort paths', async () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, abortTimeoutMs: 10,
     })
-    const handle = (factory as unknown as {
-      handle(
-        child: ChildProcess,
-        origin: string,
-        cookie: { readonly name: string; readonly value: string },
-        generation: number,
-      ): ProfileWorkerHandle
-    }).handle.bind(factory)
+    const handle = privateMethod(factory, 'handle')
     const cookie = { name: 'dsh-auth-fixture', value: 'v1.fixture.fixture' }
     const errored = controlledWebChild()
-    const failed = handle(errored as unknown as ChildProcess, 'http://127.0.0.1:1', cookie, 1)
+    const failed = handle(errored, 'http://127.0.0.1:1', cookie, 1)
     const failure = expect(failed.done).rejects.toThrow('worker error')
     errored.emit('error', new Error('worker error'))
     errored.emit('exit', 1, null)
     await failure
 
     const crashed = controlledWebChild()
-    const unexpected = handle(crashed as unknown as ChildProcess, 'http://127.0.0.1:2', cookie, 2)
+    const unexpected = handle(crashed, 'http://127.0.0.1:2', cookie, 2)
     crashed.emit('exit', 73, 'SIGABRT')
     await expect(unexpected.done).rejects.toThrow('73')
 
     const clean = controlledWebChild()
-    const completed = handle(clean as unknown as ChildProcess, 'http://127.0.0.1:3', cookie, 3)
+    const completed = handle(clean, 'http://127.0.0.1:3', cookie, 3)
     clean.emit('exit', 0, null)
     clean.emit('error', new Error('late error'))
     await expect(completed.done).resolves.toBeUndefined()
@@ -463,13 +674,41 @@ describe('dsh web Profile worker', () => {
     const signals: (string | number | undefined)[] = []
     const stubborn = controlledWebChild()
     stubborn.kill = (signal) => { signals.push(signal); return true }
-    const stopped = handle(stubborn as unknown as ChildProcess, 'http://127.0.0.1:4', cookie, 4)
+    const stopped = handle(stubborn, 'http://127.0.0.1:4', cookie, 4)
     stopped.abort()
     stopped.abort()
     await new Promise(resolve => setTimeout(resolve, 25))
     expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
     stubborn.emit('exit', null, 'SIGKILL')
     await expect(stopped.done).resolves.toBeUndefined()
+
+    const erroredOnStop = controlledWebChild()
+    const stopFailure = handle(erroredOnStop, 'http://127.0.0.1:6', cookie, 6)
+    stopFailure.abort()
+    const rejectedStop = expect(stopFailure.done).rejects.toThrow('stop error')
+    erroredOnStop.emit('error', new Error('stop error'))
+    erroredOnStop.emit('exit', null, 'SIGTERM')
+    await rejectedStop
+    await new Promise(resolve => setImmediate(resolve))
+
+    const unkillable = controlledWebChild()
+    unkillable.kill = signal => {
+      if (signal === 'SIGKILL') throw new Error('kill failed')
+      return true
+    }
+    const unconfirmed = handle(unkillable, 'http://127.0.0.1:7', cookie, 7)
+    const rejectedKill = expect(unconfirmed.done).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+    unconfirmed.abort()
+    await rejectedKill
+    unkillable.emit('exit', null, 'SIGKILL')
+
+    const refusedKill = controlledWebChild()
+    refusedKill.kill = signal => signal !== 'SIGKILL'
+    const refused = handle(refusedKill, 'http://127.0.0.1:8', cookie, 8)
+    const rejectedRefusal = expect(refused.done).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+    refused.abort()
+    await rejectedRefusal
+    refusedKill.emit('exit', null, 'SIGKILL')
 
     let forceKill!: () => void
     const setTimer = vi.spyOn(globalThis, 'setTimeout').mockImplementationOnce((callback) => {
@@ -481,7 +720,7 @@ describe('dsh web Profile worker', () => {
       const raceSignals: (string | number | undefined)[] = []
       const raced = controlledWebChild()
       raced.kill = (signal) => { raceSignals.push(signal); return true }
-      const racedStop = handle(raced as unknown as ChildProcess, 'http://127.0.0.1:5', cookie, 5)
+      const racedStop = handle(raced, 'http://127.0.0.1:5', cookie, 5)
       racedStop.abort()
       raced.emit('exit', 0, null)
       await expect(racedStop.done).resolves.toBeUndefined()
@@ -497,18 +736,10 @@ describe('dsh web Profile worker', () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
-    const handle = (factory as unknown as {
-      handle(
-        child: ChildProcess,
-        origin: string,
-        cookie: { readonly name: string; readonly value: string },
-        generation: number,
-        modelToken: string,
-      ): ProfileWorkerHandle
-    }).handle.bind(factory)
+    const handle = privateMethod(factory, 'handle')
     const cookie = { name: 'dsh-auth-fixture', value: 'v1.fixture.fixture' }
     const controlled = controlledWebChild()
-    const worker = handle(controlled as unknown as ChildProcess, 'http://127.0.0.1:1', cookie, 1, 'A'.repeat(43))
+    const worker = handle(controlled, 'http://127.0.0.1:1', cookie, 1, 'A'.repeat(43))
     const fetchMock = vi.spyOn(globalThis, 'fetch')
     const generate = (text = 'question') => worker.generateText!(text, new AbortController().signal)
     try {
@@ -560,7 +791,7 @@ describe('dsh web Profile worker', () => {
     }
 
     const stoppedChild = controlledWebChild()
-    const stopped = handle(stoppedChild as unknown as ChildProcess, 'http://127.0.0.1:2', cookie, 2, 'B'.repeat(43))
+    const stopped = handle(stoppedChild, 'http://127.0.0.1:2', cookie, 2, 'B'.repeat(43))
     stopped.abort()
     await expect(stopped.generateText?.('question', new AbortController().signal))
       .rejects.toMatchObject({ code: 'unavailable' })
@@ -568,7 +799,7 @@ describe('dsh web Profile worker', () => {
     await stopped.done
 
     const settledChild = controlledWebChild()
-    const settled = handle(settledChild as unknown as ChildProcess, 'http://127.0.0.1:3', cookie, 3, 'C'.repeat(43))
+    const settled = handle(settledChild, 'http://127.0.0.1:3', cookie, 3, 'C'.repeat(43))
     settledChild.emit('exit', 0, null)
     await settled.done
     await expect(settled.generateText?.('question', new AbortController().signal))

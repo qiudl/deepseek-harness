@@ -10,7 +10,7 @@ import type { HostCollaborationArchiveStateTarget, HostCollaborationArchiveState
   HostGroupInputFenceChallenge, HostGroupInputFenceValue,
   HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
   HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
-import { HostAuthorityError } from './types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import type { HostControlAuthorityOptions } from './unix-transport.ts'
 import type { CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
@@ -22,14 +22,23 @@ interface StartProfileWorkerInput {
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
+  readonly signal?: AbortSignal
+}
+
+export interface ProfilePreparationScope {
+  ensure(input: StartProfileWorkerInput): Promise<void>
+  dispose(): Promise<void>
 }
 
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
 export class ProfileWorkerSupervisor {
   private closed = false
+  private readonly blockedProfiles = new Set<string>()
+  private readonly exitedWorkers = new WeakSet<ProfileWorkerHandle>()
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
-  constructor(private readonly factory: ProfileWorkerFactory) {}
+  constructor(private readonly factory: ProfileWorkerFactory,
+    private readonly durableBlocked: (profileId: string) => boolean = () => false) {}
 
   /**
    * Read a Bot identity from the same live exclusive-writer Profile worker.
@@ -134,18 +143,29 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile root, credential handle, and allowed plugin roots.
    */
   async start(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(input.profileId, () => this.startOwned(input))
   }
 
   private async startOwned(input: StartProfileWorkerInput): Promise<void> {
+    if (this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     if (this.workers.has(input.profileId)) throw new HostAuthorityError('conflict')
+    input.signal?.throwIfAborted()
+    const { signal, ...profile } = input
     const spec: ProfileWorkerSpec = {
-      ...input,
+      ...profile,
       pluginRoots: [...input.pluginRoots],
       env: {},
     }
-    this.workers.set(input.profileId, await this.factory(spec))
+    try {
+      const worker = await (signal === undefined ? this.factory(spec) : this.factory(spec, signal))
+      this.workers.set(input.profileId, worker)
+      void worker.done.catch(() => {})
+      if (worker.exited) void worker.exited.then(() => { this.exitedWorkers.add(worker) }, () => {})
+    } catch (error) {
+      if (error instanceof ProfileWorkerExitUnconfirmedError) this.blockProfile(input.profileId)
+      throw error
+    }
   }
 
   /**
@@ -153,8 +173,9 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile-owned runtime inputs.
    */
   async ensure(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed) throw new HostAuthorityError('unavailable')
+    if (this.closed || this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
     await this.serial(input.profileId, async () => {
+      if (this.isProfileBlocked(input.profileId)) throw new HostAuthorityError('unavailable')
       if (!this.workers.has(input.profileId)) await this.startOwned(input)
     })
   }
@@ -525,6 +546,27 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Read Session data from the same live worker throughout the request.
+   * @param profileId - Profile selected by the authorized caller.
+   * @param command - Session list or history command.
+   * @param signal - Cancellation for this request.
+   * @returns The current worker's JSON response.
+   */
+  async readRestrictedSession(
+    profileId: string,
+    command: Extract<HostRemoteSessionCommand, { operation: 'session.list' | 'session.history' }>,
+    signal: AbortSignal,
+  ): Promise<HostRemoteSessionJson> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.remoteSession) throw new HostAuthorityError('unavailable')
+    const value = await worker.remoteSession(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return value
+  }
+
+  /**
    * Invoke a read in the active Profile worker without releasing its private token.
    * @param profileId - Lease-selected Profile identity.
    * @param endpoint - Exact read endpoint.
@@ -561,6 +603,117 @@ export class ProfileWorkerSupervisor {
     return this.serial(profileId, () => this.disposeOwned(profileId))
   }
 
+  /** Serialize all Profile preparation, including its worker lifecycle, with isolated reads.
+   * The scoped operations cannot be retained after the callback or used for another Profile.
+   * @param profileId - Profile whose preparation is serialized.
+   * @param operation - All preparation and worker lifecycle steps.
+   * @returns The operation's result after queued scoped work settles.
+   */
+  async withPreparation<T>(profileId: string, operation: (scope: ProfilePreparationScope) => Promise<T>): Promise<T> {
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+    return this.serial(profileId, async () => {
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+      let active = true
+      let tail = Promise.resolve()
+      let failed = false
+      let failure: unknown
+      const enqueue = (work: () => Promise<void>): Promise<void> => {
+        if (!active) return Promise.reject(new HostAuthorityError('stale'))
+        const next = tail.then(work)
+        tail = next.catch(error => { if (!failed) { failed = true; failure = error } })
+        return next
+      }
+      const scope: ProfilePreparationScope = {
+        ensure: input => {
+          if (input.profileId !== profileId) return Promise.reject(new HostAuthorityError('profile_mismatch'))
+          return enqueue(async () => {
+            if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+            if (!this.workers.has(profileId)) await this.startOwned(input)
+          })
+        },
+        dispose: () => enqueue(async () => {
+          try { await this.disposeOwned(profileId) } catch (error) { this.blockProfile(profileId); throw error }
+        }),
+      }
+      try {
+        const result = await operation(scope)
+        active = false
+        await tail
+        if (failed) throw failure
+        return result
+      } finally { active = false; await tail }
+    })
+  }
+
+  /**
+   * Stop the Profile worker and serialize an isolated operation with every subsequent worker
+   * start or stop for that Profile. The operation must close its own worker before settling.
+   * This fence does not by itself authenticate the owner or lock out external processes.
+   * @param profileId - Profile whose regular worker must remain stopped.
+   * @param operation - Isolated operation, including all of its cleanup.
+   * @param guard - Optional synchronous authority check before stopping the worker.
+   * @returns The isolated operation's result.
+   */
+  async withQuiescent<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+    return this.serial(profileId, async () => {
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+      guard?.()
+      try {
+        await this.disposeOwned(profileId)
+      } catch (error) {
+        this.blockProfile(profileId)
+        throw error
+      }
+      if (this.closed) throw new HostAuthorityError('unavailable')
+      return operation()
+    })
+  }
+
+  /** Run a fallback only when no regular worker is running; never interrupt a healthy workspace.
+   * @param profileId - Profile whose worker slot is reserved.
+   * @param operation - Isolated operation, including all cleanup.
+   * @param guard - Synchronous authority check after acquiring the Profile slot.
+   * @returns The isolated operation's result.
+   */
+  async withInactiveProfile<T>(profileId: string, operation: () => Promise<T>, guard?: () => void): Promise<T> {
+    if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+    return this.serial(profileId, async () => {
+      if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
+      guard?.()
+      const worker = this.workers.get(profileId)
+      if (worker) {
+        if (!this.exitedWorkers.has(worker)) throw new HostAuthorityError('conflict')
+        try { worker.closeNotifications() } catch (error) { this.blockProfile(profileId); throw error }
+        this.workers.delete(profileId)
+      }
+      return operation()
+    })
+  }
+
+  /** Fail closed for this Host lifetime when isolated worker cleanup cannot be confirmed.
+   * @param profileId - Profile that must not start another writer.
+   */
+  blockProfile(profileId: string): void {
+    this.blockedProfiles.add(profileId)
+  }
+
+  /**
+   * Inspect this Host's in-memory cleanup block without consulting durable fences.
+   * @param profileId - Profile to inspect.
+   * @returns Whether this Host observed uncertain cleanup.
+   */
+  isLocallyBlocked(profileId: string): boolean { return this.blockedProfiles.has(profileId) }
+
+  /**
+   * Check whether uncertain worker cleanup prevents another start for this Profile.
+   * @param profileId - Host-resolved Profile.
+   * @returns Whether its worker state is uncertain.
+   */
+  isProfileBlocked(profileId: string): boolean {
+    return this.blockedProfiles.has(profileId) || this.durableBlocked(profileId)
+  }
+
   private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
@@ -570,11 +723,11 @@ export class ProfileWorkerSupervisor {
     await worker.done
   }
 
-  private serial(profileId: string, operation: () => Promise<void>): Promise<void> {
+  private serial<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(profileId) ?? Promise.resolve()
     const current = previous.then(operation)
     // A failed start has no retained worker. Later cleanup must still run and await the same owner.
-    const settled = current.catch(() => {}).finally(() => {
+    const settled = current.then(() => {}, () => {}).finally(() => {
       if (this.pending.get(profileId) === settled) this.pending.delete(profileId)
     })
     this.pending.set(profileId, settled)

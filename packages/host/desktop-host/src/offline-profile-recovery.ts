@@ -214,14 +214,14 @@ export function packagedRuntimeAppRoot(dshEntrypointPath: string): string | unde
 /** Build the exact root patch accepted by an existing-only Profile worker. */
 export function existingProfilePatch(
   profileRoot: string,
-  persistence: { readonly root: string; readonly compression: 'none' },
+  persistence: { readonly root: string; readonly compression: 'none' | 'zstd' },
   ownerPaths: AppliedMigrationOwnerState,
 ): string {
   return `${[
     '- id: session-persistence-jsonl',
     '  config:',
     `    root: ${JSON.stringify(persistence.root)}`,
-    '    compression: none',
+    `    compression: ${persistence.compression}`,
     '- id: storage-json',
     '  config:',
     `    root: ${JSON.stringify(ownerPaths.storageRoot)}`,
@@ -274,17 +274,40 @@ export class OfflineProfileRecoveryInspector {
   async inspect(
     profile: PersonProfileRecord,
     expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
-  ): Promise<OfflineProfileRecoveryPreflight> {
+  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number }> {
+    return this.inspectMode(profile, expected, false)
+  }
+
+  /**
+   * Inspect an existing Profile for a restricted reader without creating an executable recovery plan.
+   * @param profile - Host-resolved Account Profile.
+   * @param expected - Current Host runtime and schema generations.
+   * @returns Non-mutating preflight facts and the required Session compression.
+   */
+  async inspectRestricted(
+    profile: PersonProfileRecord,
+    expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
+  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd'; readonly persistenceInventoryDigest: string }> {
+    return this.inspectMode(profile, expected, true)
+  }
+
+  private async inspectMode(
+    profile: PersonProfileRecord,
+    expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
+    restricted: boolean,
+  ): Promise<OfflineProfileRecoveryPreflight & { readonly unverifiedPluginCount: number; readonly compression: 'none' | 'zstd'; readonly persistenceInventoryDigest: string }> {
     try {
       const profilesRoot = await checkedDirectory(join(this.options.hostRoot, 'profiles'), this.options.expectedUid, true)
       const profileRoot = await checkedDirectory(join(profilesRoot, profile.profileId), this.options.expectedUid, true)
       /* v8 ignore next -- checked realpaths derived from profilesRoot cannot escape without a filesystem TOCTOU race. */
       if (!contained(profilesRoot, profileRoot)) throw new HostAuthorityError('profile_integrity_failed')
-      const persistence = await this.options.targetFor(profile.profileId).inspectExistingPersistence()
+      const target = this.options.targetFor(profile.profileId)
+      const persistence = restricted ? await target.inspectRestrictedPersistence() : await target.inspectExistingPersistence()
       const ownerPaths = await this.options.ownerStateApplicator.inspectExisting(profileRoot, persistence.generation)
       const patch = await checkedFile(join(profileRoot, 'cordis.patch.yml'), this.options.expectedUid, true)
-      const expectedPatch = existingProfilePatch(profileRoot, persistence, ownerPaths)
-      const releasedPatch = releasedSettingsProfilePatch(profileRoot, persistence, ownerPaths)
+      const sourcePersistence = { root: persistence.root, compression: 'none' as const }
+      const expectedPatch = existingProfilePatch(profileRoot, sourcePersistence, ownerPaths)
+      const releasedPatch = releasedSettingsProfilePatch(profileRoot, sourcePersistence, ownerPaths)
       if (!patch.equals(Buffer.from(expectedPatch)) && !patch.equals(Buffer.from(releasedPatch))) {
         throw new HostAuthorityError('profile_integrity_failed')
       }
@@ -300,6 +323,28 @@ export class OfflineProfileRecoveryInspector {
       const dependencies = (manifestValue as { dependencies?: unknown }).dependencies
       if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
         throw new HostAuthorityError('profile_integrity_failed')
+      }
+      if (restricted) {
+        // A restricted worker uses only the packaged default bundles. Original plugin paths and
+        // package contents are neither followed nor loaded by this inspection.
+        const pluginCount = Object.keys(dependencies).length
+        if (pluginCount > 128) throw new HostAuthorityError('profile_integrity_failed')
+        const state = pluginCount === 0 ? 'recoverable' : 'compatibility_blocked'
+        const compatibility = pluginCount === 0 ? 'current' : 'read_only_export_only'
+        const preflightDigest = hash(canonicalJson({
+          version: 1, mode: 'restricted', installationId: this.options.installationId,
+          profileId: profile.profileId, bindingGeneration: profile.bindingGeneration,
+          keyHandleDigest: hash(profile.keyHandle), persistenceGeneration: persistence.generation,
+          persistenceInventoryDigest: persistence.inventoryDigest, compression: persistence.compression,
+          runtimeGeneration: expected.runtimeGeneration, schemaGeneration: expected.schemaGeneration,
+          ownerStateGeneration: ownerPaths.generation, patchDigest: hash(patch), manifestDigest: hash(manifest),
+          pluginCount,
+        }))
+        return { state, persistenceGeneration: persistence.generation, sessionCount: persistence.sessionCount,
+          pluginCount, unverifiedPluginCount: pluginCount, compression: persistence.compression,
+          persistenceInventoryDigest: persistence.inventoryDigest,
+          compatibility, preflightDigest,
+          ...(pluginCount === 0 ? {} : { reasonCode: 'dsh_recovery_runtime_incompatible' }) }
       }
       let lockfile: Buffer | null
       try {
@@ -348,8 +393,9 @@ export class OfflineProfileRecoveryInspector {
         bundledPlugins.push({ plugin, catalog })
         verifiedDependencies.add(name)
       }
-      const hasUnverifiedDependencies = Object.keys(dependencies)
-        .some(dependency => !verifiedDependencies.has(dependency))
+      const unverifiedPluginCount = Object.keys(dependencies)
+        .filter(dependency => !verifiedDependencies.has(dependency)).length
+      const hasUnverifiedDependencies = unverifiedPluginCount > 0
       const compatibility = hasUnverifiedDependencies
         ? 'read_only_export_only'
         : legacyRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
@@ -376,6 +422,7 @@ export class OfflineProfileRecoveryInspector {
         keyHandleDigest: hash(profile.keyHandle),
         persistenceGeneration: persistence.generation,
         persistenceInventoryDigest: persistence.inventoryDigest,
+        ...(restricted ? { restrictedCompression: persistence.compression } : {}),
         runtimeGeneration: expected.runtimeGeneration,
         schemaGeneration: expected.schemaGeneration,
         ownerStateGeneration: ownerPaths.generation,
@@ -390,19 +437,22 @@ export class OfflineProfileRecoveryInspector {
         state,
         compatibility,
       }))
-      this.plans.delete(this.planDigestByProfile.get(profile.profileId) as string)
-      this.plans.set(preflightDigest, {
+      if (!restricted) {
+        this.plans.delete(this.planDigestByProfile.get(profile.profileId) as string)
+        this.plans.set(preflightDigest, {
         profileId: profile.profileId,
         profileRoot,
         ...(sourceRuntimeRoots.size === 0 ? {} : { sourceRuntimeRoot: [...sourceRuntimeRoots][0] }),
         ...(sourceRuntimeDigest === undefined ? {} : { sourceRuntimeDigest }),
         links,
         bundledPlugins,
-      })
-      this.planDigestByProfile.set(profile.profileId, preflightDigest)
+        })
+        this.planDigestByProfile.set(profile.profileId, preflightDigest)
+      }
       return {
         state, persistenceGeneration: persistence.generation,
-        sessionCount, pluginCount, compatibility, preflightDigest,
+        sessionCount, pluginCount, unverifiedPluginCount, compression: persistence.compression,
+        persistenceInventoryDigest: persistence.inventoryDigest, compatibility, preflightDigest,
         ...(hasUnverifiedDependencies ? { reasonCode: 'dsh_recovery_runtime_incompatible' } : {}),
       }
     } catch (error) {

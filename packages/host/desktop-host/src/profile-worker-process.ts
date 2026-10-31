@@ -60,7 +60,10 @@ export class ProfileWorkerProcessFactory {
     let resolveDone!: () => void
     let rejectDone!: (error: Error) => void
     const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject })
+    let resolveExited!: () => void
+    const exited = new Promise<void>(resolve => { resolveExited = resolve })
     const settleExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      resolveExited()
       if (settled) return
       settled = true
       if (requestedStop || code === 0) resolveDone()
@@ -98,6 +101,7 @@ export class ProfileWorkerProcessFactory {
         void done.finally(() => { clearTimeout(killTimer) })
       },
       done,
+      exited,
     }
   }
 }

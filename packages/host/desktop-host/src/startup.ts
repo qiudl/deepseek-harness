@@ -66,7 +66,9 @@ import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeA
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { executeRemoteSessionCommand, FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
-import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
+import { RestrictedProfileFence } from './restricted-profile-fence.ts'
+import { RestrictedAccountSessionService } from './restricted-account-session.ts'
+import type { HostClock, OfflineProfileRecoveryPreflight, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import {
   UnixHostServer,
@@ -74,6 +76,7 @@ import {
   type UnixPeerAttestor,
 } from './unix-transport.ts'
 import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
+import type { ProfilePreparationScope } from './worker-supervisor.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type WindowsDesktopHostApplication,
@@ -195,6 +198,8 @@ export interface DesktopHostApplication {
   readonly server: UnixHostServer
   readonly workers: ProfileWorkerSupervisor
   readonly commandAuthority: SessionCommandAuthority
+  /** Host-private reader; unavailable unless a trusted writer-exclusion adapter is supplied. @internal */
+  readonly restrictedHistory?: RestrictedAccountSessionService
   close(): Promise<void>
 }
 
@@ -221,6 +226,14 @@ export interface StartDesktopHostApplicationDependencies {
   readonly profileWorkerFactory?: ProfileWorkerFactory
   readonly attestPeer?: UnixPeerAttestor
   readonly createServer?: (options: UnixHostServerOptions) => UnixHostServer
+  /** Host-private composition boundary; this does not enable a control protocol or user entry. */
+  readonly restrictedHistory?: {
+    /** Throw an error with code restricted_writer_exclusion_cleanup_unconfirmed if guard release cannot be confirmed. */
+    readonly withAllWritersExcluded: <T>(profileId: string, operation: () => Promise<T>, signal: AbortSignal) => Promise<T>
+    readonly assertAllWritersQuiescent: (profileId: string) => void
+    readonly createWorker?: ProfileWorkerFactory
+    readonly onCleanupFailure: () => void
+  }
 }
 
 interface ClosableDesktopHostApplication {
@@ -465,6 +478,8 @@ export async function startDesktopHostApplication(
   if (uid === undefined) throw new HostAuthorityError('unavailable')
   ownerDirectory(root, uid)
   let ownership: SingleHostLock | undefined
+  let restrictedFence: RestrictedProfileFence | undefined
+  let restrictedHistory: RestrictedAccountSessionService | undefined
   let server: UnixHostServer | undefined
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
@@ -474,9 +489,16 @@ export async function startDesktopHostApplication(
     ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })
   /* v8 ignore next -- the production subprocess factory is exercised by packaged Host integration, not unit composition. */
-  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)))
+  const workers = new ProfileWorkerSupervisor(dependencies.profileWorkerFactory ?? (spec => workerFactory.create(spec)),
+    profileId => restrictedFence?.pending(profileId) !== undefined)
   try {
     ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: config.processNonce })
+    const restrictedFencesRoot = join(root, 'restricted-fences')
+    ownerDirectory(restrictedFencesRoot, uid)
+    // Persist the directory entry before any fence inside it can be relied on after a crash.
+    const rootFd = openSync(root, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(rootFd) } finally { closeSync(rootFd) }
+    restrictedFence = new RestrictedProfileFence(restrictedFencesRoot, uid, ownership)
     const registry = new ProfileRegistry({
       root: join(root, 'registry'), deviceIndexKey: ownerFile(config.deviceIndexKeyPath, uid, 32), clock,
     })
@@ -490,7 +512,8 @@ export async function startDesktopHostApplication(
     const targets = new Map<string, FileOwnerJsonlMigrationGenerationTarget>()
     const ownerStateApplicator = new MigrationOwnerStateApplicator(uid)
     const claimMarker = new ProfileClaimMarker(new FileProfileClaimMarkerFiles(join(root, 'profiles'), uid))
-    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId))
+    const claimWorkerGate = new LegacyClaimWorkerGate(profileId => claimMarker.pending(profileId),
+      profileId => restrictedFence?.pending(profileId) !== undefined)
     const targetFor = (profileId: string): FileOwnerJsonlMigrationGenerationTarget => {
       const existing = targets.get(profileId)
       if (existing) return existing
@@ -500,7 +523,7 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+    const prepareWorker = async (profile: PersonProfileRecord, scoped: ProfilePreparationScope, claimRestart = false): Promise<void> => {
       const profilesRoot = join(root, 'profiles')
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
@@ -527,12 +550,16 @@ export async function startDesktopHostApplication(
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+      await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
       }),
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
-      () => workers.dispose(profile.profileId), claimRestart)
+      () => scoped.dispose(), claimRestart)
+    }
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+      await restrictedHistory?.reconcileEmptyFence(profile.profileId)
+      return workers.withPreparation(profile.profileId, scoped => prepareWorker(profile, scoped, claimRestart))
     }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
@@ -551,31 +578,34 @@ export async function startDesktopHostApplication(
     ) => recoveryInspector.inspect(profile, expected)
     const ensureRecoveredProfileWorker = async (
       profile: PersonProfileRecord,
-      preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
+      preflight: OfflineProfileRecoveryPreflight,
     ): Promise<void> => {
-      claimWorkerGate.assertOpen(profile.profileId)
-      await recoveryInspector.prepareConfirmedProfile(profile, preflight)
-      try {
-        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
-          profileId: profile.profileId,
-          profileRoot: join(root, 'profiles', profile.profileId),
-          credentialHandle: profile.keyHandle,
-          pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-        }),
-        /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
-        () => workers.dispose(profile.profileId))
-        // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
-        // Reinspect and pin those generated links into the Profile-owned content-addressed closure
-        // before returning an offline grant, so replacing the App cannot break the next launch.
-        const stabilized = await recoveryInspector.inspect(profile, {
-          runtimeGeneration: config.runtimeGeneration,
-          schemaGeneration: config.schemaGeneration,
-        })
-        await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
-      } catch (error) {
-        await workers.dispose(profile.profileId).catch(() => undefined)
-        throw error
-      }
+      await restrictedHistory?.reconcileEmptyFence(profile.profileId)
+      return workers.withPreparation(profile.profileId, async scoped => {
+        claimWorkerGate.assertOpen(profile.profileId)
+        await recoveryInspector.prepareConfirmedProfile(profile, preflight)
+        try {
+          await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
+            profileId: profile.profileId,
+            profileRoot: join(root, 'profiles', profile.profileId),
+            credentialHandle: profile.keyHandle,
+            pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
+          }),
+          /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
+          () => scoped.dispose())
+          // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
+          // Reinspect and pin those generated links into the Profile-owned content-addressed closure
+          // before returning an offline grant, so replacing the App cannot break the next launch.
+          const stabilized = await recoveryInspector.inspect(profile, {
+            runtimeGeneration: config.runtimeGeneration,
+            schemaGeneration: config.schemaGeneration,
+          })
+          await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
+        } catch (error) {
+          await scoped.dispose().catch(() => undefined)
+          throw error
+        }
+      })
     }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
@@ -784,7 +814,21 @@ export async function startDesktopHostApplication(
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
+      profileId => workers.isProfileBlocked(profileId),
     )
+    if (dependencies.restrictedHistory) {
+      const adapter = dependencies.restrictedHistory
+      restrictedHistory = new RestrictedAccountSessionService({
+        hostRoot: root, expectedUid: uid, runtimeGeneration: config.runtimeGeneration,
+        schemaGeneration: config.schemaGeneration, ownership, fence: restrictedFence,
+        withAllWritersExcluded: adapter.withAllWritersExcluded,
+        assertAllWritersQuiescent: adapter.assertAllWritersQuiescent,
+        workers, extensions: extensionOperations, claims: claimWorkerGate, inspector: recoveryInspector,
+        ownerStateApplicator, inspectPersistence: profileId => targetFor(profileId).inspectRestrictedPersistence(),
+        createWorker: adapter.createWorker ?? ((spec, signal) => workerFactory.createRestricted(spec, signal)),
+        onCleanupFailure: adapter.onCleanupFailure,
+      })
+    }
     const socketPath = join(root, 'host.sock')
     let modelClaimCoordinator: LegacyClaimCoordinator | undefined
     const claims = (): LegacyClaimCoordinator => {
@@ -932,23 +976,49 @@ export async function startDesktopHostApplication(
             },
           })
         }
-        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> => {
-          host.revokeProfile(profile.profileId)
-          await workers.dispose(profileId)
-          try { return await operation() } finally { await ensureWorker(profile) }
-        }
+        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> =>
+          workers.withPreparation(profileId, async scoped => {
+            host.revokeProfile(profile.profileId)
+            await scoped.dispose()
+            try { return await operation() } finally { await prepareWorker(profile, scoped) }
+          })
         return new CurrentMigrationExportService(currentExporter, quiesced)
       },
       createMigrationImport: (_ownerId, profileId) => {
         let migrationImport = imports.get(profileId)
         if (!migrationImport) {
           const target = targetFor(profileId)
+          let activeCutover: { readonly scoped: ProfilePreparationScope; restarted: boolean } | undefined
           const restartingTarget = new RestartingMigrationTarget(target, async () => {
             const profile = requiredProfile(registry, profileId)
+            if (!activeCutover) throw new HostAuthorityError('unavailable')
+            await prepareWorker(profile, activeCutover.scoped)
+            activeCutover.restarted = true
+          }, async (operation, expectedGeneration) => workers.withPreparation(profileId, async scoped => {
+            const profile = requiredProfile(registry, profileId)
             host.revokeProfile(profile.profileId)
-            await workers.dispose(profileId)
-            await ensureWorker(profile)
-          })
+            await scoped.dispose()
+            const cutover = { scoped, restarted: false }
+            activeCutover = cutover
+            try {
+              await operation()
+            } finally {
+              try {
+                if (!cutover.restarted) {
+                  const active = await target.activeGeneration().catch(error => {
+                    workers.blockProfile(profileId)
+                    throw error
+                  })
+                  if (active !== expectedGeneration) {
+                    workers.blockProfile(profileId)
+                    throw new HostAuthorityError('unavailable')
+                  }
+                  await prepareWorker(requiredProfile(registry, profileId), scoped)
+                }
+              }
+              finally { activeCutover = undefined }
+            }
+          }))
           migrationImport = new OwnerMigrationImportService(
             transferStore, restartingTarget,
             new FileOwnerMigrationImportJournal(join(root, 'profiles', profileId, 'migration-journal'), uid),
@@ -977,22 +1047,31 @@ export async function startDesktopHostApplication(
     server = dependencies.createServer?.(serverOptions) ?? new UnixHostServer(serverOptions)
     await server.start()
     publishRegistration(config, socketPath, uid)
-    let closed = false
+    let closing: Promise<void> | undefined
     return {
-      host, server, workers, commandAuthority,
-      async close() {
-        if (closed) return
-        closed = true
-        await server?.close()
-        await workers.disposeAll()
-        await ownership?.release()
+      host, server, workers, commandAuthority, ...(restrictedHistory ? { restrictedHistory } : {}),
+      close() {
+        if (!closing) closing = Promise.resolve().then(async () => {
+          const failures: unknown[] = []
+          try { await server?.close() } catch (error) { failures.push(error) }
+          try { await restrictedHistory?.close() } catch (error) { failures.push(error) }
+          try { await workers.disposeAll() } catch (error) { failures.push(error) }
+          if (failures.length === 1) throw failures[0]
+          if (failures.length > 1) throw new AggregateError(failures, 'host_cleanup_unconfirmed')
+          await ownership?.release()
+        })
+        return closing
       },
     }
   } catch (error) {
-    await server?.close().catch(() => undefined)
-    /* v8 ignore next -- no worker can exist before server.start succeeds; worker failures are owned by supervisor tests. */
-    await workers.disposeAll().catch(() => undefined)
-    await ownership?.release().catch(() => undefined)
+    const cleanupFailures: unknown[] = []
+    try { await server?.close() } catch (failure) { cleanupFailures.push(failure) }
+    try { await restrictedHistory?.close() } catch (failure) { cleanupFailures.push(failure) }
+    try { await workers.disposeAll() } catch (failure) { cleanupFailures.push(failure) }
+    // A server may admit work as soon as it starts, before registration finishes. Do not
+    // release ownership if any admitted operation or worker could still be running.
+    if (cleanupFailures.length) throw new AggregateError([error, ...cleanupFailures], 'host_startup_cleanup_unconfirmed')
+    await ownership?.release()
     throw error
   }
 }

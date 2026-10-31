@@ -262,6 +262,63 @@ function setup() {
 }
 
 describe('Profile extension operations', () => {
+  it('does not queue Profile mutations during restricted access and resumes after release', async () => {
+    const f = setup()
+    onTestFinished(async () => { await f.operations.dispose() })
+    const plan = await f.operations.prepare(f.authority, 'mcp', '{}')
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const fenced = f.operations.withRestrictedAccess(f.profileId, async () => {
+      enter()
+      await new Promise<void>(resolve => { release = resolve })
+    })
+    await entered
+    const operationId = randomUUID()
+    try {
+      expect(() => f.operations.commit(f.authority, plan.planId, operationId)).toThrow('busy')
+      expect(f.store.read(operationId)).toBeUndefined()
+    } finally { release(); await fenced }
+    f.operations.commit(f.authority, plan.planId, operationId)
+    await f.operations.settled()
+    expect(f.executions()).toBe(1)
+  })
+
+  it('refuses restricted access while a Profile mutation is queued or running', async () => {
+    const f = setup()
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const owner = new ProfileExtensionOperations(f.store, { ...f.executor, execute: async () => {
+      enter()
+      await new Promise<void>(resolve => { release = resolve })
+      return { state: 'succeeded' as const }
+    } }, { now: () => 1000 })
+    onTestFinished(async () => { release?.(); await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(f.authority, 'plugin', '{}')
+    owner.commit(f.authority, plan.planId, randomUUID())
+    await expect(owner.withRestrictedAccess(f.profileId, async () => {})).rejects.toThrow('busy')
+    await entered
+    await expect(owner.withRestrictedAccess(f.profileId, async () => {})).rejects.toThrow('busy')
+    await expect(owner.withRestrictedAccess(randomUUID(), async () => 'other')).resolves.toBe('other')
+    release()
+    await owner.settled()
+    await expect(owner.withRestrictedAccess(f.profileId, async () => 'ready')).resolves.toBe('ready')
+  })
+
+  it('rejects extension writes when the Host reports an unconfirmed Profile worker exit', async () => {
+    const f = setup()
+    let blocked = false
+    const owner = new ProfileExtensionOperations(f.store, f.executor, { now: () => 1000 }, id => id === f.profileId && blocked)
+    onTestFinished(async () => { await owner.dispose(); await f.operations.dispose() })
+    const plan = await owner.prepare(f.authority, 'mcp', '{}')
+    blocked = true
+    expect(() => owner.commit(f.authority, plan.planId, randomUUID())).toThrow('busy')
+    await expect(owner.withRestrictedAccess(f.profileId, async () => {})).rejects.toThrow('busy')
+    blocked = false
+    owner.commit(f.authority, plan.planId, randomUUID())
+    await owner.settled()
+    expect(f.executions()).toBe(1)
+  })
+
   it('requires the exact preflight script digest before queuing an approved build', async () => {
     const f = setup()
     const scriptDigest = hash('reviewed scripts')

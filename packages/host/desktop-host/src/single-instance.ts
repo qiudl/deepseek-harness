@@ -23,6 +23,18 @@ export class SingleHostLock {
     if (token !== LOCK_LEASE) throw new HostAuthorityError('unauthorized')
   }
 
+  /** Opaque generation for correlating durable recovery records across Host restarts. @internal */
+  get generation(): string {
+    this.assertOwner()
+    return this.record.ownerId
+  }
+
+  /** PID recorded in this ownership generation. @internal */
+  get ownerPid(): number {
+    this.assertOwner()
+    return this.record.pid
+  }
+
   /** Prove this process still owns the exact lock generation. */
   assertOwner(): void {
     if (this.released) throw new HostAuthorityError('stale')

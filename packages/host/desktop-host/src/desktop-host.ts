@@ -52,6 +52,18 @@ interface ViewLease {
 
 type AccountProfileRecord = ReturnType<ProfileRegistry['resolveUniqueAccountByKeyHandle']>
 
+/** Existing Account and binding proof supplied by the trusted local broker. */
+export interface ExistingAccountProof {
+  readonly issuer: string
+  readonly subject: string
+  readonly accountAccessToken: string
+  readonly authorityEnvironmentId: string
+  readonly accountBindingHandle: string
+  readonly authorityBindingVersion: number
+  readonly keyHandle: string
+  readonly unlockMaterial: string
+}
+
 interface ProfileAccessGrant {
   readonly scope: ProfileAccessScope
   readonly operationId?: OfflineProfileRecoveryOperationId
@@ -699,16 +711,21 @@ export class DesktopHost {
    * @param input - Fresh Account token, current binding, and matching Main-vault unlock proof.
    * @returns The existing Account Profile authorized for recovery.
    */
-  authorizeAccountModelClaimRecovery(input: {
-    readonly issuer: string
-    readonly subject: string
-    readonly accountAccessToken: string
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
-    readonly keyHandle: string
-    readonly unlockMaterial: string
-  }): PersonProfileId {
+  authorizeAccountModelClaimRecovery(input: ExistingAccountProof): PersonProfileId {
+    return this.verifyExistingAccountProof(input).profileId
+  }
+
+  /**
+   * Verify an existing Account Profile without starting a worker or granting a view.
+   * The trusted broker must independently verify fresh server authority and its connection.
+   * @param input - Account token, current binding, and local unlock proof.
+   * @returns The current registry record for one restricted read.
+   */
+  authorizeRestrictedAccountHistory(input: ExistingAccountProof): PersonProfileRecord {
+    return this.verifyExistingAccountProof(input)
+  }
+
+  private verifyExistingAccountProof(input: ExistingAccountProof): PersonProfileRecord {
     const verify = this.options.verifyAccountAccessToken
     if (!verify) throw new HostAuthorityError('unavailable')
     let account: { readonly issuer: string; readonly subject: string }
@@ -723,7 +740,7 @@ export class DesktopHost {
       throw new HostAuthorityError('unauthorized')
     }
     this.options.registry.verifyUnlock(profile, input.keyHandle, input.unlockMaterial)
-    return profile.profileId
+    return profile
   }
 
   /**
