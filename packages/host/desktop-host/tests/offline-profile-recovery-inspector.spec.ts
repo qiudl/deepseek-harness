@@ -1318,6 +1318,29 @@ describe('offline Profile existing-only inspector', () => {
     expect(createWorker).not.toHaveBeenCalled()
   })
 
+  it('rejects a restricted result when an external writer creates a session during the read', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const deferred = new Promise<void>(resolve => { release = resolve })
+    onTestFinished(() => release())
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      remoteSession: async () => { enter(); await deferred; return { items: ['must not return'] } } }))
+    const pending = restrictedAccountRead(service, () => record, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174014' as HostControlRequestId }, new AbortController().signal)
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    try {
+      await entered
+      await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id: SessionId('external-new-session'),
+        createdAt: 1, cwd: '/work', isSeeded: false }, [
+        { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+        { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+      ])
+    } finally { release() }
+    await rejected
+  })
+
   it('does not return restricted history if Account authorization is revoked during the read', async () => {
     const value = await bundledFixture()
     const record = profile()
