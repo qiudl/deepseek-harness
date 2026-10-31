@@ -422,10 +422,6 @@
   "packages/client/connection/tests/node-half.host.spec.ts": {
     "b7bfb7092ddbfc55e0b0dcf4bf9f0237ce0257e818da21b0141f7a1561fa61fd": 1
   },
-  "packages/client/file-upload/tests/file-upload-http.host.spec.ts": {
-    "12a2d457945d43a02ab415318a8f6744ef620abd1fe272e12a164fa4ff476289": 1,
-    "37d0e226122b7a3a4253e22583da5c77cc3690554dc959c74bf570589f3224fd": 1
-  },
   "packages/client/hmr/src/client/index.ts": {
     "c680fd791fbbade1ee77c9fff0289e5106cacf1574ea0ccd5d2a218e62a44262": 1
   },
@@ -1385,7 +1381,6 @@
     "9c8a2d823c424815c00052c079d903218f6483a500122b84fbdb91fe992cc271": 1,
     "a130eda5d9ce1facf43cfd0eae7558d3ab0fcefa851a14c93935a737ff5be31b": 1,
     "c148ec23925e54c9bf0e0969b881a154e651bfbeb0d861e564895797eb57fa3a": 4,
-    "c3971f03c12dfbaa46a76d08cb5a44df2ae3ff03b777fd809cdfa52d971dfec3": 2,
     "d8b5b62347c0cdf9f687d125882e208c0ead53eca6d639819bb7568faabe1e3f": 1,
     "e324f01c770b209152a062d647b6d618cab97339459f283bb5c1a526a40d2f9f": 1,
     "f87258473b42b1e1d9d970b2060e1e99bbeb7b34acd14f497a12ac9904771b3c": 1

@@ -1575,6 +1575,18 @@ export function normalizeAria(snapshot: string, workspaceCwd: string, age: boole
     .replace(/(?<!\d)\d{2}:\d{2}(?!\d)/g, '{{clock}}')
 }
 
+async function settleConversationAtBottom(page: Page): Promise<void> {
+  const backToBottom = page.getByRole('button', { name: 'Back to bottom', exact: true })
+  const scroll = page.locator('[data-conversation-scroll]')
+  await expect.poll(async () => {
+    const distanceFromBottom = await scroll.evaluate((host) => {
+      host.scrollTop = host.scrollHeight
+      return host.scrollHeight - host.clientHeight - host.scrollTop
+    })
+    return Math.abs(distanceFromBottom) <= 1 && await backToBottom.count() === 0
+  }, { timeout: 10_000 }).toBe(true)
+}
+
 /**
  * Capture the region's aria snapshot at a settled milestone: poll until two
  * consecutive normalized captures are equal — a single-shot capture races the
@@ -1590,6 +1602,7 @@ export function normalizeAria(snapshot: string, workspaceCwd: string, age: boole
  *   for a region whose rows are dated from live wall-clock state;
  *   `replacements` tokenizes scenario-owned values before generic normalization;
  *   `runningJobs` is `'settle'` (default: wait for no running-job control) or `'keep'`.
+ *   `scrollToBottom` settles the transcript before capture.
  * @returns the stable normalized snapshot.
  */
 export async function captureStableAria(
@@ -1600,12 +1613,14 @@ export async function captureStableAria(
     normalizeAge?: boolean
     replacements?: readonly (readonly [value: string, token: string])[]
     runningJobs?: 'settle' | 'keep'
+    scrollToBottom?: boolean
   } = {},
 ): Promise<string> {
   if ((options.runningJobs ?? 'settle') === 'settle') {
     await page.getByRole('button', { name: /background jobs? running/ })
       .waitFor({ state: 'detached', timeout: 10_000 })
   }
+  if (options.scrollToBottom === true) await settleConversationAtBottom(page)
   const region = page.locator(selector).first()
   const age = options.normalizeAge === true
   const normalize = (snapshot: string): string => {
@@ -1650,17 +1665,7 @@ export async function captureExpandedTurnProcessAria(
     opened.push(index)
   }
   try {
-    if (options.scrollToBottom === true) {
-      const backToBottom = page.getByRole('button', { name: 'Back to bottom', exact: true })
-      const scroll = page.locator('[data-conversation-scroll]')
-      await expect.poll(async () => {
-        const distanceFromBottom = await scroll.evaluate((host) => {
-          host.scrollTop = host.scrollHeight
-          return host.scrollHeight - host.clientHeight - host.scrollTop
-        })
-        return Math.abs(distanceFromBottom) <= 1 && await backToBottom.count() === 0
-      }, { timeout: 10_000 }).toBe(true)
-    }
+    if (options.scrollToBottom === true) await settleConversationAtBottom(page)
     return await captureStableAria(page, selector, workspaceCwd)
   } finally {
     for (const index of opened.reverse()) {

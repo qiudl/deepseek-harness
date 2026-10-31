@@ -109,7 +109,7 @@ const require = (specifier) => {
     fixedExtension: false,
     dts: false,
     clean: false,
-    noExternal: [/^@deepseek-ai\/(?:dsh-host-control-protocol|dsh-brand)(?:\/|$)/u],
+    noExternal: [/^@deepseek-ai\/(?:dsh-host-control-protocol|dsh-brand|dsh-session\/types)(?:\/|$)/u],
     codeSplitting: false,
   },
 ])

@@ -55,6 +55,7 @@ try {
       ;(globalThis as { __DSH_TRANSPORT__?: ClientTransportHooks }).__DSH_TRANSPORT__ = {
         fetch, openStream, loadBundle, ownsHost: false, remoteHost: true,
       }
+      ;(globalThis as { __DSH_FILE_UPLOAD__?: { fetch: RemoteTransport['fetch'] } }).__DSH_FILE_UPLOAD__ = { fetch }
       await applyIndexInjections(injections, loadBundle, import.meta.env.MODE === 'native' ? executeNativeScript : undefined)
       gate.resolve()
     }).catch((error: unknown) => { gate.reject(error) })

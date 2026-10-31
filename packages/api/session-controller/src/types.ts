@@ -83,8 +83,9 @@ export type SessionProjectionValues = Partial<SessionProjectionMap>
 
 /**
  * Browser-submitted prompt content; the Host promotes image bytes to durable
- * references. File parts carry the opaque receipt returned by a preceding
- * `uploadFile` call on the same Session.
+ * references. File parts and remote image parts carry the opaque receipt from
+ * a preceding upload on the same Session. Remote image receipts preserve their
+ * declared media type and are admitted as native image attachments.
  */
 export type PromptContentPart =
   | { readonly type: 'text'; readonly text: string }
@@ -95,6 +96,11 @@ export type PromptContentPart =
     readonly name?: string
   }
   | { readonly type: 'file'; readonly receiptId: Branded<'file-upload-receipt-id'> }
+  | {
+    readonly type: 'image'
+    readonly receiptId: Branded<'file-upload-receipt-id'>
+    readonly mediaType: ImageMediaType
+  }
 
 /** Complete model selection for one Session. */
 export interface ModelSelection {

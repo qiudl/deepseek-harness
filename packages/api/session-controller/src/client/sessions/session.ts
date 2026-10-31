@@ -281,19 +281,19 @@ export class Session implements SessionFace {
       result = this.options.prompt === undefined
         ? await this.remote.session.prompt(request, signal)
         : await this.options.prompt(request, signal)
-    } else if (content.some(part => part.type === 'file')) {
+    } else if (content.some(part => part.type === 'file' || 'receiptId' in part)) {
       result = {
         ok: false,
         error: new RemoteError(
           'subagent/attachment-invalid',
-          'subagent continuation does not accept files',
+          'subagent continuation does not accept upload receipts',
           { reason: 'SUBAGENT_FILE_UNSUPPORTED' },
         ),
       }
     } else {
-      // The preceding branch rejects file parts before the narrower subagent
+      // The preceding branch rejects receipt parts before the narrower subagent
       // wire type is used; this array is not filtered or reordered.
-      const routedContent = content as Exclude<PromptContentPart, { readonly type: 'file' }>[]
+      const routedContent = content as Exclude<PromptContentPart, { readonly receiptId: unknown }>[]
       const routed = await this.remote.subagents.prompt({
         requestId: randomUUID() as SessionRequestId,
         parentSessionId: this.address.parentSessionId,

@@ -69,6 +69,11 @@ describe('Profile remote Session wire commands', () => {
         content: [{ type: 'text', text: 'hello\nworld' }], client_time_zone: 'Europe/Belgrade' },
       { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
         content: [{ type: 'text', text: 'without time zone' }] },
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
+        content: [{ type: 'text', text: 'read this file' }, { type: 'file', receiptId: randomUUID() }] },
+      { operation: 'session.prompt', command_id: commandId, session_id: sessionId, control, mode: 'queue',
+        content: [{ type: 'text', text: 'inspect this screenshot' },
+          { type: 'image', receiptId: randomUUID(), mediaType: 'image/png' }] },
       { operation: 'session.cancel', command_id: commandId, session_id: sessionId, control },
       { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
         title: 'Remote session' },
@@ -138,9 +143,19 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'remote.event.respond', command_id, session_id, control, client_id: 'client-1',
         event_id: 'event-1', outcome: 'always-allow' },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
-        content: Array(17).fill({ type: 'text', text: 'safe' }) },
+        content: Array(34).fill({ type: 'text', text: 'safe' }) },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
         content: [{ type: 'image', text: 'unsafe' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'file', receiptId: 'not-a-receipt' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'tool', receiptId: randomUUID() }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'image', receiptId: randomUUID(), mediaType: 'text/plain' }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'video', receiptId: randomUUID() }] },
+      { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
+        content: [{ type: 'image', receiptId: randomUUID(), mediaType: 'image/png', data: 'AAAA' }] },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
         content: [{ type: 'text', text: '' }] },
       { operation: 'session.prompt', command_id, session_id, control, mode: 'queue',
@@ -229,8 +244,9 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
+      'llm/listProviders', 'llm/listConfigurableProviders',
       'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
-      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits', 'llm/listProviders', 'llm/listConfigurableProviders']) {
+      'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] }
         : endpoint.startsWith('session/') ? { _request: {} } : {}
       const value = readFrame(endpoint, { args })
@@ -245,6 +261,8 @@ describe('Profile remote UI read wire commands', () => {
     ] as const) expect(() => decode(readFrame(endpoint, { args }))).toThrow()
     expect(() => decode(readFrame('credentials/describe', { args: { refs: ['bad-ref'] } }))).toThrow()
     expect(() => decode(readFrame('settings/describe', { args: { path: '/private' } }))).toThrow()
+    expect(() => decode(readFrame('llm/listProviders', { args: { path: '/private' } }))).toThrow()
+    expect(() => decode(readFrame('llm/listConfigurableProviders', { args: { path: '/private' } }))).toThrow()
     expect(() => decode(readFrame('cotTranslation/limits', { args: { provider: 'other' } }))).toThrow()
     for (const endpoint of ['cotTranslation/translate', 'cotTranslation/limits?all=true', 'session/create', '/api/session/list', 'session/list?all=true',
       'dynamicCordisRunner/syncInspectManifest']) {
