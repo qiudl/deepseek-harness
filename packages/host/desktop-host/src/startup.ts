@@ -66,7 +66,7 @@ import { existingProfilePatch, OfflineProfileRecoveryInspector, packagedRuntimeA
 import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { executeRemoteSessionCommand, FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
-import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
+import type { HostClock, OfflineProfileRecoveryPreflight, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import {
   UnixHostServer,
@@ -551,7 +551,7 @@ export async function startDesktopHostApplication(
     ) => recoveryInspector.inspect(profile, expected)
     const ensureRecoveredProfileWorker = async (
       profile: PersonProfileRecord,
-      preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
+      preflight: OfflineProfileRecoveryPreflight,
     ): Promise<void> => {
       claimWorkerGate.assertOpen(profile.profileId)
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)

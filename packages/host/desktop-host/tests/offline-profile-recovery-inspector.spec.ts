@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
@@ -10,6 +10,15 @@ import { readBundledPluginPatch, verifyCopiedBundledPlugin, verifyProfileRollbac
 import { prepareBundledPluginUpgrade } from '../src/plugin-upgrade-plan.ts'
 import { pluginBundleEntries } from '../src/plugin-bundle-entries.ts'
 import { parseDocument } from 'yaml'
+import { initProfile, loadProfileDirectory, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot/src/profile.ts'
+import { fileURLToPath } from 'node:url'
+import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
+import { acquireSingleHostLock } from '../src/single-instance.ts'
+import { startRestrictedProfileReader, withRestrictedProfileReader } from '../src/restricted-profile-reader.ts'
+import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { SESSION_FORMAT_VERSION, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import { generationLogPath } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -316,7 +325,7 @@ describe('offline Profile existing-only inspector', () => {
     const value = await releasedEmptyProfile()
     const before = await treeInventory(value.profileRoot)
     const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
-    expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 0 })
+    expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 0, unverifiedPluginCount: 0 })
     await value.inspector.prepareConfirmedProfile(profile(), inspected)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
@@ -446,9 +455,234 @@ describe('offline Profile existing-only inspector', () => {
   it('keeps copied dependencies blocked when their source is not the exact catalog archive', async () => {
     const value = await bundledFixture()
     await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }))
+    const before = await treeInventory(value.profileRoot)
     await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
-      .resolves.toMatchObject({ state: 'compatibility_blocked', compatibility: 'read_only_export_only' })
+      .resolves.toMatchObject({ state: 'compatibility_blocked', compatibility: 'read_only_export_only',
+        unverifiedPluginCount: 1 })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
+
+  it('counts unverified dependencies independently of verified runtime dependencies', async () => {
+    const value = await fixture()
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: {
+      'fixture-plugin': '1.0.0', 'missing-one': '1.0.0', 'missing-two': '1.0.0',
+    } }))
+    const before = await treeInventory(value.profileRoot)
+    const result = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(result).toMatchObject({ state: 'compatibility_blocked', pluginCount: 3, unverifiedPluginCount: 2 })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('does not execute a copied unverified dependency while counting it', async () => {
+    const value = await bundledFixture()
+    const sentinel = join(value.hostRoot, 'plugin-executed')
+    await writeFile(join(value.installed, 'index.js'),
+      `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed')`)
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }))
+    const result = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(result).toMatchObject({ state: 'compatibility_blocked', unverifiedPluginCount: 1 })
+    await expect(lstat(sentinel)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('inspects released compressed history for restricted reading without creating a recovery plan', async () => {
+    const value = await fixture()
+    const id = SessionId('req0002-old-writer-history')
+    const path = generationLogPath(value.persistence.root, '/private/tmp/slark-req0002-history-workspace', id, 3, 'zstd')
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    await writeFile(path,
+      await readFile(new URL('../../../session/session-persistence-jsonl/tests/fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url)),
+      { mode: 0o600 })
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    const restricted = await value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(restricted).toMatchObject({ state: 'compatibility_blocked', compression: 'zstd', unverifiedPluginCount: 1 })
+    await expect(value.inspector.prepareConfirmedProfile(profile(), restricted))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('quarantines an external plugin link during restricted inspection without following or executing it', async () => {
+    const value = await fixture()
+    const external = join(value.hostRoot, 'untrusted-plugin')
+    await mkdir(external, { mode: 0o700 })
+    const marker = join(value.hostRoot, 'executed')
+    await writeFile(join(external, 'index.js'), `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`)
+    await unlink(join(value.web, 'node_modules', 'fixture-plugin'))
+    await symlink(external, join(value.web, 'node_modules', 'fixture-plugin'))
+    const before = await treeInventory(value.profileRoot)
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: 'runtime_incompatible' })
+    await expect(value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'compatibility_blocked', unverifiedPluginCount: 1 })
+    await expect(lstat(marker)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('can inspect a separate default web composition without reading the original plugin manifest', async () => {
+    const value = await bundledFixture()
+    const originalManifest = join(value.web, 'package.json')
+    await writeFile(originalManifest, 'invalid user manifest')
+    const before = await treeInventory(value.profileRoot)
+    const isolatedWeb = join(value.hostRoot, 'isolated', 'profiles', 'web')
+    initProfile(isolatedWeb, PROFILE_TEMPLATES.web!.bundles)
+    const anchor = fileURLToPath(new URL('../../../../apps/cli/package.json', import.meta.url))
+    const loaded = loadProfileDirectory('dsh', isolatedWeb, anchor)
+    expect(loaded.skippedBundles).toEqual([])
+    expect(loaded.layers.map(layer => layer.packageName)).toEqual(PROFILE_TEMPLATES.web!.bundles)
+    expect(loaded.layers.every(layer => !layer.packageDir.startsWith(value.profileRoot))).toBe(true)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('stops the isolated reader before allowing the original Profile worker to restart', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fence-fixture' })
+    const events: string[] = []
+    const regular = new ProfileWorkerSupervisor(async () => {
+      events.push('regular-start')
+      return { closeNotifications() {}, abort() { events.push('regular-stop') }, done: Promise.resolve() }
+    })
+    const spec = { profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] }
+    onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
+    await regular.start(spec)
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
+      onCleanupFailure: () => { throw new Error('cleanup failed') },
+      createWorker: async () => ({ closeNotifications() {}, abort() { events.push('isolated-stop') }, done: Promise.resolve() }),
+    }, async () => {
+      enter()
+      await new Promise<void>(resolve => { release = resolve })
+      throw new Error('operation failed')
+    })
+    const failed = expect(isolated).rejects.toThrow('operation failed')
+    await entered
+    const restart = regular.start(spec)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(events).toEqual(['regular-start', 'regular-stop'])
+    release()
+    await failed
+    await restart
+    expect(events).toEqual(['regular-start', 'regular-stop', 'isolated-stop', 'regular-start'])
+  })
+
+  it('blocks the Profile when the isolated worker exit cannot be confirmed', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-failed-stop-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
+    await expect(withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
+      onCleanupFailure: () => {}, createWorker: async () => {
+        let fail!: (error: Error) => void
+        const done = new Promise<void>((_resolve, reject) => { fail = reject })
+        return { closeNotifications() {}, abort() { fail(new Error('worker exit unknown')) }, done }
+      },
+    }, async () => {})).rejects.toThrow('worker exit unknown')
+    await expect(regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
+  it.runIf(process.env.DSH_RUN_ISOLATION_SPIKE === '1')('starts a separate default worker without loading the original composition', async () => {
+    const value = await bundledFixture()
+    const sentinel = join(value.hostRoot, 'plugin-executed')
+    await writeFile(join(value.installed, 'index.js'),
+      `require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'executed')`)
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }))
+    await writeFile(value.ownerPaths.settingsPath, JSON.stringify({ appearance: { theme: 'fixture-theme' } }), { mode: 0o600 })
+    await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id: SessionId('fixture-session'),
+      createdAt: 1, isSeeded: false, cwd: value.hostRoot }, [
+      { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      { type: 'user/message', seq: SessionSeq(1), time: 2, surfaceOp: 'append', data: {
+        id: 'fixture-message', role: 'user', source: { kind: 'user' },
+        content: [{ type: 'text', text: 'isolated-history-fixture' }],
+      } },
+      { type: 'turn/end', seq: SessionSeq(2), time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
+    ])
+    const legacyPath = generationLogPath(value.persistence.root, '/work', SessionId('released-v0-real-shapes'), 0, 'none')
+    await mkdir(dirname(legacyPath), { recursive: true, mode: 0o700 })
+    await writeFile(legacyPath,
+      await readFile(new URL('../../../session/session-persistence-jsonl/tests/fixtures/released-v0-real-shapes.jsonl', import.meta.url)),
+      { mode: 0o600 })
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'compatibility_blocked', unverifiedPluginCount: 1 })
+    const before = await treeInventory(value.profileRoot)
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-lock' })
+    onTestFinished(() => ownership.release())
+    const entry = fileURLToPath(new URL('../../../../apps/cli/lib/bin.js', import.meta.url))
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
+    const reader = await startRestrictedProfileReader({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, profileId, credentialHandle: 'fixture', createWorker: spec => factory.create(spec), onCleanupFailure: () => {},
+      assertCurrent: () => {}, signal: new AbortController().signal })
+    let stopped = false
+    onTestFinished(async () => { if (!stopped) await reader.close() })
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
+    const history = await reader.read(command, AbortSignal.timeout(10_000))
+    expect(JSON.stringify(history)).toContain('fixture-session')
+    const events = await reader.read({ operation: 'session.history',
+      command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId,
+      session_id: 'fixture-session', max_events: 100 }, AbortSignal.timeout(10_000))
+    expect(JSON.stringify(events)).toContain('isolated-history-fixture')
+    await expect(reader.read({ operation: 'session.history',
+      command_id: '123e4567-e89b-42d3-a456-426614174003' as HostControlRequestId,
+      session_id: 'released-v0-real-shapes', max_events: 100 }, AbortSignal.timeout(10_000)))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(reader.read({ operation: 'session.create',
+      command_id: '123e4567-e89b-42d3-a456-426614174002' as HostControlRequestId }, AbortSignal.timeout(10_000)))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(lstat(sentinel)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+    // A second writer invalidates the staged snapshot; do not return history under stale facts.
+    await writeFile(legacyPath, 'changed by another writer', { mode: 0o600 })
+    await expect(reader.read(command, AbortSignal.timeout(10_000)))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await reader.close()
+    stopped = true
+    await expect(reader.read(command, AbortSignal.timeout(10_000))).rejects.toMatchObject({ code: 'stale' })
+  }, 45_000)
+
+  it.runIf(process.env.DSH_RUN_ISOLATION_SPIKE === '1')('reads released compressed history without modifying its generation', async () => {
+    const value = await bundledFixture()
+    const id = SessionId('req0002-old-writer-history')
+    const path = generationLogPath(value.persistence.root, '/private/tmp/slark-req0002-history-workspace', id, 3, 'zstd')
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    await writeFile(path,
+      await readFile(new URL('../../../session/session-persistence-jsonl/tests/fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url)),
+      { mode: 0o600 })
+    const persistence = await value.target.inspectRestrictedPersistence()
+    expect(persistence.compression).toBe('zstd')
+    const preflight = await value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(preflight).toMatchObject({ state: 'compatibility_blocked', compression: 'zstd', unverifiedPluginCount: 1 })
+    const before = await treeInventory(value.profileRoot)
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-lock' })
+    onTestFinished(() => ownership.release())
+    const entry = fileURLToPath(new URL('../../../../apps/cli/lib/bin.js', import.meta.url))
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
+    const reader = await startRestrictedProfileReader({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence, ownership, profileId,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      credentialHandle: 'fixture', createWorker: spec => factory.create(spec), onCleanupFailure: () => {},
+      assertCurrent: () => {}, signal: new AbortController().signal })
+    onTestFinished(() => reader.close())
+    const history = await reader.read({ operation: 'session.history',
+      command_id: '123e4567-e89b-42d3-a456-426614174004' as HostControlRequestId,
+      session_id: id, max_events: 100 }, AbortSignal.timeout(10_000))
+    expect(JSON.stringify(history)).toContain('old-writer historical prompt')
+    await reader.close()
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  }, 45_000)
 
   it.skipIf(process.platform === 'win32')('rejects a group-writable copied dependency', async () => {
     const value = await bundledFixture()

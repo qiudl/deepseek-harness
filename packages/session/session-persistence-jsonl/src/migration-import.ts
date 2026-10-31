@@ -178,6 +178,11 @@ export interface ExistingPersistenceInspection {
   readonly inventoryDigest: string
 }
 
+/** Existing generation facts for a restricted reader with one consistent physical encoding. */
+export interface RestrictedPersistenceInspection extends Omit<ExistingPersistenceInspection, 'compression'> {
+  readonly compression: 'none' | 'zstd'
+}
+
 /**
  * File-backed generation target for production JSONL composition. Imported
  * generations are ordinary uncompressed JSONL roots; the active generation is
@@ -223,10 +228,25 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
    * @returns canonical persistence root plus digest-only semantic records.
    */
   async inspectExistingPersistence(): Promise<ExistingPersistenceInspection> {
+    const result = await this.inspectPersistence(false)
+    return { ...result, compression: 'none' }
+  }
+
+  /**
+   * Inspect an existing generation for restricted reading without publishing or migrating files.
+   * A restricted generation may use one physical compression mode throughout.
+   * @returns Existing generation facts and the required reader compression.
+   */
+  async inspectRestrictedPersistence(): Promise<RestrictedPersistenceInspection> {
+    return this.inspectPersistence(true)
+  }
+
+  private async inspectPersistence(restricted: boolean): Promise<RestrictedPersistenceInspection> {
     const { generation } = await this.loadExistingActive()
     const root = await this.checkedGenerationRoot(generation)
     const ownerState = await this.readOwnerState(generation)
     const sessions: Array<Readonly<{ project: string; session: string; files: readonly string[]; sizes: readonly string[] }>> = []
+    let observedCompression: 'none' | 'zstd' | undefined
     for (const project of await readdir(root, { withFileTypes: true })) {
       if (project.name === 'owner-state.json' && project.isFile() && !project.isSymbolicLink()) continue
       if (!project.isDirectory() || project.isSymbolicLink()) throw new Error('migration_generation_unsafe')
@@ -243,8 +263,15 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
         const recognized = ordinaryGenerations.length + legacyZstd.length + metadata.length
         if (recognized !== files.length || ordinaryGenerations.length + legacyZstd.length < 1
           || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
-          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
+          || (legacyZstd.length > 0 && (restricted
+            ? legacyZstd.length !== 1 || (legacyZstd[0] !== 'session.jsonl.zstd' && legacyZstd[0] !== 'session.v3.jsonl.zstd')
+            : JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd'])))) {
           throw new Error('migration_generation_unsafe')
+        }
+        if (restricted) {
+          const sessionCompression = legacyZstd.length > 0 ? 'zstd' : 'none'
+          if (observedCompression !== undefined && observedCompression !== sessionCompression) throw new Error('migration_generation_unsafe')
+          observedCompression = sessionCompression
         }
         if (directoryFiles.includes(LEASE_FILENAME)) {
           const lock = await lstat(join(sessionPath, LEASE_FILENAME), { bigint: true })
@@ -270,7 +297,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
       ownerStateDigest: migrationSemanticDigest(migrationOwnerStateRecords(ownerState)), sessions,
     })).digest('hex')
     return {
-      root, compression: 'none', generation, sessionCount: sessions.length, inventoryDigest,
+      root, compression: restricted ? observedCompression ?? 'none' : 'none', generation, sessionCount: sessions.length, inventoryDigest,
     }
   }
 

@@ -5,6 +5,78 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 
+it('holds the original Profile stopped until the isolated reader releases its reservation', async () => {
+  let starts = 0
+  let stops = 0
+  const workers = new ProfileWorkerSupervisor(async () => {
+    starts += 1
+    return { closeNotifications() {}, abort() { stops += 1 }, done: Promise.resolve() }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await workers.start(input)
+  let release!: () => void, enter!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = workers.withQuiescent(input.profileId, async () => {
+    enter()
+    await new Promise<void>(resolve => { release = resolve })
+  })
+  await entered
+  expect(stops).toBe(1)
+  const restart = workers.start(input)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(starts).toBe(1)
+  release()
+  await held
+  await restart
+  expect(starts).toBe(2)
+  await workers.disposeAll()
+})
+
+it('releases a Profile reservation after the isolated operation fails', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  await expect(workers.withQuiescent('profile', async () => { throw new Error('isolated failure') }))
+    .rejects.toThrow('isolated failure')
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  await workers.disposeAll()
+})
+
+it('refuses a queued restart when isolated worker cleanup cannot be confirmed', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  let release!: () => void, enter!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const held = workers.withQuiescent('profile', async () => {
+    enter()
+    await new Promise<void>(resolve => { release = resolve })
+    workers.blockProfile('profile')
+  })
+  await entered
+  const restart = workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  const denied = expect(restart).rejects.toMatchObject({ code: 'unavailable' })
+  release()
+  await held
+  await denied
+  await expect(workers.withQuiescent('profile', async () => {})).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('discards restricted Session reads when the original worker is replaced', async () => {
+  let release!: () => void, enter!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    remoteSession: async () => { await new Promise<void>(resolve => { release = resolve; enter() }); return { items: ['private'] } },
+  }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  onTestFinished(() => workers.disposeAll())
+  await workers.start(input)
+  const pending = workers.readRestrictedSession('profile',
+    { operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never }, new AbortController().signal)
+  await entered
+  await workers.dispose('profile')
+  await workers.start(input)
+  release()
+  await expect(pending).rejects.toMatchObject({ code: 'stale' })
+})
+
 it('reads the exact original worker reference grant and refuses changed digests, cancellation and missing workers', async () => {
   const target = parseHostCollaborationSourceTarget({ workspace_id: '123e4567-e89b-42d3-a456-426614174000',
     session_id: 'session', source_message_id: 'message', source_revision: '1' })

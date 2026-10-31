@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { access, chmod, link, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
@@ -15,6 +15,7 @@ import {
   type MigrationImportTarget,
 } from '../src/migration-import.ts'
 import { FileJsonlMigrationExportSource } from '../src/migration-export-source.ts'
+import { generationLogPath } from '../src/format.ts'
 import {
   migrationOwnerStateRecords,
   migrationSemanticRecords,
@@ -122,6 +123,30 @@ class Target implements MigrationImportTarget {
 }
 
 describe('owner-only migration import', () => {
+  it('inspects a released v3 compressed generation without changing its bytes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-owner-released-v3-'))
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 1)
+    const active = await target.activePersistenceConfig()
+    await target.importOwnerState(1, ownerState)
+    const id = SessionId('req0002-old-writer-history')
+    const path = generationLogPath(active.root, '/private/tmp/slark-req0002-history-workspace', id, 3, 'zstd')
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    const original = await readFile(new URL('./fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url))
+    await writeFile(path, original, { mode: 0o600 })
+    await expect(target.inspectExistingPersistence()).rejects.toThrow('migration_generation_unsafe')
+    await expect(target.inspectRestrictedPersistence()).resolves.toMatchObject({ generation: 1, sessionCount: 1, compression: 'zstd' })
+    expect(await readFile(path)).toEqual(original)
+    const unknown = join(dirname(path), 'session.v99.jsonl.zstd')
+    await writeFile(unknown, original, { mode: 0o600 })
+    await expect(target.inspectRestrictedPersistence()).rejects.toThrow('migration_generation_unsafe')
+    await unlink(path)
+    await expect(target.inspectRestrictedPersistence()).rejects.toThrow('migration_generation_unsafe')
+    await writeFile(path, original, { mode: 0o600 })
+    await unlink(unknown)
+    await target.importSession(1, header, events)
+    await expect(target.inspectRestrictedPersistence()).rejects.toThrow('migration_generation_unsafe')
+    expect(await readFile(path)).toEqual(original)
+  })
   it('materializes an ordinary JSONL generation and CAS-publishes its active root', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-owner-generation-'))
     const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 4)

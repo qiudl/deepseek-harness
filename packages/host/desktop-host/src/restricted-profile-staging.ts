@@ -1,0 +1,109 @@
+import { lstat, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
+import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
+import type { RestrictedPersistenceInspection } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { existingProfilePatch } from './offline-profile-recovery.ts'
+import { MaterializedMigrationOwnerStateSource } from './materialized-migration-owner-state-source.ts'
+import { MigrationOwnerStateApplicator, type AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'
+import { restrictedProfileOwnerState } from './restricted-profile-owner-state.ts'
+import type { SingleHostLock } from './single-instance.ts'
+import { HostAuthorityError } from './types.ts'
+
+function within(root: string, path: string): boolean {
+  const part = relative(root, path)
+  return part === '' || (part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part))
+}
+
+/**
+ * Stage an isolated default Web composition without rewriting the original Profile.
+ * The caller must authenticate the owner, quiesce the original worker and keep its Profile lock.
+ * This prepares files only; it does not start a worker or grant access to any endpoint.
+ * @param input - Host-owned paths, source generation, authorization fence and request lifetime.
+ * @returns Host-private staging paths and a cleanup function.
+ */
+export async function stageRestrictedProfile(input: {
+  readonly stagingParent: string
+  readonly expectedUid: number
+  readonly profileRoot: string
+  readonly ownerPaths: AppliedMigrationOwnerState
+  readonly persistence: { readonly root: string; readonly compression: 'none' | 'zstd' }
+  readonly inspectPersistence: () => Promise<RestrictedPersistenceInspection>
+  readonly ownership: SingleHostLock
+  readonly assertCurrent: () => void
+  readonly signal: AbortSignal
+}): Promise<{ readonly root: string; readonly ownerPaths: AppliedMigrationOwnerState;
+  readonly verify: () => Promise<void>; readonly dispose: () => Promise<void> }> {
+  input.signal.throwIfAborted()
+  input.ownership.assertOwner()
+  input.assertCurrent()
+  const parentStat = await lstat(input.stagingParent)
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || parentStat.uid !== input.expectedUid
+    || (parentStat.mode & 0o077) !== 0) throw new HostAuthorityError('profile_integrity_failed')
+  const profileStat = await lstat(input.profileRoot)
+  if (!profileStat.isDirectory() || profileStat.isSymbolicLink() || profileStat.uid !== input.expectedUid
+    || (profileStat.mode & 0o077) !== 0) throw new HostAuthorityError('profile_integrity_failed')
+  const parent = await realpath(input.stagingParent)
+  const profile = await realpath(input.profileRoot)
+  if (within(profile, parent)) throw new HostAuthorityError('invalid_input')
+  const existing = await new MigrationOwnerStateApplicator(input.expectedUid).inspectExisting(profile, input.ownerPaths.generation)
+  for (const [expected, supplied] of [[existing.settingsPath, input.ownerPaths.settingsPath],
+    [existing.credentialsPath, input.ownerPaths.credentialsPath], [existing.storageRoot, input.ownerPaths.storageRoot]] as const) {
+    if (await realpath(expected) !== await realpath(supplied)) throw new HostAuthorityError('profile_integrity_failed')
+  }
+  for (const path of [input.persistence.root, input.ownerPaths.storageRoot,
+    input.ownerPaths.settingsPath, input.ownerPaths.credentialsPath]) {
+    if (!within(profile, await realpath(path))) throw new HostAuthorityError('profile_integrity_failed')
+  }
+  const persistence = await input.inspectPersistence()
+  if (await realpath(persistence.root) !== await realpath(input.persistence.root)
+    || persistence.compression !== input.persistence.compression || persistence.generation !== input.ownerPaths.generation
+    || !Number.isSafeInteger(persistence.sessionCount) || persistence.sessionCount < 0
+    || !/^[a-f0-9]{64}$/u.test(persistence.inventoryDigest)) throw new HostAuthorityError('recovery_preflight_stale')
+  const source = new MaterializedMigrationOwnerStateSource(input.ownerPaths, input.expectedUid)
+  const ownerState = await restrictedProfileOwnerState(source)
+  const verify = async () => {
+    input.signal.throwIfAborted()
+    input.ownership.assertOwner()
+    input.assertCurrent()
+    const currentWorkspace = await source.readWorkspace()
+    if (!isDeepStrictEqual(ownerState.documents.find(document => document.kind === 'workspace'), currentWorkspace)
+      || !isDeepStrictEqual(persistence, await input.inspectPersistence())) {
+      throw new HostAuthorityError('recovery_preflight_stale')
+    }
+    input.signal.throwIfAborted()
+    input.ownership.assertOwner()
+    input.assertCurrent()
+  }
+  input.signal.throwIfAborted()
+  input.ownership.assertOwner()
+  input.assertCurrent()
+  const root = await mkdtemp(join(parent, 'restricted-'))
+  const created = await lstat(root)
+  let disposed = false
+  const dispose = async () => {
+    if (disposed) return
+    input.ownership.assertOwner()
+    const current = await lstat(root).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return undefined
+      throw error
+    })
+    if (current && (!current.isDirectory() || current.isSymbolicLink() || current.uid !== input.expectedUid
+      || current.dev !== created.dev || current.ino !== created.ino)) throw new HostAuthorityError('recovery_preflight_stale')
+    if (current) {
+      input.ownership.assertOwner()
+      await rm(root, { recursive: true })
+    }
+    disposed = true
+  }
+  try {
+    initProfile(join(root, 'profiles', 'web'), PROFILE_TEMPLATES.web!.bundles)
+    const ownerPaths = await new MigrationOwnerStateApplicator(input.expectedUid).apply(root, input.ownerPaths.generation, ownerState)
+    await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root, input.persistence, ownerPaths), { mode: 0o600, flag: 'wx' })
+    await verify()
+    return { root, ownerPaths, verify, dispose }
+  } catch (error) {
+    await dispose()
+    throw error
+  }
+}
