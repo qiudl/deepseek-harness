@@ -6,8 +6,10 @@ import { parseWorkbenchTerminalRequest, parseHostCollaborationSourceDescriptor }
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
-  'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'session/collaborationSources', 'session/collaborationMembership',
+  'commands/list', 'skills/list', 'llm/listProviders', 'llm/listConfigurableProviders',
+  'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
+  'terminal/environment', 'terminal/shells', 'terminal/list',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
   'dynamicCordisRunner/inventory', 'permissionPresets/catalog', 'cotTranslation/limits'])

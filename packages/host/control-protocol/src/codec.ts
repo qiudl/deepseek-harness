@@ -598,12 +598,24 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'mode', 'content',
       ...(withTimeZone ? ['client_time_zone'] : [])])
     if (command.mode !== 'queue' || !Array.isArray(command.content)
-      || command.content.length < 1 || command.content.length > 16) reject()
+      || command.content.length < 1 || command.content.length > 33) reject()
     const content = command.content.map((value) => {
       const part = record(value)
-      exactKeys(part, ['type', 'text'])
-      if (part.type !== 'text') reject()
-      return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+      if (part.type === 'text') {
+        exactKeys(part, ['type', 'text'])
+        return { type: 'text' as const, text: wireText(part.text, 32_768, true) }
+      }
+      if (part.type === 'image') {
+        exactKeys(part, ['type', 'receiptId', 'mediaType'])
+        const mediaType = (['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const)
+          .find(candidate => candidate === part.mediaType)
+        if (!mediaType) reject()
+        return { type: 'image' as const, receiptId: uuid(part.receiptId),
+          mediaType }
+      }
+      exactKeys(part, ['type', 'receiptId'])
+      if (part.type !== 'file') reject()
+      return { type: 'file' as const, receiptId: uuid(part.receiptId) }
     })
     return { operation: command.operation, command_id, session_id: remoteIdentifier(command.session_id),
       control: remoteSessionControlProof(command.control), mode: 'queue', content,
@@ -1723,7 +1735,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
-    if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders' || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
+    if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders'
+      || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
       || params.endpoint === 'cotTranslation/limits')
       && Object.keys(args).length !== 0) reject()
