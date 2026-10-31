@@ -18,7 +18,8 @@ import {
   ApiSessionSubagentOwnership,
   inspectApiSession,
 } from '../src/agent.ts'
-import { installModelSelectionProjection } from '../src/model-selection-projection.ts'
+import { foldModelSelection, installModelSelectionProjection } from '../src/model-selection-projection.ts'
+import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
 
 const roots: Context[] = []
@@ -288,6 +289,21 @@ describe('ApiSession Agent lookup and recovery', () => {
 })
 
 describe('ApiSession model selection', () => {
+  it('replays adapter-defaulted effort as absent and consumes matching pending intent', async () => {
+    const { ctx } = await harness()
+    const logged = agent(ctx, header('default-effort'))
+    logged.session.append('model/selection', { provider: 'provider', model: 'model' })
+    logged.session.append('request/header', {
+      header: { config: { provider: 'provider', model: 'model', reasoningEffort: 'high' as never },
+        adapterDefaults: { reasoningEffort: true } },
+      reason: 'initial',
+    })
+    expect(modelSelectionProjectionDefinition.stateVersion).toBe(3)
+    expect(foldModelSelection(logged.session.snapshotEvents())).toEqual({
+      lastUsed: { provider: 'provider', model: 'model' }, pending: null,
+    })
+  })
+
   it('requires the model-selection projection', async () => {
     const { ctx, agents } = await harness()
     const live = agent(ctx, header('missing-model-projection'))

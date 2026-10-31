@@ -1,3 +1,4 @@
+import type {} from '@deepseek-ai/dsh-agent/types'
 /** Browser-safe request, result, and lifecycle vocabulary for the Session Remote service. */
 import type { NativeFileApplication } from '@deepseek-ai/dsh-native-command/types'
 
@@ -18,26 +19,12 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
     sessionListMetadata: SessionListMetadata
     /** Host state for the boot-constant image-limit view. */
     imageLimits: null
-    /** Durable model selection already used by a request and still pending for a later request. */
-    modelSelection: ModelSelectionProjectionState
   }
   interface SessionProjectionMap {
     /** Persisted facts used to summarize a Session without activating it. */
     sessionListMetadata: SessionListMetadata
     /** Image-intake limits enforced by the Session prompt endpoint. */
     imageLimits: ImageAttachmentLimits
-    /** Durable model selection already used and selected for the next request. */
-    modelSelection: ModelSelectionProjection
-  }
-}
-
-declare module '@deepseek-ai/dsh-session/types' {
-  interface SessionEventMap {
-    /**
-     * Complete validated model selection requested for subsequent prompt
-     * assembly. Log-only: it never enters derived model history.
-     */
-    'model/selection': ModelSelection
   }
 }
 

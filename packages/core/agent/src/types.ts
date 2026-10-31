@@ -102,3 +102,34 @@ declare module '@deepseek-ai/dsh-session/types' {
     }
   }
 }
+
+/** One durable model selection without adapter-owned defaults. */
+export interface ModelSelectionValue {
+  readonly provider: string
+  readonly model: string
+  readonly reasoningEffort?: string
+}
+
+/** Durable model selection folded from Session events. */
+export interface ModelSelectionProjectionState {
+  readonly lastUsed: ModelSelectionValue | null
+  readonly pending: ModelSelectionValue | null
+}
+
+/** Client view of the durable model selection. */
+export interface ModelSelectionProjection {
+  readonly lastUsed: ModelSelectionValue | null
+  readonly next: ModelSelectionValue | null
+}
+
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionStateMap { modelSelection: ModelSelectionProjectionState }
+  interface SessionProjectionMap { modelSelection: ModelSelectionProjection }
+}
+
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    /** Validated choice for subsequent prompt assembly. */
+    'model/selection': ModelSelectionValue
+  }
+}
