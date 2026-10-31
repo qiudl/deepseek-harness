@@ -16,6 +16,7 @@ import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { startRestrictedProfileReader, withRestrictedProfileReader } from '../src/restricted-profile-reader.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { MessageId } from '@deepseek-ai/dsh-llm'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { generationLogPath } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
@@ -601,7 +602,7 @@ describe('offline Profile existing-only inspector', () => {
       createdAt: 1, isSeeded: false, cwd: value.hostRoot }, [
       { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
       { type: 'user/message', seq: SessionSeq(1), time: 2, surfaceOp: 'append', data: {
-        id: 'fixture-message', role: 'user', source: { kind: 'user' },
+        id: MessageId('fixture-message'), role: 'user', source: { kind: 'user' },
         content: [{ type: 'text', text: 'isolated-history-fixture' }],
       } },
       { type: 'turn/end', seq: SessionSeq(2), time: 3, data: { turn: 1, reason: { kind: 'completed' } } },
