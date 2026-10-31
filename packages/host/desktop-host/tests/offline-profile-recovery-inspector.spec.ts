@@ -84,7 +84,9 @@ async function isolatedTestNode(root: string): Promise<string> {
   await writeFile(probe, `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');let fork,write,link,hardlink;try { fork=cp.spawnSync('/usr/bin/true').error?.code ?? 'allowed' } catch(e) { fork=e.code } try { fs.writeFileSync(${JSON.stringify(forbidden)},'bad');write='allowed' } catch(e) { write=e.code } try { const p=path.join(process.env.DSH_HOME,'probe-link');fs.symlinkSync(${JSON.stringify(original)},p);fs.writeFileSync(p,'bad');link='allowed' } catch(e) { link=e.code } try { fs.linkSync(${JSON.stringify(original)},path.join(process.env.DSH_HOME,'probe-hardlink'));hardlink='allowed' } catch(e) { hardlink=e.code } fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-probe-result'),JSON.stringify({fork,write,link,hardlink}));`, { mode: 0o600 })
   await appendFile(probe, `\nconst socket=require('node:net').connect(9,'198.51.100.1');
     socket.once('error',e=>fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-network-result'),e.code));
-    socket.once('connect',()=>{fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-network-result'),'allowed');socket.destroy()});`)
+    socket.once('connect',()=>{fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-network-result'),'allowed');socket.destroy()});
+    const udp=require('node:dgram').createSocket('udp4');
+    udp.send(Buffer.from('x'),9,'198.51.100.1',e=>{fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-udp-result'),e?.code ?? 'allowed');udp.close()});`)
   await writeFile(wrapper, `#!/bin/sh\nexec "${process.execPath}" --require "${probe}" "$@"\n`, { mode: 0o700 })
   return wrapper
 }
@@ -1083,6 +1085,7 @@ describe('offline Profile existing-only inspector', () => {
         expect(JSON.parse(await readFile(join(staged.root, 'sandbox-probe-result'), 'utf8')))
           .toEqual({ fork: 'EPERM', write: 'EPERM', link: 'EPERM', hardlink: 'EPERM' })
         await vi.waitFor(async () => expect(await readFile(join(staged.root, 'sandbox-network-result'), 'utf8')).toBe('EPERM'))
+        await vi.waitFor(async () => expect(await readFile(join(staged.root, 'sandbox-udp-result'), 'utf8')).toBe('EPERM'))
         await expect(lstat(join(value.hostRoot, 'forbidden-sandbox-write'))).rejects.toMatchObject({ code: 'ENOENT' })
         expect(await readFile(join(value.hostRoot, 'sandbox-original'), 'utf8')).toBe('unchanged')
       }
