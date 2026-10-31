@@ -8,6 +8,18 @@ import { createHash, randomUUID } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+
+const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
+vi.mock('../src/profile-import-plugin-plan.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-plan.ts')>()
+  return { ...actual, planSelectedProfileImportPlugins: async (
+    input: Parameters<typeof actual.planSelectedProfileImportPlugins>[0],
+  ) => {
+    const plan = await actual.planSelectedProfileImportPlugins(input)
+    return stageFaults.invalidDigest ? { ...plan, plugins: plan.plugins.map(plugin => ({ ...plugin,
+      archiveDigest: 'invalid' })) } : plan
+  } }
+})
 import { verifyCopiedBundledPlugin } from '../src/bundled-plugin-recovery.ts'
 import { compareProfileImportInventory, inspectProfileImportInventory } from '../src/profile-import-preview.ts'
 import { inspectProfileImportPluginArchives } from '../src/profile-import-plugin-trust.ts'
@@ -229,6 +241,27 @@ async function pluginPlanFixture(runtime = false) {
     selectedPluginNames: ['fixture-plugin'], composedEntryIds: () => new Set<string>(),
     assertQuiescent: async () => {} }
   return { source, target, input, inspect }
+}
+
+async function fencedPluginArchiveFixture() {
+  stageFaults.invalidDigest = false
+  const value = await pluginPlanFixture()
+  const plan = await planSelectedProfileImportPlugins(value.input)
+  const journal = new FileProfileImportOperationJournal(
+    join(value.target.profileRoot, 'profile-import-journal'), uid)
+  const targetInventory = await inspectProfileImportInventory({ profileRoot: value.target.profileRoot,
+    target: value.target.target, uid })
+  const prepared = await journal.create({ operationId: value.input.operationId,
+    sourceProfileId: value.input.source.profileId, targetProfileId: value.input.target.profileId,
+    sourceSnapshotDigest: plan.sourceSnapshotDigest, targetSnapshotDigest: plan.targetSnapshotDigest,
+    previewDigest: plan.previewDigest, selectedSessionIds: [], selectedPluginNames: ['fixture-plugin'],
+    targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1 })
+  await journal.advance(prepared, 'fenced')
+  const input = { ...value.input, journal, plan }
+  const recovery = { target: value.input.target, sourceProfileId: value.input.source.profileId,
+    uid, operationId: value.input.operationId, fence: value.input.fence, journal,
+    catalog: value.input.catalog, plan }
+  return { value, plan, journal, input, recovery }
 }
 
 function unsafeArchive(path: string, type: 'File' | 'SymbolicLink' | 'CharacterDevice' | 'ExtendedHeader' = 'File', size = 1, includeBase = true): Buffer {
@@ -1125,6 +1158,141 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
     await expect(lstat(join(value.target.profileRoot, 'profile-import-plugin-staging')))
       .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('distinguishes absent private archive stages from unsafe and incomplete ones', async () => {
+    const first = await fencedPluginArchiveFixture()
+    expect(await inspectStagedProfileImportPluginArchives(first.recovery)).toBeNull()
+    const parent = join(first.value.target.profileRoot, 'profile-import-plugin-staging')
+    await mkdir(parent, { mode: 0o700 })
+    expect(await inspectStagedProfileImportPluginArchives(first.recovery)).toBeNull()
+    await chmod(parent, 0o755)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    const second = await fencedPluginArchiveFixture()
+    const result = await stageSelectedProfileImportPluginArchives(second.input)
+    await writeFile(join(result.stageRoot, 'unexpected.txt'), 'unexpected', { mode: 0o600 })
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_incomplete')
+  })
+
+  it('rejects an unsafe staging parent and a catalog changed after archive staging', async () => {
+    const first = await fencedPluginArchiveFixture()
+    const parent = join(first.value.target.profileRoot, 'profile-import-plugin-staging')
+    await mkdir(parent, { mode: 0o700 })
+    await chmod(parent, 0o755)
+    await expect(stageSelectedProfileImportPluginArchives(first.input))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    await chmod(parent, 0o700)
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    vi.spyOn(second.value.input.catalog, 'get').mockReturnValueOnce(undefined)
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('keeps changed plans and moved intent out of a private archive stage', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await expect(stageSelectedProfileImportPluginArchives({ ...first.input,
+      plan: { ...first.plan, plugins: first.plan.plugins.map(plugin => ({ ...plugin,
+        archiveDigest: 'f'.repeat(64) })) } }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const second = await fencedPluginArchiveFixture()
+    const load = second.journal.load.bind(second.journal)
+    let calls = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++calls === 2 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('rechecks stage privacy and durable intent after a crash', async () => {
+    const first = await fencedPluginArchiveFixture()
+    const result = await stageSelectedProfileImportPluginArchives(first.input)
+    await chmod(result.stageRoot, 0o755)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    const load = second.journal.load.bind(second.journal)
+    let calls = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++calls === 2 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('checks cancellation wiring and catalog evidence at archive staging time', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives({ ...first.input,
+      signal: new AbortController().signal })
+    const second = await fencedPluginArchiveFixture()
+    const get = second.value.input.catalog.get.bind(second.value.input.catalog)
+    let gets = 0
+    vi.spyOn(second.value.input.catalog, 'get').mockImplementation((name, version) =>
+      ++gets === 4 ? undefined : get(name, version))
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const third = await fencedPluginArchiveFixture()
+    const archive = third.value.input.catalog.readArchive.bind(third.value.input.catalog)
+    let reads = 0
+    vi.spyOn(third.value.input.catalog, 'readArchive').mockImplementation(plugin =>
+      ++reads === 4 ? Buffer.from('changed archive') : archive(plugin))
+    await expect(stageSelectedProfileImportPluginArchives(third.input))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('rechecks the plan and operation intent after archiving bytes', async () => {
+    const first = await fencedPluginArchiveFixture()
+    let calls = 0
+    await expect(stageSelectedProfileImportPluginArchives({ ...first.input,
+      composedEntryIds: () => ++calls > 2 ? new Set(['new-entry']) : new Set<string>() }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const second = await fencedPluginArchiveFixture()
+    const load = second.journal.load.bind(second.journal)
+    let reads = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++reads === 3 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('rejects a foreign recovery pair and non-private staged evidence', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await expect(inspectStagedProfileImportPluginArchives({ ...first.recovery,
+      sourceProfileId: randomUUID() }))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+    const result = await stageSelectedProfileImportPluginArchives(first.input)
+    await chmod(join(result.stageRoot, 'receipt.json'), 0o644)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_incomplete')
+    const second = await fencedPluginArchiveFixture()
+    const staged = await stageSelectedProfileImportPluginArchives(second.input)
+    await chmod(join(staged.stageRoot, `${second.value.source.digest}.tgz`), 0o644)
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('fails closed on a stage parent creation fault and malformed planner digest', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await chmod(first.value.target.profileRoot, 0o500)
+    try {
+      await expect(stageSelectedProfileImportPluginArchives(first.input))
+        .rejects.toMatchObject({ code: 'EACCES' })
+    } finally { await chmod(first.value.target.profileRoot, 0o700) }
+    const second = await fencedPluginArchiveFixture()
+    const invalid = { ...second.plan, plugins: second.plan.plugins.map(plugin => ({ ...plugin,
+      archiveDigest: 'invalid' })) }
+    stageFaults.invalidDigest = true
+    await expect(stageSelectedProfileImportPluginArchives({ ...second.input, plan: invalid }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    stageFaults.invalidDigest = false
   })
 
   it('rejects source drift after planning before creating a private archive stage', async () => {
