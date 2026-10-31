@@ -1,7 +1,7 @@
 import { EventEmitter, once } from 'node:events'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -112,9 +112,7 @@ describe('profile worker child process', () => {
     const parent = spawn(process.execPath, ['-e', parentProgram], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
     const parentExited = once(parent, 'exit', { signal: AbortSignal.timeout(10_000) })
     let workerPid: number | undefined
-    const watcher = watch(root)
     onTestFinished(async () => {
-      watcher.close()
       if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
       await parentExited.catch(() => {})
       if (workerPid !== undefined && !existsSync(marker)) {
@@ -126,12 +124,10 @@ describe('profile worker child process', () => {
     const [pid] = await once(parent, 'message', { signal: AbortSignal.timeout(10_000) })
     expect(typeof pid).toBe('number')
     workerPid = pid as number
-    const changed = once(watcher, 'change', { signal: AbortSignal.timeout(10_000) })
     parent.kill('SIGKILL')
     await parentExited
-    await changed
-    expect(existsSync(marker)).toBe(true)
     await waitForProcessExit(workerPid)
+    expect(existsSync(marker)).toBe(true)
   })
 
   it('rejects original plugin roots before starting a restricted worker', async () => {
