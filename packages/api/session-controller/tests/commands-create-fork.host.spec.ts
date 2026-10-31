@@ -46,7 +46,7 @@ describe('Session creation failures', () => {
     const ctx = await baseContext()
     const id = SessionId('exact-adoption')
     const session = ctx.sessions.create(id, { meta: { cwd: '/workspace' } })
-    const adoptExactSession = vi.fn(() => Promise.resolve({ id, session } as Agent))
+    const adoptExactSession = vi.fn(() => Promise.resolve({ agent: { id, session } as Agent }))
     const createSession = vi.fn()
     const controller = new SessionCommandController(ctx, controllerAgents({ adoptExactSession, createSession }), '/default')
     await expect(controller.create({ sessionId: id, cwd: '/workspace', exactAdopt: true })).resolves.toEqual({ sessionId: id })

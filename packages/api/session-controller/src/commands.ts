@@ -130,8 +130,9 @@ export class SessionCommandController {
     let agentPreset: string | undefined
     try {
       if (request.exactAdopt === true && request.sessionId !== undefined) {
-        adopted = await this.agents.adoptExactSession(request.sessionId, cwd, true, request.agentPreset)
-        agentPreset = this.agents.presetForSession(adopted.session)
+        const created = await this.agents.adoptExactSession(request.sessionId, cwd, true, request.agentPreset)
+        adopted = created.agent
+        agentPreset = created.agentPreset
       } else {
         const created = await this.agents.createSession({
           ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
