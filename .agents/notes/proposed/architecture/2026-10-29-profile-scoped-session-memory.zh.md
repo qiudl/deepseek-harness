@@ -18,6 +18,8 @@ Session 所有权保留在已认证的 Desktop Host 及当前选定的 Person Pr
 
 Host 控制协议将 `search` 固定为自身文字索引；只有独立签名的 operation 和已认证的 worker opener 同时存在时，才允许 `semantic_search`。默认启动组合不公布独立的 `profile.memory_semantic_search` capability。worker 可以对脱敏投影排序，但候选引用仍须由当前 Host 核验，才可作为证据来源。
 
+首版 Mac 试点须只读打开现有 v4 Profile registry，不能在读取时改写。Binding scope 始终随已保存的 handle 保留；旧 broker 只能续用已知 handle，若同一环境已有 scoped binding，未知的无 scope handle 必须拒绝。打开文件时校验 scope 和 version 的唯一性。新建 scoped binding 需要另行修改控制协议。
+
 ## 考虑过的替代方案
 
 **让记忆 Agent 直接访问 DSH home。** 文件权限会绕开当前 Profile，暴露原始日志、工具结果和无关凭据，并使 Session ID 意外成为访问凭证。

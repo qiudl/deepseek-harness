@@ -12,7 +12,7 @@ interface ProfileRegistryOptions {
   readonly persistSnapshot?: (path: string, root: string, snapshot: RegistryFile) => void
 }
 
-interface RegistryFile { readonly version: 3; readonly profiles: readonly PersonProfileRecord[] }
+interface RegistryFile { readonly version: 3 | 4; readonly profiles: readonly PersonProfileRecord[] }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -39,7 +39,7 @@ function handle(value: string): string {
   return value
 }
 
-function parseProfile(value: unknown, legacyBindings: boolean): PersonProfileRecord {
+function parseProfile(value: unknown, legacyBindings: boolean, scopedBindings: boolean): PersonProfileRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
   const record = value as Record<string, unknown>
   if (record.kind !== 'account' && record.kind !== 'local-anonymous') throw new HostAuthorityError('unavailable')
@@ -68,15 +68,21 @@ function parseProfile(value: unknown, legacyBindings: boolean): PersonProfileRec
     const binding = value as Record<string, unknown>
     if (!exact(binding, legacyBindings
       ? ['authorityEnvironmentId', 'handle']
-      : ['authorityEnvironmentId', 'handle', 'authorityBindingVersion'])
+      : ['authorityEnvironmentId', 'handle', 'authorityBindingVersion',
+        ...(scopedBindings && Object.hasOwn(binding, 'authorityBindingScope') ? ['authorityBindingScope'] : [])])
       || typeof binding.authorityEnvironmentId !== 'string' || !UUID.test(binding.authorityEnvironmentId)
       || typeof binding.handle !== 'string'
       || (!legacyBindings && (!Number.isSafeInteger(binding.authorityBindingVersion)
-        || (binding.authorityBindingVersion as number) < 1))) throw new HostAuthorityError('unavailable')
+        || (binding.authorityBindingVersion as number) < 1))
+      || (Object.hasOwn(binding, 'authorityBindingScope')
+        && (typeof binding.authorityBindingScope !== 'string' || !SHA256.test(binding.authorityBindingScope)))) {
+      throw new HostAuthorityError('unavailable')
+    }
     return {
       authorityEnvironmentId: binding.authorityEnvironmentId,
       handle: handle(binding.handle),
       authorityBindingVersion: legacyBindings ? 1 : binding.authorityBindingVersion as number,
+      ...(binding.authorityBindingScope === undefined ? {} : { authorityBindingScope: binding.authorityBindingScope as string }),
     }
   })
   return {
@@ -142,6 +148,7 @@ export class ProfileRegistry {
       readonly authorityEnvironmentId?: string
       readonly accountBindingHandle?: string
       readonly authorityBindingVersion?: number
+      readonly authorityBindingScope?: string
       readonly unlockMaterial: string
     },
   ): Promise<PersonProfileRecord> {
@@ -149,14 +156,23 @@ export class ProfileRegistry {
     const index = personIndex(this.options.deviceIndexKey, input)
     const material = unlockMaterial(input.unlockMaterial)
     const existing = this.profiles.find(profile => profile.personIndex === index)
+    if (input.authorityBindingScope !== undefined
+      && (!SHA256.test(input.authorityBindingScope) || input.accountBindingHandle === undefined)) {
+      throw new HostAuthorityError('invalid_input')
+    }
     if ((input.authorityEnvironmentId === undefined) !== (input.accountBindingHandle === undefined)
       || (input.accountBindingHandle === undefined) !== (input.authorityBindingVersion === undefined)) {
       throw new HostAuthorityError('invalid_input')
     }
+    const knownScope = existing?.accountBindings?.find(candidate =>
+      candidate.authorityEnvironmentId === input.authorityEnvironmentId
+        && candidate.handle === input.accountBindingHandle)?.authorityBindingScope
+    const scope = input.authorityBindingScope ?? knownScope
     const binding = input.accountBindingHandle === undefined ? undefined : {
       authorityEnvironmentId: input.authorityEnvironmentId as string,
       handle: handle(input.accountBindingHandle),
       authorityBindingVersion: input.authorityBindingVersion as number,
+      ...(scope === undefined ? {} : { authorityBindingScope: scope }),
     }
     if (binding !== undefined && (!UUID.test(binding.authorityEnvironmentId)
       || !Number.isSafeInteger(binding.authorityBindingVersion) || binding.authorityBindingVersion < 1)) {
@@ -187,8 +203,20 @@ export class ProfileRegistry {
         this.save(next); this.profiles = next
         return currentProfile
       }
-      const current = currentProfile.accountBindings?.find(candidate =>
-        candidate.authorityEnvironmentId === binding.authorityEnvironmentId)
+      const environmentBindings = currentProfile.accountBindings?.filter(candidate =>
+        candidate.authorityEnvironmentId === binding.authorityEnvironmentId) ?? []
+      if (binding.authorityBindingScope === undefined
+        && environmentBindings.some(candidate => candidate.authorityBindingScope !== undefined)) {
+        throw new HostAuthorityError('upgrade_required')
+      }
+      const sameHandle = environmentBindings.find(candidate => candidate.handle === binding.handle)
+      if (sameHandle?.authorityBindingScope !== undefined
+        && sameHandle.authorityBindingScope !== binding.authorityBindingScope) throw new HostAuthorityError('conflict')
+      if (sameHandle !== undefined && binding.authorityBindingVersion < sameHandle.authorityBindingVersion) {
+        throw new HostAuthorityError('stale')
+      }
+      const current = environmentBindings.find(candidate =>
+        candidate.authorityBindingScope === binding.authorityBindingScope)
       if (current !== undefined) {
         if (binding.authorityBindingVersion < current.authorityBindingVersion) throw new HostAuthorityError('stale')
         if (binding.authorityBindingVersion === current.authorityBindingVersion) {
@@ -202,7 +230,9 @@ export class ProfileRegistry {
       const updated = {
         ...currentProfile,
         accountBindings: [...currentProfile.accountBindings?.filter(candidate =>
-          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId) ?? [], binding],
+          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId
+            || (candidate.authorityBindingScope !== binding.authorityBindingScope
+              && candidate.handle !== binding.handle)) ?? [], binding],
         bindingGeneration: currentProfile.bindingGeneration + 1,
       }
       const next = this.profiles.map(profile => profile.profileId === existing.profileId ? updated : profile)
@@ -293,7 +323,9 @@ export class ProfileRegistry {
     const binding = handle(accountBindingHandle)
     return this.profiles.find(profile => profile.kind === 'account' && profile.accountBindings?.some(candidate =>
       candidate.authorityEnvironmentId === authorityEnvironmentId && candidate.handle === binding
-      && candidate.authorityBindingVersion === authorityBindingVersion)) ?? null
+      && candidate.authorityBindingVersion === authorityBindingVersion
+      && (candidate.authorityBindingScope !== undefined || !profile.accountBindings?.some(other =>
+        other.authorityEnvironmentId === authorityEnvironmentId && other.authorityBindingScope !== undefined)))) ?? null
   }
 
   /**
@@ -380,25 +412,26 @@ export class ProfileRegistry {
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
       const registry = parsed as Record<string, unknown>
       if (!exact(registry, ['version', 'profiles'])
-        || (registry.version !== 2 && registry.version !== 3) || !Array.isArray(registry.profiles)) {
+        || (registry.version !== 2 && registry.version !== 3 && registry.version !== 4) || !Array.isArray(registry.profiles)) {
         throw new HostAuthorityError('unavailable')
       }
       const legacyBindings = registry.version === 2
-      const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings))
+      const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings, registry.version === 4))
       const profileIds = new Set<string>()
       const indexes = new Set<string>()
       const bindings = new Set<string>()
       const environments = new Set<string>()
       for (const profile of profiles) {
-        if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)
-          || profile.accountBindings?.some(binding => bindings.has(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-            || environments.has(`${profile.profileId}\0${binding.authorityEnvironmentId}`))) {
+        if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)) {
           throw new HostAuthorityError('unavailable')
         }
         profileIds.add(profile.profileId); indexes.add(profile.personIndex)
         for (const binding of profile.accountBindings ?? []) {
-          bindings.add(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-          environments.add(`${profile.profileId}\0${binding.authorityEnvironmentId}`)
+          const bindingKey = `${binding.authorityEnvironmentId}\0${binding.handle}`
+          const scopeKey = `${profile.profileId}\0${binding.authorityEnvironmentId}\0${binding.authorityBindingScope ?? ''}`
+          if (bindings.has(bindingKey) || environments.has(scopeKey)) throw new HostAuthorityError('unavailable')
+          bindings.add(bindingKey)
+          environments.add(scopeKey)
         }
       }
       if (legacyBindings) this.save(profiles)
@@ -410,7 +443,9 @@ export class ProfileRegistry {
   }
 
   private save(profiles: readonly PersonProfileRecord[]): void {
-    const snapshot = { version: 3 as const, profiles }
+    const version = profiles.some(profile => profile.accountBindings?.some(binding =>
+      binding.authorityBindingScope !== undefined)) ? 4 as const : 3 as const
+    const snapshot = { version, profiles }
     if (this.options.persistSnapshot) { this.options.persistSnapshot(this.path, this.options.root, snapshot); return }
     const temporary = join(this.options.root, `.profiles-${randomUUID()}.tmp`)
     const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)

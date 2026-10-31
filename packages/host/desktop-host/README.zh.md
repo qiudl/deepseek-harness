@@ -33,6 +33,8 @@ kind: "package-bundle"
 
 Profile registry 只保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC、opaque Profile id、按环境划分的当前 binding handle／version，以及 opaque Keychain handle。同一个人的 staging 与 production binding 解析到同一 Profile；更高的服务端签名 binding version 只原子替换对应环境的旧 handle，并使旧签名 selector 失效。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料，只持久化域隔离 verifier；常量时间校验成功后才授权当前已认证连接。
 
+Registry 可读取 v4 binding scope，读取时不会改写文件。旧 broker 可以续用已知 handle，且不会丢失已保存的 scope；若同一环境已有 scoped binding，未知的无 scope handle 将以 `upgrade_required` 拒绝。当前控制协议不能新建 scoped binding，因此这条兼容路径只恢复已登记的 Profile。
+
 `profile.ensure` 返回绑定 installation、Profile、binding generation、runtime generation 与 schema generation 的 Host 签名 opaque selector。`profile.restore` 接受该 selector、精确 Keychain handle 与新鲜 Main-vault material。跨 installation 复制、binding 轮换后重放、猜测 handle／material，或证明连接断开，都会 fail closed。
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
@@ -56,6 +58,7 @@ Web Profile worker 通过显式子进程环境接收独立随机记忆路由 bea
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
+- **HY 容量尚不足以覆盖完整 Profile 历史**——Host 索引最多接受 20,000 条脱敏记录，但一个 worker 连接最多执行 64 次顺序 embedding 请求，其中包括查询 embedding；固定合成 worker 使用两次请求。m5max 的合成探针即使假设 embedding broker 一次处理八条输入，512 条写入加一次查询仍需 65 批；20,000 条写入在查询前至少需 2,500 批。Host 在 64 次请求全部用尽时拒绝最终投影 ACK，因此不会把没有首次查询预算的 worker 标为就绪。动态 worker 仍需明确索引与查询容量策略，并测量模型和 IPC 构建时间，才能声称覆盖完整历史的语义检索。当前 startup 没有提供产品 worker opener。
 
 <a id="dev-note"></a>
 ### 开发备注

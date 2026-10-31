@@ -18,6 +18,8 @@ The first private route increment uses `borrowSession()` so a live Session is re
 
 The Host control wire keeps `search` on its own text index and admits `semantic_search` only with a separately signed operation and an attested worker opener. The separate `profile.memory_semantic_search` capability is absent from the default startup composition. A worker can rank redacted projections, but its references never authorize evidence without current Host resolution.
 
+The first Mac pilot must read an existing v4 Profile registry without rewriting it. Binding scope stays attached to each stored handle; an older broker may renew only a known handle, while an unknown unscoped handle is rejected in an environment that already has scoped bindings. Scope and version uniqueness are checked when the file opens. Creating a new scoped binding requires a separate control-protocol change.
+
 ## Alternatives considered
 
 **Give the memory agent access to the DSH home.** File access would bypass the selected Profile and expose raw logs, tool results, and unrelated credentials. A Session ID would become an accidental capability.
