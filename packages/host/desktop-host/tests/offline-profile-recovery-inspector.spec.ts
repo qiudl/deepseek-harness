@@ -28,6 +28,8 @@ import { generationLogPath } from '@deepseek-ai/dsh-session-persistence-jsonl/sr
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
 const stageCleanupFaults = vi.hoisted(() => new Set<string>())
+const stageCopyLinkFaults = vi.hoisted(() => new Set<string>())
+const stageDiskFullFaults = vi.hoisted(() => new Set<string>())
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open: typeof actual.open = async (...args) => {
@@ -53,10 +55,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     return entries
   }
   const cp: typeof actual.cp = async (...args) => {
+    if ([...stageDiskFullFaults].some(root => String(args[1]).startsWith(`${root}/restricted-`))) {
+      throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' })
+    }
     if ([...stageCleanupFaults].some(root => String(args[1]).startsWith(`${root}/restricted-`))) {
       throw new Error('fixture_copy_failed')
     }
-    return actual.cp(...args)
+    await actual.cp(...args)
+    if ([...stageCopyLinkFaults].some(root => String(args[1]).startsWith(`${root}/restricted-`))) {
+      await actual.symlink(String(args[0]), join(String(args[1]), 'unexpected-link'))
+    }
   }
   const rm: typeof actual.rm = async (...args) => {
     if ([...stageCleanupFaults].some(root => String(args[0]).startsWith(`${root}/restricted-`))) {
@@ -70,7 +78,7 @@ import {
   FileOwnerJsonlMigrationGenerationTarget,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import { SessionWriteLease } from '@deepseek-ai/dsh-session-persistence-jsonl/src/lease.ts'
-import { ExistingSessionLock } from '@deepseek-ai/dsh-session-persistence-jsonl/src/existing-session-lock.ts'
+import { ExistingSessionLock, ExistingSessionLockSet } from '@deepseek-ai/dsh-session-persistence-jsonl/src/existing-session-lock.ts'
 import type { MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 import {
@@ -693,6 +701,47 @@ describe('offline Profile existing-only inspector', () => {
     expect(createWorker).not.toHaveBeenCalled()
   })
 
+  it('keeps Account history unavailable if Session lock rollback cannot be confirmed', async () => {
+    const value = await bundledFixture()
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const acquire = vi.spyOn(ExistingSessionLockSet, 'acquire')
+      .mockRejectedValueOnce(new AggregateError([new Error('close failed')], 'session_fence_cleanup_failed'))
+    onTestFinished(() => { acquire.mockRestore() })
+    const service = await accountService(value, createWorker, undefined, true)
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(service.close()).rejects.toMatchObject({ code: 'unavailable' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
+  it('releases Session locks if the inventory changes immediately after locking', async () => {
+    const value = await bundledFixture()
+    const id = SessionId('restricted-inventory-after-lock')
+    await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id, createdAt: 1,
+      cwd: '/work', isSeeded: false }, [])
+    const [directory] = (await value.target.inspectRestrictedPersistence()).sessionDirectories
+    if (!directory) throw new Error('missing fixture session')
+    await writeFile(join(directory, 'session.lock'), '', { mode: 0o600 })
+    let inspections = 0
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker, async () => {
+      const inventory = await value.target.inspectRestrictedPersistence()
+      inspections++
+      return inspections === 3 ? { ...inventory, inventoryDigest: '0'.repeat(64) } : inventory
+    })
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    const lock = await ExistingSessionLock.acquire(directory, uid)
+    lock.close()
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
   it('blocks the Profile when the isolated worker exit cannot be confirmed', async () => {
     const value = await bundledFixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
@@ -1054,6 +1103,80 @@ describe('offline Profile existing-only inspector', () => {
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
       signal: new AbortController().signal })).rejects.toThrow('restricted_staging_cleanup_unconfirmed')
     expect(await readFile(sentinel, 'utf8')).toBe('existing')
+  })
+
+  it('rejects a malformed staging operation identifier before creating a directory', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-operation-fixture' })
+    onTestFinished(() => ownership.release())
+    await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, stagingOperationId: '../outside', expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'invalid_input' })
+    expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(false)
+  })
+
+  it('does not remove a directory that replaced the private staging copy', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-replacement-fixture' })
+    onTestFinished(() => ownership.release())
+    const staged = await stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })
+    await rm(staged.root, { recursive: true })
+    await mkdir(staged.root, { mode: 0o700 })
+    const sentinel = join(staged.root, 'replacement')
+    await writeFile(sentinel, 'preserve', { mode: 0o600 })
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(await readFile(sentinel, 'utf8')).toBe('preserve')
+  })
+
+  it('treats a removed staging directory and repeated disposal as already cleaned', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-disposed-fixture' })
+    onTestFinished(() => ownership.release())
+    const staged = await stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })
+    await rm(staged.root, { recursive: true })
+    await staged.dispose()
+    await staged.dispose()
+    await expect(lstat(staged.root)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects a symlink introduced into the isolated copy and cleans only that copy', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-copy-link-fixture' })
+    stageCopyLinkFaults.add(value.hostRoot)
+    onTestFinished(async () => { stageCopyLinkFaults.delete(value.hostRoot); await ownership.release() })
+    const before = await treeInventory(value.profileRoot)
+    await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(false)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('reports insufficient storage and removes the partial staging copy', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-disk-full-fixture' })
+    stageDiskFullFaults.add(value.hostRoot)
+    onTestFinished(async () => { stageDiskFullFaults.delete(value.hostRoot); await ownership.release() })
+    const before = await treeInventory(value.profileRoot)
+    await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'unavailable', diagnosticReason: 'restricted_snapshot_disk_space' })
+    expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(false)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
 
   it.each(['owner-path', 'generation', 'compression', 'digest', 'count'] as const)(
@@ -1431,6 +1554,23 @@ describe('offline Profile existing-only inspector', () => {
       .resolves.toEqual({ items: [] })
     expect(writerBlockedDuringRead).toBe(true)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it.each([
+    ['EAGAIN', 'busy'], ['EWOULDBLOCK', 'busy'], ['ENOENT', 'recovery_preflight_stale'], ['EIO', 'unavailable'],
+  ])('maps an existing Session lock failure %s to %s without starting a worker', async (errorCode, expectedCode) => {
+    const value = await bundledFixture()
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const acquire = vi.spyOn(ExistingSessionLockSet, 'acquire')
+      .mockRejectedValueOnce(Object.assign(new Error('fixture lock failure'), { code: errorCode }))
+    onTestFinished(() => { acquire.mockRestore() })
+    const service = await accountService(value, createWorker)
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: expectedCode })
+    expect(createWorker).not.toHaveBeenCalled()
   })
 
   it('rejects a malformed account Profile identifier before starting a worker', async () => {
