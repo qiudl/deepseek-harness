@@ -885,5 +885,6 @@ function applyMutation(summaries: readonly SessionSummary[], mutation: SessionLi
 
 /** Temporary source-plane bridge while the Host contract and client project build independently. */
 function workspaceAttachSessionId(error: RemoteFailure): SessionId | undefined {
-  return error.code === 'session/workspace-attach-failed' ? error.details.sessionId : undefined
+  return error.code === 'session/workspace-attach-failed' && error.details.workspaceAttached !== true
+    ? error.details.sessionId : undefined
 }

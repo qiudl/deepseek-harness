@@ -1268,6 +1268,17 @@ describe('remaining branches', () => {
     expect(manager.getListSnapshot().items[0]).not.toHaveProperty('cwd')
   })
 
+  it('does not classify a Session as Ungrouped when workspace attachment succeeded', async ({ mock, remote }) => {
+    remote.session.create.mockResolvedValue(err(new RemoteError('session/workspace-attach-failed', 'mark failed', {
+      sessionId: S1, workspaceId: 'w1', workspaceAttached: true,
+    })))
+    const manager = makeManager(mock, remote)
+    onTestFinished(() => manager.dispose())
+    const result = await manager.create({ workspaceId: 'w1' as never, sessionId: S1 })
+    expect(result).toMatchObject({ ok: false, error: { details: { sessionId: S1, workspaceAttached: true } } })
+    expect(manager.getListSnapshot().items).toEqual([])
+  })
+
   it.for([undefined, false, true])('forwards fork migration permission %s to the Remote request', async (allowMigration, { mock, remote }) => {
     const manager = makeManager(mock, remote)
     onTestFinished(() => manager.dispose())
