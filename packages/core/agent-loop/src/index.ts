@@ -28,6 +28,7 @@ import type { Session, SessionHeader, SessionId } from '@deepseek-ai/dsh-session
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-projection'
+import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { SessionPersistenceNotFoundError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionHandle, SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
@@ -378,11 +379,14 @@ export class AgentLoop extends Service implements AgentFactory {
     ctx.effect(function* () {
       const unregisterTurnBoundary = ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
       yield unregisterTurnBoundary
+      const unregisterModel = ctx.sessionProjections.register(modelSelectionProjectionDefinition)
+      yield unregisterModel
       const unregisterInbox = ctx.sessionProjections.register(inboxProjectionDefinition)
       yield unregisterInbox
       // Cordis skips later disposers after a rejection; finally still releases projections.
       yield () => ownership.dispose().finally(() => {
         unregisterInbox()
+        unregisterModel()
         unregisterTurnBoundary()
       })
     }, 'agentLoop.transactions()')

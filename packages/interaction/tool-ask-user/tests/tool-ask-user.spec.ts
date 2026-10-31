@@ -80,6 +80,7 @@ async function setup(config: toolAskUser.Config = { mode: 'timed', timeout: -1 }
 function stubAgent(id: string, delegationDepth = 0): Agent {
   const agentId = SessionId(id)
   const agent: Agent = {
+    model: {} as Agent['model'],
     id: agentId,
     options: {},
     session: Session.create(agentId, [], {

@@ -16,6 +16,7 @@ async function fixture() {
     const fiber = ctx.plugin(() => {})
     const session = Session.create(SessionId(id))
     const agent: Agent = {
+      get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
       id: session.id, session, ctx: fiber.ctx, options: {}, status: 'idle',
       inbox: unsupportedInbox(), send() {}, followup() {}, inject() {}, cancel() {},
       steer: () => ({ outcome: Promise.resolve({ status: 'rejected' as const }) }),

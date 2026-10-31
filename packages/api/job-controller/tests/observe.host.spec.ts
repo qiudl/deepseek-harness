@@ -226,6 +226,7 @@ describe('JobController', () => {
   async function liveOwner(ctx: Context, rawId: string): Promise<Agent> {
     const session = ctx.sessions.create(SessionId(rawId))
     const owner: Agent = {
+      get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
       id: session.id,
       options: {},
       session,

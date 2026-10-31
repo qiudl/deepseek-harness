@@ -77,6 +77,8 @@ The runner is a direct driver over the core API carrier: it resolves the Agent i
 
 ### Run flow
 
+The Agent owns model selection for both a fresh run and a resumed Session.
+
 The runner awaits the complete application (`ctx.get('loader')?.await()`) so the composed tools and adapters are not half-mounted, reads the shared [`agentDefaultModel`](../../core/agent-default-model/README.md) selection, resolves the task from config or stdin, then resolves the Agent identity: a fresh `session-<uuid>` by default, or the persisted Session `--session-id` names, which it adopts through [`sessionQuery`](../../session-query/session-query/README.md) and refuses when no log exists. It submits the task as an ordinary user message. Without `--json` it streams that Agent's non-empty reasoning deltas to stderr; with `--json` it projects the run instead. It waits for child work and rechecks that the parent remains idle with an unchanged Session sequence before finishing, so settlement notices can drive a final parent answer. Idle children with parked inbox messages do not delay completion; process shutdown discards their unclaimed messages. It then flushes the Session and folds the owned interval (`firstSeq` onward) into the last non-empty `assistant/message` text and final `turn/end` reason. It writes the final text to stdout (or the `final` event) and requests exit.
 
 ### Patch surface over base

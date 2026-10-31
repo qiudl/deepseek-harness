@@ -382,17 +382,6 @@ export class SessionController extends TypertRemoteService {
       ctx.emit('api-session/error', agent.id, errorChain(error))
     })
     ctx.on('session/event', (session, event) => {
-      if (event.type === 'request/header') {
-        const agent = ctx.agents.get(session.id)
-        if (agent?.session === session) this.agents.consumeSelection(
-          agent,
-          event.data.header.config.provider,
-          event.data.header.config.model,
-          event.data.header.adapterDefaults?.reasoningEffort === true
-            ? undefined
-            : event.data.header.config.reasoningEffort,
-        )
-      }
       if (event.type !== 'user/message' || event.data.source.kind !== 'user') return
       ctx.emit('api-session/activity', session.id, event.time)
     })

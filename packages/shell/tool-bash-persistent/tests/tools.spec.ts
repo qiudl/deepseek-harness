@@ -39,6 +39,7 @@ async function agent(ctx: Context, cwd: string | undefined): Promise<Agent> {
     ...cwd === undefined ? {} : { cwd },
   })
   const value: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session,

@@ -133,8 +133,8 @@ export class AcpSession {
       meta: { cwd: options.cwd },
       agentOptions: options.agentOptions,
       signal: options.signal,
-      setup: async (agentCtx) => {
-        modelControl.install(agentCtx)
+      setup: async (agentCtx, agent) => {
+        modelControl.install(agentCtx, agent)
         await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
       },
     })
@@ -158,7 +158,7 @@ export class AcpSession {
           ctx.llm,
           selectionFor(agent.session.requestHeader(), options.fallbackSelection),
         )
-        modelControl.install(agentCtx)
+        modelControl.install(agentCtx, agent)
         await mountAcpMcpServers(agentCtx, options.mcpServers, options.cwd)
       },
     })

@@ -106,6 +106,7 @@ async function mount(
 
 function sessionAgent(session: Session, id = 'agent'): Agent {
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: SessionId(id),
     options: {},
     session,

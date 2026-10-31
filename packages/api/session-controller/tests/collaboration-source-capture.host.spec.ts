@@ -1929,7 +1929,7 @@ async function feedbackHarness(skipDelivery = false, isolateOwners = false, poli
   Object.assign(h.ctx.get('sessionPersistence')!, { flush })
   const inject = vi.fn((message: import('@deepseek-ai/dsh-llm').UserMessage) => { session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message] }) })
   const unexpected = () => { throw Error('unexpected agent operation in feedback unit fixture') }
-  const agent: import('@deepseek-ai/dsh-agent').Agent = { id: h.sessionId, session, ctx: h.ctx, get status() { return busy ? 'running' : 'idle' }, options: {},
+  const agent: import('@deepseek-ai/dsh-agent').Agent = { get model(): import('@deepseek-ai/dsh-agent').Agent['model'] { throw new Error('model selection is not used by this fixture') }, id: h.sessionId, session, ctx: h.ctx, get status() { return busy ? 'running' : 'idle' }, options: {},
     inbox: { nextTurn: [], nextStep: [], clear: unexpected, append: unexpected, prepend: unexpected,
       replace: unexpected, remove: unexpected, splice: unexpected }, inject,
     cancel: unexpected, whenIdle: unexpected, runMaintenance: unexpected, send: unexpected, followup: unexpected, steer: unexpected }

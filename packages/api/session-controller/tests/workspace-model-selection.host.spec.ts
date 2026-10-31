@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import AgentRegistry from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { AgentModel } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import SessionStore, { Session, SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -239,6 +239,11 @@ describe('Host workspace model inspection', () => {
       const session = Session.create(sessionId, undefined, h.meta)
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(session, () => {
+          const state = h.ctx.sessionProjections.stateOf(session, 'modelSelection')
+          if (state === undefined) throw new Error('required modelSelection projection')
+          return state
+        }, () => undefined),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }
@@ -287,6 +292,11 @@ describe('Host workspace model inspection', () => {
       session.append('model/selection', { provider: 'live', model: 'live-model' })
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(session, () => {
+          const state = h.ctx.sessionProjections.stateOf(session, 'modelSelection')
+          if (state === undefined) throw new Error('required modelSelection projection')
+          return state
+        }, () => undefined),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }
@@ -308,6 +318,11 @@ describe('Host workspace model inspection', () => {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(session, () => {
+          const state = h.ctx.sessionProjections.stateOf(session, 'modelSelection')
+          if (state === undefined) throw new Error('required modelSelection projection')
+          return state
+        }, () => undefined),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }

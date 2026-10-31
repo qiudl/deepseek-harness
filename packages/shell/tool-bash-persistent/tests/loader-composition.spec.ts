@@ -45,6 +45,7 @@ async function agent(ctx: Context, cwd: string): Promise<Agent> {
     version: SESSION_FORMAT_VERSION, id, createdAt: 0, cwd, isSeeded: false,
   })
   const value: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session,

@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { AgentModel } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-registry'
-import SessionStore, { SESSION_FORMAT_VERSION, SessionLogOffset, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
@@ -65,7 +65,12 @@ function providePersistence(ctx: Context, persistence: Record<string, unknown>):
 
 function agent(ctx: Context, meta: SessionHeader): Agent {
   const session = ctx.sessions.create(meta.id, { meta })
-  return { id: meta.id, session, status: 'idle', ctx } as Agent
+  const model = new AgentModel(session, () => {
+    const state = ctx.sessionProjections.stateOf(session, 'modelSelection')
+    if (state === undefined) throw new Error('required modelSelection projection')
+    return state
+  }, () => ({ provider: 'fixture', model: 'fixture-model' }))
+  return { id: meta.id, session, model, status: 'idle', ctx } as Agent
 }
 
 function unpublishedAgent(ctx: Context, meta: SessionHeader): Agent {
@@ -310,7 +315,7 @@ describe('ApiSession model selection', () => {
     const logged = agent(ctx, header('old-model-cache'))
     logged.session.append('model/selection', { provider: 'actual', model: 'model' })
     const { checkpoint } = ctx.sessionProjections.restore({
-      modelSelection: { ver: 2, seq: 0, val: { lastUsed: null, pending: { provider: 'stale', model: 'model' } } },
+      modelSelection: { ver: 2, seq: SessionSeq(0), val: { lastUsed: null, pending: { provider: 'stale', model: 'model' } } },
     }, logged.session.snapshotEvents(), SessionLogOffset(0), logged.session.header, SessionLogOffset(0))
     expect(checkpoint.modelSelection).toMatchObject({ ver: 3, val: { pending: { provider: 'actual', model: 'model' } } })
   })
@@ -350,15 +355,14 @@ describe('ApiSession model selection', () => {
     const seqBeforeRead = pending.session.seq
     expect(agents.inspectSelectionFor(pending)).toEqual(selection.current)
     expect(pending.session.seq).toBe(seqBeforeRead)
-    expect(agents.consumeSelection(pending, 'other-provider', 'selected-model', 'high')).toBe(false)
-    expect(agents.consumeSelection(pending, 'selected-provider', 'other-model', 'high')).toBe(false)
-    expect(agents.consumeSelection(pending, 'selected-provider', 'selected-model', 'low')).toBe(false)
-    expect(agents.consumeSelection(pending, 'selected-provider', 'selected-model', 'high')).toBe(true)
-    expect(selection.current).toEqual({ provider: 'fixture', model: 'fixture-model' })
+    pending.session.append('request/header', {
+      header: { config: { provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high' as never } },
+      reason: 'initial',
+    })
+    expect(selection.current).toEqual({ provider: 'selected-provider', model: 'selected-model', reasoningEffort: 'high' })
 
     const untouched = agent(ctx, header('uninstalled-model'))
     expect(agents.inspectSelectionFor(untouched)).toEqual({ provider: 'fixture', model: 'fixture-model' })
-    expect(agents.consumeSelection(untouched, 'fixture', 'fixture-model', undefined)).toBe(false)
   })
 })
 

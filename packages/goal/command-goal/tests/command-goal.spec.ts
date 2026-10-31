@@ -25,6 +25,7 @@ function stubAgent(ctx: Context, id: string): { agent: Agent; session: Session }
   const inbox = createInboxStub()
   let status: AgentStatus = 'idle'
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id: session.id,
     options: {},
     session,

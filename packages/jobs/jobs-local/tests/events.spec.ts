@@ -19,6 +19,7 @@ function agentIn(ctx: Context, rawId: string, presetScope?: ScopeKey): Agent {
   }
   const session = Session.create(id)
   return {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session,

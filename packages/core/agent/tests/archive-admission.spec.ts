@@ -15,6 +15,7 @@ async function liveAgent(ctx: Context, rawId: string, initial: AgentStatus): Pro
   const cancels: CancelCall[] = []
   let status = initial
   const agent: LiveAgent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session: Session.create(id),

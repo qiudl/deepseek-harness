@@ -24,6 +24,7 @@ function stubAgent(ctx: Context, rawId: string): Agent {
   const scopeFiber = ctx.plugin(() => {})
   const session = Session.create(id)
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id,
     options: {},
     session,

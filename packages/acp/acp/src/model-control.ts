@@ -2,7 +2,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionConfigOption, SessionConfigValueId } from '@agentclientprotocol/sdk'
-import { installModelSelection, type ModelSelection, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentModel, ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId, type LlmCallConfig, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 
 const MODEL_CONFIG_ID = 'model'
@@ -33,7 +33,13 @@ export class AcpModelControl {
   /** Scoped selection reference consumed by Agent request assembly. */
   readonly selection: ModelSelectionRef
   private tail = Promise.resolve()
-  private selected: ModelSelection | undefined
+  private initialSelection: ModelSelection | undefined
+  private owner: AgentModel | undefined
+  private get selected(): ModelSelection | undefined { return this.owner?.selected() ?? this.initialSelection }
+  private set selected(value: ModelSelection | undefined) {
+    if (this.owner !== undefined && value !== undefined) this.owner.select(value)
+    else this.initialSelection = value
+  }
   private turnSelection: { turn: number; selection: ModelSelection } | undefined
   private hasResolvedState = false
 
@@ -53,10 +59,12 @@ export class AcpModelControl {
 
   /**
    * Install request/prompt consistency listeners in the unpublished Agent scope.
-   * @param agentCtx - Agent scope that consumes this selection.
+   * @param _agentCtx - Agent scope that consumes this selection.
+   * @param agent - Agent that owns durable model choices.
    */
-  install(agentCtx: Context): void {
-    installModelSelection(agentCtx, this.selection)
+  install(_agentCtx: Context, agent: Agent): void {
+    this.owner = agent.model
+    agent.model.setFallback(() => this.initialSelection)
   }
 
   /**
@@ -74,6 +82,7 @@ export class AcpModelControl {
    */
   pinTurn(turn: number, selection: ModelSelection): void {
     this.turnSelection = { turn, selection: { ...selection } }
+    this.owner?.pinTurn(turn, selection)
   }
 
   /**
@@ -82,6 +91,7 @@ export class AcpModelControl {
    */
   releaseTurn(turn: number): void {
     if (this.turnSelection?.turn === turn) this.turnSelection = undefined
+    this.owner?.releaseTurn(turn)
   }
 
   /**

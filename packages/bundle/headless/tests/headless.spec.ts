@@ -149,6 +149,7 @@ async function bench(script: Script, options: BenchOptions = {}): Promise<{
     let idle = Promise.resolve()
     let running = false
     const agent: Agent = {
+      get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
       id: session.id,
       options: createOptions.agentOptions ?? {},
       session,
