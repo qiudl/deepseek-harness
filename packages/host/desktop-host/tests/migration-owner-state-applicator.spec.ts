@@ -3,6 +3,23 @@ import { tmpdir } from 'node:os'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+
+const diskFaults = vi.hoisted(() => ({ availableBytes: undefined as bigint | undefined, copyNoSpace: false }))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>()
+  return { ...actual,
+    statfs: async (...args: Parameters<typeof actual.statfs>) => diskFaults.availableBytes === undefined
+      ? actual.statfs(...args) : { bavail: diskFaults.availableBytes, bsize: 1n },
+    cp: async (...args: Parameters<typeof actual.cp>) => {
+      if (diskFaults.copyNoSpace) {
+        await actual.mkdir(args[1], { recursive: true })
+        await actual.writeFile(join(String(args[1]), 'partial'), 'partial')
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
+      }
+      return actual.cp(...args)
+    },
+  }
+})
 import type { MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { FileJsonlMigrationExportSource } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
 import { MigrationOwnerStateApplicator, migrationOwnerStateObject } from '../src/migration-owner-state-applicator.ts'
@@ -136,6 +153,33 @@ describe('migration owner-state generation applicator', () => {
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
       signal: new AbortController().signal })).rejects.toMatchObject({ code: 'profile_integrity_failed' })
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
+  })
+
+  it('fails safely when snapshot space is insufficient before or during copy', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const file = join(persistenceRoot, 'history.jsonl')
+    await writeFile(file, 'original', { mode: 0o600 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-disk-fixture' })
+    onTestFinished(async () => { diskFaults.availableBytes = undefined; diskFaults.copyNoSpace = false; await ownership.release() })
+    const input = { stagingParent: parent, expectedUid: uid, profileRoot: source, ownerPaths: paths,
+      persistence: { root: persistenceRoot, compression: 'none' as const },
+      inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal }
+    diskFaults.availableBytes = 64n * 1024n * 1024n + 7n
+    await expect(stageRestrictedProfile(input)).rejects.toMatchObject({ code: 'unavailable',
+      diagnosticReason: 'restricted_snapshot_disk_space' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
+    diskFaults.availableBytes += 1n
+    diskFaults.copyNoSpace = true
+    await expect(stageRestrictedProfile(input)).rejects.toMatchObject({ code: 'unavailable',
+      diagnosticReason: 'restricted_snapshot_disk_space' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe('original')
   })
 
   it('does not delete a staged Profile after losing its Host lock', async () => {

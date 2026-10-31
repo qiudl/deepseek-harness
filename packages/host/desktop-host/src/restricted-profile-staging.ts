@@ -1,4 +1,4 @@
-import { cp, lstat, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdtemp, readdir, realpath, rm, statfs, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
@@ -26,6 +26,22 @@ async function assertPrivateCopy(path: string, expectedUid: number): Promise<voi
   if (stat.isDirectory()) {
     for (const entry of await readdir(path)) await assertPrivateCopy(join(path, entry), expectedUid)
   }
+}
+
+/** Measure the private copy pessimistically, even on filesystems with copy-on-write support. */
+async function snapshotBytes(root: string, path: string, expectedUid: number, signal: AbortSignal): Promise<bigint> {
+  signal.throwIfAborted()
+  const part = relative(root, path)
+  if (part === 'owner-state.json' || part.split(sep).at(-1) === LEASE_FILENAME) return 0n
+  const stat = await lstat(path, { bigint: true })
+  if (stat.isSymbolicLink() || stat.uid !== BigInt(expectedUid) || (!stat.isDirectory() && !stat.isFile())
+    || (stat.isFile() && ((stat.mode & 0o077n) !== 0n || stat.nlink !== 1n))) {
+    throw new HostAuthorityError('profile_integrity_failed')
+  }
+  if (stat.isFile()) return stat.size
+  let total = 0n
+  for (const entry of await readdir(path)) total += await snapshotBytes(root, join(path, entry), expectedUid, signal)
+  return total
 }
 
 /**
@@ -94,6 +110,13 @@ export async function stageRestrictedProfile(input: {
   input.signal.throwIfAborted()
   input.ownership.assertOwner()
   input.assertCurrent()
+  const bytes = await snapshotBytes(persistence.root, persistence.root, input.expectedUid, input.signal)
+  const disk = await statfs(parent, { bigint: true })
+  const reserve = bytes / 10n > 64n * 1024n * 1024n ? (bytes + 9n) / 10n : 64n * 1024n * 1024n
+  if (disk.bavail * disk.bsize < bytes + reserve) {
+    throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
+  }
+  await verify()
   const root = await mkdtemp(join(parent, 'restricted-'))
   const created = await lstat(root)
   let disposed = false
@@ -135,6 +158,9 @@ export async function stageRestrictedProfile(input: {
     return { root, ownerPaths, verify, dispose }
   } catch (error) {
     await dispose()
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') {
+      throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
+    }
     throw error
   }
 }
