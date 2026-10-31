@@ -56,7 +56,7 @@ async function fixture() {
       sha256: 'a'.repeat(64), entryIds: ['fixture-entry'] }) },
     expectedPreviewDigest: 'p', selectedPluginNames: ['fixture-plugin'],
     composedEntryIds: () => new Set<string>(), assertQuiescent: async () => {} }
-  return { input: input as unknown as Input, sourceManifest, targetManifest }
+  return { input: input as Input, sourceManifest, targetManifest }
 }
 
 it.skipIf(process.platform === 'win32')('rejects missing, malformed, and policy-bearing plugin manifests', async () => {
@@ -85,7 +85,7 @@ it.skipIf(process.platform === 'win32')('rejects inaccessible installations and 
 it.skipIf(process.platform === 'win32')('rejects invalid composed IDs and an inventory changed during planning', async () => {
   const value = await fixture()
   await expect(planSelectedProfileImportPlugins({ ...value.input,
-    composedEntryIds: () => new Set([42]) } as unknown as Input))
+    composedEntryIds: () => new Set<string>([42 as never]) }))
     .rejects.toThrow('profile_import_plugin_target_conflict')
   state.finalChanged = true
   state.calls = 0

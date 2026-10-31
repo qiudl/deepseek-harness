@@ -6,7 +6,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 
 const faults = vi.hoisted(() => ({ lstatRoot: false, lstatAbsentOnce: false,
   mkdirRoot: false, openLock: false,
-  lockError: null as unknown }))
+  lockError: null as Error | null }))
 const denied = () => Object.assign(Error('injected filesystem denial'), { code: 'EACCES' })
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()

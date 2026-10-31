@@ -7,10 +7,10 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 const state = vi.hoisted(() => ({ installationRoot: '', layerCalls: 0, missingLayer: 0,
   before: { skippedBundles: [] as string[], layers: [] as Array<{ packageName: string
     packageDir: string
-    patches: unknown[] }>, patches: [] as unknown[], marker: 'before' },
+    patches: string[] }>, patches: [] as string[], marker: 'before' },
   after: { skippedBundles: [] as string[], layers: [] as Array<{ packageName: string
     packageDir: string
-    patches: unknown[] }>, patches: [] as unknown[], marker: 'after' },
+    patches: string[] }>, patches: [] as string[], marker: 'after' },
   beforeRuntime: { entries: [] as Array<{ scope: string; name: string; version?: string }>,
     localPackageNames: [] as string[] },
   afterRuntime: { entries: [] as Array<{ scope: string; name: string; version?: string }>,
@@ -85,7 +85,7 @@ async function fixture() {
   const input = { installAnchor: anchor, uid: process.getuid?.() ?? 0,
     target: { profileRoot: root }, manifestPlan: { nextManifest },
     plan: { plugins: [{ name: 'fixture-plugin', entryIds: ['fixture-entry'] }] },
-    operationId: randomUUID() } as unknown as Input
+    operationId: randomUUID() } as Input
   return { input, root, baselineRoot, installationRoot, pluginRoot }
 }
 

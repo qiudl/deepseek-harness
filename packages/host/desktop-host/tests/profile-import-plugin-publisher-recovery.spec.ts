@@ -22,7 +22,7 @@ async function fixture() {
     journal: { advance: async (record: { phase: string }, phase: string) => ({ ...record, phase }) },
     assertAuthority: async () => {}, assertQuiescent: async () => {},
     assertPreparedCandidate: async () => {}, assertSessionPointerOld: async () => {} }
-  return input as unknown as ProfileImportPluginPublisherInput
+  return input as ProfileImportPluginPublisherInput
 }
 
 it('keeps the Profile fenced when publication recovery changes unexpectedly', async () => {
