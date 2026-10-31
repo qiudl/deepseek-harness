@@ -56,6 +56,110 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('accepts only bounded, ordered private Memory pages from the live Profile worker', async () => {
+    let value: unknown = { items: [], nextAfter: null }
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw Error('missing listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    })
+    const listMemorySessions = Reflect.get(factory, 'listMemorySessions') as (
+      origin: string, token: string, after: string | null,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
+    const signal = new AbortController().signal
+    const list = (after: string | null = null, stopped: () => boolean = () => false) =>
+      listMemorySessions.call(factory, origin, 'private-token', after, signal, stopped)
+    await expect(list()).resolves.toEqual(value)
+    await expect(list('../bad')).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(list(null, () => true)).rejects.toMatchObject({ code: 'invalid_input' })
+    const full = Array.from({ length: 64 }, (_, n) => ({
+      sessionId: `session-${String(n).padStart(3, '0')}`, revision: 'r1',
+    }))
+    value = { items: full, nextAfter: full.at(-1)!.sessionId }
+    await expect(list()).resolves.toEqual(value)
+    for (const malformed of [
+      null, [], {}, { items: [], nextAfter: null, extra: true },
+      { items: Array.from({ length: 65 }, () => full[0]), nextAfter: null },
+      { items: [null], nextAfter: null }, { items: [[]], nextAfter: null },
+      { items: [{ sessionId: 'bad/id', revision: 'r1' }], nextAfter: null },
+      { items: [{ sessionId: 'session-a', revision: '' }], nextAfter: null },
+      { items: [{ sessionId: 'session-a', revision: 'r1', extra: true }], nextAfter: null },
+      { items: [], nextAfter: '../bad' }, { items: [], nextAfter: 'session-a' },
+      { items: [{ sessionId: 'session-a', revision: 'r1' }], nextAfter: 'session-a' },
+      { items: [full[1], full[0]], nextAfter: null },
+      { items: [full[0], full[0]], nextAfter: null },
+      { items: full, nextAfter: 'wrong' },
+    ]) {
+      value = malformed
+      await expect(list()).rejects.toThrow()
+    }
+    value = { items: [full[0]], nextAfter: null }
+    await expect(list(full[0]!.sessionId)).rejects.toThrow()
+  })
+
+  it('refuses changed or unbounded raw Session replies from the private Memory route', async () => {
+    let value: unknown = { sessionId: 'session-one', revision: 'r1', text: 'safe\n' }
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value))
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    onTestFinished(async () => { await new Promise<void>((resolve) => { server.close(() => { resolve() }) }) })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw Error('missing listener')
+    const origin = `http://127.0.0.1:${address.port}`
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    })
+    const readMemorySession = Reflect.get(factory, 'readMemorySession') as (
+      origin: string, token: string, sessionId: string,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
+    const signal = new AbortController().signal
+    const read = (sessionId = 'session-one', stopped: () => boolean = () => false) =>
+      readMemorySession.call(factory, origin, 'private-token', sessionId, signal, stopped)
+    await expect(read()).resolves.toEqual(value)
+    await expect(read('../bad')).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(read('session-one', () => true)).rejects.toMatchObject({ code: 'invalid_input' })
+    for (const malformed of [null, [], {}, { sessionId: 'session-one', revision: 'r1', text: 'safe\n', extra: true },
+      { sessionId: 'other', revision: 'r1', text: 'safe\n' },
+      { sessionId: 'session-one', revision: '', text: 'safe\n' },
+      { sessionId: 'session-one', revision: 'r1', text: 42 },
+    ]) {
+      value = malformed
+      await expect(read()).rejects.toThrow()
+    }
+  })
+
+  it('binds Memory callbacks to the current worker lifetime', async () => {
+    const factory = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    })
+    const handle = Reflect.get(factory, 'handle') as (...args: unknown[]) => ProfileWorkerHandle
+    const child = controlledWebChild()
+    const worker = handle.call(factory, child, 'http://127.0.0.1:1',
+      { name: 'cookie', value: 'private' }, 1, ...Array.from({ length: 10 }, () => 'private-token'))
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = input instanceof URL ? input.href : typeof input === 'string' ? input : input.url
+      if (url.endsWith('/internal/desktop-memory-session'))
+        return new Response(JSON.stringify({ sessionId: 'session-one', revision: 'r1', text: 'safe\n' }), { status: 200 })
+      return new Response(JSON.stringify({ items: [], nextAfter: null }), { status: 200 })
+    })
+    try {
+      const signal = new AbortController().signal
+      await expect(worker.readMemorySession?.('session-one', signal)).resolves.toMatchObject({ revision: 'r1' })
+      await expect(worker.listMemorySessions?.(null, signal)).resolves.toEqual({ items: [], nextAfter: null })
+      worker.abort()
+      await expect(worker.readMemorySession?.('session-one', signal)).rejects.toMatchObject({ code: 'invalid_input' })
+      await expect(worker.listMemorySessions?.(null, signal)).rejects.toMatchObject({ code: 'invalid_input' })
+      child.emit('exit', 0, null)
+      await worker.done
+    } finally { fetchMock.mockRestore() }
+  })
   it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
     const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
     const absolute = `/${relative}`
@@ -130,16 +234,17 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteSession(origin: string, token: string, command: object, signal: AbortSignal,
-        stopped: () => boolean): Promise<unknown>
-      remoteUiRead(origin: string, token: string, endpoint: string, payload: object,
-        signal: AbortSignal, stopped: () => boolean): Promise<unknown>
-    }
+    })
+    const remoteSession = Reflect.get(factory, 'remoteSession') as (
+      origin: string, token: string, command: object, signal: AbortSignal,
+      stopped: () => boolean) => Promise<unknown>
+    const remoteUiRead = Reflect.get(factory, 'remoteUiRead') as (
+      origin: string, token: string, endpoint: string, payload: object,
+      signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
     const signal = new AbortController().signal
     const readers = [
-      (stopped: () => boolean) => factory.remoteSession(origin, 'token', { operation: 'session.list' }, signal, stopped),
-      (stopped: () => boolean) => factory.remoteUiRead(origin, 'token', 'session/list', { args: {} }, signal, stopped),
+      (stopped: () => boolean) => remoteSession.call(factory, origin, 'token', { operation: 'session.list' }, signal, stopped),
+      (stopped: () => boolean) => remoteUiRead.call(factory, origin, 'token', 'session/list', { args: {} }, signal, stopped),
     ]
     for (const read of readers) {
       await expect(read(() => true)).rejects.toMatchObject({ code: 'unavailable' })
@@ -177,15 +282,15 @@ describe('profile worker child process', () => {
     const origin = `http://127.0.0.1:${address.port}`
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
-    }) as unknown as {
-      remoteUiAssetRead(origin: string, cookie: { name: string; value: string }, token: string,
-        endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
-        cache: { current?: { url: string; bytes: Buffer } }): Promise<unknown>
-    }
+    })
+    const remoteUiAssetRead = Reflect.get(factory, 'remoteUiAssetRead') as (
+      origin: string, cookie: { name: string; value: string }, token: string,
+      endpoint: 'asset/read' | 'asset/describe', payload: unknown, signal: AbortSignal, stopped: () => boolean,
+      cache: { current?: { url: string; bytes: Buffer } }) => Promise<unknown>
     const signal = new AbortController().signal
     const read = (payload: unknown, stopped: () => boolean = () => false,
       cache: { current?: { url: string; bytes: Buffer } } = {}, selectedSignal = signal) =>
-      factory.remoteUiAssetRead(origin, { name: 'cookie', value: 'private' }, 'token',
+      remoteUiAssetRead.call(factory, origin, { name: 'cookie', value: 'private' }, 'token',
         'asset/read', payload, selectedSignal, stopped, cache)
     for (const payload of [null, {}, { args: null }, { args: { url: 'http://[', offset: 0 } }]) {
       await expect(read(payload)).rejects.toMatchObject({ code: 'invalid_input' })

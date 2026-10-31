@@ -67,6 +67,7 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     await rm(directory, { recursive: true, force: true })
   })
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
+  vi.stubEnv('DSH_PROFILE_MEMORY_TOKEN', mode === 'source-only' ? 'M'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', ((mode === 'analysis-profile' || mode === 'analysis-missing-domain' || rootAnalysis) || mode === 'root-submission') ? 'B'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_DELIVERY_TOKEN', mode === 'delivery' ? 'C'.repeat(43) : '')
   vi.stubEnv('DSH_PROFILE_REFERENCE_TOKEN', mode === 'reference' ? 'D'.repeat(43) : '')
@@ -396,6 +397,16 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     expect(row?.projections?.values.sessionListMetadata?.blank).toBe(true)
     expect(session.seq).toBe(1)
     expect(stream).not.toHaveBeenCalled()
+    const memory = await factory['readMemorySession'](origin, 'M'.repeat(43), sessionId,
+      new AbortController().signal, () => false)
+    expect(memory.sessionId).toBe(sessionId)
+    expect(memory.text).toBe(`${JSON.stringify(header)}\n`)
+    const memoryUrl = `${origin}/internal/desktop-memory-session`
+    const memoryBody = JSON.stringify({ session_id: sessionId })
+    expect((await fetch(memoryUrl, { method: 'POST', headers: { cookie: 'dsh-auth=browser' },
+      body: memoryBody })).status).toBe(403)
+    expect((await fetch(memoryUrl, { method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: memoryBody })).status).toBe(403)
   }
   expect(result).toEqual(await ctx.sessionController.inspectCollaborationSource(target, new AbortController().signal))
   const full=await factory['readCollaborationSourceSnapshot'](origin,token,target,new AbortController().signal,()=>false)

@@ -158,7 +158,8 @@ describe('web-app runtime glue', () => {
     expect(captureGroupRoot).toHaveBeenCalledOnce()
   })
   it.each(['', 'invalid', 'A'.repeat(43)])('registers private Desktop routes only for valid tokens (%s)', async (token) => {
-    for (const name of ['DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) {
+    for (const name of ['DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN',
+      'DSH_PROFILE_REMOTE_UI_TOKEN', 'DSH_PROFILE_MEMORY_TOKEN']) {
       vi.stubEnv(name, token)
     }
     stageDist()
@@ -167,6 +168,10 @@ describe('web-app runtime glue', () => {
     onTestFinished(async () => { await ctx.fiber.dispose(); await gatewayCtx.fiber.dispose() })
     const { server, routes } = fakeHttpServer()
     ctx.provide('webServer', server)
+    ctx.provide('sessionPersistence', {
+      list: async () => [], stat: async () => undefined,
+      open: async () => { throw Error('unexpected Session open') },
+    } as never)
     provideConnection(ctx)
     const gateway = new TypertGatewayService(gatewayCtx, {})
     let browserAdmission: Parameters<typeof gateway.registerBrowserAdmission>[0] | undefined
@@ -196,6 +201,7 @@ describe('web-app runtime glue', () => {
       return
     }
     expect([...routes.keys()].sort()).toEqual([
+      '/internal/desktop-memory-session', '/internal/desktop-memory-sessions',
       '/internal/desktop-model-text', '/internal/desktop-remote-session', '/internal/desktop-remote-ui',
       '/internal/desktop-remote-ui-stream',
     ])
@@ -220,6 +226,7 @@ describe('web-app runtime glue', () => {
       ['/internal/desktop-remote-session', { operation: 'session.list' }, { value: { items: [] } }],
       ['/internal/desktop-remote-ui', { endpoint: 'boot/injections', payload: { args: {} } },
         { value: { injections: [{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }] } }],
+      ['/internal/desktop-memory-sessions', { after: null }, { items: [], nextAfter: null }],
     ] as const) {
       const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
         method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body),
