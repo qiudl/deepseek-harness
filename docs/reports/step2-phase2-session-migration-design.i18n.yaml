@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for step2-phase2-session-migration-design.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/reports/step2-phase2-session-migration-design.md
+/step2-phase-2-session-migration-design:
+  en: 12d2e129aedafd78
+  zh: 78680d8a6a14e7e8
+/step2-phase-2-session-migration-design/summary:
+  en: 21ab9e363dcb73d1
+  zh: dc7d42ca17e6f0fa
+/step2-phase-2-session-migration-design/evidence-and-current-call-paths:
+  en: d95003d8c2f6bbcd
+  zh: 78f0162253803b78
+/step2-phase-2-session-migration-design/proposed-integration:
+  en: 5059acbaf6fdc58e
+  zh: 719b46bfdead38c9
+/step2-phase-2-session-migration-design/host-control-and-startup:
+  en: 804e702d65d80ee5
+  zh: 9da84cff06ffda65
+/step2-phase-2-session-migration-design/persistence-and-compatibility:
+  en: 494871b060586a16
+  zh: a4afb54123b1effa
+/step2-phase-2-session-migration-design/implementation-checkpoints:
+  en: a073d7dd4ccce5a2
+  zh: 269b8820e94cfdd1
+/step2-phase-2-session-migration-design/risks-and-decisions-for-maintainers:
+  en: 5f88843031ce5235
+  zh: d096300d24eb7c0b
