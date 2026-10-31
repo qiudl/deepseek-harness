@@ -521,7 +521,7 @@ export class UnixHostServer {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     }
     const failures = workerClosures.filter(result => result.status === 'rejected')
-    if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason), 'memory worker shutdown failed')
+    if (failures.length > 0) throw new AggregateError(failures.map(result => result.reason as unknown), 'memory worker shutdown failed')
   }
 
   private async accept(socket: Socket): Promise<void> {
@@ -951,6 +951,7 @@ export class UnixHostServer {
               bootstrap_cookie: activated.bootstrapCookie,
             },
           })
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- retain a runtime refusal for unknown wire methods.
         } else if (frame.method === 'profile.lease_close') {
           this.options.host.closeOwnedViewLease({
             viewLeaseId: frame.params.view_lease_id as unknown as ProfileViewLeaseId,
@@ -1079,7 +1080,10 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
-  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  /**
+   * Report only local transport liveness; authority is still rechecked by every operation.
+   * @returns whether this client transport remains connected.
+   */
   isConnected(): boolean { return this.channel.isConnected() }
 
   /**

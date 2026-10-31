@@ -33,7 +33,11 @@ export function SessionId(id: string): SessionId {
 /** Identifies the plugin-owned namespace that can interpret a session scope reference. */
 export type SessionScopeProviderId = Branded<'SessionScopeProviderId'>
 
-/** Brand a string as a {@link SessionScopeProviderId}. */
+/**
+ * Brand a string as a {@link SessionScopeProviderId}.
+ * @param id - provider namespace.
+ * @returns the branded namespace.
+ */
 export function SessionScopeProviderId(id: string): SessionScopeProviderId {
   return id as SessionScopeProviderId
 }
@@ -41,7 +45,11 @@ export function SessionScopeProviderId(id: string): SessionScopeProviderId {
 /** An opaque, provider-owned reference within one session scope namespace. */
 export type SessionScopeReference = Branded<'SessionScopeReference'>
 
-/** Brand a string as a {@link SessionScopeReference}. */
+/**
+ * Brand a string as a {@link SessionScopeReference}.
+ * @param ref - provider-owned opaque reference.
+ * @returns the branded reference.
+ */
 export function SessionScopeReference(ref: string): SessionScopeReference {
   return ref as SessionScopeReference
 }

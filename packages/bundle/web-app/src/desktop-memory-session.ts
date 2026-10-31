@@ -50,7 +50,13 @@ async function inventory(persistence: DesktopMemoryPersistence, signal: AbortSig
   return items
 }
 
-/** List bounded, sorted Session identities from this Profile only. */
+/**
+ * List bounded, sorted Session identities from this Profile only.
+ * @param persistence - Profile-local persistence reader.
+ * @param after - optional cursor from the previous page.
+ * @param signal - cancellation signal.
+ * @returns one bounded inventory page.
+ */
 export async function listDesktopMemorySessions(persistence: DesktopMemoryPersistence, after: string | null,
   signal: AbortSignal): Promise<DesktopMemorySessionPage> {
   signal.throwIfAborted()
@@ -63,7 +69,13 @@ export async function listDesktopMemorySessions(persistence: DesktopMemoryPersis
     ? (items[PAGE_SIZE - 1] as { sessionId: string }).sessionId : null }
 }
 
-/** Borrow one cold, durable logical view and refuse live or changing Sessions. */
+/**
+ * Borrow one cold, durable logical view and refuse live or changing Sessions.
+ * @param persistence - Profile-local persistence reader.
+ * @param sessionId - Session to read.
+ * @param signal - cancellation signal.
+ * @returns revision-checked logical Session snapshot.
+ */
 export async function readDesktopMemorySession(persistence: DesktopMemoryPersistence, sessionId: string,
   signal: AbortSignal): Promise<DesktopMemorySessionSnapshot> {
   signal.throwIfAborted()
@@ -116,7 +128,14 @@ function parseSnapshot(value: unknown): DesktopMemorySessionSnapshot {
     meta: snapshot.meta, events: snapshot.events }
 }
 
-/** Authenticate and serve one Profile inventory page to the parent Host. */
+/**
+ * Authenticate and serve one Profile inventory page to the parent Host.
+ * @param req - private HTTP request.
+ * @param res - private HTTP response.
+ * @param token - bearer secret for the private route.
+ * @param persistence - Profile-local persistence reader.
+ * @returns completion of the private response.
+ */
 export function handleDesktopMemorySessionsRequest(req: IncomingMessage, res: ServerResponse,
   token: string, persistence: DesktopMemoryPersistence): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token,
@@ -126,11 +145,18 @@ export function handleDesktopMemorySessionsRequest(req: IncomingMessage, res: Se
       const target = value as Record<string, unknown>
       if (Object.keys(target).length !== 1 || target.after !== null && !validId(target.after))
         throw Error('invalid_input')
-      return { after: target.after as string | null }
+      return { after: target.after }
     }, parsePage, () => true, 2048)
 }
 
-/** Authenticate and serve one logical Session view to the parent Host. */
+/**
+ * Authenticate and serve one logical Session view to the parent Host.
+ * @param req - private HTTP request.
+ * @param res - private HTTP response.
+ * @param token - bearer secret for the private route.
+ * @param persistence - Profile-local persistence reader.
+ * @returns completion of the private response.
+ */
 export function handleDesktopMemorySessionRequest(req: IncomingMessage, res: ServerResponse,
   token: string, persistence: DesktopMemoryPersistence): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token,

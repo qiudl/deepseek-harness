@@ -78,7 +78,11 @@ export class DesktopHost {
       : { state: 'locked' }
   }
 
-  /** Resolve a memory request only when its Account identity, binding, and connection unlock agree. */
+  /**
+   * Resolve a memory request only when its Account identity, binding, and connection unlock agree.
+   * @param input - Account identity, binding and owner connection.
+   * @returns the authorized Profile id.
+   */
   async authorizeMemoryProfile(input: {
     readonly authorityEnvironmentId: string
     readonly accountBindingHandle: string

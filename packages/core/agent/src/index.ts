@@ -388,7 +388,12 @@ export class AgentRegistry extends Service {
     return dispose
   }
 
-  /** Register one plugin-owned durable session-scope namespace. */
+  /**
+   * Register one plugin-owned durable session-scope namespace.
+   * @param id - namespace owned by the provider.
+   * @param provider - admission implementation for that namespace.
+   * @returns disposer that unregisters this exact provider.
+   */
   registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void {
     const dispose = this.ctx.effect(() => {
       if (this.scopeProviders.has(id)) throw new Error(`session scope provider "${id}" is already registered`)
@@ -404,6 +409,9 @@ export class AgentRegistry extends Service {
   /**
    * Fail-closed execution admission for a persisted scope. The exact provider
    * must remain registered for the whole await.
+   * @param scope - persisted scope to admit, if any.
+   * @param agentCtx - unpublished Agent context for provider composition.
+   * @param signal - cancellation for asynchronous admission.
    */
   async admitSessionScope(
     scope: SessionScopeRef | undefined,
