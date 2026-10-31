@@ -620,11 +620,11 @@ export class ProfileWorkerSupervisor {
       const enqueue = (work: () => Promise<void>): Promise<void> => {
         if (!active) return Promise.reject(new HostAuthorityError('stale'))
         const next = tail.then(work)
-        tail = next.catch(error => { if (!failed) { failed = true; failure = error } })
+        tail = next.catch((error: unknown) => { if (!failed) { failed = true; failure = error } })
         return next
       }
       const scope: ProfilePreparationScope = {
-        ensure: input => {
+        ensure: (input) => {
           if (input.profileId !== profileId) return Promise.reject(new HostAuthorityError('profile_mismatch'))
           return enqueue(async () => {
             if (this.closed || this.isProfileBlocked(profileId)) throw new HostAuthorityError('unavailable')
@@ -639,6 +639,8 @@ export class ProfileWorkerSupervisor {
         const result = await operation(scope)
         active = false
         await tail
+        // Enqueued work can fail asynchronously while tail is awaited.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition
         if (failed) throw failure
         return result
       } finally { active = false; await tail }
@@ -665,6 +667,8 @@ export class ProfileWorkerSupervisor {
         this.blockProfile(profileId)
         throw error
       }
+      // Another caller may close the supervisor while disposal awaits.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition
       if (this.closed) throw new HostAuthorityError('unavailable')
       return operation()
     })
