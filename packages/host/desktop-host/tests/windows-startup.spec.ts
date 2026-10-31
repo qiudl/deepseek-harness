@@ -205,7 +205,7 @@ function fixture() {
     processFallback: vi.fn(async () => undefined),
   }
   return {
-    options, dependencies, files, createProfileWorker, createProfileWorkerFactory,
+    options, dependencies, files, bindings, createProfileWorker, createProfileWorkerFactory,
     startTransport, loadCurrentUserSid, loadRegistrationFileBindings,
     loadProfileListenerAttestor, loadWorkerIoCancellation, attestListener, dispose, readPrivateFile,
     accountAccessKeyring,
@@ -393,6 +393,33 @@ describe('Windows Desktop Host startup', () => {
     expect(state.transportOptions()?.openSession('11111111-1111-4111-8111-111111111112', inspectionAbort.signal)).toBeDefined()
     await application.close()
     expect(state.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('does not prepare a Windows Profile while an isolated operation holds its fence', async () => {
+    const state = fixture()
+    const application = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)
+    let release = () => {}
+    try {
+      const local = await application.host.bootstrapLocalProfile({
+        keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner',
+      })
+      let enter!: () => void
+      const entered = new Promise<void>(resolve => { enter = resolve })
+      const held = application.workers.withQuiescent(local.profileId, async () => {
+        enter()
+        await new Promise<void>(resolve => { release = resolve })
+      })
+      await entered
+      vi.mocked(state.bindings.ensurePrivateDirectory).mockClear()
+      const restore = application.host.restoreLocalProfile({ ...local,
+        keyHandle: 'windows-credential:local', unlockMaterial, ownerId: 'desktop-owner' })
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(state.bindings.ensurePrivateDirectory).not.toHaveBeenCalled()
+      release()
+      await held
+      await restore
+      expect(state.bindings.ensurePrivateDirectory).toHaveBeenCalled()
+    } finally { release(); await application.close() }
   })
 
   it('blocks only the Profile with a durable pending model claim after restart', async () => {
