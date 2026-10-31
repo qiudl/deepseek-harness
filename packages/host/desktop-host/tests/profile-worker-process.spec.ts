@@ -159,6 +159,29 @@ describe('profile worker child process', () => {
     }
   })
 
+  it('rejects an oversized Session response before the worker finishes streaming', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.write('x'.repeat(512 * 1024 + 1))
+      // Deliberately leave the response open: buffering the whole response cannot complete.
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    onTestFinished(async () => {
+      server.closeAllConnections()
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    })
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath }) as unknown as {
+      remoteSession(origin: string, token: string, command: object, signal: AbortSignal,
+        stopped: () => boolean): Promise<unknown>
+    }
+    await expect(factory.remoteSession(`http://127.0.0.1:${address.port}`, 'token',
+      { operation: 'session.list' }, AbortSignal.timeout(10_000), () => false))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  }, 15_000)
+
   it('fences plugin asset reads to boot-injected scripts and a live Host lease', async () => {
     const asset = '/plugins/??a/client.js&rev=1'
     let bootValue: unknown = { injections: [{ kind: 'script-src', src: asset }] }

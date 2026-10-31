@@ -861,11 +861,12 @@ export class DshWebProfileWorkerFactory {
     stopped: () => boolean,
   ): Promise<unknown> {
     if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(40_000)])
     const response = await fetch(`${viewOrigin}/internal/${route}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(payload),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(40_000)]),
+      signal: active,
     })
     if (!response.ok) {
       await response.body?.cancel()
@@ -873,15 +874,14 @@ export class DshWebProfileWorkerFactory {
         ? 'conflict' : route === 'desktop-remote-session' && response.status === 429
           ? 'busy' : 'unavailable')
     }
-    const body = await response.text()
-    if (Buffer.byteLength(body) > 512 * 1024) throw new HostAuthorityError('unavailable')
-    let parsed: unknown
-    try { parsed = JSON.parse(body) } catch { throw new HostAuthorityError('unavailable') }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
-      throw new HostAuthorityError('unavailable')
-    }
-    return (parsed as { value: unknown }).value
+    return this.readPrivateResponse(response, active, signal, stopped, 512 * 1024, (bytes) => {
+      const parsed: unknown = JSON.parse(bytes.toString('utf8'))
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || Object.keys(parsed).length !== 1 || !Object.hasOwn(parsed, 'value')) {
+        throw new HostAuthorityError('unavailable')
+      }
+      return (parsed as { value: unknown }).value
+    }, 'detach')
   }
 
   private async remoteUiAssetRead(
