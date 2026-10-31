@@ -4,7 +4,8 @@ import { encodeHostFriendBotEnrollmentPayload,
   parseHostFriendBotEnrollmentAssertion, parseHostFriendBotEnrollmentChallenge,
   type HostFriendBotEnrollmentAssertion, type HostFriendBotEnrollmentChallenge,
 } from '@deepseek-ai/dsh-host-control-protocol'
-import { resolveAccountBotIdentity, type FriendBotSigningInput } from './account-bot-identity.ts'
+import { assertCurrentFriendProofAccountHost, resolveAccountBotIdentity,
+  type FriendBotSigningInput } from './account-bot-identity.ts'
 import { HostAuthorityError } from './types.ts'
 
 const unavailable = (): never => { throw new HostAuthorityError('profile_mismatch') }
@@ -14,17 +15,7 @@ Promise<HostFriendBotEnrollmentAssertion> {
   input.signal.throwIfAborted()
   const c = parseHostFriendBotEnrollmentChallenge(input.challenge)
   const { account,identity } = input
-  const before = input.now()
-  if (!Number.isSafeInteger(before) || before < c.issued_at || before >= c.expires_at ||
-      c.owner_user_id !== account.ownerId ||
-      c.authority_environment_id !== account.authorityEnvironmentId ||
-      c.binding_id !== account.accountBindingHandle ||
-      c.binding_epoch !== String(account.authorityBindingVersion) ||
-      c.account_issuer !== account.issuer || c.account_subject !== account.subject ||
-      c.host_installation_id !== identity.installationId ||
-      c.host_public_key !== identity.installationPublicKey ||
-      c.host_instance_id !== identity.hostInstanceId || c.process_nonce !== identity.processNonce)
-    return unavailable()
+  assertCurrentFriendProofAccountHost(c,account,identity,input.now())
   input.host.authorizeCollaborationRegistration(account)
   const profileId = input.host.authorizeAccountModelText(account)
   const bot = await resolveAccountBotIdentity(input.host,input.workers,account,c.bot_id,input.signal)

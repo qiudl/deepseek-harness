@@ -13,6 +13,7 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import { friendBotChallengeFixture } from '../../control-protocol/tests/friend-bot-confirmation-fixture.ts'
+import { signAccountFriendOnlineLease } from '../src/account-friend-online-lease.ts'
 
 async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
@@ -104,6 +105,77 @@ function friendEnrollmentInput(f: Awaited<ReturnType<typeof fixture>>) {
     issued_at:c.issued_at,expires_at:c.expires_at,nonce:c.nonce }
   return { ...f.account,challenge }
 }
+
+function friendOnlineLeaseInput(f: Awaited<ReturnType<typeof fixture>>) {
+  const c = friendEnrollmentInput(f).challenge
+  const { bot_id: _botId,...fields } = c
+  return { ...f.account,challenge:{ ...fields,operation:'renew' as const,
+    device_id:randomUUID(),key_epoch:'2',expected_lease_epoch:'3' } }
+}
+
+it('refuses stale, expired, and aborted lease signing before releasing a signature',async () => {
+  const f = await fixture(); await f.grant()
+  const { challenge } = friendOnlineLeaseInput(f)
+  const account = { authorityEnvironmentId:f.account.authorityEnvironmentId,
+    accountBindingHandle:f.account.accountBindingHandle,
+    authorityBindingVersion:f.account.authorityBindingVersion,ownerId:f.ownerId,
+    issuer:f.account.issuer,subject:f.account.subject }
+  const authorizeCollaborationRegistration = vi.fn()
+  const input = { host:{ authorizeCollaborationRegistration },account,challenge,
+    identity:f.identity,signal:new AbortController().signal,now:()=>f.time.value }
+  const signs = (changes:Partial<Parameters<typeof signAccountFriendOnlineLease>[0]> = {}) =>
+    signAccountFriendOnlineLease({ ...input,...changes })
+  expect(signs().challenge).toEqual(challenge)
+  expect(authorizeCollaborationRegistration).toHaveBeenCalledTimes(2)
+  expect(()=>signs({ challenge:{ ...challenge,owner_user_id:randomUUID() } }))
+    .toThrow(/profile_mismatch/u)
+  expect(()=>signs({ now:()=>challenge.expires_at })).toThrow(/profile_mismatch/u)
+  let calls=0
+  expect(()=>signs({ now:()=>++calls===1 ? challenge.issued_at : challenge.expires_at }))
+    .toThrow(/profile_mismatch/u)
+  const controller=new AbortController(); controller.abort()
+  expect(()=>signs({ signal:controller.signal })).toThrow()
+  const pem=f.keys.privateKey.export({ type:'pkcs8',format:'pem' }).toString()
+  expect(signs({ identity:{ ...f.identity,installationPrivateKey:pem } }).signature).toBeTruthy()
+})
+
+it('signs one current friend device lease through the strict Host control connection',async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendOnlineLeaseInput(f)
+  const challenge = input.challenge
+  const assertion = await f.client.attestFriendOnlineLease(input)
+  expect(assertion.challenge).toEqual(challenge)
+  const request = f.seen.at(-1)!
+  expect(request.method).toBe('profile.friend_online_lease')
+  expect(JSON.stringify(request)).not.toContain(f.account.keyHandle)
+  expect(decodeHostControlFrame(encodeHostControlFrame(request))).toEqual(request)
+  const result = { version:1 as const,type:'result' as const,request_id:request.request_id,
+    method:'profile.friend_online_lease' as const,result:assertion }
+  expect(decodeHostControlFrame(encodeHostControlFrame(result))).toEqual(result)
+  expect(await f.session.handleRequest(request)).toMatchObject({ type:'error',error:{ code:'replayed' } })
+  await expect(f.client.attestFriendOnlineLease({ ...input,issuer:'https://other.example.test' }))
+    .rejects.toMatchObject({ code:'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_online_lease'
+    ? { ...frame,method:'profile.friend_bot_enrollment' } as never : frame)
+  await expect(f.client.attestFriendOnlineLease({ ...input,challenge:{ ...challenge,
+    request_id:randomUUID() } })).rejects.toMatchObject({ code:'unavailable' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_online_lease'
+    ? { ...frame,result:{ ...frame.result,signature:Buffer.alloc(64,7).toString('base64url') } } : frame)
+  await expect(f.client.attestFriendOnlineLease({ ...input,challenge:{ ...challenge,
+    request_id:randomUUID() } })).rejects.toThrow()
+  f.alter(undefined)
+  const capabilities=f.client.inspection.capabilities.filter(value=>value!=='profile.friend_online_lease')
+  expect(Reflect.set(f.client.inspection,'capabilities',capabilities)).toBe(true)
+  await expect(f.client.attestFriendOnlineLease({ ...input,challenge:{ ...challenge,
+    request_id:randomUUID() } })).rejects.toMatchObject({ code:'upgrade_required' })
+})
+
+it('refuses friend device lease signing after the Account owner is revoked',async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendOnlineLeaseInput(f)
+  f.host.revokeOwner(f.ownerId)
+  await expect(f.client.attestFriendOnlineLease(input)).rejects.toThrow()
+})
 
 it('returns a friend Bot enrollment proof through the authenticated strict wire codec',async () => {
   const f = await fixture(); await f.grant()
