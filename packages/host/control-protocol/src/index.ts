@@ -35,6 +35,10 @@ export type { HostControlProtocolFailure } from './codec.js'
 export { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
+export { parseHostBotChatRequest, parseHostBotChat } from './bot-chat.ts'
+export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
+export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
+export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
@@ -76,11 +80,20 @@ export type {
 } from './collaboration-delivery.js'
 export { canonicalMigrationRecords, migrationProfileSelectorHash, migrationSemanticDigest } from './migration-canonical.js'
 export { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
+export {
+  SKILLHUB_BOT_MESSAGE_ACTOR_SCHEMA, SKILLHUB_BOT_MESSAGE_ACTOR_AUDIENCE,
+  SKILLHUB_BOT_MESSAGE_ACTOR_PURPOSE, SKILLHUB_BOT_MESSAGE_ACTOR_JWS_TYPE,
+  parseSkillHubBotMessageActorInput, parseSkillHubBotMessageActorProtectedHeader,
+  parseSkillHubBotMessageActorClaims, encodeSkillHubBotMessageActorClaims,
+  matchesSkillHubBotMessageActorInput,
+} from './skillhub-bot-message-actor.js'
 export { SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload } from './skillhub-package-receipt.js'
 export { SKILLHUB_EXECUTION_RECEIPT_DOMAIN, parseSkillHubExecutionReceipt,
   encodeSkillHubExecutionReceiptPayload } from './skillhub-execution-receipt.js'
 export type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.js'
 export type { SkillHubProfileBindingPayload } from './skillhub-profile-binding.js'
+export type { SkillHubBotMessageActorInput,
+  SkillHubBotMessageActorClaims, SkillHubBotMessageActorProtectedHeader } from './skillhub-bot-message-actor.js'
 export type { CanonicalMigrationRecord } from './migration-canonical.js'
 export type {
   ProfileCollaborationDeliveryRequest, ProfileCollaborationDeliveryResult,
@@ -133,6 +146,8 @@ export type {
   ProfileOpenRequest,
   ProfileSkillHubBindingRequest,
   ProfileSkillHubBindingResult,
+  ProfileSkillHubBotMessageActorRequest,
+  ProfileSkillHubBotMessageActorResult,
   HostSkillHubPackagePlan,
   ProfileSkillHubPackageChunkRequest,
   ProfileSkillHubPackageChunkResult,

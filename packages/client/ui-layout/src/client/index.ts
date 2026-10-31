@@ -66,7 +66,9 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * and is expected to render the compact control rail while collapsed.
      */
     'sidebar': { kind: 'single'; scope: 'root'; owner: SidebarOwnerProps }
-    /** Optional product navigation entry in the phone Web bottom bar. */
+    /** Mobile drawer content supplied by a domain navigation owner. */
+    'shell.navigation': { kind: 'single'; scope: 'root'; owner: { close: () => void } }
+    /** Optional collaboration destination in the generic navigation drawer. */
     'shell.mobile.collaboration': { kind: 'single'; scope: 'root'; owner: { active: boolean; open: () => void } }
     /**
      * Central panel selected by sidebar entry id. The reserved `conversation`
@@ -189,6 +191,7 @@ export function apply(ctx: ClientContext): void {
         'shell.bottom': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
         'shell.leading': { kind: 'single', scope: 'root' },
+        'shell.navigation': { kind: 'single', scope: 'root' },
         'shell.mobile.collaboration': { kind: 'single', scope: 'root' },
       },
       store,

@@ -2,6 +2,10 @@
 .button { display: grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: 50%; corner-shape: round; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); cursor: pointer; touch-action: manipulation; }
 .button:disabled { opacity: .5; cursor: default; }
 .button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
-.notice { position: absolute; bottom: calc(100% + 8px); right: 0; width: 220px; padding: 10px; border-radius: var(--dsw-radius-md); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 12px; }
+.notice { position: absolute; box-sizing: border-box; bottom: calc(100% + 8px); right: -16px; width: 180px; max-width: calc(100vw - 32px); padding: 10px; border-radius: var(--dsw-radius-md); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 12px; }
+.menu { position: absolute; box-sizing: border-box; z-index: 3; bottom: calc(100% + 8px); right: -16px; display: grid; width: 180px; max-width: calc(100vw - 32px); padding: 6px; }
+.menuItem { min-height: 44px; padding: 10px 14px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-primary); font: inherit; text-align: start; cursor: pointer; }
+.menuItem:hover, .menuItem:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
+.retained { display: block; max-height: 40vh; margin-top: 8px; overflow: auto; white-space: pre-wrap; user-select: text; }
 
 @media (pointer: coarse) { .button { width: 44px; height: 44px; } }

@@ -93,6 +93,8 @@ The controller composes `ArchivedSessionGate` through `ctx.plugin`: it loads onc
 
 For REQ-20261020-0010, `GroupInputGate` reads the Workspace registry's local group fence in the synchronous `agent/pre-inbox` event and refuses user messages to the original Session. `prompt` also checks the fence before request-ID replay and after asynchronous attachment admission; `updateQueue` refuses edits, removal, and steering through the retired route. Source/root capture and their analysis calls report in-flight activity to fence admission and reject new calls after the fence; a root remains active across its Source and aggregate commits. Fence admission folds the original Session's durable inbox events and refuses installation while either queue contains input. The trusted Host and Slark activation protocol must still reconcile those inputs before retrying activation.
 
+A domain that owns a Session sender registers `ctx.sessions.registerPromptRoute(sessionId, send)` before opening that Session. The ordinary Conversation keeps its composer, draft, history and request ID, while the registered route performs domain admission. Only unregistered identities use the ordinary Session prompt endpoint. Withdrawing a route cancels its pending calls and fences that identity for the page lifetime; a later registration can replace the withdrawn owner. See the [sender ownership decision](../../../.agents/notes/implemented/architecture/2026-10-29-session-prompt-routes.md).
+
 <a id="client-references"></a>
 
 ## Client references

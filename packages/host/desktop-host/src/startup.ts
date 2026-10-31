@@ -6,7 +6,7 @@ import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
 } from 'node:fs'
 import { existsSync } from 'node:fs'
-import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
+import { loadProfileDirectory, loadOverlayPatches, type ProfileLayer } from '@deepseek-ai/dsh-app-boot'
 import { homedir } from 'node:os'
 import { isAbsolute, join, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -34,7 +34,11 @@ import { runProfilePluginCommand } from './plugin-command.ts'
 import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
 import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
-import { BundledPluginCatalog, bundledDependencySpec } from './bundled-plugins.ts'
+import { BundledPluginCatalog, bundledDependencySpec, parseBundledPluginSpec } from './bundled-plugins.ts'
+import { verifyCopiedBundledPlugin, verifyProfileRollbackArchive } from './bundled-plugin-recovery.ts'
+import { prepareBundledPluginUpgrade } from './plugin-upgrade-plan.ts'
+import { parseDocument } from 'yaml'
+import { capturePluginTree } from './plugin-tree-snapshot.ts'
 import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
@@ -622,6 +626,20 @@ export async function startDesktopHostApplication(
       },
     })
     const pnpmEntrypointPath = config.pnpmEntrypointPath
+    const verifyRollbackSnapshot = async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
+      context: Parameters<ProfilePluginExecutor['execute']>[2], retained?: string) => {
+      const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
+      if (!requested) throw Error('invalid_recovery')
+      const webRoot = join(profileRoot, 'profiles/web'); const dependency = bundledDependencySpec(upgrade.rollbackDigest)
+      const verify = async () => {
+        const actual = await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true, retained)
+        if (actual.spec !== upgrade.rollbackSpec || actual.digest !== upgrade.rollbackDigest) throw Error('invalid_recovery')
+      }
+      context.guard(); context.signal.throwIfAborted(); await verify()
+      const digest = capturePluginTree(retained ?? join(webRoot, 'node_modules', requested.name), uid).digest
+      await verify(); context.guard(); context.signal.throwIfAborted()
+      return digest
+    }
     const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
       uid,
       inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
@@ -664,6 +682,64 @@ export async function startDesktopHostApplication(
         return join(root, 'profiles', profileId)
       },
       ...(bundledCatalog === undefined ? {} : {
+        upgradePlan: async (profileId: string, packageName: string, spec: string, patch: string, originalDependency: string) => {
+          const requested = parseBundledPluginSpec(spec)
+          if (packageName !== 'ds-bot' || requested?.name !== packageName || requested.version !== '0.2.16') throw Error('upgrade_required')
+          const plugin = bundledCatalog.get(requested.name, requested.version)
+          if (!plugin) throw Error('bundled_plugin_unavailable')
+          requiredProfile(registry, profileId)
+          const profileRoot = join(root, 'profiles', profileId)
+          const webRoot = join(profileRoot, 'profiles/web')
+          const loaded = loadProfileDirectory('dsh', webRoot, config.dshEntrypointPath)
+          if (loaded.skippedBundles.length) throw Error('plugin_bundle_missing')
+          const homePatch = join(profileRoot, 'cordis.patch.yml')
+          const overrides = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []
+          pluginBundleEntries(loaded.layers, [...loaded.patches, ...overrides], packageName)
+          const rollback = await verifyProfileRollbackArchive(webRoot, originalDependency, packageName, uid)
+          capturePluginTree(join(webRoot, 'node_modules', packageName), uid)
+          const plan = await prepareBundledPluginUpgrade(bundledCatalog, plugin, loaded.layers, patch, overrides)
+          const document = parseDocument(plan.patch)
+          if (document.errors.length || document.warnings.length) throw Error('invalid_patch')
+          const local = document.toJSON() as ProfileLayer['patches']
+          const layers = loaded.layers.map(layer => layer.packageName === packageName ? { ...layer, patches: plan.patches } : layer)
+          const actual = pluginBundleEntries(layers, [...local, ...overrides], packageName).map(row => row.entryId.slice('include:'.length)).sort()
+          if (JSON.stringify(actual) !== JSON.stringify([...plugin.entryIds].sort())) throw Error('plugin_entry_conflict')
+          return { patch: plan.patch, rollback }
+        },
+        rollbackUpgrade: async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
+          context: Parameters<ProfilePluginExecutor['execute']>[2]) => {
+          const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
+          if (!requested) throw Error('invalid_recovery')
+          const webRoot = join(profileRoot, 'profiles/web')
+          const dependency = bundledDependencySpec(upgrade.rollbackDigest)
+          const verify = async () => {
+            const actual = await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid)
+            if (actual.spec !== upgrade.rollbackSpec || actual.digest !== upgrade.rollbackDigest) throw Error('invalid_recovery')
+          }
+          context.guard(); context.signal.throwIfAborted(); await verify(); context.guard()
+          await runProfilePluginCommand({
+            nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+            pnpmEntrypointPath, profileRoot, controlRoot: join(root, 'control'), uid, spec: upgrade.rollbackSpec,
+            archivePath: join(webRoot, dependency.slice('file:'.length)), signal: context.signal, guard: context.guard,
+          })
+          context.guard(); context.signal.throwIfAborted(); await verify()
+          await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true)
+          const digest = capturePluginTree(join(webRoot, 'node_modules', requested.name), uid).digest
+          await verifyProfileRollbackArchive(webRoot, dependency, requested.name, uid, true)
+          context.guard(); context.signal.throwIfAborted()
+          return digest
+        },
+        verifyUpgradeTarget: async (profileRoot: string, spec: string, context: Parameters<ProfilePluginExecutor['execute']>[2]) => {
+          const requested = parseBundledPluginSpec(spec)
+          const plugin = requested && bundledCatalog.get(requested.name, requested.version)
+          if (!plugin) throw Error('bundled_plugin_unavailable')
+          context.guard(); context.signal.throwIfAborted()
+          await verifyCopiedBundledPlugin(bundledCatalog, plugin, join(profileRoot, 'profiles/web'), uid)
+          context.guard(); context.signal.throwIfAborted()
+        },
+        verifyRollbackTree: (profileRoot, upgrade, context) => verifyRollbackSnapshot(profileRoot, upgrade, context),
+        verifyRetainedRollbackTree: (profileRoot, upgrade, retained, context) =>
+          verifyRollbackSnapshot(profileRoot, upgrade, context, retained),
         bundledPlugin: (name: string, version: string) => {
           const plugin = bundledCatalog.get(name, version)
           return plugin && { entryIds: plugin.entryIds, dependency: bundledDependencySpec(plugin.sha256) }
@@ -783,6 +859,8 @@ export async function startDesktopHostApplication(
       remoteSession: (profileId, command, signal) => executeRemoteSessionCommand({
         authority: commandAuthority, workers, profileId, command, signal,
       }),
+      remoteBotChatSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotChatSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiAssetGzipSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
       remoteUiItemChunksSupported: dependencies.profileWorkerFactory === undefined,

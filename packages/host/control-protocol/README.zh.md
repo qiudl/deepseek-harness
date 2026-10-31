@@ -42,6 +42,10 @@ kind: "package-reference"
 
 原生终端只读操作限于原有 `terminal/environment`、`terminal/shells` 和 `terminal/list`，且必须提供准确的 Session 身份。终端修改操作使用 Session 控制权证明。私有 `terminal/stream` 路由只消费在该证明下为 `follow` 或 `retain` 签发的一次性票据；每次轮询继续检查视图租约，Profile 在流期间重新核验 Session 控制权。
 
+`profile.remote_ui_read.bot_chat` 单独发布固定的 `bot/chat` 读取能力。精确参数 `{ botId: string | null }` 选择已有 Bot 或团队的第一个 Main Bot。响应仅包含团队 revision、默认 Bot 身份，以及所选 Bot 的公开身份和当前私聊 Session ID；提供者不可用与 Bot 不存在保持不同语义。读取不初始化团队、不创建 Session，也不授予 prompt 权限。消费方同时要求已签名的 Host capability 和本地 SDK 的 `remoteUiBotChatSupported` 标志。
+
+`profile.remote_session.bot_chat` 单独发布 `bot.chat.send` 和 `bot.chat.receipt`。二者将已有 Bot、预期私聊分段、稳定 submission UUID 与至多 16 KiB 的规范化文本绑定。发送持有既有 Session 控制权并调用显式启用的 Bot 提供者，保留能力准备与 prompt 语义。回执与原 Session 日志对应；unobserved 不代表可安全重试。提供者缺失仍返回 null。消费方同时要求已签名 capability 和 SDK 的 remoteBotChatSupported 标志；旧或自定义 worker 不隐式继承支持。
+
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
@@ -63,6 +67,8 @@ kind: "package-reference"
 ## 挑战认证
 
 `profile.skillhub_binding` 使用独立签名域 `SLARK-SKILLHUB-DSH-PROFILE-BINDING/v1` 为一个 Host 本地 Profile 选择器签署 Slark 挑战。固定顺序 JSON 精确绑定 Slark 用户、Computer、Host 安装、本地 Profile、绑定代次和挑战 UUID。Host 根据当前本地 Profile 授权核验选择器；Desktop broker 提供 Slark 用户和 Computer 坐标。Slark 必须再与已认证 daemon 和数据库一次性挑战核对，才能建立 SkillHub 目标绑定。此签名本身不授予安装或执行权限。
+
+`profile.skillhub_bot_message_actor` 只接受由 Slark 解析的私聊消息、工具调用、Person 权威、策略和请求摘要字段，并要求当前连接持有对应的 Profile selector。Host 补入自己的安装、本地 Profile、绑定代次、密钥身份、token 和有界时间，再用该安装密钥签发紧凑 EdDSA JWS；客户端返回前会复核原始输入和已检查的 Host 密钥。该证明本身不授予 SkillHub 权限，Slark 消费前仍须核验当前 Person、Host/Profile 和项目权威。
 
 `profile.skillhub_package_chunk` 每个规范控制帧最多传输同一固定 ZIP 的 32 KiB。每片重复 Profile 选择器、包计划、总字节数和下一偏移；Host 每次重查当前连接的 Profile 授权，拒绝坐标变化、片段缺口和超限片段。最后的确认只表示完整包已在该 Profile 私有存储中完成验证和准备，不表示已激活、加载或授权。Slark 在单独提交前仍须重查来源和目标权限。
 

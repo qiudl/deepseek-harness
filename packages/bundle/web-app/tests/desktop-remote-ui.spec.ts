@@ -21,6 +21,35 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 }
 
 describe('Desktop remote UI read-only bridge', () => {
+  it('reads only an existing Bot own-chat selection and never invokes the generic gateway', async () => {
+    const invoke = vi.fn(), read = vi.fn(async () => ({ revision: 4, defaultBotId: 'z',
+      bot: { botId: 'z', actorRef: 'deepseek-bot:z', displayName: 'Main Bot', sessionId: 'current-part' } }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], read)
+    const signal = new AbortController().signal
+    expect(await executor.execute('bot/chat', { args: { botId: null } }, signal)).toEqual(await read())
+    expect(read).toHaveBeenCalledWith(null, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/chat', { args: { botId: null, sessionId: 'other' } }, signal)).rejects.toThrow()
+    await expect(executor.execute('bot', { args: { endpoint: 'state' } }, signal)).rejects.toThrow('endpoint denied')
+    read.mockResolvedValueOnce({ revision: 4, defaultBotId: 'z', bot: { botId: 'other', actorRef: 'deepseek-bot:other', displayName: 'Other', sessionId: 's' } })
+    await expect(executor.execute('bot/chat', { args: { botId: null } }, signal)).rejects.toThrow('invalid_bot_chat_result')
+    await expect(new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+      .execute('bot/chat', { args: { botId: null } }, signal)).rejects.toThrow()
+  })
+  it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
+    const read = vi.fn(async () => null)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)
+    const controller = new AbortController()
+    await expect(executor.execute('bot/chat', { args: { botId: null } }, controller.signal)).resolves.toBeNull()
+    controller.abort()
+    await expect(executor.execute('bot/chat', { args: { botId: null } }, controller.signal)).rejects.toThrow()
+    expect(read).toHaveBeenCalledOnce()
+    const late = new AbortController()
+    const delayed = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], async () => {
+      late.abort(); return { revision: 0, defaultBotId: null, bot: null }
+    })
+    await expect(delayed.execute('bot/chat', { args: { botId: null } }, late.signal)).rejects.toThrow()
+  })
   it.each(['close', 'write-failure', 'server-ended'])('keeps an idle private stream alive and releases its timer on settlement (%s)', async (settlement) => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     const token = 'A'.repeat(43)

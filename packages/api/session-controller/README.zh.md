@@ -93,6 +93,8 @@ Client 的首次 `follow`、重连首屏与 `loadOlder()` 至少请求 50 条以
 
 针对 REQ-20261020-0010，`GroupInputGate` 在同步的 `agent/pre-inbox` 事件中读取 Workspace 注册表的本地群栅栏，拒绝发给原 Session 的用户消息。`prompt` 还会在 request ID 重试判断之前，以及异步附件准入之后检查栅栏；`updateQueue` 拒绝经旧入口编辑、移除或转向队列内容。Source/root 捕获及其分析调用会向栅栏准入报告在途活动，并在栅栏生效后拒绝新调用；root 从 Source 提交到汇总提交期间持续视为活动。栅栏准入会折叠原 Session 的持久 inbox 事件；只要任一队列还有输入，就拒绝安装栅栏。可信 Host 和 Slark 激活协议仍须对账这些输入，然后才能重试激活。
 
+拥有会话发送权限的业务方在打开会话前调用 `ctx.sessions.registerPromptRoute(sessionId, send)`。原有 Conversation 保留输入框、草稿、历史与请求 ID，由注册的路由执行业务准入。只有从未注册的身份使用普通会话提示词端点。撤销路由会取消其待处理调用，并在当前页面生命周期内阻止该身份回退；后续注册可替换已撤销的所有者。参见[发送方所有权决策](../../../.agents/notes/implemented/architecture/2026-10-29-session-prompt-routes.zh.md)。
+
 <a id="client-references"></a>
 
 ## Client 引用

@@ -1,4 +1,5 @@
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
 import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
@@ -11,6 +12,7 @@ import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJo
 import type { Branded } from '@deepseek-ai/dsh-brand'
 import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
 import type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
+import type { SkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -559,6 +561,27 @@ export interface ProfileSkillHubBindingResult {
     readonly challengeId: string
     readonly signature: string
   }
+}
+
+/** Ask the current Host/Profile grant to sign one Server-resolved private Bot message actor. */
+export interface ProfileSkillHubBotMessageActorRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly input: SkillHubBotMessageActorInput
+  }
+}
+
+/** Compact EdDSA JWS signed only by the current installation key. */
+export interface ProfileSkillHubBotMessageActorResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly result: { readonly compact_jws: string }
 }
 
 /** Fixed package coordinates carried with every Host-controlled ZIP fragment. */
@@ -1892,6 +1915,14 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.chat.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotChatSubmission }
+  | { readonly operation: 'bot.chat.receipt'
+    readonly command_id: HostControlRequestId
+    readonly request: HostBotChatSubmission }
   | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
   | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
   | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
@@ -2032,7 +2063,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'bot/chat' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
@@ -2292,6 +2323,8 @@ export interface ProfileModelClaimRetryResult {
 export type HostControlFrame =
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubBindingResult
+  | ProfileSkillHubBotMessageActorRequest
+  | ProfileSkillHubBotMessageActorResult
   | ProfileSkillHubPackageChunkRequest
   | ProfileSkillHubPackageChunkResult
   | ProfileSkillHubPackageRequest

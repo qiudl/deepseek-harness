@@ -2795,3 +2795,15 @@ it('YAML-loaded browser composer exposes no native call without a native capabil
   const f = await bench()
   expect(f.ctx.slots.entries('conversation.input.right')).toEqual([])
 })
+
+for (const withCall of [false, true]) {
+  it(`YAML-loaded composer binds advertised dictation ${withCall ? 'with' : 'without'} native calls`, async () => {
+    const start = vi.fn(async () => {}), dictate = vi.fn(async () => 'native draft')
+    const f = await bench(false, true, false, false, true, false, undefined, undefined,
+      { dictate, ...(withCall ? { duetStart: start } : {}) })
+    const entry = f.ctx.slots.entries('conversation.input.right').find(item => item.options.id === 'slark-native-duet')
+    if (!entry?.inject) throw Error('missing native dictation action')
+    expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toEqual({ dictate, ...(withCall ? { start } : {}) })
+    expect(f.prompt).not.toHaveBeenCalled()
+  })
+}

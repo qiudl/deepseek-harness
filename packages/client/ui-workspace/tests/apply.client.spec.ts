@@ -53,6 +53,7 @@ const workspaceState = (
 
 async function bench() {
   const ctx = new Context()
+  ctx.provide('connection', { isRemoteHost: false })
   ctx.provide('shortcuts', { register: () => () => {}, catalog: createSnapshotStore([]) })
   ctx.provide('uiConversation', {})
   await ctx.plugin(SlotRegistry).await()
@@ -201,7 +202,7 @@ describe('ui-workspace apply', () => {
 
   it('declares the services it drives', () => {
     expect(inject).toEqual([
-      'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts',
+      'connection', 'slots', 'sessions', 'workspaces', 'locale', 'remote', 'remote.directoryPicker', 'layout', 'shortcuts',
     ])
   })
 

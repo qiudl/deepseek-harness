@@ -82,6 +82,7 @@ function fakeSessions(ctx: Context): { sessions: ISessions; binding: SessionBind
     [Symbol.dispose]() {},
   }
   const sessions: ISessions = {
+    registerPromptRoute: () => { throw new Error('unused prompt route') },
     discussionRequestId: collaborationDiscussionRequestId,
     list,
     searchResultLimit: 50,
