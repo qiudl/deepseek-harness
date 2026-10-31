@@ -409,6 +409,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         clock,
         runtimeGeneration: config.runtimeGeneration,
         verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
+        verifySlarkAccountAccessToken: (token, expected) => accountAccessVerifier.verifySlarkFederated(token, expected),
         activateProfileView: profileId => workers.activate(profileId),
         ensureProfileWorker: ensureWorker,
       })

@@ -1,12 +1,221 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
-import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { dirname, join, relative } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
+import { parseDocument } from 'yaml'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+
+const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
+const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, fstatCalls: 0,
+  archiveFd: -1, installError: false }))
+const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0,
+  invalidDependenciesAt: 0, unknownDependenciesAt: 0, nullDuringPrepareBaseline: false }))
+const targetLockFaults = vi.hoisted(() => ({ replacement: '', at: 0, calls: 0 }))
+const runPnpmFaults = vi.hoisted(() => ({ removeResolvedAfterFrozen: false }))
+const layerSyncFaults = vi.hoisted(() => ({ removeModulesAfterReceiptSync: false, armed: false }))
+const resolutionSyncFaults = vi.hoisted(() => ({ mode: 'none' as 'none' | 'remove' | 'rewrite', armed: false }))
+const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
+const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
+const isolatedReadFaults = vi.hoisted(() => new Map<string, {
+  calls: number
+  at: number
+  mode: 'throw' | 'changed'
+}>())
+const isolatedStageFaults = vi.hoisted(() => ({ missingAt: 0, removeSandboxAt: 0, calls: 0 }))
+const isolatedInspectFaults = vi.hoisted(() => ({ missingAt: 0, calls: 0 }))
+vi.mock('../src/private-file-io.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/private-file-io.ts')>()
+  return { ...actual, readOwnerPrivateFile: (...args: Parameters<typeof actual.readOwnerPrivateFile>) => {
+    const bytes = actual.readOwnerPrivateFile(...args)
+    const fault = isolatedReadFaults.get(args[0])
+    if (fault && ++fault.calls === fault.at) {
+      if (fault.mode === 'changed') return Buffer.from('changed staged bytes')
+      throw args[3]()
+    }
+    return bytes
+  } }
+})
+vi.mock('../src/profile-import-plugin-stage.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-stage.ts')>()
+  return { ...actual, inspectStagedProfileImportPluginArchives: async (
+    ...args: Parameters<typeof actual.inspectStagedProfileImportPluginArchives>
+  ) => {
+    const stage = await actual.inspectStagedProfileImportPluginArchives(...args)
+    if (isolatedStageFaults.missingAt || isolatedStageFaults.removeSandboxAt) {
+      isolatedStageFaults.calls += 1
+      if (isolatedStageFaults.calls === isolatedStageFaults.missingAt) return null
+      if (isolatedStageFaults.calls === isolatedStageFaults.removeSandboxAt) {
+        const input = args[0]
+        await (await import('node:fs/promises')).rm(
+          `${input.target.profileRoot}/profile-import-plugin-install/${input.operationId}`,
+          { recursive: true, force: true })
+      }
+    }
+    return stage
+  } }
+})
+vi.mock('../src/profile-import-plugin-isolated-install.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-isolated-install.ts')>()
+  return { ...actual, inspectIsolatedProfileImportPluginInstall: async (
+    ...args: Parameters<typeof actual.inspectIsolatedProfileImportPluginInstall>
+  ) => {
+    isolatedInspectFaults.calls += 1
+    if (isolatedInspectFaults.calls === isolatedInspectFaults.missingAt) return null
+    return actual.inspectIsolatedProfileImportPluginInstall(...args)
+  }, runPnpm: async (...args: Parameters<typeof actual.runPnpm>) => {
+    await actual.runPnpm(...args)
+    if (runPnpmFaults.removeResolvedAfterFrozen && args[0].frozen
+      && args[0].sandboxRoot.endsWith('/target-merge')) {
+      await (await import('node:fs/promises')).rm(args[0].sandboxRoot, { recursive: true, force: true })
+    }
+  } }
+})
+vi.mock('../src/profile-import-plugin-private-dir.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-private-dir.ts')>()
+  return { ...actual, writePrivate: async (...args: Parameters<typeof actual.writePrivate>) => {
+    await actual.writePrivate(...args)
+    if (layerSyncFaults.removeModulesAfterReceiptSync && args[0].endsWith('/layer-receipt.json')) {
+      layerSyncFaults.armed = true
+    }
+    if (resolutionSyncFaults.mode !== 'none' && args[0].endsWith('/resolution-receipt.json')) {
+      resolutionSyncFaults.armed = true
+    }
+  }, syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) => {
+    await actual.syncDirectory(...args)
+    if (resolutionSyncFaults.armed && args[0].endsWith('/target-merge')) {
+      resolutionSyncFaults.armed = false
+      const fs = await import('node:fs/promises')
+      if (resolutionSyncFaults.mode === 'remove') {
+        await fs.rm(args[0], { recursive: true, force: true })
+      } else if (resolutionSyncFaults.mode === 'rewrite') {
+        const lockPath = `${args[0]}/pnpm-lock.yaml`
+        const changed = `${await fs.readFile(lockPath, 'utf8')}\n`
+        await fs.writeFile(lockPath, changed)
+        const receiptPath = `${args[0]}/resolution-receipt.json`
+        const receipt = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as Record<string, unknown>
+        const { createHash: hash } = await import('node:crypto')
+        await fs.writeFile(receiptPath, `${JSON.stringify({ ...receipt,
+          lockfileDigest: hash('sha256').update(changed).digest('hex') })}\n`)
+      }
+    }
+    if (layerSyncFaults.armed && args[0].endsWith('/target-merge')) {
+      layerSyncFaults.armed = false
+      await (await import('node:fs/promises')).rm(`${args[0]}/node_modules`, { recursive: true, force: true })
+    }
+  } }
+})
+vi.mock('yaml', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('yaml')>()
+  return { ...actual, parseDocument: (...args: Parameters<typeof actual.parseDocument>) => {
+    if (args[0] === 'throw-parser') throw Error('parser fault')
+    return actual.parseDocument(...args)
+  } }
+})
+vi.mock('../src/bundled-plugin-recovery.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/bundled-plugin-recovery.ts')>()
+  return { ...actual, verifyCopiedBundledPlugin: async (
+    ...args: Parameters<typeof actual.verifyCopiedBundledPlugin>
+  ) => {
+    if (trustVerifyFaults.failSecond && ++trustVerifyFaults.calls === 2) throw Error('later verification failed')
+    return actual.verifyCopiedBundledPlugin(...args)
+  } }
+})
+vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/posix-extension-files.ts')>()
+  return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
+    const value = actual.readExtensionStateFile(...args)
+    if (trustManifestFaults.nullDuringPrepareBaseline
+      && args[0].endsWith('/profiles/web/package.json')
+      && new Error().stack?.includes('prepareBaseline')) return null
+    if (args[0].endsWith('/profiles/web/pnpm-lock.yaml') && targetLockFaults.at) {
+      targetLockFaults.calls += 1
+      if (targetLockFaults.calls === targetLockFaults.at) return targetLockFaults.replacement
+    }
+    if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt
+      || trustManifestFaults.changedAt || trustManifestFaults.invalidDependenciesAt
+      || trustManifestFaults.unknownDependenciesAt)) {
+      trustManifestFaults.count += 1
+      if (trustManifestFaults.count === trustManifestFaults.nullAt) return null
+      if (trustManifestFaults.count === trustManifestFaults.changedAt) return `${value} `
+      if (trustManifestFaults.count === trustManifestFaults.invalidDependenciesAt) {
+        return JSON.stringify({ dependencies: [] })
+      }
+      if (trustManifestFaults.count === trustManifestFaults.unknownDependenciesAt) {
+        return JSON.stringify({ dependencies: { 'unknown-plugin': '1.0.0' } })
+      }
+    }
+    return value
+  } }
+})
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (path: string, flags: number, mode?: number) => {
+      const fd = actual.openSync(path, flags, mode)
+      if (trustFsFaults.changedStat && path.endsWith('.tgz')) trustFsFaults.archiveFd = fd
+      return fd
+    },
+    readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => {
+      if (trustFsFaults.shortRead) { trustFsFaults.shortRead = false; return 0 }
+      return actual.readSync(fd, buffer, offset, length, position)
+    },
+    fstatSync: (fd: number) => {
+      const stat = actual.fstatSync(fd)
+      if (trustFsFaults.changedStat && fd === trustFsFaults.archiveFd && ++trustFsFaults.fstatCalls === 2) {
+        return Object.assign(stat, { mtimeMs: stat.mtimeMs + 1 })
+      }
+      return stat
+    },
+    lstatSync: (path: string) => {
+      if (trustFsFaults.installError && path.endsWith('/node_modules/fixture-plugin')) {
+        throw Object.assign(new Error('installation access denied'), { code: 'EACCES' })
+      }
+      return actual.lstatSync(path)
+    },
+  }
+})
+vi.mock('../src/profile-import-plugin-plan.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-plan.ts')>()
+  return { ...actual, planSelectedProfileImportPlugins: async (
+    input: Parameters<typeof actual.planSelectedProfileImportPlugins>[0],
+  ) => {
+    const plan = await actual.planSelectedProfileImportPlugins(input)
+    return stageFaults.invalidDigest ? { ...plan, plugins: plan.plugins.map(plugin => ({ ...plugin,
+      archiveDigest: 'invalid' })) } : plan
+  } }
+})
 import { verifyCopiedBundledPlugin } from '../src/bundled-plugin-recovery.ts'
+import { compareProfileImportInventory, inspectProfileImportInventory } from '../src/profile-import-preview.ts'
+import { inspectProfileImportPluginArchives, lockfileResolutionMatches } from '../src/profile-import-plugin-trust.ts'
+import { planSelectedProfileImportPlugins } from '../src/profile-import-plugin-plan.ts'
+import { inspectStagedProfileImportPluginArchives, stageSelectedProfileImportPluginArchives } from '../src/profile-import-plugin-stage.ts'
+import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
+import { inspectIsolatedProfileImportPluginInstall, installStagedProfileImportPluginsInIsolation } from '../src/profile-import-plugin-isolated-install.ts'
+import { planProfileImportPluginTargetManifest } from '../src/profile-import-plugin-target-manifest.ts'
+import { inspectResolvedProfileImportTargetPluginsInIsolation, resolveProfileImportTargetPluginsInIsolation } from '../src/profile-import-plugin-target-resolution.ts'
+import { inspectResolvedProfileImportTargetPluginLayer, installResolvedProfileImportTargetPlugins } from '../src/profile-import-plugin-target-install.ts'
+import { inspectProfileImportPluginComposition } from '../src/profile-import-plugin-composition.ts'
+import { fingerprintProfileImportPluginWeb, inspectProfileImportPluginDirectoryState,
+  inspectStagedProfileImportPluginPublishCandidate,
+  planProfileImportPluginPublish,
+  stageProfileImportPluginPublishCandidate } from '../src/profile-import-plugin-publish-plan.ts'
+import { FileProfileImportPluginPublishJournal,
+  inspectProfileImportPluginPublishRecovery } from '../src/profile-import-plugin-publish-journal.ts'
+import { publishProfileImportPluginLayer, publishProfileImportPluginLayerAndCommitSession,
+  rollbackProfileImportPluginLayer, rollbackProfileImportPluginLayerAndAbortSession } from '../src/profile-import-plugin-publisher.ts'
+import { acquireSingleHostLock } from '../src/single-instance.ts'
+import { inspectPreparedProfileImportPlugins,
+  prepareSelectedProfileImportPlugins } from '../src/profile-import-plugin-preparation.ts'
+import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
+import { stageSelectedProfileImportSessions } from '../src/profile-import-stage.ts'
+import { ProfileImportSessionCoordinator } from '../src/profile-import-session-coordinator.ts'
+import { FileProfileImportCandidateLease } from '../src/profile-import-candidate-lease.ts'
+import { FileProfileImportRuntimePatch } from '../src/profile-import-runtime-patch.ts'
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -33,7 +242,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return entries
   }
-  return { ...actual, open, readdir }
+  const mkdir = async (...args: Parameters<typeof actual.mkdir>) => {
+    if (isolatedMkdirFaults.has(String(args[0]))) throw Object.assign(Error('mkdir denied'), { code: 'EACCES' })
+    return actual.mkdir(...args)
+  }
+  return { ...actual, open, readdir, mkdir }
 })
 import {
   FileOwnerJsonlMigrationGenerationTarget,
@@ -117,7 +330,14 @@ const bundledFiles = {
   'node_modules/nested/index.js': 'export const nested = true\n',
 }
 
-async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withNewerVersion = false) {
+const runtimeBundledFiles = { ...bundledFiles,
+  'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0',
+    bundledDependencies: ['nested'], dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+  'cordis.patch.yml': '- insert:\n    - id: fixture-entry\n      name: fixture-plugin\n',
+}
+
+async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withNewerVersion = false,
+  entryIds: string[] = []) {
   const value = await fixture()
   const installed = join(value.web, 'node_modules', 'fixture-plugin')
   await unlink(installed)
@@ -136,7 +356,7 @@ async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withN
   const digest = createHash('sha256').update(await readFile(archive)).digest('hex')
   const historical = {
     name: 'fixture-plugin', version: '1.0.0', file: 'fixture.tgz', sha256: digest,
-    repository: 'https://example.com/fixture', sourceSha: 'a'.repeat(40), entryIds: [],
+    repository: 'https://example.com/fixture', sourceSha: 'a'.repeat(40), entryIds,
   }
   let newer: typeof historical | undefined
   if (withNewerVersion) {
@@ -162,6 +382,59 @@ async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withN
 
 function verifyBundle(value: Awaited<ReturnType<typeof bundledFixture>>) {
   return verifyCopiedBundledPlugin(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!, value.web, uid)
+}
+
+async function pluginPlanFixture(runtime = false) {
+  const source = await bundledFixture(undefined, runtime ? runtimeBundledFiles : bundledFiles,
+    false, runtime ? ['fixture-entry'] : [])
+  const target = await fixture()
+  await writeFile(join(target.web, 'package.json'), JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }))
+  await unlink(join(target.web, 'node_modules', 'fixture-plugin'))
+  const spec = bundledDependencySpec(source.digest)
+  const key = `fixture-plugin@${spec}`
+  const integrity = `sha512-${createHash('sha512').update(await readFile(source.archive)).digest('base64')}`
+  await writeFile(join(source.web, 'pnpm-lock.yaml'), 'lockfileVersion: \'9.0\'\n'
+    + `importers:\n  .:\n    dependencies:\n      fixture-plugin:\n        specifier: ${JSON.stringify(spec)}\n`
+    + `        version: ${JSON.stringify(spec)}\npackages:\n  ${JSON.stringify(key)}:\n`
+    + `    resolution:\n      integrity: ${integrity}\n      tarball: ${JSON.stringify(spec)}\n`
+    + `    version: 1.0.0\nsnapshots:\n  ${JSON.stringify(key)}: {}\n`, { mode: 0o600 })
+  const sourceProfileId = randomUUID(); const targetProfileId = randomUUID(); const operationId = randomUUID()
+  const markers = new Map<string, Buffer>()
+  const fence = new ProfileImportWorkerFence({ read: id => markers.get(id),
+    replace: (id, bytes) => { markers.set(id, bytes) } })
+  fence.reservePair(sourceProfileId, targetProfileId, operationId)
+  const sourceProfile = { profileId: sourceProfileId, profileRoot: source.profileRoot, target: source.target }
+  const targetProfile = { profileId: targetProfileId, profileRoot: target.profileRoot, target: target.target }
+  const inspect = async () => compareProfileImportInventory(
+    await inspectProfileImportInventory({ ...sourceProfile, uid }),
+    await inspectProfileImportInventory({ ...targetProfile, uid }))
+  const preview = await inspect()
+  const input = { source: sourceProfile, target: targetProfile, uid, operationId, fence,
+    catalog: source.catalog, expectedPreviewDigest: preview.previewDigest,
+    selectedPluginNames: ['fixture-plugin'], composedEntryIds: () => new Set<string>(),
+    assertQuiescent: async () => {} }
+  return { source, target, input, inspect }
+}
+
+async function fencedPluginArchiveFixture() {
+  stageFaults.invalidDigest = false
+  const value = await pluginPlanFixture()
+  const plan = await planSelectedProfileImportPlugins(value.input)
+  const journal = new FileProfileImportOperationJournal(
+    join(value.target.profileRoot, 'profile-import-journal'), uid)
+  const targetInventory = await inspectProfileImportInventory({ profileRoot: value.target.profileRoot,
+    target: value.target.target, uid })
+  const prepared = await journal.create({ operationId: value.input.operationId,
+    sourceProfileId: value.input.source.profileId, targetProfileId: value.input.target.profileId,
+    sourceSnapshotDigest: plan.sourceSnapshotDigest, targetSnapshotDigest: plan.targetSnapshotDigest,
+    previewDigest: plan.previewDigest, selectedSessionIds: [], selectedPluginNames: ['fixture-plugin'],
+    targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1 })
+  await journal.advance(prepared, 'fenced')
+  const input = { ...value.input, journal, plan }
+  const recovery = { target: value.input.target, sourceProfileId: value.input.source.profileId,
+    uid, operationId: value.input.operationId, fence: value.input.fence, journal,
+    catalog: value.input.catalog, plan }
+  return { value, plan, journal, input, recovery }
 }
 
 function unsafeArchive(path: string, type: 'File' | 'SymbolicLink' | 'CharacterDevice' | 'ExtendedHeader' = 'File', size = 1, includeBase = true): Buffer {
@@ -198,6 +471,23 @@ async function treeInventory(root: string): Promise<unknown[]> {
 }
 
 describe('offline Profile existing-only inspector', () => {
+  it('rejects the POSIX-only target plugin resolver and installer on Windows before touching Profile files', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation(
+        {} as Parameters<typeof resolveProfileImportTargetPluginsInIsolation>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(
+        {} as Parameters<typeof inspectResolvedProfileImportTargetPluginsInIsolation>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(installResolvedProfileImportTargetPlugins(
+        {} as Parameters<typeof installResolvedProfileImportTargetPlugins>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(inspectResolvedProfileImportTargetPluginLayer(
+        {} as Parameters<typeof inspectResolvedProfileImportTargetPluginLayer>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+    } finally { platform.mockRestore() }
+  })
   async function releasedEmptyProfile() {
     const value = await fixture()
     await rm(join(value.web, 'node_modules'), { recursive: true })
@@ -214,6 +504,15 @@ describe('offline Profile existing-only inspector', () => {
     const inspected = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
     expect(inspected).toMatchObject({ state: 'recoverable', compatibility: 'current', pluginCount: 0 })
     await value.inspector.prepareConfirmedProfile(profile(), inspected)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('previews the released empty-plugin Profile with installation-owned web bundles', async () => {
+    const value = await releasedEmptyProfile()
+    const before = await treeInventory(value.profileRoot)
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    expect(inventory.plugins).toEqual([])
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   })
 
@@ -306,6 +605,1630 @@ describe('offline Profile existing-only inspector', () => {
     await expect(readFile(join(value.profileRoot, 'runtime-compat', 'journals', `${inspected.preflightDigest}.json`)))
       .rejects.toMatchObject({ code: 'ENOENT' })
     expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('proves copied legacy installation bytes for import, and rejects later tampering', async () => {
+    const value = await bundledFixture()
+    const before = await treeInventory(value.profileRoot)
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot, target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    expect(await inspectProfileImportPluginArchives(input)).toEqual([
+      { name: 'fixture-plugin', status: 'installed_verified', archiveDigest: value.digest,
+        lockfileResolutionVerified: false },
+    ])
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+    await writeFile(join(value.installed, 'index.js'), 'tampered', { mode: 0o600 })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32').each(['hardlink', 'symlink', 'group-writable', 'empty'] as const)
+  ('rejects an unsafe historical plugin archive before import: %s', async (fault) => {
+    const value = await bundledFixture()
+    const archive = join(value.web, '.bundled-plugins', `${value.digest}.tgz`)
+    if (fault === 'hardlink' || fault === 'symlink') {
+      const retained = join(value.hostRoot, 'retained-archive.tgz')
+      await rename(archive, retained)
+      if (fault === 'hardlink') await link(retained, archive)
+      else await symlink(retained, archive)
+    }
+    if (fault === 'group-writable') await chmod(archive, 0o666)
+    if (fault === 'empty') await writeFile(archive, Buffer.alloc(0))
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot,
+      target: value.target, uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }))
+      .rejects.toThrow('profile_import_plugin_archive_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a historical archive changed between initial proof and final recheck', async () => {
+    const value = await bundledFixture()
+    await rm(value.installed, { recursive: true })
+    const archive = join(value.web, '.bundled-plugins', `${value.digest}.tgz`)
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const readArchive = value.catalog.readArchive.bind(value.catalog)
+    vi.spyOn(value.catalog, 'readArchive').mockImplementationOnce((plugin) => {
+      const bytes = readArchive(plugin)
+      writeFileSync(archive, 'changed after proof')
+      return bytes
+    })
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot,
+      target: value.target, uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }))
+      .rejects.toThrow('profile_import_plugin_archive_changed')
+  })
+
+  it('plans only an installed archive with a matching direct lockfile resolution without writing either Profile', async () => {
+    const value = await pluginPlanFixture()
+    const beforeSource = await treeInventory(value.source.profileRoot)
+    const beforeTarget = await treeInventory(value.target.profileRoot)
+    expect(await planSelectedProfileImportPlugins(value.input)).toMatchObject({
+      plugins: [{ name: 'fixture-plugin', version: '1.0.0', archiveDigest: value.source.digest, entryIds: [] }],
+    })
+    expect(await treeInventory(value.source.profileRoot)).toEqual(beforeSource)
+    expect(await treeInventory(value.target.profileRoot)).toEqual(beforeTarget)
+  })
+
+  it('rejects empty, repeated, or oversized plugin selections before reading either Profile', async () => {
+    const value = await pluginPlanFixture()
+    for (const selectedPluginNames of [[], ['fixture-plugin', 'fixture-plugin'],
+      Array.from({ length: 129 }, (_, index) => `plugin-${index}`)]) {
+      await expect(planSelectedProfileImportPlugins({ ...value.input, selectedPluginNames }))
+        .rejects.toThrow('profile_import_plugin_selection_invalid')
+    }
+  })
+
+  it('rejects a selected plugin whose entry conflicts with the target composition', async () => {
+    const value = await pluginPlanFixture(true)
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      composedEntryIds: () => new Set(['fixture-entry']) }))
+      .rejects.toThrow('profile_import_plugin_entry_conflict')
+  })
+
+  it('rejects an unlisted target dependency and an unlisted installed tree occupying the plugin name', async () => {
+    const value = await pluginPlanFixture()
+    await writeFile(join(value.target.web, 'package.json'), JSON.stringify({ dependencies: {},
+      devDependencies: { 'fixture-plugin': '1.0.0' }, dsh: { profile: { bundles: [] } } }))
+    const occupied = { ...value.input, expectedPreviewDigest: (await value.inspect()).previewDigest }
+    await expect(planSelectedProfileImportPlugins(occupied)).rejects.toThrow('profile_import_plugin_target_conflict')
+    await writeFile(join(value.target.web, 'package.json'), JSON.stringify({ dependencies: {},
+      dsh: { profile: { bundles: [] } } }))
+    await mkdir(join(value.target.web, 'node_modules', 'fixture-plugin'))
+    const installed = { ...value.input, expectedPreviewDigest: (await value.inspect()).previewDigest }
+    await expect(planSelectedProfileImportPlugins(installed)).rejects.toThrow('profile_import_plugin_target_conflict')
+  })
+
+  it('rejects malformed extra dependency declarations during plugin selection', async () => {
+    const value = await pluginPlanFixture()
+    const targetPath = join(value.target.web, 'package.json')
+    const targetManifest = await readFile(targetPath)
+    await writeFile(targetPath, JSON.stringify({ dependencies: {}, devDependencies: [],
+      dsh: { profile: { bundles: [] } } }))
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      expectedPreviewDigest: (await value.inspect()).previewDigest }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+    await writeFile(targetPath, targetManifest)
+    const sourcePath = join(value.source.web, 'package.json')
+    const sourceManifest = JSON.parse(await readFile(sourcePath, 'utf8')) as Record<string, unknown>
+    await writeFile(sourcePath, JSON.stringify({ ...sourceManifest, peerDependencies: { peer: 42 } }))
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      expectedPreviewDigest: (await value.inspect()).previewDigest }))
+      .rejects.toThrow('profile_import_manifest_invalid')
+  })
+
+  it('rejects stale previews and missing direct lockfile evidence', async () => {
+    const value = await pluginPlanFixture()
+    await expect(planSelectedProfileImportPlugins({ ...value.input, expectedPreviewDigest: 'f'.repeat(64) }))
+      .rejects.toThrow('profile_import_inventory_changed')
+    await writeFile(join(value.source.web, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n')
+    await expect(planSelectedProfileImportPlugins({ ...value.input,
+      expectedPreviewDigest: (await value.inspect()).previewDigest }))
+      .rejects.toThrow('profile_import_plugin_source_unverified')
+  })
+
+  it('binds target plugin policy and patch state even when the import inventory is unchanged', async () => {
+    const value = await pluginPlanFixture()
+    const before = await planSelectedProfileImportPlugins(value.input)
+    await writeFile(join(value.target.web, '.npmrc'), 'ignore-scripts=true\n', { mode: 0o600 })
+    expect((await value.inspect()).previewDigest).toBe(before.previewDigest)
+    const after = await planSelectedProfileImportPlugins(value.input)
+    expect(after.targetPluginStateDigest).not.toBe(before.targetPluginStateDigest)
+  })
+
+  it('plans an additive target manifest while retaining existing dependency and bundle order', async () => {
+    const value = await pluginPlanFixture()
+    const current = { name: 'target', private: true, note: { keep: 1 },
+      dependencies: { 'baseline-plugin': '1.2.3' },
+      dsh: { note: 'keep', profile: { patchReload: 'restart', bundles: ['baseline-plugin'] } } }
+    const path = join(value.target.web, 'package.json')
+    await writeFile(path, JSON.stringify(current))
+    const input = { ...value.input, expectedPreviewDigest: (await value.inspect()).previewDigest }
+    const plan = await planSelectedProfileImportPlugins(input)
+    const before = await readFile(path)
+    const merged = await planProfileImportPluginTargetManifest({ ...input, plan })
+    expect(JSON.parse(merged.nextManifest)).toEqual({ ...current,
+      dependencies: { ...current.dependencies, 'fixture-plugin': bundledDependencySpec(value.source.digest) },
+      dsh: { ...current.dsh, profile: { ...current.dsh.profile,
+        bundles: ['baseline-plugin', 'fixture-plugin'] } } })
+    expect(merged.addedBundleNames).toEqual(['fixture-plugin'])
+    expect(await readFile(path)).toEqual(before)
+    await writeFile(join(value.target.web, '.npmrc'), 'changed=true\n')
+    await expect(planProfileImportPluginTargetManifest({ ...input, plan }))
+      .rejects.toThrow('profile_import_plugin_target_plan_changed')
+  })
+
+  it('rejects target resolver settings and undeclared dependency classes before plugin installation', async () => {
+    const value = await pluginPlanFixture()
+    const path = join(value.target.web, 'package.json')
+    const baseline = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>
+    const unsafeFields: Record<string, unknown>[] = [
+      { devDependencies: { extra: 'file:../../outside' } },
+      { optionalDependencies: { extra: 'file:../../outside' } },
+      { peerDependencies: { extra: 'file:../../outside' } },
+      { pnpm: { overrides: { extra: 'file:../../outside' } } },
+      { resolutions: { extra: 'file:../../outside' } },
+      { overrides: { extra: 'file:../../outside' } },
+    ]
+    for (const unsafe of unsafeFields) {
+      await writeFile(path, JSON.stringify({ ...baseline, ...unsafe }))
+      const input = { ...value.input, expectedPreviewDigest: (await value.inspect()).previewDigest }
+      const plan = await planSelectedProfileImportPlugins(input)
+      await expect(planProfileImportPluginTargetManifest({ ...input, plan }))
+        .rejects.toThrow('profile_import_plugin_target_policy_unsupported')
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('resolves selected plugins beside an existing catalog-backed target plugin without changing live files', async () => {
+    const value = await pluginPlanFixture(true)
+    const baselineSource = join(value.target.hostRoot, 'baseline-source')
+    await mkdir(join(baselineSource, 'package'), { recursive: true })
+    await writeFile(join(baselineSource, 'package', 'package.json'),
+      JSON.stringify({ name: 'baseline-plugin', version: '1.0.0',
+        dsh: { bundle: { patch: './cordis.patch.yml' } } }))
+    await writeFile(join(baselineSource, 'package', 'index.js'), 'export const baseline = true\n')
+    await writeFile(join(baselineSource, 'package', 'cordis.patch.yml'),
+      '- insert:\n    - id: baseline-entry\n      name: baseline-plugin\n')
+    const baselineArchive = join(value.target.hostRoot, 'baseline.tgz')
+    await createArchive({ gzip: true, cwd: baselineSource, file: baselineArchive }, ['package'])
+    const baselineBytes = await readFile(baselineArchive)
+    const baselineDigest = createHash('sha256').update(baselineBytes).digest('hex')
+    const catalogRoot = join(value.source.hostRoot, 'bundled')
+    const catalogPath = join(catalogRoot, 'catalog.v1.json')
+    const catalogJson = JSON.parse(await readFile(catalogPath, 'utf8')) as { plugins: unknown[] }
+    catalogJson.plugins.push({ name: 'baseline-plugin', version: '1.0.0', file: 'baseline.tgz',
+      sha256: baselineDigest, repository: 'https://example.com/baseline',
+      sourceSha: 'b'.repeat(40), entryIds: ['baseline-entry'] })
+    await writeFile(catalogPath, JSON.stringify(catalogJson))
+    await writeFile(join(catalogRoot, 'baseline.tgz'), baselineBytes)
+    const catalog = BundledPluginCatalog.load(catalogRoot, uid)
+    const targetArchives = join(value.target.web, '.bundled-plugins')
+    await mkdir(targetArchives, { mode: 0o700 })
+    await writeFile(join(targetArchives, `${baselineDigest}.tgz`), baselineBytes, { mode: 0o600 })
+    const baselineSpec = bundledDependencySpec(baselineDigest)
+    await writeFile(join(value.target.web, 'package.json'), JSON.stringify({ name: 'target', private: true,
+      dependencies: { 'baseline-plugin': baselineSpec },
+      dsh: { profile: { bundles: ['baseline-plugin'] } } }))
+    await writeFile(join(value.target.web, 'pnpm-workspace.yaml'),
+      'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+    await writeFile(join(value.target.web, 'cordis.patch.yml'), '[]\n')
+    await writeFile(join(value.target.web, 'compatibility.json'), '{}\n')
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    const targetInstall = spawnSync(process.execPath, [pnpmEntrypointPath, 'install', '--offline',
+      '--ignore-scripts', '--package-import-method=copy', '--store-dir', join(value.target.hostRoot, 'store')],
+    { cwd: value.target.web, encoding: 'utf8' })
+    expect(targetInstall.status, targetInstall.stderr).toBe(0)
+    expect((await lstat(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js'))).nlink).toBe(1)
+    expect((await lstat(join(value.target.web, 'node_modules', 'baseline-plugin', 'package.json'))).nlink).toBe(1)
+    const targetManifestBefore = await readFile(join(value.target.web, 'package.json'))
+    const targetLockBefore = await readFile(join(value.target.web, 'pnpm-lock.yaml'))
+    const baselineInstalledBefore = await readFile(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js'))
+    const input = { ...value.input, catalog, expectedPreviewDigest: (await value.inspect()).previewDigest }
+    const plan = await planSelectedProfileImportPlugins(input)
+    const manifestPlan = await planProfileImportPluginTargetManifest({ ...input, plan })
+    const journal = new FileProfileImportOperationJournal(
+      join(value.target.profileRoot, 'profile-import-journal'), uid)
+    const targetInventory = await inspectProfileImportInventory({ profileRoot: value.target.profileRoot,
+      target: value.target.target, uid })
+    const prepared = await journal.create({ operationId: input.operationId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId,
+      sourceSnapshotDigest: plan.sourceSnapshotDigest, targetSnapshotDigest: plan.targetSnapshotDigest,
+      previewDigest: plan.previewDigest, selectedSessionIds: [], selectedPluginNames: ['fixture-plugin'],
+      targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1 })
+    const fenced = await journal.advance(prepared, 'fenced')
+    await stageSelectedProfileImportPluginArchives({ ...input, journal, plan })
+    await installStagedProfileImportPluginsInIsolation({ target: input.target,
+      sourceProfileId: input.source.profileId, uid, operationId: input.operationId,
+      fence: input.fence, journal, catalog, plan, nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    const resolutionInput = { ...input, journal, plan, manifestPlan,
+      signal: new AbortController().signal }
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toBeNull()
+    await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    const baselineSourceArchivePath = join(targetArchives, `${baselineDigest}.tgz`)
+    const targetMergeRoot = join(value.target.profileRoot, 'profile-import-plugin-install',
+      input.operationId, 'target-merge')
+    const targetLockDocument = parseDocument(targetLockBefore.toString())
+    expect(targetLockDocument.hasIn(['packages', `baseline-plugin@${baselineSpec}`])).toBe(true)
+    targetLockDocument.deleteIn(['packages', `baseline-plugin@${baselineSpec}`])
+    targetLockFaults.replacement = String(targetLockDocument)
+    let rejectedBaselineLock = false
+    for (let at = 1; at <= 64 && !rejectedBaselineLock; at++) {
+      targetLockFaults.calls = 0
+      targetLockFaults.at = at
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedBaselineLock = failure?.message === 'profile_import_plugin_target_resolution_invalid'
+          && !!failure.stack?.includes('targetBaseline')
+        if (!failure && targetLockFaults.calls < at) break
+      } finally {
+        targetLockFaults.at = 0
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect(rejectedBaselineLock).toBe(true)
+    isolatedInspectFaults.calls = 0
+    isolatedInspectFaults.missingAt = 1
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    } finally { isolatedInspectFaults.missingAt = 0 }
+    isolatedReadFaults.set(baselineSourceArchivePath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
+    isolatedReadFaults.set(baselineSourceArchivePath, { calls: 0, at: 1, mode: 'changed' })
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
+    const installedStage = await inspectIsolatedProfileImportPluginInstall({ target: input.target,
+      sourceProfileId: input.source.profileId, uid, operationId: input.operationId,
+      fence: input.fence, journal, catalog, plan })
+    if (!installedStage) throw Error('missing isolated stage')
+    const stagedArchivePath = join(installedStage.sandboxRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`)
+    for (const [mode, frame] of [['throw', ':221:'], ['changed', ':223:']] as const) {
+      let rejectedStageArchive = false
+      for (let at = 1; at <= 16 && !rejectedStageArchive; at++) {
+        const fault = { calls: 0, at, mode }
+        isolatedReadFaults.set(stagedArchivePath, fault)
+        try {
+          const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+            nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+            .then(() => null, (error: unknown) => error as Error)
+          rejectedStageArchive = failure?.message === 'profile_import_plugin_stage_archive_changed'
+            && !!failure.stack?.includes(frame)
+          if (!failure && fault.calls < at) break
+        } finally {
+          isolatedReadFaults.delete(stagedArchivePath)
+          await rm(targetMergeRoot, { recursive: true, force: true })
+        }
+      }
+      expect(rejectedStageArchive).toBe(true)
+    }
+    const getForDependency = catalog.getForDependency.bind(catalog)
+    const catalogDriftFailures = new Set([
+      'profile_import_plugin_target_source_unsupported',
+      'profile_import_plugin_target_archive_changed',
+      'profile_import_plugin_target_resolution_invalid',
+    ])
+    for (let at = 1; at <= 24 && catalogDriftFailures.size > 0; at++) {
+      let calls = 0
+      const lookup = vi.spyOn(catalog, 'getForDependency').mockImplementation((name, spec) => {
+        calls += 1
+        return calls === at ? undefined : getForDependency(name, spec)
+      })
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        if (failure) catalogDriftFailures.delete(failure.message)
+        if (calls < at) break
+      } finally {
+        lookup.mockRestore()
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect([...catalogDriftFailures]).toEqual([])
+    let rejectedLateIsolatedLoss = false
+    for (let at = 1; at <= 8 && !rejectedLateIsolatedLoss; at++) {
+      isolatedInspectFaults.calls = 0
+      isolatedInspectFaults.missingAt = at
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedLateIsolatedLoss = failure?.message === 'profile_import_plugin_target_plan_changed'
+          && !!failure.stack?.includes('profile-import-plugin-target-resolution.ts:267')
+        if (!failure && isolatedInspectFaults.calls < at) break
+      } finally {
+        isolatedInspectFaults.missingAt = 0
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect(rejectedLateIsolatedLoss).toBe(true)
+    for (const mode of ['remove', 'rewrite'] as const) {
+      resolutionSyncFaults.mode = mode
+      try {
+        await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+          .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+      } finally {
+        resolutionSyncFaults.mode = 'none'
+        resolutionSyncFaults.armed = false
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    const selectedCopiedArchivePath = join(targetMergeRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`)
+    for (const mode of ['throw', 'changed'] as const) {
+      isolatedReadFaults.set(selectedCopiedArchivePath, { calls: 0, at: 1, mode })
+      try {
+        await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+          .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+      } finally {
+        isolatedReadFaults.delete(selectedCopiedArchivePath)
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    const baselineModulesRoot = join(value.target.web, 'node_modules', 'baseline-plugin')
+    const linkedBaselineRoot = join(value.target.web, 'node_modules', '.pnpm',
+      `baseline-plugin@file+.bundled-plugins+${baselineDigest}.tgz`, 'node_modules', 'baseline-plugin')
+    await mkdir(dirname(linkedBaselineRoot), { recursive: true, mode: 0o700 })
+    await rm(linkedBaselineRoot, { recursive: true, force: true })
+    await rename(baselineModulesRoot, linkedBaselineRoot)
+    await symlink(relative(dirname(baselineModulesRoot), linkedBaselineRoot), baselineModulesRoot)
+    const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    await unlink(baselineModulesRoot)
+    await rename(linkedBaselineRoot, baselineModulesRoot)
+    let rejectedMissingBaselineEntry = false
+    for (let at = 1; at <= 16 && !rejectedMissingBaselineEntry; at++) {
+      let calls = 0
+      const lookup = vi.spyOn(catalog, 'getForDependency').mockImplementation((name, spec) => {
+        calls += 1
+        return calls === at ? undefined : getForDependency(name, spec)
+      })
+      try {
+        const failure = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedMissingBaselineEntry = failure?.message === 'profile_import_plugin_target_source_unsupported'
+          && !!failure.stack?.includes('verifyCopiedBaselineArchive')
+      } finally { lookup.mockRestore() }
+    }
+    expect(rejectedMissingBaselineEntry).toBe(true)
+    const rejectArchiveReadAt = async (path: string, frame: string) => {
+      let reached = false
+      for (let at = 1; at <= 16 && !reached; at++) {
+        const fault = { calls: 0, at, mode: 'throw' as const }
+        isolatedReadFaults.set(path, fault)
+        try {
+          const failure = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+            .then(() => null, (error: unknown) => error as Error)
+          reached = failure?.message.includes('profile_import_plugin_target_') === true
+            && !!failure.stack?.includes(frame)
+        } finally { isolatedReadFaults.delete(path) }
+      }
+      expect(reached).toBe(true)
+    }
+    await rejectArchiveReadAt(baselineSourceArchivePath, 'verifyCopiedBaselineArchive')
+    await rejectArchiveReadAt(join(resolved.resolutionRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`), 'profile-import-plugin-target-resolution.ts:342')
+    expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toBeNull()
+    await chmod(resolved.resolutionRoot, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_unsafe')
+    await chmod(resolved.resolutionRoot, 0o700)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      manifestPlan: { ...manifestPlan, nextManifestDigest: 'changed' } }))
+      .rejects.toThrow('profile_import_plugin_target_plan_changed')
+    const resolvedArchives = join(resolved.resolutionRoot, '.bundled-plugins')
+    await chmod(resolvedArchives, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_unsafe')
+    await chmod(resolvedArchives, 0o700)
+    const resolvedNpmrcPath = join(resolved.resolutionRoot, '.npmrc')
+    const resolvedNpmrc = await readFile(resolvedNpmrcPath)
+    await writeFile(resolvedNpmrcPath, 'ignore-scripts=false\n')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    await writeFile(resolvedNpmrcPath, resolvedNpmrc)
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    const lock = await readFile(join(resolved.resolutionRoot, 'pnpm-lock.yaml'), 'utf8')
+    expect(lock).toContain(`baseline-plugin@${baselineSpec}`)
+    expect(lock).toContain(`fixture-plugin@${bundledDependencySpec(value.source.digest)}`)
+    expect(await readFile(join(resolved.resolutionRoot, 'cordis.patch.yml'), 'utf8')).toBe('[]\n')
+    expect(await readFile(join(resolved.resolutionRoot, 'compatibility.json'), 'utf8')).toBe('{}\n')
+    const receiptPath = join(resolved.resolutionRoot, 'resolution-receipt.json')
+    const receipt = await readFile(receiptPath)
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    } finally { isolatedReadFaults.delete(receiptPath) }
+    await unlink(receiptPath)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    await writeFile(receiptPath, receipt, { mode: 0o600 })
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_plan_changed')
+    } finally { isolatedReadFaults.delete(receiptPath) }
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 2, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    } finally { isolatedReadFaults.delete(receiptPath) }
+    const mergedLockPath = join(resolved.resolutionRoot, 'pnpm-lock.yaml')
+    const extraResolution = lock.replace('packages:\n', 'packages:\n  unrelated@1.0.0:\n    version: 1.0.0\n')
+    await writeFile(mergedLockPath, extraResolution)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(extraResolution).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_changed')
+    const extraImporter = lock.replace('importers:\n', 'importers:\n  rogue:\n    dependencies: {}\n')
+    expect(extraImporter).not.toBe(lock)
+    await writeFile(mergedLockPath, extraImporter)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(extraImporter).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const obsoleteLockfile = lock.replace("lockfileVersion: '9.0'", "lockfileVersion: '8.0'")
+    expect(obsoleteLockfile).not.toBe(lock)
+    await writeFile(mergedLockPath, obsoleteLockfile)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(obsoleteLockfile).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const malformedPackages = lock.replace('packages:\n', 'packages: []\n')
+    expect(malformedPackages).not.toBe(lock)
+    await writeFile(mergedLockPath, malformedPackages)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(malformedPackages).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const arrayImporters = lock.replace(/importers:\n[\s\S]*?\npackages:/u, 'importers: []\npackages:')
+    expect(arrayImporters).not.toBe(lock)
+    await writeFile(mergedLockPath, arrayImporters)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(arrayImporters).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const arrayPackages = lock.replace(/packages:\n[\s\S]*?\nsnapshots:/u, 'packages: []\nsnapshots:')
+    expect(arrayPackages).not.toBe(lock)
+    await writeFile(mergedLockPath, arrayPackages)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(arrayPackages).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const rejectChangedLock = async (mutate: (document: ReturnType<typeof parseDocument>) => void,
+      reason: string, expectedFrame?: string) => {
+      const document = parseDocument(lock)
+      mutate(document)
+      const changed = String(document)
+      await writeFile(mergedLockPath, changed)
+      await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+        lockfileDigest: createHash('sha256').update(changed).digest('hex') })}\n`)
+      const error = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+        .then(() => null, (failure: unknown) => failure as Error)
+      expect(error?.message).toContain(reason)
+      if (expectedFrame) expect(error?.stack).toContain(expectedFrame)
+    }
+    await rejectChangedLock((document) => { document.set('importers', null) },
+      'profile_import_plugin_target_resolution_invalid', 'lockSections')
+    await rejectChangedLock((document) => { document.set('packages', []) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.set('snapshots', []) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.set('lockfileVersion', '8.0') },
+      'profile_import_plugin_target_resolution_invalid', 'lockSections')
+    await rejectChangedLock((document) => { document.deleteIn(['importers', '.', 'dependencies']) },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.delete('packages') },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.delete('snapshots') },
+      'profile_import_plugin_target_resolution_invalid')
+    await rejectChangedLock((document) => { document.setIn(['importers', '.', 'dependencies',
+      'baseline-plugin'], 'changed') }, 'profile_import_plugin_target_resolution_changed')
+    await rejectChangedLock((document) => { document.setIn(['packages',
+      `baseline-plugin@${baselineSpec}`, 'resolution'], { integrity: 'changed' }) },
+    'profile_import_plugin_target_resolution_changed')
+    await rejectChangedLock((document) => { document.setIn(['snapshots',
+      `baseline-plugin@${baselineSpec}`, 'dependencies'], { changed: '1.0.0' }) },
+    'profile_import_plugin_target_resolution_changed')
+    await writeFile(mergedLockPath, lock)
+    await writeFile(receiptPath, receipt)
+    const copiedBaselineArchive = join(resolved.resolutionRoot, '.bundled-plugins', `${baselineDigest}.tgz`)
+    isolatedReadFaults.set(copiedBaselineArchive, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(copiedBaselineArchive) }
+    await writeFile(copiedBaselineArchive, 'tampered')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    await writeFile(copiedBaselineArchive, baselineBytes)
+    const liveBaselineArchive = join(targetArchives, `${baselineDigest}.tgz`)
+    await writeFile(liveBaselineArchive, 'tampered')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    await writeFile(liveBaselineArchive, baselineBytes)
+    const copiedSelectedArchive = join(resolvedArchives, `${value.source.digest}.tgz`)
+    isolatedReadFaults.set(copiedSelectedArchive, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    } finally { isolatedReadFaults.delete(copiedSelectedArchive) }
+    isolatedReadFaults.set(copiedSelectedArchive, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    } finally { isolatedReadFaults.delete(copiedSelectedArchive) }
+    const copiedArchiveDirectory = join(resolved.resolutionRoot, '.bundled-plugins')
+    const heldArchiveDirectory = join(resolved.resolutionRoot, 'held-bundled-plugins')
+    await rename(copiedArchiveDirectory, heldArchiveDirectory)
+    await symlink(heldArchiveDirectory, copiedArchiveDirectory)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_unsafe')
+    } finally {
+      await unlink(copiedArchiveDirectory)
+      await rename(heldArchiveDirectory, copiedArchiveDirectory)
+    }
+    const unexpectedArchive = join(resolved.resolutionRoot, '.bundled-plugins', 'unexpected.tgz')
+    await writeFile(unexpectedArchive, 'untrusted')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    await unlink(unexpectedArchive)
+    const baselineInstalledPath = join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js')
+    await writeFile(baselineInstalledPath, 'tampered')
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).rejects.toThrow()
+    await writeFile(baselineInstalledPath, baselineInstalledBefore)
+    expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    runPnpmFaults.removeResolvedAfterFrozen = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_resolution_changed')
+    } finally { runPnpmFaults.removeResolvedAfterFrozen = false }
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
+    trustManifestFaults.nullDuringPrepareBaseline = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_install_invalid')
+    } finally { trustManifestFaults.nullDuringPrepareBaseline = false }
+    await rm(targetMergeRoot, { recursive: true, force: true })
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
+    layerSyncFaults.removeModulesAfterReceiptSync = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally {
+      layerSyncFaults.removeModulesAfterReceiptSync = false
+      layerSyncFaults.armed = false
+    }
+    await rm(targetMergeRoot, { recursive: true, force: true })
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
+    const layer = await installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    expect(layer.installationRoot).toBe(resolved.resolutionRoot)
+    expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toEqual(layer)
+    trustManifestFaults.count = 0
+    trustManifestFaults.nullAt = Number.MAX_SAFE_INTEGER
+    await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+    const manifestReads = trustManifestFaults.count
+    trustManifestFaults.nullAt = 0
+    let lateManifestRead = 0
+    for (let at = 1; at <= manifestReads; at++) {
+      trustManifestFaults.count = 0
+      trustManifestFaults.nullAt = at
+      try {
+        await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+      } catch (error) {
+        if ((error as Error).message === 'profile_import_plugin_target_install_invalid') {
+          lateManifestRead = at
+        }
+      } finally { trustManifestFaults.nullAt = 0 }
+    }
+    expect(lateManifestRead).toBeGreaterThan(0)
+    trustManifestFaults.count = 0
+    trustManifestFaults.invalidDependenciesAt = lateManifestRead
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_invalid')
+    trustManifestFaults.invalidDependenciesAt = 0
+    trustManifestFaults.count = 0
+    trustManifestFaults.unknownDependenciesAt = lateManifestRead
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_source_unsupported')
+    trustManifestFaults.unknownDependenciesAt = 0
+    trustManifestFaults.count = 0
+    const originalCatalogGet = catalog.get.bind(catalog)
+    let catalogGetCalls = 0
+    const catalogGetSpy = vi.spyOn(catalog, 'get').mockImplementation((name, version) => {
+      catalogGetCalls += 1
+      return originalCatalogGet(name, version)
+    })
+    await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+    const totalCatalogGets = catalogGetCalls
+    let rejectedSelectedCatalogDrift = false
+    try {
+      for (let at = totalCatalogGets; at > 0 && !rejectedSelectedCatalogDrift; at--) {
+        catalogGetCalls = 0
+        catalogGetSpy.mockImplementation((name, version) => {
+          catalogGetCalls += 1
+          return catalogGetCalls === at && name === 'fixture-plugin'
+            ? undefined : originalCatalogGet(name, version)
+        })
+        try {
+          await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+        } catch (error) {
+          rejectedSelectedCatalogDrift = (error as Error).message === 'profile_import_plugin_target_install_invalid'
+        }
+      }
+    } finally { catalogGetSpy.mockRestore() }
+    expect(rejectedSelectedCatalogDrift).toBe(true)
+    const layerReceiptPath = join(layer.installationRoot, 'layer-receipt.json')
+    const layerReceipt = await readFile(layerReceiptPath)
+    const lateReceiptFault = { calls: 0, at: 2, mode: 'changed' as const }
+    isolatedReadFaults.set(layerReceiptPath, lateReceiptFault)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+      expect(lateReceiptFault.calls).toBe(2)
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    const unreadableLateReceipt = { calls: 0, at: 2, mode: 'throw' as const }
+    isolatedReadFaults.set(layerReceiptPath, unreadableLateReceipt)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+      expect(unreadableLateReceipt.calls).toBe(2)
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    await unlink(layerReceiptPath)
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    await writeFile(layerReceiptPath, layerReceipt, { mode: 0o600 })
+    await writeFile(layerReceiptPath, Buffer.concat([layerReceipt, Buffer.from('unexpected')]))
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    await writeFile(layerReceiptPath, layerReceipt)
+    isolatedReadFaults.set(layerReceiptPath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    isolatedReadFaults.set(layerReceiptPath, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    const layerModulesPath = join(layer.installationRoot, 'node_modules')
+    const layerModulesMode = (await lstat(layerModulesPath)).mode & 0o777
+    await chmod(layerModulesPath, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_unsafe')
+    await chmod(layerModulesPath, layerModulesMode)
+    const heldModulesPath = join(layer.installationRoot, 'held-node-modules')
+    await rename(layerModulesPath, heldModulesPath)
+    await symlink(heldModulesPath, layerModulesPath)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_unsafe')
+    } finally {
+      await unlink(layerModulesPath)
+      await rename(heldModulesPath, layerModulesPath)
+    }
+    const baselineRoot = join(layer.installationRoot, 'baseline-composition')
+    await chmod(baselineRoot, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_unsafe')
+    await chmod(baselineRoot, 0o700)
+    const baselineManifestPath = join(layer.installationRoot, 'baseline-composition', 'package.json')
+    const baselineManifest = await readFile(baselineManifestPath)
+    await writeFile(baselineManifestPath, 'changed after installation')
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_changed')
+    await writeFile(baselineManifestPath, baselineManifest)
+    const baselineModulesPath = join(layer.installationRoot, 'baseline-composition', 'node_modules')
+    const baselineModulesTarget = await readlink(baselineModulesPath)
+    await unlink(baselineModulesPath)
+    await symlink(value.source.installed, baselineModulesPath)
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_unsafe')
+    await unlink(baselineModulesPath)
+    await symlink(baselineModulesTarget, baselineModulesPath)
+    expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toEqual(layer)
+    const addedInstalledPath = join(layer.installationRoot, 'node_modules', 'fixture-plugin', 'index.js')
+    const addedBytes = await readFile(addedInstalledPath)
+    await writeFile(addedInstalledPath, 'tampered')
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).rejects.toThrow()
+    await writeFile(addedInstalledPath, addedBytes)
+    expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toEqual(layer)
+    expect(await inspectProfileImportPluginComposition({ ...resolutionInput,
+      installAnchor: join(process.cwd(), 'apps', 'cli', 'package.json') })).toMatchObject({
+      addedEntryIds: ['fixture-entry'],
+    })
+    const shadowRoot = join(value.target.hostRoot, 'shadow-installation')
+    await mkdir(join(shadowRoot, 'node_modules'), { recursive: true })
+    await writeFile(join(shadowRoot, 'package.json'), '{}\n')
+    await symlink(value.source.installed, join(shadowRoot, 'node_modules', 'fixture-plugin'))
+    await expect(inspectProfileImportPluginComposition({ ...resolutionInput,
+      installAnchor: join(shadowRoot, 'package.json') }))
+      .rejects.toThrow('profile_import_plugin_composition_shadowed')
+    const publishInput = { ...resolutionInput,
+      installAnchor: join(process.cwd(), 'apps', 'cli', 'package.json') }
+    const publishPlan = await planProfileImportPluginPublish(publishInput)
+    expect(publishPlan.targetWebDigest).toMatch(/^[a-f0-9]{64}$/u)
+    expect(publishPlan.candidateWebDigest).toMatch(/^[a-f0-9]{64}$/u)
+    const targetWebMode = (await lstat(value.target.web)).mode & 0o777
+    await chmod(value.target.web, 0o777)
+    await expect(fingerprintProfileImportPluginWeb(value.target.web, uid))
+      .rejects.toThrow('profile_import_plugin_publish_unsafe')
+    await chmod(value.target.web, targetWebMode)
+    const staged = await stageProfileImportPluginPublishCandidate(publishInput, publishPlan)
+    expect(staged.stagedWebDigest).toBe(publishPlan.candidateWebDigest)
+    expect(await readFile(join(staged.stagedWeb, 'node_modules', 'baseline-plugin', 'index.js')))
+      .toEqual(baselineInstalledBefore)
+    expect(await inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .toEqual(staged)
+    const stagedPluginDirectory = join(staged.stagedWeb, 'node_modules', 'baseline-plugin')
+    const stagedPluginDirectoryMode = (await lstat(stagedPluginDirectory)).mode & 0o777
+    await chmod(stagedPluginDirectory, 0o777)
+    await expect(inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .rejects.toThrow('profile_import_plugin_publish_unsafe')
+    await chmod(stagedPluginDirectory, stagedPluginDirectoryMode)
+    const stagedSessions = await stageSelectedProfileImportSessions({
+      source: input.source, target: input.target, sourceProfileId: input.source.profileId,
+      targetProfileId: input.target.profileId, operationId: input.operationId, fence: input.fence,
+      uid, expectedPreviewDigest: plan.previewDigest, selectedSessionIds: [],
+      assertQuiescent: input.assertQuiescent,
+    })
+    expect(stagedSessions.generation).toBe(targetInventory.generation + 1)
+    const stagedOperation = await journal.advance(fenced, 'staged')
+    await journal.advance(stagedOperation, 'committing')
+    const stagedPlugin = join(staged.stagedWeb, 'node_modules', 'baseline-plugin', 'index.js')
+    await writeFile(stagedPlugin, 'tampered')
+    await expect(inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    await writeFile(stagedPlugin, baselineInstalledBefore)
+    expect(await inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .toEqual(staged)
+    await expect(stageProfileImportPluginPublishCandidate(publishInput, publishPlan))
+      .rejects.toMatchObject({ code: 'EEXIST' })
+    await writeFile(join(value.target.web, 'unexpected.txt'), 'preserve me')
+    await expect(planProfileImportPluginPublish(publishInput))
+      .rejects.toThrow('profile_import_plugin_publish_layout_unsupported')
+    await unlink(join(value.target.web, 'unexpected.txt'))
+    expect(await readFile(join(value.target.web, 'package.json'))).toEqual(targetManifestBefore)
+    expect(await readFile(join(value.target.web, 'pnpm-lock.yaml'))).toEqual(targetLockBefore)
+    expect(await readFile(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js')))
+      .toEqual(baselineInstalledBefore)
+    const directoryState = () => inspectProfileImportPluginDirectoryState({
+      profileRoot: value.target.profileRoot, operationId: input.operationId, uid, plan: publishPlan,
+    })
+    expect(await directoryState()).toBe('prepared')
+    const heldStagedWeb = `${staged.stagedWeb}.held`
+    await rename(staged.stagedWeb, heldStagedWeb)
+    try { await expect(directoryState()).rejects.toThrow('profile_import_plugin_publish_state_unknown') }
+    finally { await rename(heldStagedWeb, staged.stagedWeb) }
+    expect(await directoryState()).toBe('prepared')
+    const publishJournal = new FileProfileImportPluginPublishJournal(
+      join(value.target.profileRoot, 'profile-import-plugin-publish'), uid)
+    await publishJournal.create({ operationId: input.operationId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId,
+      selectedPluginNames: ['fixture-plugin'], plan: publishPlan })
+    const recovery = () => inspectProfileImportPluginPublishRecovery({ journal: publishJournal,
+      profileRoot: value.target.profileRoot, operationId: input.operationId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId, uid })
+    expect((await recovery()).action).toBe('ready')
+    const sessionCoordinator = new ProfileImportSessionCoordinator(journal, input.fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    const jointInput = { operationId: input.operationId, source: input.source,
+      target: input.target, uid, assertAuthority: async () => {}, pluginJournal: publishJournal }
+    expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction).toBe('ready')
+    const wrongSelectionJournal = new FileProfileImportPluginPublishJournal(
+      join(value.target.profileRoot, 'profile-import-plugin-wrong-selection'), uid)
+    await wrongSelectionJournal.create({ operationId: input.operationId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId,
+      selectedPluginNames: ['different-plugin'], plan: publishPlan })
+    await expect(sessionCoordinator.inspectCommittingWithPlugins({ ...jointInput,
+      pluginJournal: wrongSelectionJournal })).rejects.toThrow('profile_import_plugin_publish_changed')
+    const hostLock = await acquireSingleHostLock({ root: join(value.target.hostRoot, 'publish-host-lock'),
+      pid: process.pid, uid, processNonce: randomUUID() })
+    const publishOperation = { journal: publishJournal, fence: input.fence, hostLock,
+      profileRoot: value.target.profileRoot, operationId: input.operationId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId, uid,
+      assertAuthority: async () => {}, assertQuiescent: input.assertQuiescent,
+      assertPreparedCandidate: async () => {
+        expect(await inspectStagedProfileImportPluginPublishCandidate(publishInput, publishPlan))
+          .toEqual(staged)
+      },
+      assertSessionPointerOld: async () => {},
+    }
+    await expect(publishProfileImportPluginLayer({ ...publishOperation,
+      profileRoot: 'relative-profile-root' }))
+      .rejects.toThrow('profile_import_plugin_publish_invalid')
+    let releaseInspection: (() => void) | undefined
+    let inspectionStarted: (() => void) | undefined
+    const blockedInspection = new Promise<void>((resolve) => { releaseInspection = resolve })
+    const inspectionEntered = new Promise<void>((resolve) => { inspectionStarted = resolve })
+    const pendingPublish = publishProfileImportPluginLayer({ ...publishOperation,
+      assertQuiescent: async () => { inspectionStarted?.(); await blockedInspection },
+      assertSessionPointerOld: async () => { throw Error('session_pointer_changed') },
+    })
+    await inspectionEntered
+    try {
+      await expect(publishProfileImportPluginLayer(publishOperation))
+        .rejects.toThrow('profile_import_plugin_publish_busy')
+    } finally { releaseInspection?.() }
+    await expect(pendingPublish).rejects.toThrow('session_pointer_changed')
+    await expect(publishProfileImportPluginLayer({ ...publishOperation,
+      assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
+      .rejects.toThrow('session_pointer_changed')
+    expect(await directoryState()).toBe('prepared')
+    const durablePrepared = await publishJournal.load(input.operationId)
+    if (!durablePrepared) throw Error('missing_publish_record')
+    await publishJournal.advance(durablePrepared, 'switching')
+    expect((await recovery()).action).toBe('ready')
+    const published = await publishProfileImportPluginLayerAndCommitSession(publishOperation,
+      async (record) => {
+        await expect(publishProfileImportPluginLayer(publishOperation))
+          .rejects.toThrow('profile_import_plugin_publish_busy')
+        return record
+      })
+    expect(published.phase).toBe('published')
+    expect((await publishProfileImportPluginLayer(publishOperation)).phase).toBe('published')
+    expect(await directoryState()).toBe('candidate_published')
+    expect((await recovery()).action).toBe('published')
+    expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction)
+      .toBe('published')
+    expect(await readFile(join(value.target.web, 'node_modules', 'baseline-plugin', 'index.js')))
+      .toEqual(baselineInstalledBefore)
+    await writeFile(join(value.target.web, 'unexpected.txt'), 'unknown')
+    await expect(directoryState()).rejects.toThrow('profile_import_plugin_publish_layout_unsupported')
+    await unlink(join(value.target.web, 'unexpected.txt'))
+    await expect(rollbackProfileImportPluginLayer({ ...publishOperation,
+      assertSessionPointerOld: async () => { throw Error('session_pointer_changed') } }))
+      .rejects.toThrow('session_pointer_changed')
+    expect(await directoryState()).toBe('candidate_published')
+    let beforeRollbackCalled = false
+    const rolledBack = await rollbackProfileImportPluginLayerAndAbortSession(publishOperation,
+      async (record) => {
+        await expect(rollbackProfileImportPluginLayer(publishOperation))
+          .rejects.toThrow('profile_import_plugin_publish_busy')
+        return record
+      }, async () => { beforeRollbackCalled = true })
+    expect(beforeRollbackCalled).toBe(true)
+    expect(rolledBack.phase).toBe('rolled_back')
+    expect((await rollbackProfileImportPluginLayer(publishOperation)).phase).toBe('rolled_back')
+    expect((await rollbackProfileImportPluginLayerAndAbortSession(publishOperation,
+      async record => record)).phase).toBe('rolled_back')
+    expect(await directoryState()).toBe('prepared')
+    expect((await recovery()).action).toBe('rolled_back')
+    expect((await sessionCoordinator.inspectCommittingWithPlugins(jointInput)).pluginAction)
+      .toBe('rolled_back')
+    expect(await readFile(join(value.target.web, 'package.json'))).toEqual(targetManifestBefore)
+    const resumedId = randomUUID()
+    input.fence.clearPair(input.source.profileId, input.target.profileId, input.operationId)
+    input.fence.reservePair(input.source.profileId, input.target.profileId, resumedId)
+    const resumedStaged = join(value.target.profileRoot, 'profiles', `.web-import-${resumedId}`)
+    const resumedBackup = join(value.target.profileRoot, 'profiles', `.web-import-backup-${resumedId}`)
+    await rename(staged.stagedWeb, resumedStaged)
+    const resumedPrepared = await publishJournal.create({ operationId: resumedId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId,
+      selectedPluginNames: ['fixture-plugin'], plan: publishPlan })
+    await publishJournal.advance(resumedPrepared, 'switching')
+    await rename(value.target.web, resumedBackup)
+    const resumedOperation = { ...publishOperation, operationId: resumedId,
+      assertPreparedCandidate: async () => { throw Error('unexpected_prepared_check') } }
+    expect((await inspectProfileImportPluginPublishRecovery(resumedOperation)).action)
+      .toBe('publish_candidate')
+    expect((await publishProfileImportPluginLayer(resumedOperation)).phase).toBe('published')
+    expect((await rollbackProfileImportPluginLayer(resumedOperation)).phase).toBe('rolled_back')
+    expect(await readFile(join(value.target.web, 'package.json'))).toEqual(targetManifestBefore)
+    const afterSecondRenameId = randomUUID()
+    input.fence.clearPair(input.source.profileId, input.target.profileId, resumedId)
+    input.fence.reservePair(input.source.profileId, input.target.profileId, afterSecondRenameId)
+    const afterSecondStaged = join(value.target.profileRoot, 'profiles',
+      `.web-import-${afterSecondRenameId}`)
+    const afterSecondBackup = join(value.target.profileRoot, 'profiles',
+      `.web-import-backup-${afterSecondRenameId}`)
+    await rename(resumedStaged, afterSecondStaged)
+    const afterSecondPrepared = await publishJournal.create({ operationId: afterSecondRenameId,
+      sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId,
+      selectedPluginNames: ['fixture-plugin'], plan: publishPlan })
+    await publishJournal.advance(afterSecondPrepared, 'switching')
+    await rename(value.target.web, afterSecondBackup)
+    await rename(afterSecondStaged, value.target.web)
+    const afterSecondOperation = { ...publishOperation, operationId: afterSecondRenameId,
+      assertPreparedCandidate: async () => { throw Error('unexpected_prepared_check') } }
+    expect((await inspectProfileImportPluginPublishRecovery(afterSecondOperation)).action)
+      .toBe('record_published')
+    const afterSecondPublished = await publishProfileImportPluginLayer(afterSecondOperation)
+    expect(afterSecondPublished.phase).toBe('published')
+    await publishJournal.advance(afterSecondPublished, 'rolling_back')
+    await rename(value.target.web, afterSecondStaged)
+    expect((await inspectProfileImportPluginPublishRecovery(afterSecondOperation)).action)
+      .toBe('restore_old')
+    expect((await rollbackProfileImportPluginLayer(afterSecondOperation)).phase).toBe('rolled_back')
+    expect(await readFile(join(value.target.web, 'package.json'))).toEqual(targetManifestBefore)
+    await rename(afterSecondStaged, staged.stagedWeb)
+    input.fence.clearPair(input.source.profileId, input.target.profileId, afterSecondRenameId)
+    input.fence.reservePair(input.source.profileId, input.target.profileId, input.operationId)
+    await input.target.target.commitGeneration(targetInventory.generation, stagedSessions.generation)
+    await expect(sessionCoordinator.inspectCommittingWithPlugins(jointInput))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    await hostLock.release()
+  }, 300_000)
+
+  it.skipIf(process.platform === 'win32')('prepares and jointly commits a plugin layer when the empty target has no lockfile', async () => {
+    const value = await pluginPlanFixture(true)
+    await writeFile(join(value.target.web, 'pnpm-workspace.yaml'),
+      'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
+    await writeFile(join(value.target.web, 'cordis.patch.yml'), '[]\n')
+    const originalManifest = await readFile(join(value.target.web, 'package.json'))
+    const targetLockPath = join(value.target.web, 'pnpm-lock.yaml')
+    await unlink(targetLockPath)
+    await expect(readFile(targetLockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    const preview = await value.inspect()
+    const input = { ...value.input, expectedPreviewDigest: preview.previewDigest }
+    const journal = new FileProfileImportOperationJournal(
+      join(value.target.profileRoot, 'profile-import-journal'), uid)
+    const publishJournal = new FileProfileImportPluginPublishJournal(
+      join(value.target.profileRoot, 'profile-import-plugin-publish'), uid)
+    const installAnchor = join(process.cwd(), 'apps', 'cli', 'package.json')
+    const preparedInput = { ...input, journal, publishJournal, installAnchor }
+    const coordinator = new ProfileImportSessionCoordinator(journal, input.fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    const staged = await coordinator.prepareWithPlugins({ ...input, selectedSessionIds: [],
+      assertAuthority: async () => {} }, { journal: publishJournal,
+      prepare: async () => prepareSelectedProfileImportPlugins({ ...preparedInput,
+        nodeExecutablePath: process.execPath,
+        pnpmEntrypointPath: await realpath(process.env.npm_execpath!) }) })
+    expect(staged.phase).toBe('staged')
+    const publishRecord = await publishJournal.load(input.operationId)
+    expect(publishRecord?.phase).toBe('prepared')
+    expect((await inspectProfileImportPluginDirectoryState({ profileRoot: value.target.profileRoot,
+      operationId: input.operationId, uid, plan: publishRecord!.plan }))).toBe('prepared')
+    expect(await readFile(join(value.target.web, 'package.json'))).toEqual(originalManifest)
+    await expect(readFile(targetLockPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await journal.load(input.operationId))?.phase).toBe('staged')
+    await inspectPreparedProfileImportPlugins(preparedInput)
+    const missingRecord = vi.spyOn(publishJournal, 'load').mockResolvedValueOnce(null)
+    await expect(inspectPreparedProfileImportPlugins(preparedInput))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    missingRecord.mockRestore()
+    const changedRecord = vi.spyOn(publishJournal, 'load').mockResolvedValueOnce({
+      ...publishRecord!, plan: { ...publishRecord!.plan, targetWebDigest: '0'.repeat(64) },
+    })
+    await expect(inspectPreparedProfileImportPlugins(preparedInput))
+      .rejects.toThrow('profile_import_plugin_publish_changed')
+    changedRecord.mockRestore()
+    const hostLock = await acquireSingleHostLock({ root: join(value.target.hostRoot, 'publish-host-lock'),
+      pid: process.pid, uid, processNonce: randomUUID() })
+    const committed = await coordinator.commitWithPlugins({ operationId: input.operationId,
+      source: input.source, target: input.target, uid, assertAuthority: async () => {},
+      activateCandidate: async () => {},
+      candidateLease: new FileProfileImportCandidateLease(input.target.profileRoot, input.operationId, uid),
+      runtimePatch: new FileProfileImportRuntimePatch(input.target.profileRoot, input.operationId,
+        input.target.target, new MigrationOwnerStateApplicator(uid), uid),
+      pluginJournal: publishJournal,
+      pluginPublisher: { journal: publishJournal, fence: input.fence, hostLock,
+        profileRoot: input.target.profileRoot, operationId: input.operationId,
+        sourceProfileId: input.source.profileId, targetProfileId: input.target.profileId, uid,
+        assertAuthority: async () => {}, assertQuiescent: input.assertQuiescent,
+        assertPreparedCandidate: () => inspectPreparedProfileImportPlugins(preparedInput),
+        assertSessionPointerOld: async () => {} } })
+    expect(committed.phase).toBe('committed')
+    expect(await input.target.target.activeGeneration()).toBe(staged.stagedGeneration)
+    expect(await readFile(join(value.target.web, 'package.json'), 'utf8')).toContain('fixture-plugin')
+    expect(await readFile(targetLockPath, 'utf8')).toContain('fixture-plugin')
+    await hostLock.release()
+  }, 30_000)
+
+  it('stages verified archives under a fenced private operation without changing live plugin files', async () => {
+    const value = await pluginPlanFixture()
+    const outerWorkspace = join(value.target.profileRoot, 'pnpm-workspace.yaml')
+    await writeFile(outerWorkspace, "packages:\n  - 'profiles/*'\n", { mode: 0o600 })
+    const plan = await planSelectedProfileImportPlugins(value.input)
+    const journal = new FileProfileImportOperationJournal(
+      join(value.target.profileRoot, 'profile-import-journal'), uid)
+    const targetInventory = await inspectProfileImportInventory({ profileRoot: value.target.profileRoot,
+      target: value.target.target, uid })
+    const prepared = await journal.create({ operationId: value.input.operationId,
+      sourceProfileId: value.input.source.profileId, targetProfileId: value.input.target.profileId,
+      sourceSnapshotDigest: plan.sourceSnapshotDigest, targetSnapshotDigest: plan.targetSnapshotDigest,
+      previewDigest: plan.previewDigest, selectedSessionIds: [], selectedPluginNames: ['fixture-plugin'],
+      targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1 })
+    await journal.advance(prepared, 'fenced')
+    const beforeSource = await treeInventory(value.source.profileRoot)
+    const beforeWeb = await treeInventory(value.target.web)
+    const input = { ...value.input, journal, plan }
+    const result = await stageSelectedProfileImportPluginArchives(input)
+    expect(await readFile(join(result.stageRoot, `${value.source.digest}.tgz`))).toEqual(await readFile(value.source.archive))
+    expect(JSON.parse(await readFile(join(result.stageRoot, 'receipt.json'), 'utf8'))).toMatchObject({
+      operationId: value.input.operationId, previewDigest: plan.previewDigest,
+      archives: [{ name: 'fixture-plugin', digest: value.source.digest }],
+    })
+    expect(await treeInventory(value.source.profileRoot)).toEqual(beforeSource)
+    expect(await treeInventory(value.target.web)).toEqual(beforeWeb)
+    const recovery = { target: value.input.target, sourceProfileId: value.input.source.profileId,
+      uid, operationId: value.input.operationId, fence: value.input.fence, journal,
+      catalog: value.input.catalog, plan }
+    expect(await inspectStagedProfileImportPluginArchives(recovery)).toMatchObject({ stageRoot: result.stageRoot })
+    if (process.platform !== 'win32') {
+      const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+      expect(await inspectIsolatedProfileImportPluginInstall(recovery)).toBeNull()
+      const installed = await installStagedProfileImportPluginsInIsolation({ ...recovery,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+      expect(installed.lockfileDigest).toMatch(/^[a-f0-9]{64}$/u)
+      expect(await readFile(join(installed.sandboxRoot, 'install-receipt.json'), 'utf8'))
+        .toContain(value.source.digest)
+      expect(await inspectIsolatedProfileImportPluginInstall(recovery)).toEqual(installed)
+      const privateArchives = join(installed.sandboxRoot, '.bundled-plugins')
+      await chmod(privateArchives, 0o777)
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_directory_unsafe')
+      await chmod(privateArchives, 0o700)
+      const copiedArchive = join(privateArchives, `${value.source.digest}.tgz`)
+      const copiedArchiveBytes = await readFile(copiedArchive)
+      await writeFile(copiedArchive, 'tampered')
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_archive_changed')
+      await writeFile(copiedArchive, copiedArchiveBytes)
+      const npmrcPath = join(installed.sandboxRoot, '.npmrc')
+      const npmrc = await readFile(npmrcPath)
+      await writeFile(npmrcPath, 'ignore-scripts=false\n')
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+      await writeFile(npmrcPath, npmrc)
+      const isolatedReceiptPath = join(installed.sandboxRoot, 'install-receipt.json')
+      const isolatedReceipt = await readFile(isolatedReceiptPath)
+      await unlink(isolatedReceiptPath)
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+      await writeFile(isolatedReceiptPath, isolatedReceipt, { mode: 0o600 })
+      expect(await inspectIsolatedProfileImportPluginInstall(recovery)).toEqual(installed)
+      const lockfilePath = join(installed.sandboxRoot, 'pnpm-lock.yaml')
+      const lockfile = await readFile(lockfilePath)
+      await writeFile(lockfilePath, 'tampered')
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+      await writeFile(lockfilePath, lockfile)
+      const receiptPath = join(installed.sandboxRoot, 'install-receipt.json')
+      const receipt = await readFile(receiptPath)
+      const extraResolution = lockfile.toString().replace('packages:\n',
+        'packages:\n  unrelated@1.0.0:\n    version: 1.0.0\n')
+      await writeFile(lockfilePath, extraResolution)
+      await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+        lockfileDigest: createHash('sha256').update(extraResolution).digest('hex') })}\n`)
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_resolution_invalid')
+      await writeFile(lockfilePath, lockfile)
+      await writeFile(receiptPath, receipt)
+      expect(await treeInventory(value.target.web)).toEqual(beforeWeb)
+      expect(await readFile(outerWorkspace, 'utf8')).toBe("packages:\n  - 'profiles/*'\n")
+      await expect(lstat(join(value.target.profileRoot, 'pnpm-lock.yaml')))
+        .rejects.toMatchObject({ code: 'ENOENT' })
+    }
+    await writeFile(join(result.stageRoot, `${value.source.digest}.tgz`), 'tampered', { mode: 0o600 })
+    await expect(inspectStagedProfileImportPluginArchives(recovery))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+    await unlink(join(result.stageRoot, 'receipt.json'))
+    await expect(inspectStagedProfileImportPluginArchives(recovery))
+      .rejects.toThrow('profile_import_plugin_stage_incomplete')
+    await expect(stageSelectedProfileImportPluginArchives(input)).rejects.toMatchObject({ code: 'EEXIST' })
+  })
+
+  it('requires a durable fenced intent before creating a plugin archive stage', async () => {
+    const value = await pluginPlanFixture()
+    const plan = await planSelectedProfileImportPlugins(value.input)
+    const journal = new FileProfileImportOperationJournal(
+      join(value.target.profileRoot, 'profile-import-journal'), uid)
+    await expect(stageSelectedProfileImportPluginArchives({ ...value.input, journal, plan }))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+    await expect(lstat(join(value.target.profileRoot, 'profile-import-plugin-staging')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('distinguishes absent private archive stages from unsafe and incomplete ones', async () => {
+    const first = await fencedPluginArchiveFixture()
+    expect(await inspectStagedProfileImportPluginArchives(first.recovery)).toBeNull()
+    const parent = join(first.value.target.profileRoot, 'profile-import-plugin-staging')
+    await mkdir(parent, { mode: 0o700 })
+    expect(await inspectStagedProfileImportPluginArchives(first.recovery)).toBeNull()
+    await chmod(parent, 0o755)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    const second = await fencedPluginArchiveFixture()
+    const result = await stageSelectedProfileImportPluginArchives(second.input)
+    await writeFile(join(result.stageRoot, 'unexpected.txt'), 'unexpected', { mode: 0o600 })
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_incomplete')
+  })
+
+  it('rejects an unsafe staging parent and a catalog changed after archive staging', async () => {
+    const first = await fencedPluginArchiveFixture()
+    const parent = join(first.value.target.profileRoot, 'profile-import-plugin-staging')
+    await mkdir(parent, { mode: 0o700 })
+    await chmod(parent, 0o755)
+    await expect(stageSelectedProfileImportPluginArchives(first.input))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    await chmod(parent, 0o700)
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    vi.spyOn(second.value.input.catalog, 'get').mockReturnValueOnce(undefined)
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('keeps changed plans and moved intent out of a private archive stage', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await expect(stageSelectedProfileImportPluginArchives({ ...first.input,
+      plan: { ...first.plan, plugins: first.plan.plugins.map(plugin => ({ ...plugin,
+        archiveDigest: 'f'.repeat(64) })) } }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const second = await fencedPluginArchiveFixture()
+    const load = second.journal.load.bind(second.journal)
+    let calls = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++calls === 2 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('rechecks stage privacy and durable intent after a crash', async () => {
+    const first = await fencedPluginArchiveFixture()
+    const result = await stageSelectedProfileImportPluginArchives(first.input)
+    await chmod(result.stageRoot, 0o755)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_unsafe')
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    const load = second.journal.load.bind(second.journal)
+    let calls = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++calls === 2 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('checks cancellation wiring and catalog evidence at archive staging time', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives({ ...first.input,
+      signal: new AbortController().signal })
+    const second = await fencedPluginArchiveFixture()
+    const get = second.value.input.catalog.get.bind(second.value.input.catalog)
+    let gets = 0
+    vi.spyOn(second.value.input.catalog, 'get').mockImplementation((name, version) =>
+      ++gets === 4 ? undefined : get(name, version))
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const third = await fencedPluginArchiveFixture()
+    const archive = third.value.input.catalog.readArchive.bind(third.value.input.catalog)
+    let reads = 0
+    vi.spyOn(third.value.input.catalog, 'readArchive').mockImplementation(plugin =>
+      ++reads === 4 ? Buffer.from('changed archive') : archive(plugin))
+    await expect(stageSelectedProfileImportPluginArchives(third.input))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('rechecks the plan and operation intent after archiving bytes', async () => {
+    const first = await fencedPluginArchiveFixture()
+    let calls = 0
+    await expect(stageSelectedProfileImportPluginArchives({ ...first.input,
+      composedEntryIds: () => ++calls > 2 ? new Set(['new-entry']) : new Set<string>() }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    const second = await fencedPluginArchiveFixture()
+    const load = second.journal.load.bind(second.journal)
+    let reads = 0
+    vi.spyOn(second.journal, 'load').mockImplementation(async (id) => {
+      const record = await load(id)
+      return ++reads === 3 && record ? { ...record, revision: record.revision + 1 } : record
+    })
+    await expect(stageSelectedProfileImportPluginArchives(second.input))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+  })
+
+  it('rejects a foreign recovery pair and non-private staged evidence', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await expect(inspectStagedProfileImportPluginArchives({ ...first.recovery,
+      sourceProfileId: randomUUID() }))
+      .rejects.toThrow('profile_import_plugin_stage_intent_invalid')
+    const result = await stageSelectedProfileImportPluginArchives(first.input)
+    await chmod(join(result.stageRoot, 'receipt.json'), 0o644)
+    await expect(inspectStagedProfileImportPluginArchives(first.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_incomplete')
+    const second = await fencedPluginArchiveFixture()
+    const staged = await stageSelectedProfileImportPluginArchives(second.input)
+    await chmod(join(staged.stageRoot, `${second.value.source.digest}.tgz`), 0o644)
+    await expect(inspectStagedProfileImportPluginArchives(second.recovery))
+      .rejects.toThrow('profile_import_plugin_stage_archive_changed')
+  })
+
+  it('fails closed on a stage parent creation fault and malformed planner digest', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await chmod(first.value.target.profileRoot, 0o500)
+    try {
+      await expect(stageSelectedProfileImportPluginArchives(first.input))
+        .rejects.toMatchObject({ code: 'EACCES' })
+    } finally { await chmod(first.value.target.profileRoot, 0o700) }
+    const second = await fencedPluginArchiveFixture()
+    const invalid = { ...second.plan, plugins: second.plan.plugins.map(plugin => ({ ...plugin,
+      archiveDigest: 'invalid' })) }
+    stageFaults.invalidDigest = true
+    await expect(stageSelectedProfileImportPluginArchives({ ...second.input, plan: invalid }))
+      .rejects.toThrow('profile_import_plugin_stage_plan_changed')
+    stageFaults.invalidDigest = false
+  })
+
+  it('rejects source drift after planning before creating a private archive stage', async () => {
+    const value = await pluginPlanFixture()
+    const plan = await planSelectedProfileImportPlugins(value.input)
+    const journal = new FileProfileImportOperationJournal(
+      join(value.target.profileRoot, 'profile-import-journal'), uid)
+    const targetInventory = await inspectProfileImportInventory({ profileRoot: value.target.profileRoot,
+      target: value.target.target, uid })
+    const prepared = await journal.create({ operationId: value.input.operationId,
+      sourceProfileId: value.input.source.profileId, targetProfileId: value.input.target.profileId,
+      sourceSnapshotDigest: plan.sourceSnapshotDigest, targetSnapshotDigest: plan.targetSnapshotDigest,
+      previewDigest: plan.previewDigest, selectedSessionIds: [], selectedPluginNames: ['fixture-plugin'],
+      targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1 })
+    await journal.advance(prepared, 'fenced')
+    await writeFile(join(value.source.installed, 'index.js'), 'changed', { mode: 0o600 })
+    await expect(stageSelectedProfileImportPluginArchives({ ...value.input, journal, plan }))
+      .rejects.toThrow('profile_import_plugin_install_unsafe')
+    await expect(lstat(join(value.target.profileRoot, 'profile-import-plugin-staging')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects a linked legacy installation outside the private pnpm layout', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot, target: value.target, uid })
+    await rm(value.installed, { recursive: true })
+    await symlink(join(value.hostRoot, 'archive-source', 'package'), value.installed)
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }))
+      .rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it('verifies a pnpm linked installation within its content-addressed private layout', async () => {
+    const value = await bundledFixture()
+    const folder = `fixture-plugin@file+.bundled-plugins+${value.digest}.tgz`
+    const physical = join(value.web, 'node_modules', '.pnpm', folder, 'node_modules', 'fixture-plugin')
+    await mkdir(join(value.web, 'node_modules', '.pnpm', folder, 'node_modules'),
+      { recursive: true, mode: 0o700 })
+    await rename(value.installed, physical)
+    // pnpm 11.28.5 uses this exact relative direct-dependency link for a local tarball.
+    await symlink(join('.pnpm', folder, 'node_modules', 'fixture-plugin'), value.installed)
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot, target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    expect(await inspectProfileImportPluginArchives(input)).toEqual([
+      { name: 'fixture-plugin', status: 'installed_verified', archiveDigest: value.digest,
+        lockfileResolutionVerified: false },
+    ])
+    await writeFile(join(physical, 'index.js'), 'tampered', { mode: 0o600 })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+    await writeFile(join(physical, 'index.js'), value.files['index.js'], { mode: 0o600 })
+    await unlink(value.installed)
+    await symlink(`.pnpm/${folder}/node_modules/../node_modules/fixture-plugin`, value.installed)
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it('rejects unsafe archive directory and non-package installation evidence', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const archiveDirectory = join(value.web, '.bundled-plugins')
+    await chmod(archiveDirectory, 0o777)
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_unsafe')
+    await chmod(archiveDirectory, 0o700)
+    await rm(value.installed, { recursive: true })
+    await writeFile(value.installed, 'not a package', { mode: 0o600 })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it('rejects inventory and manifest changes during archive proof', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const readArchive = value.catalog.readArchive.bind(value.catalog)
+    vi.spyOn(value.catalog, 'readArchive').mockImplementationOnce((plugin) => {
+      const bytes = readArchive(plugin)
+      writeFileSync(join(value.web, 'package.json'), JSON.stringify({ dependencies: {
+        'fixture-plugin': bundledDependencySpec(value.digest), extra: '1.0.0',
+      } }))
+      return bytes
+    })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_inventory_changed')
+  })
+
+  it('checks cancellation and selection before reading archive evidence', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(inspectProfileImportPluginArchives({ ...input, signal: controller.signal }))
+      .rejects.toThrow()
+    await expect(inspectProfileImportPluginArchives({ ...input, selectedPluginNames: ['missing'] }))
+      .rejects.toThrow('profile_import_plugin_selection_invalid')
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot, target: value.target,
+      uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'] })).resolves.toEqual([
+      { name: 'fixture-plugin', status: 'source_unverified' },
+    ])
+  })
+
+  it('rejects a short archive read and changed file metadata', async () => {
+    const value = await bundledFixture()
+    await rm(value.installed, { recursive: true })
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustFsFaults.shortRead = true
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_changed')
+    trustFsFaults.changedStat = true
+    trustFsFaults.fstatCalls = 0
+    trustFsFaults.archiveFd = -1
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_changed')
+    trustFsFaults.changedStat = false
+  })
+
+  it('rejects manifest disappearance, final manifest drift, and installation access faults', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustManifestFaults.count = 0
+    trustManifestFaults.nullAt = 3
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_manifest_invalid')
+    trustManifestFaults.nullAt = 0
+    trustManifestFaults.count = 0
+    trustManifestFaults.changedAt = 6
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_inventory_changed')
+    trustManifestFaults.changedAt = 0
+    trustFsFaults.installError = true
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+    trustFsFaults.installError = false
+  })
+
+  it('fails closed on lockfile parser and later installation verification faults', async () => {
+    expect(lockfileResolutionMatches('throw-parser', 'fixture-plugin', 'file:fixture.tgz', '1.0.0',
+      Buffer.from('archive'))).toBe(false)
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustVerifyFaults.failSecond = true
+    trustVerifyFaults.calls = 0
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+    trustVerifyFaults.failSecond = false
+  })
+
+  it.skipIf(process.platform === 'win32')('rechecks isolated install directories and files before recovery', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    const installed = await installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    await chmod(parent, 0o777)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_directory_unsafe')
+    await chmod(parent, 0o700)
+    const archiveDirectory = join(installed.sandboxRoot, '.bundled-plugins')
+    const archive = join(archiveDirectory, `${value.source.digest}.tgz`)
+    const bytes = await readFile(archive)
+    await writeFile(archive, 'changed archive')
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_archive_changed')
+    await writeFile(archive, bytes)
+    const manifestPath = join(installed.sandboxRoot, 'package.json')
+    const manifest = await readFile(manifestPath)
+    await writeFile(manifestPath, '{}')
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    await writeFile(manifestPath, manifest)
+    const receiptPath = join(installed.sandboxRoot, 'install-receipt.json')
+    await chmod(receiptPath, 0o666)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    await chmod(receiptPath, 0o600)
+    await chmod(archive, 0o666)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_archive_changed')
+    await chmod(archive, 0o600)
+    const lockfilePath = join(installed.sandboxRoot, 'pnpm-lock.yaml')
+    const lockfile = await readFile(lockfilePath, 'utf8')
+    const receipt = await readFile(receiptPath, 'utf8')
+    const withExtraPackage = lockfile.replace('packages:\n',
+      'packages:\n  unrelated@1.0.0:\n    version: 1.0.0\n')
+    const rejectLockfile = async (candidate: string) => {
+      await writeFile(lockfilePath, candidate)
+      await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt),
+        lockfileDigest: createHash('sha256').update(candidate).digest('hex') })}\n`)
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_resolution_invalid')
+    }
+    await rejectLockfile(withExtraPackage)
+    const wrongIntegrity = lockfile.replace(/sha512-[A-Za-z0-9+/=]+/u, 'sha512-AAAA')
+    expect(wrongIntegrity).not.toBe(lockfile)
+    await rejectLockfile(wrongIntegrity)
+    await rejectLockfile("lockfileVersion: '9.0'\nimporters: []\npackages: {}\nsnapshots: {}\n")
+    await writeFile(lockfilePath, lockfile)
+    await writeFile(receiptPath, receipt)
+    const originalGet = recovery.catalog.get.bind(recovery.catalog)
+    let getCalls = 0
+    const get = vi.spyOn(recovery.catalog, 'get').mockImplementation((name, version) => {
+      getCalls += 1
+      return getCalls === 3 ? undefined : originalGet(name, version)
+    })
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_install_invalid')
+    get.mockRestore()
+    getCalls = 0
+    const changed = vi.spyOn(recovery.catalog, 'get').mockImplementation((name, version) => {
+      const entry = originalGet(name, version)
+      getCalls += 1
+      return getCalls === 3 && entry ? { ...entry, sha256: 'f'.repeat(64) } : entry
+    })
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_install_invalid')
+    changed.mockRestore()
+    expect(await inspectIsolatedProfileImportPluginInstall(recovery)).toEqual(installed)
+  }, 120_000)
+
+  it.skipIf(process.platform === 'win32')('requires a staged archive and private install parent', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_stage_missing')
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_stage_missing')
+    await stageSelectedProfileImportPluginArchives(input)
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    await mkdir(parent, { mode: 0o777 })
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_isolated_directory_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects isolated installer entry on Windows', async () => {
+    const { recovery } = await fencedPluginArchiveFixture()
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+        nodeExecutablePath: 'node', pnpmEntrypointPath: 'pnpm' }))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+    } finally { Object.defineProperty(process, 'platform', descriptor) }
+  })
+
+  it.skipIf(process.platform === 'win32').each(['missing-lockfile', 'manifest-changed', 'malformed-lockfile'] as const)
+  ('rejects an incomplete isolated install after a successful child exit: %s', async (fault) => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const fakePnpm = join(value.source.hostRoot, 'fake-pnpm.cjs')
+    const script = fault === 'missing-lockfile' ? '' : fault === 'manifest-changed'
+      ? "const fs = require('node:fs'); fs.writeFileSync('pnpm-lock.yaml', 'lockfileVersion: 8\\n'); fs.writeFileSync('package.json', '{}');"
+      : "require('node:fs').writeFileSync('pnpm-lock.yaml', 'lockfileVersion: 8\\n');"
+    await writeFile(fakePnpm, script, { mode: 0o600 })
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath: fakePnpm }))
+      .rejects.toThrow('profile_import_plugin_isolated_resolution_invalid')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects install parent creation and staged archive read faults', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    const stage = await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    const install = () => installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    isolatedMkdirFaults.add(parent)
+    try { await expect(install()).rejects.toThrow('mkdir denied') }
+    finally { isolatedMkdirFaults.clear() }
+    const archive = join(stage.stageRoot, `${value.source.digest}.tgz`)
+    isolatedReadFaults.set(archive, { calls: 0, at: 1, mode: 'throw' })
+    try { await expect(install()).rejects.toThrow('profile_import_plugin_stage_archive_changed') }
+    finally { isolatedReadFaults.clear() }
+    await rm(join(parent, recovery.operationId), { recursive: true, force: true })
+    isolatedReadFaults.set(archive, { calls: 0, at: 1, mode: 'changed' })
+    try { await expect(install()).rejects.toThrow('profile_import_plugin_stage_archive_changed') }
+    finally { isolatedReadFaults.clear() }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an archive stage lost during isolated install', async () => {
+    const { input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.missingAt = 2
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath,
+        signal: new AbortController().signal }))
+        .rejects.toThrow('profile_import_plugin_stage_missing')
+    } finally { isolatedStageFaults.missingAt = 0 }
+  }, 120_000)
+
+  it.skipIf(process.platform === 'win32')('rejects a stage lost during recovery and sandbox removed before final inspection', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(first.input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    await installStagedProfileImportPluginsInIsolation({ ...first.recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.missingAt = 2
+    try {
+      await expect(inspectIsolatedProfileImportPluginInstall(first.recovery))
+        .rejects.toThrow('profile_import_plugin_stage_missing')
+    } finally { isolatedStageFaults.missingAt = 0 }
+
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.removeSandboxAt = 3
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...second.recovery,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    } finally { isolatedStageFaults.removeSandboxAt = 0 }
+  }, 120_000)
+
+  it.each(['private-store', 'installed-package'] as const)
+  ('rejects a writable directory in a pnpm linked installation: %s', async (kind) => {
+    const value = await bundledFixture()
+    const folder = `fixture-plugin@file+.bundled-plugins+${value.digest}.tgz`
+    const store = join(value.web, 'node_modules', '.pnpm')
+    const physical = join(store, folder, 'node_modules', 'fixture-plugin')
+    await mkdir(join(store, folder, 'node_modules'), { recursive: true, mode: 0o700 })
+    await rename(value.installed, physical)
+    await symlink(join('.pnpm', folder, 'node_modules', 'fixture-plugin'), value.installed)
+    await chmod(kind === 'private-store' ? store : physical, 0o777)
+    await expect(verifyCopiedBundledPlugin(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!,
+      value.web, uid, 'pnpm_link')).rejects.toMatchObject({ code: 'runtime_incompatible' })
   })
 
   it('recovers the historical archive when the catalog also ships a newer version', async () => {

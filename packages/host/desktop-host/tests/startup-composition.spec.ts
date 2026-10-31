@@ -5,16 +5,21 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
-import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
-import type { Config } from '../src/startup.ts'
+import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
+import type { Config, StartDesktopHostApplicationDependencies } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
+import { FileProfileImportFenceFiles, ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
+import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
+import { ProfileImportSessionCoordinator } from '../src/profile-import-session-coordinator.ts'
 import { FileLegacyClaimEventStore } from '../src/legacy-claim-store.ts'
 import { LegacyClaimLedger } from '../src/legacy-claim-ledger.ts'
 import { FileLegacyClaimRecoveryFiles } from '../src/legacy-claim-recovery-files.ts'
 import { LegacyClaimRecoveryStore } from '../src/legacy-claim-recovery.ts'
 import { FileLegacyClaimTargetFiles } from '../src/legacy-claim-target-files.ts'
 import { LegacyClaimTarget } from '../src/legacy-claim-target.ts'
+import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 
 const mocks = vi.hoisted(() => ({
   loadProfileDirectory: vi.fn(() => ({ layers: [], patches: [] })),
@@ -47,10 +52,23 @@ const mocks = vi.hoisted(() => ({
   recoveryPrepare: vi.fn(async (_profile: unknown, _preflight: unknown) => undefined),
   packagedRuntimeAppRoot: vi.fn(() => '/fixture/runtime-app'),
 }))
+const importWiring = vi.hoisted(() => ({ enabled: false }))
+const startupFsFaults = vi.hoisted(() => ({ deniedProfilePath: '' }))
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, lstatSync: (...args: unknown[]) => {
+    if (String(args[0]) === startupFsFaults.deniedProfilePath) {
+      throw Object.assign(Error('simulated profile lstat denial'), { code: 'EACCES' })
+    }
+    return Reflect.apply(actual.lstatSync, actual, args) as ReturnType<typeof actual.lstatSync>
+  } }
+})
 
 vi.mock('@deepseek-ai/dsh-app-boot', () => ({
   loadProfileDirectory: mocks.loadProfileDirectory,
   loadOverlayPatches: mocks.loadOverlayPatches,
+  PROFILE_TEMPLATES: { web: { bundles: [] } },
 }))
 vi.mock('../src/plugin-command.ts', async importOriginal => ({
   ...await importOriginal<typeof import('../src/plugin-command.ts')>(),
@@ -77,6 +95,23 @@ vi.mock('../src/offline-profile-recovery.ts', async (importOriginal) => {
     },
     packagedRuntimeAppRoot: mocks.packagedRuntimeAppRoot,
   }
+})
+vi.mock('../src/profile-import-plugin-preparation.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-preparation.ts')>()
+  return { ...actual, prepareSelectedProfileImportPlugins: async (
+    input: Parameters<typeof actual.prepareSelectedProfileImportPlugins>[0]) => {
+    if (!importWiring.enabled) return actual.prepareSelectedProfileImportPlugins(input)
+    await input.assertQuiescent()
+    input.composedEntryIds()
+  } }
+})
+vi.mock('../src/profile-import-candidate-activation.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-candidate-activation.ts')>()
+  return { ...actual, activateProfileImportCandidate: async (
+    input: Parameters<typeof actual.activateProfileImportCandidate>[0]) => {
+    if (!importWiring.enabled) return actual.activateProfileImportCandidate(input)
+    input.assertFenced()
+  } }
 })
 
 const NOW = 1_780_000_000_000
@@ -150,6 +185,329 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     },
   }
 }
+
+it.skipIf(process.platform === 'win32')('keeps an import-fenced Profile closed across Mac Host restart', async () => {
+  const { config, root } = fixture()
+  let workerStarts = 0
+  let transportOptions: UnixHostServerOptions | undefined
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const dependencies: StartDesktopHostApplicationDependencies = {
+    platform: 'darwin' as const,
+    createServer: (options) => { transportOptions = options; return server },
+    profileWorkerFactory: async (): Promise<ProfileWorkerHandle> => {
+      workerStarts += 1
+      return { viewOrigin: 'http://127.0.0.1:43123', generation: workerStarts,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => undefined, abort: () => undefined, done: Promise.resolve() }
+    },
+  }
+  const first = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  const cleanup: { restarted?: Awaited<ReturnType<typeof startDesktopHostApplication>> } = {}
+  onTestFinished(async () => {
+    await cleanup.restarted?.close()
+    await first.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const profile = await first.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-fence',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner' })
+  const secondId = randomUUID()
+  mkdirSync(join(root, 'profiles', secondId), { mode: 0o700 })
+  const gate = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(join(root, 'profiles'), process.getuid!()))
+  gate.reservePair(profile.profileId, secondId, randomUUID())
+  await first.close()
+  const restarted = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  cleanup.restarted = restarted
+  const patchPath = join(root, 'profiles', profile.profileId, 'cordis.patch.yml')
+  const patchBefore = lstatSync(patchPath)
+  await expect(restarted.host.restoreLocalProfile({ ...profile, keyHandle: 'keychain:import-fence',
+    unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner' }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(workerStarts).toBe(1)
+  expect(lstatSync(patchPath).ino).toBe(patchBefore.ino)
+  const migration = transportOptions!.createMigrationImport!('owner', profile.profileId)
+  await expect(migration.verify(randomUUID(), 1)).rejects.toThrow('unavailable')
+})
+
+it.skipIf(process.platform === 'win32')('uses the packaged worker factory when no worker is injected', async () => {
+  const { config, root } = fixture()
+  const create = vi.spyOn(DshWebProfileWorkerFactory.prototype, 'create').mockResolvedValue({
+    viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+    bootstrapCookie: { name: 'fixture', value: 'private' },
+    closeNotifications: () => {}, abort: () => {}, done: Promise.resolve(),
+  })
+  const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+  })
+  onTestFinished(async () => {
+    await application.close()
+    create.mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  })
+  await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:packaged-worker',
+    unlockMaterial: Buffer.alloc(32, 5).toString('base64url'), ownerId: 'owner' })
+  expect(create).toHaveBeenCalledOnce()
+})
+
+it.skipIf(process.platform === 'win32')('fails closed when a Profile marker stat fails for a reason other than absence', async () => {
+  const { config, root } = fixture()
+  const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+  const dependencies: StartDesktopHostApplicationDependencies = {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => {}, abort: () => {}, done: Promise.resolve() }),
+  }
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const first = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  onTestFinished(async () => {
+    startupFsFaults.deniedProfilePath = ''
+    await first.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const keyHandle = 'keychain:marker-stat-fault'
+  const unlockMaterial = Buffer.alloc(32, 6).toString('base64url')
+  const profile = await first.host.bootstrapLocalProfile({ keyHandle, unlockMaterial, ownerId: 'owner' })
+  await first.close()
+  const restarted = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  onTestFinished(async () => { await restarted.close() })
+  startupFsFaults.deniedProfilePath = join(root, 'profiles', profile.profileId)
+  const failure = await restarted.host.restoreLocalProfile({ ...profile, keyHandle, unlockMaterial,
+    ownerId: 'owner' }).then(() => null, (error: unknown) => error as Error)
+  expect(failure?.message).toBe('simulated profile lstat denial')
+  expect(failure?.stack).toContain('ProfileImportActivity.assertOpen')
+})
+
+it.skipIf(process.platform === 'win32')('wires a session import through prepare, commit, and durable status', async () => {
+  const { config, root } = fixture()
+  let options: UnixHostServerOptions | undefined
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: (value) => { options = value; return server },
+    profileWorkerFactory: async () => ({
+      viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => {}, abort: () => {}, done: Promise.resolve(),
+    }),
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  if (!options) throw Error('missing server options')
+  const environmentId = randomUUID()
+  await expect(application.host.ensureSlarkAccountProfile({
+    issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'slark-user',
+    authorityEnvironmentId: environmentId, accountBindingHandle: 'slark:startup',
+    authorityBindingVersion: 1, accountAccessToken: 'invalid-token',
+    keyHandle: 'keychain:startup-slark', unlockMaterial: Buffer.alloc(32, 3).toString('base64url'),
+    ownerId: 'owner', expected: { slarkUserId: 'slark-user', environmentId,
+      profileId: randomUUID(), deviceId: randomUUID(),
+      deviceKeyThumbprint: Buffer.alloc(32, 4).toString('base64url'),
+      loginEpoch: 1, bindingEpoch: 1 },
+  })).rejects.toMatchObject({ code: 'unauthorized' })
+  const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-source',
+    unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
+  const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-target',
+    unlockMaterial: Buffer.alloc(32, 2).toString('base64url'), ownerId: 'owner' })
+  for (const profile of [source, target]) {
+    const web = join(root, 'profiles', profile.profileId, 'profiles', 'web')
+    mkdirSync(web, { recursive: true, mode: 0o700 })
+    writeFileSync(join(web, 'package.json'), JSON.stringify({ dependencies: {} }), { mode: 0o600 })
+  }
+  const generationTarget = (profileId: string) => new FileOwnerJsonlMigrationGenerationTarget(
+    join(root, 'profiles', profileId, 'persistence'), process.getuid!(), config.schemaGeneration)
+  await generationTarget(source.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('source-session'), createdAt: 1, isSeeded: false }, [])
+  await generationTarget(target.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('target-session'), createdAt: 1, isSeeded: false }, [])
+  const preview = await options.inspectProfileImport!(source.profileId, target.profileId,
+    new AbortController().signal)
+  const operationId = randomUUID()
+  const input = { sourceProfileId: source.profileId, targetProfileId: target.profileId,
+    operationId, assertAuthority: async () => {} }
+  expect(await options.prepareProfileImport?.({ ...input, expectedPreviewDigest: preview.previewDigest,
+    selectedSessionIds: ['source-session'], selectedPluginNames: [] })).toEqual({ operationId, phase: 'staged' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(1)
+  expect(await options.commitProfileImport?.(input)).toEqual({ operationId, phase: 'committed' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(2)
+  expect(await options.listProfileImportStatus?.({ sourceProfileId: source.profileId,
+    targetProfileId: target.profileId, operationOffset: 0, assertAuthority: async () => {} }))
+    .toMatchObject({ operations: [{ operationId, phase: 'committed' }] })
+  await generationTarget(source.profileId).importSession(1, { version: SESSION_FORMAT_VERSION,
+    id: SessionId('source-session-2'), createdAt: 2, isSeeded: false }, [])
+  const nextPreview = await options.inspectProfileImport!(source.profileId, target.profileId,
+    new AbortController().signal)
+  const abortId = randomUUID()
+  const abortInput = { ...input, operationId: abortId }
+  expect(await options.prepareProfileImport?.({ ...abortInput, expectedPreviewDigest: nextPreview.previewDigest,
+    selectedSessionIds: ['source-session-2'], selectedPluginNames: [] })).toEqual({
+    operationId: abortId, phase: 'staged',
+  })
+  expect(await options.abortProfileImport?.(abortInput)).toEqual({ operationId: abortId, phase: 'aborted' })
+  expect((await generationTarget(target.profileId).inspectExistingPersistence()).generation).toBe(2)
+  const journal = new FileProfileImportOperationJournal(join(root, 'control', 'profile-import-operations'),
+    process.getuid!())
+  const aborted = await journal.load(abortId)
+  if (!aborted) throw Error('missing aborted import intent')
+  const wrongPrepare = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'prepare')
+    .mockResolvedValueOnce({ ...aborted, phase: 'fenced' })
+  await expect(options.prepareProfileImport?.({ ...abortInput, operationId: randomUUID(),
+    expectedPreviewDigest: nextPreview.previewDigest, selectedSessionIds: ['source-session-2'],
+    selectedPluginNames: [] })).rejects.toThrow('profile_import_stage_mismatch')
+  wrongPrepare.mockRestore()
+  const wrongCommit = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'commit')
+    .mockResolvedValueOnce({ ...aborted, phase: 'staged' })
+  await expect(options.commitProfileImport?.(abortInput)).rejects.toThrow('profile_import_commit_mismatch')
+  wrongCommit.mockRestore()
+  const wrongAbort = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'abort')
+    .mockResolvedValueOnce({ ...aborted, phase: 'staged' })
+  await expect(options.abortProfileImport?.(abortInput)).rejects.toThrow('profile_import_abort_mismatch')
+  wrongAbort.mockRestore()
+})
+
+it.skipIf(process.platform === 'win32')('rejects plugin import before durable intent when trusted dependencies are unavailable', async () => {
+  for (const missing of ['installer', 'catalog'] as const) {
+    const value = fixture()
+    const config = value.config
+    Reflect.deleteProperty(config, missing === 'installer' ? 'pnpmEntrypointPath' : 'bundledPluginsRoot')
+    let options: UnixHostServerOptions | undefined
+    const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+    const { startDesktopHostApplication } = await import('../src/startup.ts')
+    const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+      platform: 'darwin', createServer: (captured) => { options = captured; return server },
+      profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+        bootstrapCookie: { name: 'fixture', value: 'private' },
+        closeNotifications: () => {}, abort: () => {}, done: Promise.resolve() }),
+    })
+    onTestFinished(async () => { await application.close(); rmSync(value.root, { recursive: true, force: true }) })
+    if (!options) throw Error('missing server options')
+    const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:missing-installer-source',
+      unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
+    const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:missing-installer-target',
+      unlockMaterial: Buffer.alloc(32, 2).toString('base64url'), ownerId: 'owner' })
+    const operationId = randomUUID()
+    await expect(options.prepareProfileImport?.({ sourceProfileId: source.profileId,
+      targetProfileId: target.profileId, operationId, expectedPreviewDigest: 'a'.repeat(64),
+      selectedSessionIds: [], selectedPluginNames: ['dsh-duet'], assertAuthority: async () => {} }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(await options.listProfileImportStatus?.({ sourceProfileId: source.profileId,
+      targetProfileId: target.profileId, operationOffset: 0, assertAuthority: async () => {} }))
+      .toEqual({ operations: [], nextOperationOffset: null })
+    const fence = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(
+      join(value.root, 'profiles'), process.getuid!()))
+    expect(fence.hasPendingPair(source.profileId, target.profileId, operationId)).toBe(false)
+  }
+})
+
+it.skipIf(process.platform === 'win32')('wires a plugin import through the durable Host command context', async () => {
+  const { config, root } = fixture()
+  let options: UnixHostServerOptions | undefined
+  const server = { start: async () => {}, close: async () => {} } as UnixHostServer
+  const dependencies: StartDesktopHostApplicationDependencies = {
+    platform: 'darwin', createServer: (captured) => { options = captured; return server },
+    profileWorkerFactory: async () => ({ viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => {}, abort: () => {}, done: Promise.resolve() }),
+  }
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, dependencies)
+  onTestFinished(async () => {
+    importWiring.enabled = false
+    vi.restoreAllMocks()
+    await application.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  if (!options) throw Error('missing server options')
+  const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:plugin-import-source',
+    unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
+  const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:plugin-import-target',
+    unlockMaterial: Buffer.alloc(32, 2).toString('base64url'), ownerId: 'owner' })
+  const sourceSnapshotDigest = 'a'.repeat(64)
+  const targetSnapshotDigest = 'b'.repeat(64)
+  const previewDigest = createHash('sha256').update(JSON.stringify([
+    sourceSnapshotDigest, targetSnapshotDigest])).digest('hex')
+  const operationId = randomUUID()
+  const journal = new FileProfileImportOperationJournal(join(root, 'control', 'profile-import-operations'),
+    process.getuid!())
+  const prepared = await journal.create({ operationId, sourceProfileId: source.profileId,
+    targetProfileId: target.profileId, sourceSnapshotDigest, targetSnapshotDigest, previewDigest,
+    selectedSessionIds: [], selectedPluginNames: ['dsh-duet'], targetGeneration: 1, stagedGeneration: 2 })
+  const fenced = await journal.advance(prepared, 'fenced')
+  const staged = await journal.advance(fenced, 'staged')
+  importWiring.enabled = true
+  const prepare = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'prepareWithPlugins')
+    .mockImplementation(async (_input, plugins) => { await plugins.prepare(fenced); return staged })
+  const commit = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'commitWithPlugins')
+    .mockImplementation(async (context) => {
+      await context.pluginPublisher.assertQuiescent()
+      await expect(context.pluginPublisher.assertPreparedCandidate()).rejects.toThrow()
+      const active = await context.target.target.inspectExistingPersistence()
+      const changedPointer = vi.spyOn(context.target.target, 'inspectExistingPersistence')
+        .mockResolvedValueOnce({ ...active, generation: active.generation + 1 })
+      await expect(context.pluginPublisher.assertSessionPointerOld())
+        .rejects.toThrow('profile_import_generation_changed')
+      changedPointer.mockRestore()
+      await context.pluginPublisher.assertSessionPointerOld()
+      await context.activateCandidate(0)
+      return { ...staged, phase: 'committed' }
+    })
+  const abort = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'abortWithPlugins')
+    .mockResolvedValue({ ...staged, phase: 'aborted' })
+  const input = { sourceProfileId: source.profileId, targetProfileId: target.profileId,
+    operationId, assertAuthority: async () => {}, signal: new AbortController().signal }
+  const withoutSignal = { sourceProfileId: source.profileId, targetProfileId: target.profileId,
+    operationId, assertAuthority: input.assertAuthority }
+  expect(await options.prepareProfileImport?.({ ...input, expectedPreviewDigest: previewDigest,
+    selectedSessionIds: [], selectedPluginNames: ['dsh-duet'] }))
+    .toEqual({ operationId, phase: 'staged' })
+  expect(prepare.mock.calls[0]?.[0].selectedPluginNames).toEqual(['dsh-duet'])
+  expect(prepare.mock.calls[0]?.[1].journal).toBeDefined()
+  const homePatchPath = join(root, 'profiles', target.profileId, 'cordis.patch.yml')
+  const homePatch = readFileSync(homePatchPath)
+  rmSync(homePatchPath)
+  prepare.mockImplementationOnce(async (_input, plugins) => {
+    await plugins.prepare(fenced)
+    return { ...staged, phase: 'fenced' }
+  })
+  await expect(options.prepareProfileImport?.({ ...withoutSignal,
+    expectedPreviewDigest: previewDigest,
+    selectedSessionIds: [], selectedPluginNames: ['dsh-duet'] }))
+    .rejects.toThrow('profile_import_stage_mismatch')
+  writeFileSync(homePatchPath, homePatch, { mode: 0o600 })
+  await expect(options.commitProfileImport?.({ ...input, operationId: randomUUID() }))
+    .rejects.toThrow('profile_import_operation_not_found')
+  await expect(options.commitProfileImport?.(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(commit).not.toHaveBeenCalled()
+  Reflect.deleteProperty(dependencies, 'profileWorkerFactory')
+  const fence = new ProfileImportWorkerFence(new FileProfileImportFenceFiles(
+    join(root, 'profiles'), process.getuid!()))
+  fence.reservePair(source.profileId, target.profileId, operationId)
+  expect(await options.commitProfileImport?.(input)).toEqual({ operationId, phase: 'committed' })
+  expect(commit.mock.calls[0]?.[0].pluginPublisher.operationId).toBe(operationId)
+  expect(commit.mock.calls[0]?.[0].pluginPublisher.sourceProfileId).toBe(source.profileId)
+  expect(commit.mock.calls[0]?.[0].pluginPublisher.targetProfileId).toBe(target.profileId)
+  expect(await options.commitProfileImport?.(withoutSignal))
+    .toEqual({ operationId, phase: 'committed' })
+  commit.mockResolvedValueOnce(staged)
+  await expect(options.commitProfileImport?.(withoutSignal))
+    .rejects.toThrow('profile_import_commit_mismatch')
+  expect(await options.abortProfileImport?.(input)).toEqual({ operationId, phase: 'aborted' })
+  expect(abort).toHaveBeenCalledOnce()
+  abort.mockResolvedValueOnce(staged)
+  await expect(options.abortProfileImport?.(input)).rejects.toThrow('profile_import_abort_mismatch')
+  const committing = await journal.advance(staged, 'committing')
+  const inspect = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'inspectCommittingWithPlugins')
+    .mockResolvedValue({ operation: committing, pointer: 'staged', sessionCount: 0,
+      pluginAction: 'published' })
+  const recover = vi.spyOn(ProfileImportSessionCoordinator.prototype, 'recoverFailedActivationWithPlugins')
+    .mockResolvedValue({ ...committing, phase: 'aborted' })
+  expect(await options.abortProfileImport?.(input)).toEqual({ operationId, phase: 'aborted' })
+  expect(inspect).toHaveBeenCalledOnce()
+  expect(recover).toHaveBeenCalledWith(expect.objectContaining({
+    nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
+  }))
+})
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()
@@ -251,6 +609,18 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
   if (!serverOptions) throw new Error('missing captured server options')
+  await expect(serverOptions.prepareProfileImport?.({ sourceProfileId: randomUUID(),
+    targetProfileId: randomUUID(), operationId: randomUUID(), expectedPreviewDigest: 'a'.repeat(64),
+    selectedSessionIds: ['source-session'], selectedPluginNames: [],
+    assertAuthority: async () => { throw Error('revoked') },
+  })).rejects.toThrow('revoked')
+  let importAuthorityChecks = 0
+  expect(await serverOptions.listProfileImportStatus?.({ sourceProfileId: randomUUID(),
+    targetProfileId: randomUUID(), operationOffset: 0,
+    assertAuthority: async () => { importAuthorityChecks++ } })).toEqual({
+    operations: [], nextOperationOffset: null,
+  })
+  expect(importAuthorityChecks).toBe(2)
   const capturedServerOptions = serverOptions
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
   expect(await serverOptions.inspectModelClaimSource?.(new AbortController().signal)).toMatchObject({ candidates: [] })
@@ -576,7 +946,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   const ledgerRoot = join(root, 'control', 'legacy-model-claims')
   mkdirSync(ledgerRoot, { recursive: true, mode: 0o700 })
   writeFileSync(join(ledgerRoot, 'legacy-claims.v1.json'), 'corrupt', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(recoveringConfig, { now: () => NOW }, {
@@ -592,7 +964,9 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
   const { config, root, accountPrivateKey } = fixture()
-  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const server = Object.assign(Object.create(UnixHostServer.prototype) as UnixHostServer, {
+    start: async () => undefined, close: async () => undefined,
+  })
   let serverOptions: UnixHostServerOptions | undefined
   let workerStarts = 0
   const { startDesktopHostApplication } = await import('../src/startup.ts')
