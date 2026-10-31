@@ -59,6 +59,19 @@ it('refuses a queued restart when isolated worker cleanup cannot be confirmed', 
   await workers.disposeAll()
 })
 
+it('blocks another writer if stopping the original Profile worker fails', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => {
+    let fail!: (error: Error) => void
+    const done = new Promise<void>((_resolve, reject) => { fail = reject })
+    return { closeNotifications() {}, abort() { fail(new Error('original exit unknown')) }, done }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await workers.start(input)
+  await expect(workers.withQuiescent(input.profileId, async () => {})).rejects.toThrow('original exit unknown')
+  await expect(workers.start(input)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
 it('discards restricted Session reads when the original worker is replaced', async () => {
   let release!: () => void, enter!: () => void
   const entered = new Promise<void>(resolve => { enter = resolve })

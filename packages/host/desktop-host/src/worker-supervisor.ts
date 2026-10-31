@@ -597,7 +597,12 @@ export class ProfileWorkerSupervisor {
     if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
     return this.serial(profileId, async () => {
       if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
-      await this.disposeOwned(profileId)
+      try {
+        await this.disposeOwned(profileId)
+      } catch (error) {
+        this.blockProfile(profileId)
+        throw error
+      }
       if (this.closed) throw new HostAuthorityError('unavailable')
       return operation()
     })
