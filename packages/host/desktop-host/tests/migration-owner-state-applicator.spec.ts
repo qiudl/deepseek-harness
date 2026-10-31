@@ -152,7 +152,7 @@ describe('migration owner-state generation applicator', () => {
     await symlink(paths.credentialsPath, join(persistenceRoot, 'unexpected-link'))
     const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-link-fixture' })
-    onTestFinished(() => ownership.release())
+    onTestFinished(async () => { await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true }) })
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
@@ -173,6 +173,7 @@ describe('migration owner-state generation applicator', () => {
     onTestFinished(async () => {
       diskFaults.availableBytes = undefined; diskFaults.copyNoSpace = false; diskFaults.afterCopy = undefined
       await ownership.release()
+      await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
     })
     const input = { stagingParent: parent, expectedUid: uid, profileRoot: source, ownerPaths: paths,
       persistence: { root: persistenceRoot, compression: 'none' as const },
@@ -206,7 +207,10 @@ describe('migration owner-state generation applicator', () => {
     await writeFile(file, 'original', { mode: 0o600 })
     const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-content-fixture' })
-    onTestFinished(async () => { diskFaults.afterCopy = undefined; await ownership.release() })
+    onTestFinished(async () => {
+      diskFaults.afterCopy = undefined
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
     diskFaults.afterCopy = () => writeFileSync(file, 'changed!', { mode: 0o600 })
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
@@ -214,6 +218,13 @@ describe('migration owner-state generation applicator', () => {
       signal: new AbortController().signal })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
     expect(await readFile(file, 'utf8')).toBe('changed!')
+    await writeFile(file, 'original', { mode: 0o600 })
+    diskFaults.afterCopy = () => writeFileSync(join(persistenceRoot, 'new-session.jsonl'), 'new', { mode: 0o600 })
+    await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
+      ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
+      inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
   })
 
   it('does not delete a staged Profile after losing its Host lock', async () => {
