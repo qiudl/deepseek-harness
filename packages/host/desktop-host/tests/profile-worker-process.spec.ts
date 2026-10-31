@@ -428,6 +428,30 @@ describe('dsh web Profile worker', () => {
     expect(signals).toEqual(['SIGKILL'])
   })
 
+  it('waits for the failed startup child to close before reporting failure', async () => {
+    let killed!: () => void
+    const killObserved = new Promise<void>(resolve => { killed = resolve })
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    child.kill = () => { killed(); return true }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10 })
+    const wait = (factory as unknown as { waitForOrigin(child: ChildProcess): Promise<unknown> })
+      .waitForOrigin(child as unknown as ChildProcess)
+    let settled = false
+    void wait.then(() => { settled = true }, () => { settled = true })
+    const failure = expect(wait).rejects.toMatchObject({ code: 'unavailable' })
+    await killObserved
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    child.emit('close', null, 'SIGKILL')
+    await failure
+  })
+
   it('settles Web worker handles once across error, exit, and forced abort paths', async () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, abortTimeoutMs: 10,
