@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { spawnSync } from 'node:child_process'
-import { join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
@@ -17,6 +17,7 @@ const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 
   invalidDependenciesAt: 0, unknownDependenciesAt: 0, nullDuringPrepareBaseline: false }))
 const targetLockFaults = vi.hoisted(() => ({ replacement: '', at: 0, calls: 0 }))
 const runPnpmFaults = vi.hoisted(() => ({ removeResolvedAfterFrozen: false }))
+const layerSyncFaults = vi.hoisted(() => ({ removeModulesAfterReceiptSync: false, armed: false }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -70,6 +71,21 @@ vi.mock('../src/profile-import-plugin-isolated-install.ts', async (importOrigina
     if (runPnpmFaults.removeResolvedAfterFrozen && args[0].frozen
       && args[0].sandboxRoot.endsWith('/target-merge')) {
       await (await import('node:fs/promises')).rm(args[0].sandboxRoot, { recursive: true, force: true })
+    }
+  } }
+})
+vi.mock('../src/profile-import-plugin-private-dir.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-private-dir.ts')>()
+  return { ...actual, writePrivate: async (...args: Parameters<typeof actual.writePrivate>) => {
+    await actual.writePrivate(...args)
+    if (layerSyncFaults.removeModulesAfterReceiptSync && args[0].endsWith('/layer-receipt.json')) {
+      layerSyncFaults.armed = true
+    }
+  }, syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) => {
+    await actual.syncDirectory(...args)
+    if (layerSyncFaults.armed && args[0].endsWith('/target-merge')) {
+      layerSyncFaults.armed = false
+      await (await import('node:fs/promises')).rm(`${args[0]}/node_modules`, { recursive: true, force: true })
     }
   } }
 })
@@ -850,6 +866,37 @@ describe('offline Profile existing-only inspector', () => {
         nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
         .rejects.toThrow('profile_import_plugin_target_archive_changed')
     } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
+    isolatedReadFaults.set(baselineSourceArchivePath, { calls: 0, at: 1, mode: 'changed' })
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
+    const installedStage = await inspectIsolatedProfileImportPluginInstall({ target: input.target,
+      sourceProfileId: input.source.profileId, uid, operationId: input.operationId,
+      fence: input.fence, journal, catalog, plan })
+    if (!installedStage) throw Error('missing isolated stage')
+    const stagedArchivePath = join(installedStage.sandboxRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`)
+    for (const [mode, frame] of [['throw', ':221:'], ['changed', ':223:']] as const) {
+      let rejectedStageArchive = false
+      for (let at = 1; at <= 16 && !rejectedStageArchive; at++) {
+        const fault = { calls: 0, at, mode }
+        isolatedReadFaults.set(stagedArchivePath, fault)
+        try {
+          const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+            nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+            .then(() => null, (error: unknown) => error as Error)
+          rejectedStageArchive = failure?.message === 'profile_import_plugin_stage_archive_changed'
+            && !!failure.stack?.includes(frame)
+          if (!failure && fault.calls < at) break
+        } finally {
+          isolatedReadFaults.delete(stagedArchivePath)
+          await rm(targetMergeRoot, { recursive: true, force: true })
+        }
+      }
+      expect(rejectedStageArchive).toBe(true)
+    }
     const getForDependency = catalog.getForDependency.bind(catalog)
     const catalogDriftFailures = new Set([
       'profile_import_plugin_target_source_unsupported',
@@ -874,9 +921,31 @@ describe('offline Profile existing-only inspector', () => {
       }
     }
     expect([...catalogDriftFailures]).toEqual([])
+    const selectedCopiedArchivePath = join(targetMergeRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`)
+    for (const mode of ['throw', 'changed'] as const) {
+      isolatedReadFaults.set(selectedCopiedArchivePath, { calls: 0, at: 1, mode })
+      try {
+        await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+          .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+      } finally {
+        isolatedReadFaults.delete(selectedCopiedArchivePath)
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    const baselineModulesRoot = join(value.target.web, 'node_modules', 'baseline-plugin')
+    const linkedBaselineRoot = join(value.target.web, 'node_modules', '.pnpm',
+      `baseline-plugin@file+.bundled-plugins+${baselineDigest}.tgz`, 'node_modules', 'baseline-plugin')
+    await mkdir(dirname(linkedBaselineRoot), { recursive: true, mode: 0o700 })
+    await rm(linkedBaselineRoot, { recursive: true, force: true })
+    await rename(baselineModulesRoot, linkedBaselineRoot)
+    await symlink(relative(dirname(baselineModulesRoot), linkedBaselineRoot), baselineModulesRoot)
     const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    await unlink(baselineModulesRoot)
+    await rename(linkedBaselineRoot, baselineModulesRoot)
     let rejectedMissingBaselineEntry = false
     for (let at = 1; at <= 16 && !rejectedMissingBaselineEntry; at++) {
       let calls = 0
@@ -1095,6 +1164,18 @@ describe('offline Profile existing-only inspector', () => {
         nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
         .rejects.toThrow('profile_import_plugin_target_install_invalid')
     } finally { trustManifestFaults.nullDuringPrepareBaseline = false }
+    await rm(targetMergeRoot, { recursive: true, force: true })
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
+    layerSyncFaults.removeModulesAfterReceiptSync = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally {
+      layerSyncFaults.removeModulesAfterReceiptSync = false
+      layerSyncFaults.armed = false
+    }
     await rm(targetMergeRoot, { recursive: true, force: true })
     expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
