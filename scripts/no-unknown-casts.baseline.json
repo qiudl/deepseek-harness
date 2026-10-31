@@ -222,7 +222,6 @@
   },
   "packages/api/session-controller/tests/commands-create-fork.host.spec.ts": {
     "9910c2717b4be0b1d931a81447639094b314012297de3133d0557df9d2f76401": 1,
-    "d961dc67779f636692251bbcf8c152c886f273e0f821202e9d13a4ee4ed063f7": 1,
     "e929814f19128d947cc0188ecfe39833ffd5cf3f2c7155ddfef94ba9740d2bfd": 1
   },
   "packages/api/session-controller/tests/commands-queue-attachment.host.spec.ts": {
@@ -240,7 +239,7 @@
     "f2fe8bd862649a2492b7f99f0c35e78ba051a248f339d248d0dcfab163c69752": 1
   },
   "packages/api/session-controller/tests/controller.host.spec.ts": {
-    "40725eab4d86929b16d87c88d5cf83168035def78b4d901613dd0369876f0731": 4,
+    "40725eab4d86929b16d87c88d5cf83168035def78b4d901613dd0369876f0731": 3,
     "6667f55d27d315e8906a2ffdd1b7ab83c3785036fce5575f865b1dab9f3710b3": 2
   },
   "packages/api/session-controller/tests/event-script.client.ts": {
@@ -276,9 +275,6 @@
   },
   "packages/api/session-controller/tests/session-history-journal.host.spec.ts": {
     "4e6289bbcd36e12927fd2ac87dc09b4de8ac884f2a0041af58383a0144b8b9b1": 1
-  },
-  "packages/api/session-controller/tests/session-models.host.spec.ts": {
-    "7f2d35b6be247c2410599d4b91260905bc2ada88f62507af622fe067a9295f5b": 1
   },
   "packages/api/session-controller/tests/session-pending-submissions.client.spec.ts": {
     "f35467810e1f7bd9ea7659c947c274c48d310411d0eabcf528366708ea3b7ca1": 1

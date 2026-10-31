@@ -8,6 +8,7 @@
 import { describe, expect, it, vi, onTestFinished } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { AgentModel, agentEvents, installModelSelection } from '@deepseek-ai/dsh-agent'
+import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AttachmentStore from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -130,14 +131,11 @@ async function harness(logged?: {
     return state
   }, () => undefined)
   installModelSelection(ctx, model)
-  const agent = {
-    id: session.id,
-    session,
-    model,
-    status: 'running',
-    ctx,
-    inbox: { nextTurn: [], nextStep: [] },
-  } as unknown as Agent
+  const agent: Agent = {
+    id: session.id, session, model, ctx, options: {}, status: 'running', inbox: createInboxStub(),
+    send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
+    runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
+  }
   await ctx.agents.register(agent)
   return { ctx, agent, sessionId: session.id }
 }
