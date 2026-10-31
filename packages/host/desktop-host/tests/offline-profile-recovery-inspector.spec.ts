@@ -399,6 +399,23 @@ async function treeInventory(root: string): Promise<unknown[]> {
 }
 
 describe('offline Profile existing-only inspector', () => {
+  it('rejects the POSIX-only target plugin resolver and installer on Windows before touching Profile files', async () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation(
+        {} as Parameters<typeof resolveProfileImportTargetPluginsInIsolation>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(
+        {} as Parameters<typeof inspectResolvedProfileImportTargetPluginsInIsolation>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(installResolvedProfileImportTargetPlugins(
+        {} as Parameters<typeof installResolvedProfileImportTargetPlugins>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+      await expect(inspectResolvedProfileImportTargetPluginLayer(
+        {} as Parameters<typeof inspectResolvedProfileImportTargetPluginLayer>[0]))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+    } finally { platform.mockRestore() }
+  })
   async function releasedEmptyProfile() {
     const value = await fixture()
     await rm(join(value.web, 'node_modules'), { recursive: true })
@@ -752,11 +769,18 @@ describe('offline Profile existing-only inspector', () => {
     await installStagedProfileImportPluginsInIsolation({ target: input.target,
       sourceProfileId: input.source.profileId, uid, operationId: input.operationId,
       fence: input.fence, journal, catalog, plan, nodeExecutablePath: process.execPath, pnpmEntrypointPath })
-    const resolutionInput = { ...input, journal, plan, manifestPlan }
+    const resolutionInput = { ...input, journal, plan, manifestPlan,
+      signal: new AbortController().signal }
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toBeNull()
+    await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
     const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toBeNull()
     const resolvedArchives = join(resolved.resolutionRoot, '.bundled-plugins')
     await chmod(resolvedArchives, 0o777)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
@@ -780,6 +804,16 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
     await writeFile(receiptPath, receipt, { mode: 0o600 })
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_plan_changed')
+    } finally { isolatedReadFaults.delete(receiptPath) }
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 2, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    } finally { isolatedReadFaults.delete(receiptPath) }
     const mergedLockPath = join(resolved.resolutionRoot, 'pnpm-lock.yaml')
     const extraResolution = lock.replace('packages:\n', 'packages:\n  unrelated@1.0.0:\n    version: 1.0.0\n')
     await writeFile(mergedLockPath, extraResolution)
@@ -794,6 +828,34 @@ describe('offline Profile existing-only inspector', () => {
       lockfileDigest: createHash('sha256').update(extraImporter).digest('hex') })}\n`)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const obsoleteLockfile = lock.replace("lockfileVersion: '9.0'", "lockfileVersion: '8.0'")
+    expect(obsoleteLockfile).not.toBe(lock)
+    await writeFile(mergedLockPath, obsoleteLockfile)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(obsoleteLockfile).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const malformedPackages = lock.replace('packages:\n', 'packages: []\n')
+    expect(malformedPackages).not.toBe(lock)
+    await writeFile(mergedLockPath, malformedPackages)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(malformedPackages).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const arrayImporters = lock.replace(/importers:\n[\s\S]*?\npackages:/u, 'importers: []\npackages:')
+    expect(arrayImporters).not.toBe(lock)
+    await writeFile(mergedLockPath, arrayImporters)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(arrayImporters).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    const arrayPackages = lock.replace(/packages:\n[\s\S]*?\nsnapshots:/u, 'packages: []\nsnapshots:')
+    expect(arrayPackages).not.toBe(lock)
+    await writeFile(mergedLockPath, arrayPackages)
+    await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt.toString()),
+      lockfileDigest: createHash('sha256').update(arrayPackages).digest('hex') })}\n`)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
     await writeFile(mergedLockPath, lock)
     await writeFile(receiptPath, receipt)
     const copiedBaselineArchive = join(resolved.resolutionRoot, '.bundled-plugins', `${baselineDigest}.tgz`)
@@ -806,6 +868,12 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_archive_changed')
     await writeFile(liveBaselineArchive, baselineBytes)
+    const copiedSelectedArchive = join(resolvedArchives, `${value.source.digest}.tgz`)
+    isolatedReadFaults.set(copiedSelectedArchive, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    } finally { isolatedReadFaults.delete(copiedSelectedArchive) }
     const copiedArchiveDirectory = join(resolved.resolutionRoot, '.bundled-plugins')
     const heldArchiveDirectory = join(resolved.resolutionRoot, 'held-bundled-plugins')
     await rename(copiedArchiveDirectory, heldArchiveDirectory)
@@ -829,6 +897,9 @@ describe('offline Profile existing-only inspector', () => {
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
     const layer = await installResolvedProfileImportTargetPlugins({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_target_install_incomplete')
     expect(layer.installationRoot).toBe(resolved.resolutionRoot)
     expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toEqual(layer)
     const layerReceiptPath = join(layer.installationRoot, 'layer-receipt.json')
@@ -837,12 +908,36 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_install_incomplete')
     await writeFile(layerReceiptPath, layerReceipt, { mode: 0o600 })
+    await writeFile(layerReceiptPath, Buffer.concat([layerReceipt, Buffer.from('unexpected')]))
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    await writeFile(layerReceiptPath, layerReceipt)
+    isolatedReadFaults.set(layerReceiptPath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    isolatedReadFaults.set(layerReceiptPath, { calls: 0, at: 2, mode: 'changed' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
     const layerModulesPath = join(layer.installationRoot, 'node_modules')
     const layerModulesMode = (await lstat(layerModulesPath)).mode & 0o777
     await chmod(layerModulesPath, 0o777)
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_install_unsafe')
     await chmod(layerModulesPath, layerModulesMode)
+    const heldModulesPath = join(layer.installationRoot, 'held-node-modules')
+    await rename(layerModulesPath, heldModulesPath)
+    await symlink(heldModulesPath, layerModulesPath)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_unsafe')
+    } finally {
+      await unlink(layerModulesPath)
+      await rename(heldModulesPath, layerModulesPath)
+    }
     const baselineRoot = join(layer.installationRoot, 'baseline-composition')
     await chmod(baselineRoot, 0o777)
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
@@ -1088,16 +1183,15 @@ describe('offline Profile existing-only inspector', () => {
     await hostLock.release()
   }, 120_000)
 
-  it.skipIf(process.platform === 'win32')('prepares and jointly commits a complete plugin layer from an empty target web', async () => {
+  it.skipIf(process.platform === 'win32')('prepares and jointly commits a plugin layer when the empty target has no lockfile', async () => {
     const value = await pluginPlanFixture(true)
     await writeFile(join(value.target.web, 'pnpm-workspace.yaml'),
       'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
-    await writeFile(join(value.target.web, 'pnpm-lock.yaml'),
-      "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies: {}\npackages: {}\nsnapshots: {}\n")
     await writeFile(join(value.target.web, 'cordis.patch.yml'), '[]\n')
-    await writeFile(join(value.target.web, 'compatibility.json'), '{}\n')
     const originalManifest = await readFile(join(value.target.web, 'package.json'))
-    const originalLock = await readFile(join(value.target.web, 'pnpm-lock.yaml'))
+    const targetLockPath = join(value.target.web, 'pnpm-lock.yaml')
+    await unlink(targetLockPath)
+    await expect(readFile(targetLockPath)).rejects.toMatchObject({ code: 'ENOENT' })
     const preview = await value.inspect()
     const input = { ...value.input, expectedPreviewDigest: preview.previewDigest }
     const journal = new FileProfileImportOperationJournal(
@@ -1121,7 +1215,7 @@ describe('offline Profile existing-only inspector', () => {
     expect((await inspectProfileImportPluginDirectoryState({ profileRoot: value.target.profileRoot,
       operationId: input.operationId, uid, plan: publishRecord!.plan }))).toBe('prepared')
     expect(await readFile(join(value.target.web, 'package.json'))).toEqual(originalManifest)
-    expect(await readFile(join(value.target.web, 'pnpm-lock.yaml'))).toEqual(originalLock)
+    await expect(readFile(targetLockPath)).rejects.toMatchObject({ code: 'ENOENT' })
     expect((await journal.load(input.operationId))?.phase).toBe('staged')
     await inspectPreparedProfileImportPlugins(preparedInput)
     const missingRecord = vi.spyOn(publishJournal, 'load').mockResolvedValueOnce(null)
@@ -1152,7 +1246,7 @@ describe('offline Profile existing-only inspector', () => {
     expect(committed.phase).toBe('committed')
     expect(await input.target.target.activeGeneration()).toBe(staged.stagedGeneration)
     expect(await readFile(join(value.target.web, 'package.json'), 'utf8')).toContain('fixture-plugin')
-    expect(await readFile(join(value.target.web, 'pnpm-lock.yaml'))).not.toEqual(originalLock)
+    expect(await readFile(targetLockPath, 'utf8')).toContain('fixture-plugin')
     await hostLock.release()
   }, 30_000)
 
