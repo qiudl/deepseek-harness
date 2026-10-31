@@ -38,21 +38,40 @@ it('confirms deactivation only when the exact disabled row has no running fiber'
   }
 })
 
-it.each([null, 42, {}, { type: 'client-request' }, { type: 'server-response', rpcId: 'wrong', result: { ok: true, value: { entries: [] } } }])('rejects malformed inventory envelopes: %#', async (value) => {
-  vi.stubGlobal('fetch', async () => Response.json(value))
-  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('invalid_runtime_response')
+it.each([null, 42, {}, { type: 'client-request' }, { type: 'server-response', rpcId: 'wrong', result: { ok: true, value: { entries: [] } } }])('retries malformed inventory envelopes until the bounded lifetime ends: %#', async (value) => {
+  const fetcher = vi.fn(async () => Response.json(value))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(250))).rejects.toThrow()
+  expect(fetcher.mock.calls.length).toBeGreaterThan(1)
 })
 
-it.each([401, 204])('refuses HTTP %s without acknowledging startup', async (status) => {
-  vi.stubGlobal('fetch', async () => new Response(null, { status }))
-  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_unavailable')
+it.each([401, 204])('retries HTTP %s until the bounded lifetime ends instead of failing startup', async (status) => {
+  const fetcher = vi.fn(async () => new Response(null, { status }))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(250))).rejects.toThrow()
+  expect(fetcher.mock.calls.length).toBeGreaterThan(1)
 })
 
-it('cancels an error response body and rejects excessive response bytes', async () => {
+it('retries a refused worker until it answers, then acknowledges normally', async () => {
+  let calls = 0
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+    calls += 1
+    if (calls < 3) throw new TypeError('fetch failed')
+    if (typeof init.body !== 'string') throw Error('missing request body')
+    const request = JSON.parse(init.body) as { rpcId: string }
+    return Response.json({ type: 'server-response', rpcId: request.rpcId,
+      result: { ok: true, value: { entries: [{ ...expected[0], enabled: true, fiberPhase: 'active' }] } } })
+  })
+  vi.stubGlobal('fetch', fetcher)
+  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).resolves.toBeUndefined()
+  expect(fetcher).toHaveBeenCalledTimes(3)
+})
+
+it('cancels each error response body while retrying and rejects excessive response bytes', async () => {
   const cancel = vi.fn()
   vi.stubGlobal('fetch', async () => new Response(new ReadableStream({ cancel }), { status: 503 }))
-  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_unavailable')
-  expect(cancel).toHaveBeenCalledOnce()
+  await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(250))).rejects.toThrow()
+  expect(cancel.mock.calls.length).toBeGreaterThan(1)
   vi.stubGlobal('fetch', async () => new Response('x'.repeat(524_289)))
   await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('runtime_response_too_large')
 })

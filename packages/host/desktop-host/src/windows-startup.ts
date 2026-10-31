@@ -1,6 +1,6 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, symlinkSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
@@ -65,6 +65,32 @@ const PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
+
+/**
+ * REQ-20261028-0021: bundled plugins declare the DSH platform packages as peerDependencies
+ * (dsh-duet is self-contained, but ds-bot imports @deepseek-ai/dsh-llm etc. directly). pnpm cannot
+ * resolve those internal packages from a registry, so a bundled install leaves the Profile
+ * node_modules without them and the plugin host entry fails ERR_MODULE_NOT_FOUND on reload
+ * (executor_failed). The runtime already ships them, so expose them to the Profile by junction
+ * instead of duplicating bytes. `dshEntrypointPath` is `<...>/app/node_modules/@deepseek-ai/dsh/lib/bin.js`.
+ */
+export function linkBundledPluginPeerPackages(webRootPath: string, dshEntrypointPath: string): void {
+  const appNodeModules = win32.dirname(win32.dirname(
+    win32.dirname(win32.dirname(dshEntrypointPath))))
+  const destination = win32.join(webRootPath, 'node_modules', '@deepseek-ai')
+  for (const name of ['dsh-llm', 'dsh-tools', 'dsh-web'] as const) {
+    // A missing runtime package or an already-linked destination is a no-op, never a reason to
+    // fail the plugin install itself (self-contained plugins ignore the links).
+    try {
+      const source = win32.join(appNodeModules, '@deepseek-ai', name)
+      if (!lstatSync(source).isDirectory()) continue
+      const link = win32.join(destination, name)
+      if (existsSync(link)) continue
+      mkdirSync(destination, { recursive: true, mode: 0o700 })
+      symlinkSync(source, link, 'junction')
+    } catch { /* best effort */ }
+  }
+}
 
 /** Non-secret, embedding-pinned inputs for the private Windows Host composition. */
 export interface WindowsDesktopHostBaseConfig extends Omit<
@@ -517,7 +543,10 @@ async function startWindowsDesktopHostApplicationWithTrust(
               return composedEntryIds(loaded.layers, [...loaded.patches, ...overlays])
             },
           }),
-          install: (root, spec, context) => runPlugin(root, spec, context),
+          install: async (root, spec, context) => {
+            await runPlugin(root, spec, context)
+            linkBundledPluginPeerPackages(webRoot(root), config.dshEntrypointPath)
+          },
           acknowledge: async (profileId, packageName, context) => {
             context.guard(); context.signal.throwIfAborted()
             const { loaded, overlays } = loadComposition(profileRoot(profileId))
