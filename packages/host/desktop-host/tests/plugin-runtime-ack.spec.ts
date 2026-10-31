@@ -38,9 +38,11 @@ it('confirms deactivation only when the exact disabled row has no running fiber'
   }
 })
 
-it.each([null, 42, {}, { type: 'client-request' }, { type: 'server-response', rpcId: 'wrong', result: { ok: true, value: { entries: [] } } }])('rejects malformed inventory envelopes: %#', async (value) => {
-  vi.stubGlobal('fetch', async () => Response.json(value))
-  await expect(waitForPluginRuntime(worker, expected, new AbortController().signal)).rejects.toThrow('invalid_runtime_response')
+it.each([null, 42, {}, { type: 'client-request' }, { type: 'server-response', rpcId: 'wrong', result: { ok: true, value: { entries: [] } } }])('retries malformed inventory envelopes until the bounded lifetime ends: %#', async (value) => {
+  const fetcher = vi.fn(async () => Response.json(value))
+  vi.stubGlobal('fetch', fetcher)
+  await expect(waitForPluginRuntime(worker, expected, AbortSignal.timeout(250))).rejects.toThrow()
+  expect(fetcher.mock.calls.length).toBeGreaterThan(1)
 })
 
 it.each([401, 204])('retries HTTP %s until the bounded lifetime ends instead of failing startup', async (status) => {

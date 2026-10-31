@@ -41,13 +41,13 @@ export async function waitForPluginRuntime(
       }
       entries = value
     } catch (error) {
-      // REQ-20261028-0021: the worker stops accepting connections while the runtime reloads the
-      // composition; a refused connection or a not-yet-registered endpoint is not an install
-      // failure. Malformed or contradictory answers from a reachable worker stay fatal.
+      // REQ-20261028-0021: the worker stops accepting connections and answers half-initialized
+      // while the runtime reloads the composition; transport and envelope failures inside the
+      // bounded lifetime are a reason to keep waiting, not to fail the install. A fiber the
+      // runtime itself reports as failed is observed only in the parsed answer below and stays
+      // a definitive startup failure; an oversized answer stays a bound violation.
       lifetime.throwIfAborted()
-      const transient = error instanceof TypeError
-        || (error instanceof Error && error.message === 'runtime_unavailable')
-      if (!transient) throw error
+      if (error instanceof Error && error.message === 'runtime_response_too_large') throw error
       await setTimeout(100, undefined, { signal: lifetime })
       continue
     }
