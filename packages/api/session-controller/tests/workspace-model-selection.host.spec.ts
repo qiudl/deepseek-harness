@@ -299,7 +299,7 @@ describe('Host workspace model inspection', () => {
     } finally { await h.dispose() }
   })
 
-  it('reads an installed live choice, then strips an adapter default after consumption', async () => {
+  it('retains explicit pending effort when the request reports an adapter default', async () => {
     const adapter = new SnapshotAdapter()
     adapter.listModels = async provider => [{ provider, id: 'selected-model', name: 'Selected' }]
     const h = await harness([], adapter)
@@ -318,7 +318,7 @@ describe('Host workspace model inspection', () => {
       resolve.mockClear()
       expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model', reasoningEffort: 'high' })
       session.append('request/header', { header: { config: { provider: 'selected', model: 'selected-model', reasoningEffort: ReasoningEffortId('high') }, adapterDefaults: { reasoningEffort: true } }, reason: 'initial' })
-      expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model' })
+      expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model', reasoningEffort: 'high' })
       expect(resolve).not.toHaveBeenCalled()
       expect(h.resume).not.toHaveBeenCalled()
     } finally { await h.dispose() }

@@ -19,7 +19,8 @@ import {
   ApiSessionSubagentOwnership,
   inspectApiSession,
 } from '../src/agent.ts'
-import { installModelSelectionProjection } from '../src/model-selection-projection.ts'
+import { foldModelSelection, installModelSelectionProjection } from '../src/model-selection-projection.ts'
+import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { installSessionReadTestServices, testSessionPersistence } from './test-remote.ts'
 
 const roots: Context[] = []
@@ -289,6 +290,31 @@ describe('ApiSession Agent lookup and recovery', () => {
 })
 
 describe('ApiSession model selection', () => {
+  it('replays adapter-defaulted effort as absent and consumes matching pending intent', async () => {
+    const { ctx } = await harness()
+    const logged = agent(ctx, header('default-effort'))
+    logged.session.append('model/selection', { provider: 'provider', model: 'model' })
+    logged.session.append('request/header', {
+      header: { config: { provider: 'provider', model: 'model', reasoningEffort: 'high' as never },
+        adapterDefaults: { reasoningEffort: true } },
+      reason: 'initial',
+    })
+    expect(modelSelectionProjectionDefinition.stateVersion).toBe(3)
+    expect(foldModelSelection(logged.session.snapshotEvents())).toEqual({
+      lastUsed: { provider: 'provider', model: 'model' }, pending: null,
+    })
+  })
+
+  it('refolds version 2 cached model selection from the durable events', async () => {
+    const { ctx } = await harness()
+    const logged = agent(ctx, header('old-model-cache'))
+    logged.session.append('model/selection', { provider: 'actual', model: 'model' })
+    const { checkpoint } = ctx.sessionProjections.restore({
+      modelSelection: { ver: 2, seq: 0, val: { lastUsed: null, pending: { provider: 'stale', model: 'model' } } },
+    }, logged.session.snapshotEvents(), SessionLogOffset(0), logged.session.header, SessionLogOffset(0))
+    expect(checkpoint.modelSelection).toMatchObject({ ver: 3, val: { pending: { provider: 'actual', model: 'model' } } })
+  })
+
   it('requires the model-selection projection', async () => {
     const { ctx, agents } = await harness()
     const live = agent(ctx, header('missing-model-projection'))
