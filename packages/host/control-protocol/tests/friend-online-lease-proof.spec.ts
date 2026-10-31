@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { test } from 'vitest'
 import { encodeHostFriendOnlineLeasePayload, parseHostFriendOnlineLeaseChallenge,
-  type HostFriendOnlineLeaseChallenge } from '../src/friend-online-lease-proof.ts'
+  parseHostFriendOnlineLeaseAssertion, type HostFriendOnlineLeaseChallenge } from '../src/friend-online-lease-proof.ts'
 
 const challenge: HostFriendOnlineLeaseChallenge = {
   schema_version:1,operation:'renew',environment_id:'staging',
@@ -37,4 +37,26 @@ test('friend lease proof has exact domain and operation binding',()=>{
     challenge:{ ...challenge,connection_id:challenge.device_id },signature }),payload)
   assert.equal(parseHostFriendOnlineLeaseChallenge({ ...challenge,
     operation:'issue',expected_lease_epoch:'0' }).operation,'issue')
+})
+
+test('friend lease proof rejects malformed objects and noncanonical authority fields',()=>{
+  const signature=Buffer.alloc(64).toString('base64url')
+  const rejects=(value:unknown)=>assert.throws(()=>parseHostFriendOnlineLeaseChallenge(value),
+    /invalid_friend_online_lease_proof/u)
+  rejects(null)
+  rejects({ ...challenge,extra:true })
+  rejects(Object.defineProperty({ ...challenge },'nonce',{ get:()=>challenge.nonce,enumerable:true }))
+  for (const [key,value] of [
+    ['schema_version',2],['operation','revoke'],['environment_id','UPPER'],
+    ['owner_user_id','invalid user'],['account_issuer','http://accounts.example.com'],
+    ['account_issuer','not a URL'],['account_issuer','x'.repeat(2049)],
+    ['binding_id','bad binding'],['computer_id','bad computer'],
+    ['computer_installation_id',''],['request_id','not-a-uuid'],['key_epoch','0'],
+    ['host_public_key',123],['host_public_key','bad'],['process_nonce','bad'],['nonce','bad'],
+    ['issued_at',-1],['expires_at',1000],['expires_at',11001],
+  ] as const) rejects({ ...challenge,[key]:value })
+  assert.throws(()=>parseHostFriendOnlineLeaseAssertion({ schema_version:1,challenge,
+    signature:'bad' }),/invalid_friend_online_lease_proof/u)
+  assert.equal(parseHostFriendOnlineLeaseAssertion({ schema_version:1,challenge,signature })
+    .signature,signature)
 })

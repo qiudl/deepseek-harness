@@ -13,6 +13,7 @@ import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 import { friendBotChallengeFixture } from '../../control-protocol/tests/friend-bot-confirmation-fixture.ts'
+import { signAccountFriendOnlineLease } from '../src/account-friend-online-lease.ts'
 
 async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
@@ -111,6 +112,31 @@ function friendOnlineLeaseInput(f: Awaited<ReturnType<typeof fixture>>) {
   return { ...f.account,challenge:{ ...fields,operation:'renew' as const,
     device_id:randomUUID(),key_epoch:'2',expected_lease_epoch:'3' } }
 }
+
+it('refuses stale, expired, and aborted lease signing before releasing a signature',async () => {
+  const f = await fixture(); await f.grant()
+  const { challenge } = friendOnlineLeaseInput(f)
+  const account = { authorityEnvironmentId:f.account.authorityEnvironmentId,
+    accountBindingHandle:f.account.accountBindingHandle,
+    authorityBindingVersion:f.account.authorityBindingVersion,ownerId:f.ownerId,
+    issuer:f.account.issuer,subject:f.account.subject }
+  const authorizeCollaborationRegistration = vi.fn()
+  const input = { host:{ authorizeCollaborationRegistration },account,challenge,
+    identity:f.identity,signal:new AbortController().signal,now:()=>f.time.value }
+  const signs = (changes:Partial<typeof input> = {}) => signAccountFriendOnlineLease({ ...input,...changes })
+  expect(signs().challenge).toEqual(challenge)
+  expect(authorizeCollaborationRegistration).toHaveBeenCalledTimes(2)
+  expect(()=>signs({ challenge:{ ...challenge,owner_user_id:randomUUID() } }))
+    .toThrow(/profile_mismatch/u)
+  expect(()=>signs({ now:()=>challenge.expires_at })).toThrow(/profile_mismatch/u)
+  let calls=0
+  expect(()=>signs({ now:()=>++calls===1 ? challenge.issued_at : challenge.expires_at }))
+    .toThrow(/profile_mismatch/u)
+  const controller=new AbortController(); controller.abort()
+  expect(()=>signs({ signal:controller.signal })).toThrow()
+  const pem=f.keys.privateKey.export({ type:'pkcs8',format:'pem' }).toString()
+  expect(signs({ identity:{ ...f.identity,installationPrivateKey:pem } }).signature).toBeTruthy()
+})
 
 it('signs one current friend device lease through the strict Host control connection',async () => {
   const f = await fixture(); await f.grant()
