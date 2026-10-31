@@ -88,7 +88,7 @@ describe('Host local memory Evidence index', () => {
     let generation = 0
     const secret = `sk-${'a'.repeat(32)}`
     for (let number = 8; number >= 0; number--) {
-      generation = index.replace(scope, snapshot(`token=${secret} plan ${number}`,
+      generation = index.replace(scope, snapshot(`token=${secret}; plan ${number}`,
         'r1', `session-${number}`), generation)
     }
     const current = index.search(scope, 'answer', 1)
