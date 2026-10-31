@@ -95,6 +95,9 @@ function provideConnection(ctx: Context): void {
     },
     authorizeIndex: () => true,
     requestRejection: () => undefined,
+    createSharedFetchHandler: () => ({ fetch: async (_request: Request) => new Response('{"ok":true}', {
+      headers: { 'content-type': 'application/json' },
+    }) }),
     rpc: {},
   } as never)
 }
@@ -196,6 +199,14 @@ describe('web-app runtime glue', () => {
     expect(await remoteStream.text()).toBe(`${JSON.stringify({ type: 'item', value: {
       type: 'baseline', value: { items: [] },
     } })}\n${JSON.stringify({ type: 'end' })}\n`)
+    const fileRead = await fetch(`http://127.0.0.1:${address.port}/internal/desktop-remote-ui-stream`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ endpoint: 'workbench/read', payload: { args: {
+        endpoint: 'workspaceFiles/stat', rpcId: 'native-test', args: { workspaceFileScopeId: 'scope-1', path: 'a.txt' },
+      } } }),
+    })
+    expect(fileRead.status).toBe(200)
+    expect(await fileRead.text()).toContain(Buffer.from('{"ok":true}').toString('base64url'))
     await ctx.fiber.dispose()
     expect(routes.size).toBe(0)
     expect(selection).toHaveBeenCalledOnce()

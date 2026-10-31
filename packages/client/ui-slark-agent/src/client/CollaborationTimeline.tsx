@@ -65,7 +65,8 @@ function SourceRecord({ group, t, loadReplies, busy, bind }: {
     </article>
     {group.phase === 'error' || group.pendingUnavailable ? <p role="status">{t('task.readUnavailable')}</p>
       : group.replies.length === 0 && !group.pending?.length && !group.provisionalResponses?.length && <p className={css.status} role="status">
-        {t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
+        {group.planningFailure ? t('task.localPlanningFailure', { reason: t(`task.planningFailure.${group.planningFailure.reason}`) })
+          : t(planningStatus[group.planningState ?? ''] ?? 'task.awaitingResult')}</p>}
     <Assignment group={group} t={t} />
     {group.pending?.map(item => <article key={item.pending_item_id} className={`${css.reply} ${css.question}`} data-testid="slark-timeline-pending"
       data-row-id={`slark-clarification:${digest}:${item.pending_item_id}`}>

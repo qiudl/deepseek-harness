@@ -110,6 +110,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 Desktop 远端 Session 路由启用时，选定 Profile 为每个 Session 保留一份控制权证明。未受控制的 Session 接受本地浏览器写入时会隐式认领；远端控制者通过显式认领和比较交换接管。Profile 对支持的每次修改及审批答复核对远端证明，在 Gateway 检查本地浏览器写入和事件答复，并持有已获准的写入直到执行结束。控制权在未续期 30 秒后过期，Profile 重启也会使旧证明失效。daemon 和 Slark Server 必须交换 Profile 证明，远端浏览器才能使用这些命令。
 
+原生移动端终端复用 Profile 现有的终端 Gateway。环境、Shell 选项和终端列表保持只读；创建、输入、调整大小、改名和关闭都要求当前 Session 控制权，Desktop 浏览器的对应终端写入也遵守同一控制权栅栏。follow 和 retain 先在控制权下取得十秒有效、一次性使用的票据；Profile 在打开原终端流及交付输出前再次校验控制者。关闭移动端流只释放 attachment，不关闭 Shell。
+
 远端客户端持有当前 Session 控制权时，Desktop 浏览器会在会话标题栏显示接管入口。用户点击后，浏览器重新读取 Profile 当前 epoch，请用户确认，再通过已认证的浏览器 Gateway 提交比较交换接管。用户随后重新发送保留的草稿。Desktop 远端 Session 路由未启用时不显示此入口。
 
 远程 `session.create` 向选定 Profile 转发可选的工作区和会话 ID。Profile 通过本机注册表和原生 Session controller 解析这些 ID；调用方指定的路径不能通过 Host 命令协议。原生 `session/writer-held` 拒绝返回有界的 `sessionCreateFailure` 值，供远程 UI 执行已有的空白会话回退规则。原生审批答复使用仍在等待的 `$events` 连接，且必须匹配其 Session ID。事件流会拒绝第二个 ready 帧或已被其他活动事件流占用的客户端 ID；事件流关闭时清除待处理审批。
@@ -269,3 +271,15 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 私有反馈通道还将 `continuation_read` 路由到原 Session Controller。它返回尚无已提交观察或不可变的首条回复坐标；重复读取保持原 trace，不会启动新的模型请求。
 
 私有 NDJSON 路由也接受 `args` 为空的 `session/list`，并输出一个包含投影的完整 Session 列表快照。它沿用现有流的 512 KiB 单项上限和取消机制。
+
+远程 `session.select_model` 和 `session.select_agent` 复用现有会话模型选择器与 Agent 预设注册表。Host 在调用 Gateway 前要求目标会话的控制权证明，响应保留已选模型或预设标识。页面不能通过选择参数指定 Profile、其他 Agent 地址或控制权世代。
+
+绑定 view lease 的 `workbench/read` 流只允许 `workspaceFiles/read`、`readBytes`、`stat` 和 `list`，并校验精确的工作区范围与路径参数。它使用 Profile 进程内的 Connection Fetch handler，保留原有 JSON 或 multipart RPC 响应。按序分块不超过 16 KiB，完整响应上限为 34 MiB。取消会关闭所属 reader；未知接口与授权选择字段在派发前被拒绝。
+
+同一文件能力也允许精确的 `workspaceFiles/changes` 流。Gateway 范围查找与文件系统策略继续负责授权；页面取消释放所属 watcher，每次 Host 轮询仍要求原 view lease。
+
+个人 `settings.apply` 命令只允许原有 update、replace、mutate 表单操作。它保留 provider 的版本校验与脱敏 namespace 响应，意图上限 32 KiB，拒绝授权选择字段和不安全 JSON，并保留类型化冲突/拒绝结果，不返回私有异常文本。它不会改变选中 Profile，也不会获取会话控制权。
+
+个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
+
+受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。

@@ -69,6 +69,10 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
                 headers:{'content-type':'application/json'}, body:JSON.stringify({ok:true})});
               return;
             }
+            if (data.method === 'GET' && data.url.endsWith('/__native_workbench__')) {
+              channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
+              return;
+            }
             if (!data.url.endsWith('/__boot__')) return;
             window.requests++;
             channel.port1.postMessage({t:'res', id:data.id, status:200,

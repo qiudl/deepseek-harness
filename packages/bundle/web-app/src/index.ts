@@ -1,3 +1,4 @@
+import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
 /**
  * @deepseek-ai/dsh-web-app — the browser-surface bundle's runtime glue plugin
@@ -463,18 +464,20 @@ export function apply(ctx: Context, config: Config): void {
       }))
     })
   }
+  const sessionControl = new DesktopSessionControl()
+  const terminalStreams = new DesktopRemoteTerminalStreams(sessionControl)
   const desktopRemoteSessionToken = process.env.DSH_PROFILE_REMOTE_SESSION_TOKEN
   const remoteApprovalEvents = new DesktopRemoteApprovalEvents()
   if (desktopRemoteSessionToken && /^[A-Za-z0-9_-]{43}$/u.test(desktopRemoteSessionToken)) {
     ctx.inject(['typertGateway'], (remoteCtx) => {
-      const control = new DesktopSessionControl()
+      const control = sessionControl
       remoteCtx.effect(() => remoteCtx.typertGateway.registerBrowserAdmission({
         invoke: (endpoint, args) => control.admitBrowserInvoke(endpoint, args),
         eventResult: sessionId => control.admitBrowserWrite(sessionId),
         localControlStatus: sessionId => control.browserStatus(sessionId),
         localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
-      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control)
+      const executor = new DesktopRemoteSessionExecutor(remoteCtx.typertGateway, remoteApprovalEvents, control, terminalStreams)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
         handler: (req, res) => handleDesktopRemoteSessionRequest(
@@ -489,7 +492,8 @@ export function apply(ctx: Context, config: Config): void {
     ctx.inject(['typertGateway'], (remoteCtx) => {
       const executor = new DesktopRemoteUiExecutor(remoteCtx.typertGateway,
         () => remoteCtx.webServer.collectIndexInjections())
-      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents)
+      const streamExecutor = new DesktopRemoteUiStreamExecutor(remoteCtx.typertGateway, remoteApprovalEvents,
+        request => remoteCtx.connection.createSharedFetchHandler('/api').fetch(request), terminalStreams)
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-ui',
         handler: (req, res) => handleDesktopRemoteUiRequest(req, res, desktopRemoteUiToken,

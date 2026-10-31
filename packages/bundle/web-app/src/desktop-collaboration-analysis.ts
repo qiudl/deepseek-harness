@@ -1,3 +1,4 @@
+import { matchHostRootAnalysisDiagnostic, type HostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRootPlanning } from './desktop-root-planning.ts'
 import type { CollaborationRootPlanningJournal, CollaborationRootPlanningGrant } from '@deepseek-ai/dsh-api-session-controller'
 import { parseHostCollaborationSourceTarget, parseHostRootSubmissionTarget, matchHostRootAnalysisOutput, type HostRootAnalysisOutput, parseHostRootAnalysisInput, parseHostRootSubmissionDescriptor, type HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
@@ -531,6 +532,41 @@ export class DesktopCollaborationAnalysis {
     if (!isDeepStrictEqual(describeCollaborationSource(current), descriptor)) throw Error('collaboration_analysis_output_invalid')
     return result
   }
+
+  /** Read only retained local failure facts after current original-Root membership checks.
+   * @param value - Original Root and Source coordinates; no model or retry override.
+   * @param signal - Current Profile and parent-request cancellation.
+   * @returns Finite failures and the frozen model identity, never prompts, output or retry authority.
+   */
+  async readRootDiagnostic(value: unknown, signal: AbortSignal): Promise<HostRootAnalysisDiagnostic> {
+    const active = AbortSignal.any([signal, this.lifetime]), target = parseHostRootSubmissionTarget(value)
+    const ensureOpen = () => { active.throwIfAborted(); if (this.closing) throw Error('collaboration_analysis_closed') }
+    ensureOpen()
+    if (!this.readRoot) throw Error('collaboration_root_unavailable')
+    const entry = await this.readRoot(target, active)
+    ensureOpen()
+    if (entry.state !== 'admitted') throw Error('collaboration_root_not_admitted')
+    const root = parseHostRootSubmissionDescriptor({
+      namespace_id: entry.namespace_id, command_id: entry.command_id, root_task_id: entry.root_task_id,
+      root_trace_id: entry.root_trace_id, payload_digest: entry.payload_digest,
+      source_descriptor: describeCollaborationSource(entry.source),
+    })
+    const journal = await wait((this.journal ??= this.open()), active)
+    const original = [...journal.failures()].filter(failure =>
+      failure.source_digest === entry.source_digest && failure.trace_id === entry.root_trace_id)
+    const recovery = this.rootPlanning ? await this.rootPlanning.readFailures(target, active) : []
+    const model = entry.source.model_snapshot
+    const result = matchHostRootAnalysisDiagnostic({
+      root, model: { provider: model.provider, model: model.model,
+        ...(model.reasoning_effort === undefined ? {} : { reasoning_effort: model.reasoning_effort }) },
+      failures: [...original.map(failure => ({ ...failure, journal: 'original' })),
+        ...recovery.map(failure => ({ ...failure, journal: 'recovery' }))],
+    }, target)
+    if (!isDeepStrictEqual(await this.readRoot(target, active), entry)) throw Error('collaboration_root_changed')
+    ensureOpen()
+    return result
+  }
+
   /** Read only the original saved output after current root membership is verified.
    * @param value - Original root and Source lookup; no model or attempt overrides.
    * @param signal - Parent request cancellation combined with Profile lifetime.
@@ -683,7 +719,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
               : (row.action === 'capture_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
                 ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
                   ((row.action === 'prepare' || row.action === 'prepare_root') && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
-                : (row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
+                : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
                   : row.action === 'dispatch'
                     ? ['action', 'attempt_request_id', 'binding_key', 'grant']
                     : []
@@ -722,20 +758,21 @@ export async function handleDesktopCollaborationAnalysisRequest(
                           : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
                             : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
                               : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
-                                : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
-                                  : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
-                                    : row.action === 'prepare_root'
-                                      ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
-                                        row.resume_binding_key as string | undefined)
-                                      : row.action === 'prepare'
-                                        ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal,
+                                : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
+                                  : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
+                                    : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
+                                      : row.action === 'prepare_root'
+                                        ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
                                           row.resume_binding_key as string | undefined)
-                                        : await owner.dispatch(
-                                          row.attempt_request_id as string,
-                                          row.binding_key,
-                                          row.grant as CollaborationAnalysisDispatchGrant,
-                                          controller.signal,
-                                        )
+                                        : row.action === 'prepare'
+                                          ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal,
+                                            row.resume_binding_key as string | undefined)
+                                          : await owner.dispatch(
+                                            row.attempt_request_id as string,
+                                            row.binding_key,
+                                            row.grant as CollaborationAnalysisDispatchGrant,
+                                            controller.signal,
+                                          )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

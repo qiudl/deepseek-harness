@@ -110,6 +110,8 @@ The Host-only `session/collaborationMembership` read validates up to 50 exact Wo
 
 When the Desktop remote Session route is active, its Profile keeps one control claim per Session. Browser Session writes implicitly claim local control while the Session is unclaimed; a remote controller uses explicit acquire and compare-and-swap takeover. The Profile checks remote claims on every supported mutation and approval reply, checks local browser writes and event replies at the Gateway, and holds admitted writes until they settle. Control claims expire after 30 seconds without renewal and are invalid after Profile restart. The daemon and Slark Server must exchange the Profile claim before the remote browser can use these commands.
 
+The native mobile terminal reuses the Profile's existing terminal Gateway. Environment, shell choices, and terminal lists remain read-only. Create, write, resize, rename, and close require the current Session claim; the Desktop browser's corresponding terminal writes obey the same owner fence. Follow and retain require a one-use, ten-second permit issued under that claim. The Profile checks the owner before opening the original terminal stream and before delivering output; closing the mobile stream releases its attachment without closing the shell.
+
 When a remote client owns the current Session, the Desktop browser shows a takeover action in the Session header. It reads the current Profile epoch again, asks the user to confirm, and submits a compare-and-swap takeover through the authenticated browser Gateway. The user then resends the retained draft. The action is absent without the Desktop remote Session route.
 
 Remote `session.create` forwards optional Workspace and Session IDs to the selected Profile. The Profile resolves these IDs through its registry and native Session controller; caller-supplied paths do not cross the Host command protocol. A native `session/writer-held` refusal returns a bounded `sessionCreateFailure` value for the remote UI's existing blank-session fallback. Native approval results use the pending `$events` generation and must match its Session ID. An event stream rejects a second ready frame or a client ID already held by a live stream; closing the stream clears its pending approvals.
@@ -271,3 +273,15 @@ The same private `root_feedback` carrier also routes `consumer_prepare`, `consum
 The private feedback carrier also routes `continuation_read` to the original Session Controller. It returns either no committed observation or immutable first-reply coordinates; repeated reads preserve the original trace and never start another model request.
 
 The private NDJSON route also accepts `session/list` with empty `args` and emits one complete Session-list snapshot, including projections. It uses the same 512 KiB item limit and cancellation as the existing streams.
+
+Remote `session.select_model` and `session.select_agent` reuse the existing Session model selector and Agent preset registry. Both require the addressed Session control claim at the Host before invoking the Gateway; the response preserves the selected model or preset identity. A page cannot choose a Profile, a different Agent address, or a control epoch through the selection payload.
+
+The lease-bound `workbench/read` stream admits only `workspaceFiles/read`, `readBytes`, `stat`, and `list`, with exact workspace scope and path arguments. It uses the Profile's in-process Connection Fetch handler and retains the original JSON or multipart RPC response. Ordered chunks are at most 16 KiB; the complete response is capped at 34 MiB. Cancellation closes the owned reader; unrecognized endpoints and authority selectors are rejected before dispatch.
+
+The same file capability admits the exact `workspaceFiles/changes` stream. Gateway scope lookup and filesystem policy remain authoritative; page cancellation releases its watcher, and every Host poll still requires the original view lease.
+
+The personal `settings.apply` command admits only the existing update, replace, and mutate form operations. It retains provider revisions and redacted namespace responses, bounds intents to 32 KiB, rejects authority selectors and unsafe JSON, and preserves typed conflict/rejection results without private exception text. It never changes the selected Profile or acquires conversation control.
+
+The personal `credentials.apply` command admits only exact set/unset operations. Reference names retain the existing grammar and are capped at 128 characters; write-only values are capped at 16 KiB. The existing credential provider owns storage. Success has no returned value, known refusal details name only the reference, and neither provider values nor private diagnostics are echoed.
+
+Controlled terminal calls retain the original Gateway arguments and reject cross-Session input; shell input and lifecycle changes require the current Host-issued Session proof.

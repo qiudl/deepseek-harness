@@ -15,6 +15,15 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('rejects terminal proof omissions and cross-Session arguments before dispatch', () => {
+    const command = { operation: 'terminal.apply', command_id: randomUUID(), session_id: 's1',
+      control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      request: { sessionId: 's1', method: 'list', args: { sessionId: 's1' } } }
+    for (const changed of [{ ...command, control: undefined }, { ...command, request: {} },
+      { ...command, session_id: 's2' }, { ...command, request: { ...command.request, args: { sessionId: 's2' } } }]) {
+      expect(() => decode(frame(changed))).toThrow()
+    }
+  })
   it('round-trips the closed command set', () => {
     const sessionId = 'session-0123456789abcdef'
     const commandId = randomUUID()
@@ -31,6 +40,9 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'control.release', command_id: commandId, session_id: sessionId,
         controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
       { operation: 'session.list', command_id: commandId },
+      { operation: 'terminal.apply', command_id: commandId, session_id: sessionId, control, request: { sessionId, method: 'list', args: { sessionId } } },
+      { operation: 'credentials.apply', command_id: commandId, request: { method: 'set', args: { ref: 'TEST_API_KEY', value: 'synthetic' } } },
+      { operation: 'settings.apply', command_id: commandId, request: { method: 'update', args: { ns: 'general', patch: { locale: 'zh' }, expectedRevision: 1 } } },
       { operation: 'directory.pick', command_id: commandId, client_id: randomUUID() },
       { operation: 'workspace.create', command_id: commandId, client_id: randomUUID(), grant_id: randomUUID(), path: '/tmp/confirmed' },
       { operation: 'session.create', command_id: commandId },
@@ -53,6 +65,9 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'session.rename', command_id: commandId, session_id: sessionId, control,
         title: 'Remote session' },
       { operation: 'session.delete', command_id: commandId, session_id: sessionId, control },
+      { operation: 'session.select_model', command_id: commandId, session_id: sessionId, control, provider: 'deepseek', model: 'deepseek-chat' },
+      { operation: 'session.select_model', command_id: commandId, session_id: sessionId, control, provider: 'deepseek', model: 'deepseek-chat', reasoning_effort: 'high' },
+      { operation: 'session.select_agent', command_id: commandId, session_id: sessionId, control, agent_preset: 'default' },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000 },
       { operation: 'approval.poll', command_id: commandId, wait_ms: 1000, cursor: 'approval-cursor-1' },
       { operation: 'approval.respond', command_id: commandId, session_id: sessionId,
@@ -72,6 +87,10 @@ describe('Profile remote Session wire commands', () => {
       { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: 'bad', path: '/tmp/confirmed' },
       { operation: 'workspace.create', command_id: id, client_id: randomUUID(), grant_id: randomUUID(), path: 'bad\0path' },
       { operation: 'api.proxy', command_id: id, path: '/api/settings.describe' },
+      { operation: 'credentials.apply', command_id: id, request: { method: 'read', args: { ref: 'TEST_API_KEY' } } },
+      { operation: 'settings.apply', command_id: id, request: { method: 'update', args: { ns: 'general', patch: {}, profile: 'other' } } },
+      { operation: 'session.select_model', command_id: id, session_id: 'session-1', provider: 'p', model: 'm' },
+      { operation: 'session.select_agent', command_id: id, session_id: 'session-1', agent_preset: 'default' },
       { operation: 'session.list', command_id: id, profile_root: '/another-user' },
       { operation: 'session.create', command_id: id, cwd: '/tmp/escape' },
       { operation: 'session.create', command_id: id, workspace_id: '../escape' },
@@ -169,14 +188,14 @@ describe('Profile remote UI read wire commands', () => {
   })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
-    for (const offset of [0, 8 * 1024 * 1024 + 64 * 1024]) {
+    for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {
       const input = readFrame('asset/read-gzip-chunk', { args: { url: '/plugins/a.js', offset } })
       expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
     }
     for (const args of [
       { url: '/plugins/a.js', offset: -1 },
       { url: '/plugins/a.js', offset: 0.5 },
-      { url: '/plugins/a.js', offset: 8 * 1024 * 1024 + 64 * 1024 + 1 },
+      { url: '/plugins/a.js', offset: 16 * 1024 * 1024 + 64 * 1024 + 1 },
       { url: '/plugins/a.js' },
       { url: '/plugins/a.js', offset: 0, profile: 'other' },
     ]) expect(() => decode(readFrame('asset/read-gzip-chunk', { args }))).toThrow()
@@ -201,7 +220,7 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: -1 } }))).toThrow()
     expect(() => decode(readFrame('asset/read', { args: { url: '/plugins/a/client.js', offset: 0, path: '/' } }))).toThrow()
     for (const endpoint of ['session/list', 'session/page', 'session/modelCatalog',
-      'commands/list', 'skills/list', 'llm/listProviders', 'llm/listConfigurableProviders',
+      'llm/listProviders', 'llm/listConfigurableProviders',
       'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
       'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] }
@@ -209,6 +228,13 @@ describe('Profile remote UI read wire commands', () => {
       const value = readFrame(endpoint, { args })
       expect(encodeHostControlFrame(decode(value))).toBe(`${JSON.stringify(value)}\n`)
     }
+    for (const [endpoint, args] of [
+      ['commands/list', { agent: 'session-1' }], ['skills/list', { request: { sessionId: 'session-1' } }],
+    ] as const) expect(() => decode(readFrame(endpoint, { args }))).not.toThrow()
+    for (const [endpoint, args] of [
+      ['commands/list', { agent: 'session-1', profile: 'other' }],
+      ['skills/list', { request: { sessionId: '../other' } }], ['llm/listProviders', { secret: true }],
+    ] as const) expect(() => decode(readFrame(endpoint, { args }))).toThrow()
     expect(() => decode(readFrame('credentials/describe', { args: { refs: ['bad-ref'] } }))).toThrow()
     expect(() => decode(readFrame('settings/describe', { args: { path: '/private' } }))).toThrow()
     expect(() => decode(readFrame('llm/listProviders', { args: { path: '/private' } }))).toThrow()
@@ -303,6 +329,15 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: 'session-1' },
       } } }, item_chunks: true },
+      { action: 'open', stream_id, endpoint: 'workbench/read', payload: { args: {
+        endpoint: 'workspaceFiles/readBytes', rpcId: 'file-rpc',
+        args: { workspaceFileScopeId: 'session-1', path: 'image.png', options: {} },
+      } } },
+      { action: 'open', stream_id, endpoint: 'workspaceFiles/changes', payload: {
+        args: { workspaceFileScopeId: 'session-1', path: 'file.txt' },
+      } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: stream_id } } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: stream_id } }, item_chunks: true },
       { action: 'poll', stream_id }, { action: 'close', stream_id },
     ]) {
       const value = streamFrame(command)
@@ -328,6 +363,12 @@ describe('Profile remote UI stream wire commands', () => {
       { action: 'open', stream_id, endpoint: 'session/list', payload: { args: { path: '/tmp' } } },
       { action: 'open', stream_id, endpoint: '$events', payload: { args: { all: true } } },
       { action: 'open', stream_id, endpoint: 'asset/read', payload: { args: {} } },
+      { action: 'open', stream_id, endpoint: 'workbench/read', payload: { args: {
+        endpoint: 'workspaceFiles/stat', rpcId: 'file-rpc',
+        args: { workspaceFileScopeId: 'session-1', path: 'file.txt', authority: 'other' },
+      } } },
+      { action: 'open', stream_id, endpoint: 'terminal/stream', payload: { args: { grantId: 'bad' } } },
+      { action: 'open', stream_id, endpoint: 'workspaceFiles/changes', payload: { args: { workspaceFileScopeId: 'session-1', path: 'file', profile: 'other' } } },
       { action: 'open', stream_id, endpoint: 'session/follow', payload: { args: { request: {
         address: { kind: 'session', sessionId: '../other' },
       } } } },

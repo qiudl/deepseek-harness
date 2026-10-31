@@ -67,6 +67,10 @@ The original Chat view and workspace history use separate readonly models. The m
 
 Chat and workspace history share identical pending delivery and planning requests within the same Desktop bridge and Connection generation. Completed responses are removed immediately, so subsequent refreshes recheck authorization. Source, revision, cursor and page size remain separate request identities. Closing one view stops its observation without cancelling the other view's read. Execution and continuation commands are never shared.
 
+## Native mobile composer
+
+REQ-20261018-0001 uses `conversation.input.right` for a small Duet button when the verified remote carrier advertises native support. It uses the framework Session ID and invokes the native call owner; repeated clicks are suppressed while admission is pending. A Session change or component disposal ignores late completion without hanging up. Uncertain admission is shown in localized text. Touch devices retain a 44px target. The existing draft persistence slot prefers the native draft bridge when present and otherwise keeps Desktop storage. Both contributions belong to the plugin lifetime and are removed on Loader disposal. The YAML composition tests cover registration, target binding, native draft preference and teardown.
+
 ## Model Experience
 
 Indirectly, through Session Controller's original collaboration Source analysis; ordinary chat serialization still refuses Agent chips.

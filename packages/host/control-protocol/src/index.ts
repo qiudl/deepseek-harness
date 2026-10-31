@@ -179,6 +179,8 @@ export { matchHostRootJournalMetadata } from './root-authority.ts'
 export { parseHostRootAnalysisInput } from './root-authority.ts'
 export type { HostRootAnalysisInput } from './root-authority.ts'
 export { parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from './root-analysis-output.ts'
+export { parseHostRootAnalysisDiagnostic, matchHostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
+export type { HostRootAnalysisDiagnostic, HostRootDiagnosticAttemptId, HostRootDiagnosticProviderId, HostRootDiagnosticModelId } from './root-analysis-diagnostic.ts'
 export type { HostRootAnalysisOutput, HostSavedAnalysisDispatch, HostRootAnalysisPlanId, HostRootAnalysisAttemptId } from './root-analysis-output.ts'
 
 export { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion, encodeHostRootPlanningAttemptAuthorityPayload } from './root-planning-attempt-authority.ts'
@@ -204,3 +206,15 @@ export type { RecoveryProfileKeyHandle, RecoveryDescriptor, RecoveryDescribeInpu
   RecoveryValidateInput, RecoveryValidation } from './recovery-materials.ts'
 export type { ProfileRecoveryMaterialsDescribeRequest, ProfileRecoveryMaterialsDescribeResult,
   ProfileRecoveryMaterialsValidateRequest, ProfileRecoveryMaterialsValidateResult } from './types.ts'
+
+export { parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from './workbench-read.js'
+export type { WorkbenchReadPayload, WorkbenchReadEndpoint, WorkbenchChangesPayload } from './workbench-read.js'
+
+export { parseWorkbenchSettingsWrite } from './workbench-settings.js'
+export type { WorkbenchSettingsWrite, WorkbenchSettingsJson } from './workbench-settings.js'
+
+export { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
+export type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+
+export { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+export type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'

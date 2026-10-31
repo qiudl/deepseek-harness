@@ -37,6 +37,7 @@ python/**/__pycache__/
 python/**/.pytest_cache/
 packages/**/__pycache__/
 apps/web/dist/
+apps/web/dist-native/
 .artifacts/
 .dsh-build/
 .dsh-report/

@@ -188,3 +188,18 @@ it('replaces provisional assignments by delivery identity and keeps uncertain ta
   expect(assignment.queryByText('Earlier live task')).toBeNull()
   expect(assignment.getByText(zh['execution.uncertain'])).toBeTruthy()
 })
+
+it('shows a retained local planning failure without declaring the task terminal or adding retry controls', async () => {
+  const a = { ...group(), replies: [], planningState: 'planning', planningFailure: {
+    reason: 'timeout' as const, observedAt: '2026-10-19T00:00:00.000Z' } }
+  const f = fixture([a])
+  expect(screen.getByText(/本机识别任务曾失败/).textContent).toContain(zh['task.planningFailure.timeout'])
+  expect(screen.getByText(a.original.original_message)).toBeTruthy()
+  expect(screen.queryByText(zh['task.planning'])).toBeNull()
+  expect(screen.queryByText(zh['task.planningFailed'])).toBeNull()
+  expect(screen.queryByRole('textbox')).toBeNull()
+  expect(screen.queryByRole('button', { name: /重试|retry/i })).toBeNull()
+  await act(async () => { f.state.set({ phase: 'ready', groups: [{ ...a, replies: group().replies }] }) })
+  expect(screen.queryByText(/本机识别任务曾失败/)).toBeNull()
+  expect(screen.getByText('answer-a')).toBeTruthy()
+})

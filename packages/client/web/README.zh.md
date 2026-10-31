@@ -27,7 +27,7 @@ kind: "package-library"
 
 组装浏览器应用时使用它：`apps/web` 的 Vite 入口对挂载点运行 `new AppWebEntry(container).run()`，启动页会在激活过程中向用户展示进度。普通浏览器调用方不传任何选项。默认使用预注入的页面传输，除非提供 `seams` 覆盖：当 `globalThis.__DSH_TRANSPORT__` 携带 `loadBundle` 时，模块阶段将其采纳为 bundle 传输并跳过 `immediately` 层级的 HTTP 预取，而显式 `seams` 仍然优先（例如外部 `<script>` 执行无法到达页面上下文的 jsdom 测试）。
 
-静态应用页面在入口运行前安装 `__DSH_BOOT_READY__`。`run()` 等待期间会立即显示启动页；页面所有者通过 `applyIndexInjections`（也从 `./injections` 导出）应用 Host 注入项，并在所有脚本完成后兑现延迟对象。延迟对象拒绝时显示启动失败；若调用方提供 `run(onFailure)`，则由外部呈现错误并保留加载页。Desktop 使用该回调请求原生恢复。Desktop 与 WebWorker 共享注入解释器；服务端 `tapIndex` HTML 转换仅适用于服务端提供的文档。
+静态应用页面在入口运行前安装 `__DSH_BOOT_READY__`。`run()` 等待期间会立即显示启动页；页面所有者通过 `applyIndexInjections`（也从 `./injections` 导出）应用 Host 注入项，并在所有脚本完成后兑现延迟对象。延迟对象拒绝时显示启动失败；若调用方提供 `run(onFailure)`，则由外部呈现错误并保留加载页。Desktop 使用该回调请求原生恢复。App 内置原生页面为解释器提供可等待的 blob 脚本执行器，用于执行已验证的 Host 内联脚本，在基于哈希的 CSP 下保持注入表顺序。Desktop 与 WebWorker 共享注入解释器；服务端 `tapIndex` HTML 转换仅适用于服务端提供的文档。
 
 打包后的 Cordis Loader 在启动时调用 `new Function`，因此隔离的静态 DSH 页面需要在内容安全策略中设置 `script-src 'unsafe-eval'`。远程页面必须运行于不含 Slark 登录 cookie 的独立 origin，并阻断 `connect-src`；父页面的 MessagePort 承载 Host 流量。`apps/web/tests/remote-frame.e2e.ts` 在 Chromium 中验证这项策略。
 

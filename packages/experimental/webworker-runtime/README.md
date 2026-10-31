@@ -38,6 +38,8 @@ Acceptance lives in `apps/web/tests/preview-boot.e2e.ts`, which serves the real 
 
 The [built-bundle import sweep](tests/compile/transform-corpus-check.ts) checks bare Node imports after the library build. Its Dockkit exception accepts Node’s unknown-`.css`-extension refusal for any stylesheet rather than one pinned path; another extension, error code, or message, and an unexpectedly successful exempt import, remain errors.
 
+The optional second `WorkerTunnel` constructor argument fixes the Host URL namespace for an opaque native frame. Ordinary callers keep the page origin. This only resolves request and source-map URLs; the parent still owns origin checks, endpoint admission and Host authentication.
+
 -----
 
 <a id="model-experience"></a>

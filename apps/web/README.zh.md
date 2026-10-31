@@ -23,3 +23,13 @@ Client 插件应用前，载体通过端口读取 `/__collaboration__`。父页�
 [远程载体测试](tests/remote-boot.spec.ts) 覆盖认证握手和安装顺序。[范围消费者测试](tests/remote-collaboration.spec.ts) 使用真实 WorkerTunnel 和 MessagePort，覆盖拒绝、取消和期限。这些隔离测试不代表真实 Account、provider 或独立 Agent 执行验收通过。
 
 插件安装浏览器测试在高亮卡片不可见时记录卡片、高亮变化和浏览器时间戳。它保留可见性检查的超时，并重新抛出原始错误。
+
+## 原生移动输入能力
+
+REQ-20261018-0001 在协作能力发现之外增加可选 `/__native_workbench__`。仅精确的 `dsh-native-workbench/v1` 响应可声明 Duet 或草稿支持。Carrier 在 Client 插件加载前安装独立的 `__DSH_NATIVE_WORKBENCH__` 能力对象；不支持的父页面维持原浏览器行为。原生通话仅发送当前 Session ID，不发送账号、电脑、音频或凭据。草稿读写沿用现有 revision/text 契约。请求和响应严格校验，正文有上限并设置超时；页面销毁中止待处理操作，移除自己的能力对象，不会结束已经接受的原生通话。
+
+## 随 App 打包的 Web 入口
+
+Host 和 Client 库构建后运行 `pnpm --filter @deepseek-ai/dsh-web-frontend exec vite build --config vite.native.config.ts --mode native`。`dist-native/native.html` 内联同一个 Web shell、CSS、字体和延迟语言模块。签名 App 只复制此 HTML，Git 忽略生成目录。App 以 `sandbox="allow-scripts"` 的 `srcdoc` 嵌入，不授予同源访问。专用构建仅接收自身不透明父窗口发来的、绑定随机 nonce 的 MessagePort，校验父窗口提供的 HTTPS 资源命名空间，并仅将该地址用于隧道请求。普通 HTTPS remote 构建保留精确的配置 origin 检查。
+
+文档允许现有 Cordis 表达式编译器需要的 `unsafe-eval`，与隔离生产 carrier 一致，网络访问仍禁止。单个内联入口绑定 SHA-256，已验证插件脚本使用 Blob URL。浏览器偏好使用有容量限制的 frame 内存；私有历史和草稿的持久化由原生加密桥负责。`node apps/web/tests/native-built.mjs` 在真实隔离浏览器 frame 中测试实际产物，覆盖 CSP 执行、WebCrypto、内存存储和第一条 Host 请求。该启动冒烟不代表离线历史或真实 Host 验收已完成。

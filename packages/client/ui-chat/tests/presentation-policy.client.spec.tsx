@@ -89,3 +89,18 @@ describe('Chat presentation policy', () => {
     expect(previewRender).toHaveBeenCalledTimes(3)
   })
 })
+
+it('native conversation policy keeps process in its separate view across detail preferences', () => {
+  const mode = createSnapshotStore<TranscriptViewMode>('standard')
+  const timing = createSnapshotStore<CollapseTiming>('completion')
+  const source = derivePresentationPolicy(mode, timing, true)
+  const first = source.getSnapshot()
+  expect(first.separateProcess).toBe(true)
+  expect(first.foldCompletedTurns).toBe(false)
+  expect(source.getSnapshot()).toBe(first)
+  mode.set('verbose')
+  expect(source.getSnapshot()).not.toBe(first)
+  expect(source.getSnapshot().separateProcess).toBe(true)
+  mode.set('standard')
+  expect(source.getSnapshot()).toBe(first)
+})

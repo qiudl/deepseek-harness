@@ -73,8 +73,16 @@ export type HostAuthorityErrorCode =
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {
-  /** @param code - Stable code safe for the local broker. */
-  constructor(readonly code: HostAuthorityErrorCode) {
+  /**
+   * @param code - Stable code safe for the local broker.
+   * @param diagnosticReason - Optional finer stable reason (for example which local-restore step
+   *   rejected the request). Local diagnostics only: it never crosses the control protocol, so the
+   *   broker still receives `code`.
+   */
+  constructor(
+    readonly code: HostAuthorityErrorCode,
+    readonly diagnosticReason?: string,
+  ) {
     super(`DSH Host authority rejected operation: ${code}`)
     this.name = 'HostAuthorityError'
   }

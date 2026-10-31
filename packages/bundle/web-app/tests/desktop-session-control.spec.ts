@@ -75,6 +75,17 @@ describe('Desktop Session control authority', () => {
     expect(control.release('session-1', remote.claim)).toBe(false)
     expect(() => { control.admitBrowserInvoke('session/rename', args)?.() }).not.toThrow()
   })
+  it('fences local terminal mutations while the iPhone owns the Session', () => {
+    const control = new DesktopSessionControl()
+    const remote = control.acquire('session-1', { kind: 'remote', id: 'iphone' }, { takeover: false })
+    expect(remote.outcome).toBe('controlled')
+    for (const endpoint of ['terminal/create', 'terminal/write', 'terminal/resize',
+      'terminal/rename', 'terminal/close']) {
+      expect(() => control.admitBrowserInvoke(endpoint, { agentId: 'session-1', id: 'shell' }))
+        .toThrow('another client')
+    }
+    expect(control.admitBrowserInvoke('terminal/list', { sessionId: 'session-1' })).toBeUndefined()
+  })
   it('requires explicit CAS takeover and fences old writes', () => {
     let now = 1_000
     const control = new DesktopSessionControl(() => now, 5_000)

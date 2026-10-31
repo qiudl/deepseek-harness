@@ -10,7 +10,7 @@ const tunnel = vi.hoisted(() => ({
 }))
 vi.mock('@deepseek-ai/dsh-experimental-webworker-runtime/client', () => ({
   WorkerTunnel: class {
-    constructor(endpoint: unknown) { tunnel.constructed(endpoint) }
+    constructor(endpoint: unknown, origin?: string) { tunnel.constructed(endpoint, origin) }
     bootPayload = tunnel.bootPayload
     fetch = tunnel.fetch
     open = tunnel.open
@@ -75,4 +75,31 @@ it('accepts one nonce-bound port only from the configured parent origin', async 
   expect(Reflect.get(host, 'collaborationWorkspace')).toBeTypeOf('function')
   expect(port.start).toHaveBeenCalledOnce()
   expect(tunnel.constructed).toHaveBeenCalledOnce()
+})
+
+
+it('native bundled carrier binds its opaque parent window and a valid Host URL namespace', async () => {
+  vi.stubEnv('MODE', 'native')
+  const parent = { postMessage: vi.fn<(message: { nonce: string }, origin: string) => void>() }
+  Object.defineProperty(window, 'parent', { configurable: true, value: parent })
+  await import('../src/remote.ts')
+  const [ready, origin] = parent.postMessage.mock.calls[0]!
+  expect(origin).toBe('*')
+  const port = { start: vi.fn(), postMessage: vi.fn(), addEventListener: vi.fn() }
+  const send = (source: unknown, assetOrigin: unknown, nonce = ready.nonce): void => {
+    const event = new Event('message')
+    Object.defineProperties(event, { source: { value: source }, origin: { value: 'null' },
+      data: { value: { schema: 'dsh-remote-frame/v1', kind: 'connect', nonce, assetOrigin } },
+      ports: { value: [port] } })
+    window.dispatchEvent(event)
+  }
+  send({}, 'https://ui.example.test')
+  send(parent, 'https://ui.example.test', 'wrong')
+  for (const invalid of [undefined, '', 'http://ui.example.test', 'https://[]', 'https://user@ui.example.test', 'https://ui.example.test/path']) send(parent, invalid)
+  expect(port.start).not.toHaveBeenCalled()
+  send(parent, 'https://ui.example.test')
+  const boot = Reflect.get(globalThis, 'dshRemoteBoot') as { ready(): Promise<unknown> }
+  await expect(boot.ready()).resolves.toMatchObject({ injections: [] })
+  expect(port.start).toHaveBeenCalledOnce()
+  expect(tunnel.constructed).toHaveBeenCalledWith(expect.anything(), 'https://ui.example.test')
 })

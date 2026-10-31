@@ -13,10 +13,20 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
   let lastError = 0
   let firstCreate = true
   let observedSddl = sddl
+  let convertedSid = ''
   const written: Buffer[] = []
   const closeHandle = vi.fn(() => 1)
   const deleteFile = vi.fn(() => 1)
   const functions: Record<string, (...args: unknown[]) => unknown> = {
+    ConvertStringSidToSidW: (token, output) => {
+      if (!Buffer.isBuffer(output)) throw new Error('expected SID pointer slot')
+      convertedSid = String(token)
+      output.writeBigUInt64LE(31n); return 1
+    },
+    ConvertSidToStringSidW: (_sid, output) => {
+      if (!Buffer.isBuffer(output)) throw new Error('expected SID text pointer slot')
+      output.writeBigUInt64LE(32n); return 1
+    },
     ConvertStringSecurityDescriptorToSecurityDescriptorW: (_text, _revision, output) => {
       if (!Buffer.isBuffer(output)) throw new Error('expected security descriptor buffer')
       output.writeBigUInt64LE(11n); return 1
@@ -68,8 +78,12 @@ function world(options: { readonly existing?: boolean; readonly writeError?: num
     pointer: vi.fn((value: unknown) => ({ pointer: value })),
     struct: vi.fn(() => ({ size: 24 })),
     alloc: vi.fn(() => Buffer.alloc(8)),
-    decode: vi.fn((value: unknown, type: unknown) =>
-      Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 23n && type === 'str16' ? observedSddl : value),
+    decode: vi.fn((value: unknown, type: unknown) => {
+      if (Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 32n && type === 'str16') {
+        return ({ SY: 'S-1-5-18', BA: 'S-1-5-32-544', LA: 'S-1-5-21-1000-2000-3000-500' } as Record<string, string>)[convertedSid]
+      }
+      return Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 23n && type === 'str16' ? observedSddl : value
+    }),
     load: vi.fn(() => ({
       func: vi.fn((_convention: string, name: string) => {
         if (!functions[name]) throw new Error(`unexpected native function: ${name}`)
@@ -471,4 +485,55 @@ describe('Windows private create-new native file operation', () => {
     })
     expect(() => bindings.acquirePrivateFileLease?.(path, sddl)).toThrow('inspection failed')
   })
+})
+
+it('canonicalizes owner and ACE aliases and releases both SID allocations', async () => {
+  const state = world()
+  state.setObservedSddl('O:LAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)')
+  const free = vi.fn((_allocation: unknown) => 0n)
+  state.functions.LocalFree = free
+  const bindings = await loadWindowsHostRegistrationFileBindings({
+    platform: 'win32', arch: 'x64', loadKoffi: async () => state.koffi,
+  })
+  const evidence = bindings.inspectExistingDirectory!(path)
+  expect(evidence.ownerSid).toBe('S-1-5-21-1000-2000-3000-500')
+  expect(evidence.access.map(entry => entry.sid)).toEqual([
+    'S-1-5-18', 'S-1-5-32-544', 'S-1-5-21-1000-2000-3000-500',
+  ])
+  expect(free.mock.calls.map(call => call[0])).toEqual([32n, 31n, 32n, 31n, 32n, 31n, 32n, 31n, 23n, 22n])
+})
+
+it('releases acquired SID allocations when conversion or decoding fails', async () => {
+  for (const fault of ['sid-api', 'text-api', 'decode', 'non-text', 'non-numeric', 'text-free', 'sid-free'] as const) {
+    const state = world()
+    const free = vi.fn((allocation: unknown) => {
+      if ((fault === 'text-free' && allocation === 32n) || (fault === 'sid-free' && allocation === 31n)) {
+        state.setLastError(6); return allocation
+      }
+      return 0n
+    })
+    state.functions.LocalFree = free
+    if (fault === 'sid-api') state.functions.ConvertStringSidToSidW = () => { state.setLastError(5); return 0 }
+    if (fault === 'text-api') state.functions.ConvertSidToStringSidW = () => { state.setLastError(5); return 0 }
+    if (fault === 'decode' || fault === 'non-text' || fault === 'non-numeric') {
+      const decode = state.koffi.decode.getMockImplementation()!
+      state.koffi.decode.mockImplementation((value, type) => {
+        if (Buffer.isBuffer(value) && value.readBigUInt64LE() === 32n) {
+          if (fault === 'decode') throw new Error('SID text decode failed')
+          return fault === 'non-text' ? 42 : 'SY'
+        }
+        return decode(value, type)
+      })
+    }
+    const bindings = await loadWindowsHostRegistrationFileBindings({
+      platform: 'win32', arch: 'x64', loadKoffi: async () => state.koffi,
+    })
+    const expected = fault === 'non-text' || fault === 'non-numeric'
+      ? new WindowsHostRegistrationNativeError('ConvertSidToStringSidW', 13) : undefined
+    expect(() => bindings.inspectExistingDirectory!(path), fault).toThrow(expected)
+    const allocations = free.mock.calls.map(call => call[0])
+    expect(allocations).toEqual(fault === 'sid-api' ? [23n, 22n]
+      : fault === 'text-api' ? [31n, 23n, 22n] : [32n, 31n, 23n, 22n])
+    expect(state.closeHandle).toHaveBeenCalledOnce()
+  }
 })
