@@ -16,6 +16,12 @@ A deployment plugin may need a durable identity that determines whether a Sessio
 
 Core owns only durable transport, provider registration, lifecycle ordering, and failure closure. A provider plugin owns reference interpretation, authorization, remote calls, scoped tool/prompt composition, and compatibility policy. No ambient “current account” or mutable Host-wide identity is introduced.
 
+## Alternatives considered
+
+**Process-only scope:** Keeping the identity only in memory loses it on resume, so a persisted Session could resume under the wrong composition.
+
+**Product identity in core:** Embedding one product's account or tenant fields in core would prevent other providers from using the same mechanism.
+
 SQLite advances its physical schema from 19 to 20 because its Session metadata is columnar and older binaries must not silently discard the new field. The event-row codec and session log format remain unchanged; the pre-release `SESSION_FORMAT_VERSION` remains 0.
 
 ## Acceptance criteria

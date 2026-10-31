@@ -23,7 +23,7 @@ function page(value: unknown): Awaited<ReturnType<HostMemoryProfileReader['list'
       || item.revision.length > 256) throw new HostAuthorityError('unavailable')
     return { sessionId: item.sessionId, revision: item.revision }
   })
-  return { items, nextAfter: result.nextAfter as string | null }
+  return { items, nextAfter: result.nextAfter }
 }
 
 function snapshot(value: unknown): Awaited<ReturnType<HostMemoryProfileReader['read']>> {
@@ -90,7 +90,11 @@ export class ProfileWorkerSupervisor {
     return { origin: worker.viewOrigin, generation: worker.generation, bootstrapCookie: worker.bootstrapCookie }
   }
 
-  /** Pin one already-authorized Profile worker for Host-only Session indexing. */
+  /**
+   * Pin one already-authorized Profile worker for Host-only Session indexing.
+   * @param profileId - previously authorized Profile id.
+   * @returns reader pinned to that worker generation.
+   */
   memoryReader(profileId: string): HostMemoryProfileReader {
     const worker = this.workers.get(profileId)
     const memoryRead = worker?.memoryRead

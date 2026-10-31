@@ -681,6 +681,23 @@ withoutInitiator<T>(operation: () => T): T
 setFactory(factory: AgentFactory): () => void
 
 /**
+ * Register one plugin-owned durable session-scope namespace.
+ * @param id - namespace owned by the provider.
+ * @param provider - admission implementation for that namespace.
+ * @returns disposer that unregisters this exact provider.
+ */
+registerScopeProvider(id: SessionScopeProviderId, provider: SessionScopeProvider): () => void
+
+/**
+ * Fail-closed execution admission for a persisted scope. The exact provider
+ * must remain registered for the whole await.
+ * @param scope - persisted scope to admit, if any.
+ * @param agentCtx - unpublished Agent context for provider composition.
+ * @param signal - cancellation for asynchronous admission.
+ */
+async admitSessionScope( scope: SessionScopeRef | undefined, agentCtx: Context, signal: AbortSignal, ): Promise<void>
+
+/**
  * Create and publish a new agent through the registered factory.
  * Distinct from {@link register} (which records an already-constructed
  * agent): this constructs the agent and its session. Rejects if no factory is
