@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { FileJsonlMigrationExportSource } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export-source.ts'
 import { compressZstdFrame } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 import type { MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
@@ -20,6 +21,79 @@ import { FileProfileImportFenceFiles, ProfileImportWorkerFence } from '../src/pr
 import { fingerprintProfileImportPluginWeb } from '../src/profile-import-plugin-publish-plan.ts'
 import { FileProfileImportPluginPublishJournal } from '../src/profile-import-plugin-publish-journal.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
+
+const stageFaults = vi.hoisted(() => ({ generationDelta: 0, sourceDigest: false, targetDigest: false }))
+const pluginRecoveryFaults = vi.hoisted(() => ({ action: false, selectedNames: false,
+  flipAt: 0, calls: 0, misreportRolledBack: false }))
+const inventoryFaults = vi.hoisted(() => ({ changedProfileRoot: '', changedAt: 0, calls: 0 }))
+const publisherFaults = vi.hoisted(() => ({ beforeRollback: undefined as undefined | (() => Promise<void>),
+  beforeSessionAbort: undefined as undefined | (() => Promise<void>),
+  beforePublish: undefined as undefined | (() => Promise<void>) }))
+vi.mock('../src/profile-import-stage.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-stage.ts')>()
+  return { ...actual, stageSelectedProfileImportSessions: async (
+    ...args: Parameters<typeof actual.stageSelectedProfileImportSessions>
+  ) => {
+    const staged = await actual.stageSelectedProfileImportSessions(...args)
+    return { ...staged, generation: staged.generation + stageFaults.generationDelta,
+      sourceSnapshotDigest: stageFaults.sourceDigest ? '0'.repeat(64) : staged.sourceSnapshotDigest,
+      targetSnapshotDigest: stageFaults.targetDigest ? '0'.repeat(64) : staged.targetSnapshotDigest }
+  } }
+})
+vi.mock('../src/profile-import-plugin-publish-journal.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-publish-journal.ts')>()
+  return { ...actual, inspectProfileImportPluginPublishRecovery: async (
+    ...args: Parameters<typeof actual.inspectProfileImportPluginPublishRecovery>
+  ) => {
+    const recovery = await actual.inspectProfileImportPluginPublishRecovery(...args)
+    if (pluginRecoveryFaults.flipAt && ++pluginRecoveryFaults.calls === pluginRecoveryFaults.flipAt
+      && recovery.action === 'ready') {
+      return { ...recovery, action: 'published' as const }
+    }
+    if (pluginRecoveryFaults.action && recovery.action === 'ready') {
+      return { ...recovery, action: 'published' as const }
+    }
+    if (pluginRecoveryFaults.misreportRolledBack && recovery.action === 'rolled_back') {
+      return { ...recovery, action: 'ready' as const }
+    }
+    if (pluginRecoveryFaults.selectedNames && recovery.action === 'ready') {
+      return { ...recovery, record: { ...recovery.record, selectedPluginNames: ['other-plugin'] } }
+    }
+    return recovery
+  } }
+})
+vi.mock('../src/profile-import-preview.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-preview.ts')>()
+  return { ...actual, inspectProfileImportInventory: async (
+    ...args: Parameters<typeof actual.inspectProfileImportInventory>
+  ) => {
+    const inventory = await actual.inspectProfileImportInventory(...args)
+    if (args[0].profileRoot === inventoryFaults.changedProfileRoot) inventoryFaults.calls += 1
+    return args[0].profileRoot === inventoryFaults.changedProfileRoot
+      && (inventoryFaults.changedAt === 0 || inventoryFaults.calls === inventoryFaults.changedAt)
+      ? { ...inventory, snapshotDigest: '0'.repeat(64) } : inventory
+  } }
+})
+vi.mock('../src/profile-import-plugin-publisher.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-publisher.ts')>()
+  return { ...actual, publishProfileImportPluginLayerAndCommitSession: async <T>(
+    input: Parameters<typeof actual.publishProfileImportPluginLayerAndCommitSession>[0],
+    commitSession: (record: import('../src/profile-import-plugin-publish-journal.ts').ProfileImportPluginPublishRecord) => Promise<T>,
+  ): Promise<T> => {
+    await publisherFaults.beforePublish?.()
+    return actual.publishProfileImportPluginLayerAndCommitSession(input, commitSession)
+  }, rollbackProfileImportPluginLayerAndAbortSession: async <T>(
+    input: Parameters<typeof actual.rollbackProfileImportPluginLayerAndAbortSession>[0],
+    abortSession: (record: import('../src/profile-import-plugin-publish-journal.ts').ProfileImportPluginPublishRecord) => Promise<T>,
+    beforeRollback?: () => Promise<void>,
+  ): Promise<T> => {
+    await publisherFaults.beforeRollback?.()
+    return actual.rollbackProfileImportPluginLayerAndAbortSession(input, async (record) => {
+      await publisherFaults.beforeSessionAbort?.()
+      return abortSession(record)
+    }, beforeRollback)
+  } }
+})
 
 const uid = process.getuid?.() ?? 0
 const ownerState: MigrationOwnerStateBundle = { version: 1, documents: [
@@ -63,7 +137,8 @@ async function fixture() {
   return { root, source, target, journal, fence, base }
 }
 
-async function stagedJointFixture(selectedSessionIds: string[] = ['source-session']) {
+async function stagedJointFixture(selectedSessionIds: string[] = ['source-session'],
+  afterPluginPrepare?: (profiles: { source: { profileRoot: string }; target: { profileRoot: string } }) => void) {
   const { root, source, target, journal, fence, base } = await fixture()
   await writeFile(join(source.profileRoot, 'profiles', 'web', 'package.json'),
     JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }), { mode: 0o600 })
@@ -96,6 +171,7 @@ async function stagedJointFixture(selectedSessionIds: string[] = ['source-sessio
         beforeEntryDigest: 'a'.repeat(64), afterEntryDigest: 'b'.repeat(64) }
       await pluginJournal.create({ operationId: base.operationId, sourceProfileId: source.profileId,
         targetProfileId: target.profileId, selectedPluginNames: ['fixture-plugin'], plan })
+      afterPluginPrepare?.({ source, target })
     } })
   const hostLock = await acquireSingleHostLock({ root: join(root, 'host-lock'),
     pid: process.pid, uid, processNonce: randomUUID() })
@@ -391,6 +467,29 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect(await readdir(join(root, 'control', 'profile-import-operations'))).toHaveLength(4)
   })
 
+  it.each(['generation', 'source', 'target'] as const)
+  ('keeps both workers fenced if staged %s evidence disagrees with the intent', async (changed) => {
+    const { source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    stageFaults.generationDelta = changed === 'generation' ? 1 : 0
+    stageFaults.sourceDigest = changed === 'source'
+    stageFaults.targetDigest = changed === 'target'
+    try {
+      await expect(coordinator.prepare(base)).rejects.toThrow('profile_import_stage_mismatch')
+    } finally {
+      stageFaults.generationDelta = 0
+      stageFaults.sourceDigest = false
+      stageFaults.targetDigest = false
+    }
+    expect((await journal.load(base.operationId))?.phase).toBe('fenced')
+    expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
+    expect(await target.target.activeGeneration()).toBe(1)
+  })
+
   it('retains durable intent and both fences when cancellation arrives during worker shutdown', async () => {
     const { source, target, journal, fence, base } = await fixture()
     const controller = new AbortController()
@@ -502,6 +601,23 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     fence.assertOpen(target.profileId)
   })
 
+  it.each(['action', 'selectedNames'] as const)
+  ('rejects plugin preparation when the publish recovery %s changes', async (changed) => {
+    pluginRecoveryFaults[changed] = true
+    try {
+      await expect(stagedJointFixture()).rejects.toThrow('profile_import_plugin_publish_changed')
+    } finally { pluginRecoveryFaults[changed] = false }
+  })
+
+  it.each(['source', 'target'] as const)
+  ('rejects plugin preparation when the %s inventory changes after staging', async (changed) => {
+    try {
+      await expect(stagedJointFixture(['source-session'], (profiles) => {
+        inventoryFaults.changedProfileRoot = profiles[changed].profileRoot
+      })).rejects.toThrow('profile_import_inventory_changed')
+    } finally { inventoryFaults.changedProfileRoot = '' }
+  })
+
   it('rejects a plugin publisher bound to a different Profile without switching Sessions', async () => {
     const { source, target, journal, coordinator, input } = await stagedJointFixture()
     await expect(coordinator.commitWithPlugins({ ...input,
@@ -559,6 +675,94 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
       .rejects.toThrow('profile_import_plugin_publish_changed')
     expect((await journal.load(input.operationId))?.phase).toBe('staged')
     await hostLock.release()
+  })
+
+  it.each(['action', 'selectedNames'] as const)
+  ('rejects a staged joint commit when plugin recovery %s changes', async (changed) => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    pluginRecoveryFaults[changed] = true
+    try {
+      await expect(coordinator.commitWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+      expect(await target.target.activeGeneration()).toBe(1)
+    } finally {
+      pluginRecoveryFaults[changed] = false
+      await hostLock.release()
+    }
+  })
+
+  it('refuses a staged joint commit after an unapproved pointer switch', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    await target.target.commitGeneration(1, 2)
+    try {
+      await expect(coordinator.commitWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+      expect(await target.target.activeGeneration()).toBe(2)
+    } finally { await hostLock.release() }
+  })
+
+  it('refuses an unknown plugin recovery action before publishing', async () => {
+    const { journal, hostLock, coordinator, input } = await stagedJointFixture()
+    const staged = await journal.load(input.operationId)
+    if (!staged) throw Error('missing staged import')
+    const inspect = vi.spyOn(coordinator, 'inspectCommittingWithPlugins')
+      .mockResolvedValueOnce({ operation: staged, pointer: 'old', sessionCount: 2,
+        pluginAction: 'rolled_back' })
+    try {
+      await expect(coordinator.commitWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_recovery_unknown')
+    } finally {
+      inspect.mockRestore()
+      await hostLock.release()
+    }
+  })
+
+  it('refuses a Session pointer switch between commit proof and plugin publication', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    const active = await target.target.inspectExistingPersistence()
+    let restorePointer: (() => void) | undefined
+    publisherFaults.beforePublish = async () => {
+      const pointer = vi.spyOn(target.target, 'inspectExistingPersistence')
+        .mockResolvedValue({ ...active, generation: active.generation + 1 })
+      restorePointer = () =>{  pointer.mockRestore() }
+    }
+    try {
+      await expect(coordinator.commitWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+      expect(restorePointer).toBeDefined()
+    } finally {
+      publisherFaults.beforePublish = undefined
+      restorePointer?.()
+      await hostLock.release()
+    }
+  })
+
+  it.each(['beforePublication', 'afterPointer', 'afterPlugin'] as const)
+  ('keeps joint commit fenced when %s evidence changes', async (changed) => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    const inspectActual = coordinator.inspectCommittingWithPlugins.bind(coordinator)
+    let reads = 0
+    const inspect = vi.spyOn(coordinator, 'inspectCommittingWithPlugins')
+      .mockImplementation(async (evidence) => {
+        const proof = await inspectActual(evidence)
+        reads += 1
+        if (changed === 'beforePublication' && reads === 2) {
+          return { ...proof, pluginAction: 'ready' }
+        }
+        if (changed === 'afterPointer' && reads === 3) return { ...proof, pointer: 'old' }
+        if (changed === 'afterPlugin' && reads === 3) return { ...proof, pluginAction: 'ready' }
+        return proof
+      })
+    try {
+      await expect(coordinator.commitWithPlugins(input))
+        .rejects.toThrow(changed === 'beforePublication'
+          ? 'profile_import_plugin_publish_changed' : 'profile_import_generation_changed')
+      expect(reads).toBeGreaterThanOrEqual(changed === 'beforePublication' ? 2 : 3)
+      expect(() =>{  input.pluginPublisher.fence.assertOpen(target.profileId) }).toThrow()
+    } finally {
+      inspect.mockRestore()
+      await hostLock.release()
+    }
   })
 
   it('rejects a joint import whose Session pointer was switched before plugin publication', async () => {
@@ -854,6 +1058,139 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     await hostLock.release()
   })
 
+  it('refuses an already released joint abort if its plugin rollback evidence changes', async () => {
+    const { hostLock, coordinator, input } = await stagedJointFixture()
+    await coordinator.abortWithPlugins(input)
+    pluginRecoveryFaults.misreportRolledBack = true
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+    } finally {
+      pluginRecoveryFaults.misreportRolledBack = false
+      await hostLock.release()
+    }
+  })
+
+  it('retains a failed-clear joint fence until rollback evidence is trustworthy again', async () => {
+    const { fence, hostLock, coordinator, input } = await stagedJointFixture()
+    const clear = vi.spyOn(fence, 'clearPair').mockImplementationOnce(() => {
+      throw Error('marker write failed')
+    })
+    await expect(coordinator.abortWithPlugins(input)).rejects.toThrow('marker write failed')
+    clear.mockRestore()
+    pluginRecoveryFaults.misreportRolledBack = true
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+    } finally {
+      pluginRecoveryFaults.misreportRolledBack = false
+    }
+    expect((await coordinator.abortWithPlugins({ ...input,
+      signal: new AbortController().signal })).phase).toBe('aborted')
+    await hostLock.release()
+  })
+
+  it('rechecks plugin rollback after the Session abort before releasing either fence', async () => {
+    const { fence, target, hostLock, coordinator, input } = await stagedJointFixture()
+    pluginRecoveryFaults.misreportRolledBack = true
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+      expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
+    } finally {
+      pluginRecoveryFaults.misreportRolledBack = false
+      await hostLock.release()
+    }
+  })
+
+  it.each(['beforeRollback', 'beforeSessionAbort'] as const)
+  ('rejects Session pointer drift %s while the plugin rollback mutex is held', async (point) => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    const active = await target.target.inspectExistingPersistence()
+    let restorePointer: (() => void) | undefined
+    publisherFaults[point] = async () => {
+      const pointerSpy = vi.spyOn(target.target, 'inspectExistingPersistence')
+        .mockResolvedValue({ ...active, generation: active.generation + 1 })
+      restorePointer = () =>{  pointerSpy.mockRestore() }
+    }
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+      expect(restorePointer).toBeDefined()
+    } finally {
+      publisherFaults[point] = undefined
+      restorePointer?.()
+      await hostLock.release()
+    }
+  })
+
+  it('refuses to abort a staged joint import after plugin publication changed', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    pluginRecoveryFaults.action = true
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_operation_not_abortable')
+      expect(await target.target.activeGeneration()).toBe(1)
+    } finally {
+      pluginRecoveryFaults.action = false
+      await hostLock.release()
+    }
+  })
+
+  it('requires stopped candidate proof before ordinary abort can reverse its Session pointer', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    await expect(coordinator.commitWithPlugins({ ...input,
+      activateCandidate: async () => { throw Error('activation failed') },
+    })).rejects.toThrow('activation failed')
+    try {
+      await expect(coordinator.abortWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+      expect(await target.target.activeGeneration()).toBe(2)
+    } finally { await hostLock.release() }
+  })
+
+  it('refuses candidate rollback when the published plugin proof changes after quiescing', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    await expect(coordinator.commitWithPlugins({ ...input,
+      activateCandidate: async () => { throw Error('activation failed') },
+    })).rejects.toThrow('activation failed')
+    const inspectActual = coordinator.inspectCommittingWithPlugins.bind(coordinator)
+    const inspect = vi.spyOn(coordinator, 'inspectCommittingWithPlugins')
+      .mockImplementation(async evidence => ({ ...await inspectActual(evidence), pluginAction: 'ready' }))
+    try {
+      await expect(coordinator.rollbackFailedActivationWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+      expect(await target.target.activeGeneration()).toBe(2)
+    } finally {
+      inspect.mockRestore()
+      await hostLock.release()
+    }
+  })
+
+  it('refuses candidate rollback if the Session pointer becomes a third generation after stop', async () => {
+    const { target, hostLock, coordinator, input } = await stagedJointFixture()
+    await expect(coordinator.commitWithPlugins({ ...input,
+      activateCandidate: async () => { throw Error('activation failed') },
+    })).rejects.toThrow('activation failed')
+    const stopped = input.candidateLease.assertStopped.bind(input.candidateLease)
+    let restorePointer: (() => void) | undefined
+    const assertStopped = vi.spyOn(input.candidateLease, 'assertStopped').mockImplementation(async () => {
+      await stopped()
+      const active = await target.target.inspectExistingPersistence()
+      const pointer = vi.spyOn(target.target, 'inspectExistingPersistence')
+        .mockResolvedValue({ ...active, generation: 3 })
+      restorePointer = () =>{  pointer.mockRestore() }
+    })
+    try {
+      await expect(coordinator.rollbackFailedActivationWithPlugins(input))
+        .rejects.toThrow('profile_import_generation_changed')
+    } finally {
+      assertStopped.mockRestore()
+      restorePointer?.()
+      await hostLock.release()
+    }
+  })
+
   it('permits a plugin-only import with no selected source Sessions', async () => {
     const { source, target, fence, hostLock, coordinator, input } = await stagedJointFixture([])
     expect((await coordinator.commitWithPlugins(input)).phase).toBe('committed')
@@ -904,6 +1241,139 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect((await journal.load(base.operationId))?.phase).toBe('committing')
     expect(() =>{  fence.assertOpen(source.profileId) }).toThrow()
     expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
+  })
+
+  it.each(['source', 'target'] as const)
+  ('rejects a %s inventory that changes only at the final commit evidence read', async (changed) => {
+    const { source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    const staged = await coordinator.prepare(base)
+    await journal.advance(staged, 'committing')
+    inventoryFaults.changedProfileRoot = (changed === 'source' ? source : target).profileRoot
+    inventoryFaults.changedAt = 2
+    inventoryFaults.calls = 0
+    try {
+      await expect(coordinator.inspectCommitting({ operationId: base.operationId,
+        source, target, uid, assertAuthority: async () => {},
+        signal: new AbortController().signal })).rejects.toThrow('profile_import_inventory_changed')
+      expect(inventoryFaults.calls).toBe(2)
+    } finally {
+      inventoryFaults.changedProfileRoot = ''
+      inventoryFaults.changedAt = 0
+      inventoryFaults.calls = 0
+    }
+  })
+
+  it('rejects commit evidence for an operation that never entered committing', async () => {
+    const { source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    await coordinator.prepare(base)
+    await expect(coordinator.inspectCommitting({ operationId: base.operationId,
+      source, target, uid, assertAuthority: async () => {} }))
+      .rejects.toThrow('profile_import_operation_not_recoverable')
+  })
+
+  it.each(['missing', 'already-target'] as const)
+  ('rejects committing evidence with a %s selected Session', async (changed) => {
+    const { source, target, journal, fence, base } = await fixture()
+    if (changed === 'already-target') {
+      await source.target.importSession(1, { version: SESSION_FORMAT_VERSION,
+        id: SessionId('target-session'), createdAt: 1, isSeeded: false }, [])
+    }
+    const preview = compareProfileImportInventory(
+      await inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target, uid }),
+      await inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target, uid }),
+    )
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    const staged = await coordinator.prepare({ ...base, expectedPreviewDigest: preview.previewDigest })
+    const committing = await journal.advance(staged, 'committing')
+    const load = vi.spyOn(journal, 'load').mockResolvedValueOnce({ ...committing,
+      selectedSessionIds: [changed === 'missing' ? 'unknown-session' : 'target-session'] })
+    try {
+      await expect(coordinator.inspectCommitting({ operationId: base.operationId,
+        source, target, uid, assertAuthority: async () => {} }))
+        .rejects.toThrow('profile_import_stage_mismatch')
+    } finally { load.mockRestore() }
+  })
+
+  it('keeps the staged inventory reader from requesting owner state through its fallback', async () => {
+    const { source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    const staged = await coordinator.prepare(base)
+    await journal.advance(staged, 'committing')
+    const original = Reflect.get(FileJsonlMigrationExportSource.prototype, 'listImportInventory')
+    let inventoryCalls = 0
+    const inventory = vi.spyOn(FileJsonlMigrationExportSource.prototype, 'listImportInventory')
+      .mockImplementation(async function (this: FileJsonlMigrationExportSource, signal) {
+        inventoryCalls += 1
+        if (inventoryCalls === 3) await this.readOwnerState(signal)
+        return original.call(this, signal)
+      })
+    try {
+      const failure = await coordinator.inspectCommitting({ operationId: base.operationId,
+        source, target, uid, assertAuthority: async () => {} })
+        .then(() => null, (error: unknown) => error as Error)
+      expect(failure?.message).toBe('profile_import_owner_state_unavailable')
+      expect(failure?.stack).toContain('profile-import-session-coordinator.ts:614')
+      expect(inventoryCalls).toBe(4)
+    } finally { inventory.mockRestore() }
+  })
+
+  it('rejects plugin recovery evidence that changes between its two reads', async () => {
+    const { journal, hostLock, coordinator, input } = await stagedJointFixture()
+    const staged = await journal.load(input.operationId)
+    if (!staged) throw Error('missing staged import')
+    await journal.advance(staged, 'committing')
+    pluginRecoveryFaults.calls = 0
+    pluginRecoveryFaults.flipAt = 2
+    try {
+      await expect(coordinator.inspectCommittingWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+      expect(pluginRecoveryFaults.calls).toBe(2)
+    } finally {
+      pluginRecoveryFaults.flipAt = 0
+      pluginRecoveryFaults.calls = 0
+      await hostLock.release()
+    }
+  })
+
+  it('rejects plugin recovery with different selected names after staging', async () => {
+    const { journal, hostLock, coordinator, input } = await stagedJointFixture()
+    const staged = await journal.load(input.operationId)
+    if (!staged) throw Error('missing staged import')
+    await journal.advance(staged, 'committing')
+    pluginRecoveryFaults.selectedNames = true
+    try {
+      await expect(coordinator.inspectCommittingWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+    } finally {
+      pluginRecoveryFaults.selectedNames = false
+      await hostLock.release()
+    }
+  })
+
+  it('rejects a switched Session pointer while the plugin layer is still only ready', async () => {
+    const { target, journal, hostLock, coordinator, input } = await stagedJointFixture()
+    const staged = await journal.load(input.operationId)
+    if (!staged) throw Error('missing staged import')
+    await journal.advance(staged, 'committing')
+    await target.target.commitGeneration(1, 2)
+    try {
+      await expect(coordinator.inspectCommittingWithPlugins(input))
+        .rejects.toThrow('profile_import_plugin_publish_changed')
+    } finally { await hostLock.release() }
   })
 
   it('refuses a changed staged owner state during committing recovery', async () => {
@@ -1034,6 +1504,33 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect((await restarted.commit(input)).phase).toBe('committed')
     fence.assertOpen(source.profileId)
     fence.assertOpen(target.profileId)
+  })
+
+  it('refuses to clear recovered commit markers when its final pointer proof disagrees', async () => {
+    const { source, target, journal, fence, base } = await fixture()
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    await coordinator.prepare(base)
+    const clear = vi.spyOn(fence, 'clearPair').mockImplementationOnce(() => {
+      throw Error('marker write failed')
+    })
+    const input = { operationId: base.operationId, source, target, uid, assertAuthority: async () => {} }
+    await expect(coordinator.commit(input)).rejects.toThrow('marker write failed')
+    clear.mockRestore()
+    const committed = await journal.load(base.operationId)
+    if (!committed) throw Error('missing committed intent')
+    const internal = coordinator as unknown as { inspectCommitEvidence(): Promise<{
+      operation: typeof committed
+      pointer: 'old' | 'staged'
+      sessionCount: number }> }
+    const inspect = vi.spyOn(internal, 'inspectCommitEvidence')
+      .mockResolvedValueOnce({ operation: committed, pointer: 'old', sessionCount: 2 })
+    try {
+      await expect(coordinator.commit(input)).rejects.toThrow('profile_import_generation_changed')
+      expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
+    } finally { inspect.mockRestore() }
   })
 
   it('keeps the old pointer and both fences when staged data changes before commit', async () => {

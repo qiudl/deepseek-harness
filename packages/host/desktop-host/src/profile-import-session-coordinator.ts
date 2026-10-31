@@ -407,8 +407,8 @@ export class ProfileImportSessionCoordinator {
     candidateLease: FileProfileImportCandidateLease
     runtimePatch: FileProfileImportRuntimePatch
   }>): Promise<ProfileImportOperation> {
-    return this.abortWithPluginsInternal(input, undefined,
-      () => input.candidateLease.assertStopped(),
+    return this.abortWithPluginsInternal(input,
+      { kind: 'old', assertStopped: () => input.candidateLease.assertStopped() },
       (oldGeneration, stagedGeneration) => input.runtimePatch.restoreOld(oldGeneration, stagedGeneration))
   }
 
@@ -419,7 +419,8 @@ export class ProfileImportSessionCoordinator {
     candidateLease: FileProfileImportCandidateLease
     runtimePatch: FileProfileImportRuntimePatch
   }>): Promise<ProfileImportOperation> {
-    return this.abortWithPluginsInternal(input, () => input.candidateLease.assertStopped(), undefined,
+    return this.abortWithPluginsInternal(input,
+      { kind: 'candidate', assertStopped: () => input.candidateLease.assertStopped() },
       (oldGeneration, stagedGeneration) => input.runtimePatch.restoreOld(oldGeneration, stagedGeneration))
   }
 
@@ -467,9 +468,8 @@ export class ProfileImportSessionCoordinator {
   private async abortWithPluginsInternal(input: CommitInput & Readonly<{
     pluginJournal: FileProfileImportPluginPublishJournal
     pluginPublisher: ProfileImportPluginPublisherInput
-  }>, assertCandidateStopped?: () => Promise<void>,
-  assertOldCandidateStopped?: () => Promise<void>,
-  restoreOldRuntime?: (oldGeneration: number, stagedGeneration: number) => Promise<void>): Promise<ProfileImportOperation> {
+  }>, stop: Readonly<{ kind: 'candidate' | 'old'; assertStopped(): Promise<void> }>,
+  restoreOldRuntime: (oldGeneration: number, stagedGeneration: number) => Promise<void>): Promise<ProfileImportOperation> {
     const { source, target, pluginPublisher } = input
     this.assertPluginPublisher(input)
     await input.assertAuthority()
@@ -485,7 +485,7 @@ export class ProfileImportSessionCoordinator {
     }
     const active = await target.target.inspectExistingPersistence()
     if (active.generation !== current.targetGeneration
-      && (assertCandidateStopped === undefined || current.phase !== 'committing'
+      && (stop.kind === 'old' || current.phase !== 'committing'
         || active.generation !== current.stagedGeneration)) {
       throw Error('profile_import_generation_changed')
     }
@@ -503,7 +503,7 @@ export class ProfileImportSessionCoordinator {
     } else if (current.phase === 'committing' && plugin.action !== 'rolled_back') {
       const proof = await this.inspectCommittingWithPlugins(input)
       if (proof.pointer !== 'old'
-        && (assertCandidateStopped === undefined || proof.pluginAction !== 'published')) {
+        && (stop.kind === 'old' || proof.pluginAction !== 'published')) {
         throw Error('profile_import_generation_changed')
       }
     } else {
@@ -546,19 +546,19 @@ export class ProfileImportSessionCoordinator {
       }
       this.fence.clearPair(source.profileId, target.profileId, current.operationId)
       return aborted
-    }, assertCandidateStopped || assertOldCandidateStopped ? async () => {
+    }, async () => {
       if (current.phase === 'committing') {
-        await (assertCandidateStopped ?? assertOldCandidateStopped)?.()
+        await stop.assertStopped()
         const pointer = (await target.target.inspectExistingPersistence()).generation
-        if (pointer === current.stagedGeneration && assertCandidateStopped) {
+        if (pointer === current.stagedGeneration && stop.kind === 'candidate') {
           await input.assertAuthority()
           await target.target.commitGeneration(current.stagedGeneration, current.targetGeneration)
         } else if (pointer !== current.targetGeneration) {
           throw Error('profile_import_generation_changed')
         }
-        await restoreOldRuntime?.(current.targetGeneration, current.stagedGeneration)
+        await restoreOldRuntime(current.targetGeneration, current.stagedGeneration)
       }
-    } : undefined)
+    })
   }
 
   private async inspectCommitEvidence(input: CommitInput,
