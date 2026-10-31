@@ -762,6 +762,18 @@ it.skipIf(process.platform === 'win32')('composes and closes restricted history 
   }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
+it.skipIf(process.platform === 'win32')('keeps Host ownership when startup cleanup is unconfirmed', async () => {
+  const { config, root } = fixture()
+  const failure = new Error('server start failed')
+  const server = { start: async () => { throw failure }, close: async () => { throw new Error('server close failed') } } as unknown as UnixHostServer
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  await expect(startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+  })).rejects.toMatchObject({ message: 'host_startup_cleanup_unconfirmed', errors: [failure, expect.any(Error)] })
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
 it.skipIf(process.platform === 'win32')('keeps Host ownership when restricted reader cleanup is unconfirmed', async () => {
   const { config, root } = fixture()
   const stopWorker = vi.fn()

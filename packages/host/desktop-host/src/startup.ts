@@ -1059,11 +1059,14 @@ export async function startDesktopHostApplication(
       },
     }
   } catch (error) {
-    await server?.close().catch(() => undefined)
-    await restrictedHistory?.close().catch(() => undefined)
-    /* v8 ignore next -- no worker can exist before server.start succeeds; worker failures are owned by supervisor tests. */
-    await workers.disposeAll().catch(() => undefined)
-    await ownership?.release().catch(() => undefined)
+    const cleanupFailures: unknown[] = []
+    try { await server?.close() } catch (failure) { cleanupFailures.push(failure) }
+    try { await restrictedHistory?.close() } catch (failure) { cleanupFailures.push(failure) }
+    try { await workers.disposeAll() } catch (failure) { cleanupFailures.push(failure) }
+    // A server may admit work as soon as it starts, before registration finishes. Do not
+    // release ownership if any admitted operation or worker could still be running.
+    if (cleanupFailures.length) throw new AggregateError([error, ...cleanupFailures], 'host_startup_cleanup_unconfirmed')
+    await ownership?.release()
     throw error
   }
 }
