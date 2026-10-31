@@ -2,10 +2,10 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { SessionId, SessionLogOffset, type SessionHeader } from '@deepseek-ai/dsh-session/types'
+import { SessionId, SessionLogOffset, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
-import { scanLog } from './format.ts'
+import { createSessionFormatCatalogWithChildren } from '@deepseek-ai/dsh-session-format-catalog'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
   migrationSourceInventoryDigest,
@@ -14,6 +14,54 @@ import {
 } from './migration-export.ts'
 
 const MAX_LOG_BYTES = 256 * 1024 * 1024
+
+/**
+ * Decode one plaintext session log through the shared format catalog so
+ * historical versions (v0-v3) migrate to the current logical shape. The
+ * persistence scanner refuses foreign versions by design; the owner-side
+ * migration reader must read them.
+ * @param plaintext - complete decompressed log bytes (header line first).
+ * @returns Current-shaped header, events, inherited prefix and committed bytes.
+ */
+function decodeHistoricalArtifact(plaintext: Buffer): {
+  readonly header: SessionHeader
+  readonly events: readonly SessionEvent[]
+  readonly inheritedEventCount: number
+  readonly committedBytes: number
+} {
+  const headerEnd = plaintext.indexOf(0x0A)
+  if (headerEnd === -1) throw new Error('migration_export_source_corrupt')
+  let headerValue: unknown
+  try {
+    headerValue = JSON.parse(plaintext.subarray(0, headerEnd).toString('utf8'))
+  } catch {
+    throw new Error('migration_export_source_corrupt')
+  }
+  const restore = createSessionFormatCatalogWithChildren([]).createRestore(headerValue, {
+    recovery: 'strict',
+    validation: 'transformed',
+  })
+  let offset = headerEnd + 1
+  while (offset < plaintext.byteLength) {
+    const next = plaintext.indexOf(0x0A, offset)
+    if (next === -1) break
+    let row: unknown
+    try {
+      row = JSON.parse(plaintext.subarray(offset, next + 1).toString('utf8'))
+    } catch {
+      throw new Error('migration_export_source_corrupt')
+    }
+    restore.decodeRow(row)
+    offset = next + 1
+  }
+  const artifact = restore.finish()
+  return {
+    header: artifact.header as unknown as SessionHeader,
+    events: artifact.events as unknown as readonly SessionEvent[],
+    inheritedEventCount: artifact.inheritedEventCount,
+    committedBytes: offset,
+  }
+}
 
 type Stored = Readonly<{
   path: string
@@ -168,7 +216,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         } finally { decoder.close() }
         plaintext = Buffer.concat(decodedFrames, decodedBytes)
       }
-      const decoded = scanLog(plaintext)
+      const decoded = decodeHistoricalArtifact(plaintext)
       if (decoded.committedBytes !== plaintext.byteLength) {
         throw new Error('migration_export_source_corrupt')
       }
@@ -176,7 +224,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
       ].join(':'))
       return {
-        path, header: decoded.meta, inspection: { meta: decoded.meta, events: decoded.events, inheritedEventCount: SessionLogOffset(0) }, revision,
+        path, header: decoded.header, inspection: { meta: decoded.header, events: [...decoded.events], inheritedEventCount: SessionLogOffset(decoded.inheritedEventCount) }, revision,
       }
     } finally {
       await handle.close()
