@@ -73,6 +73,7 @@ export interface PersonProfileRecord {
     readonly authorityEnvironmentId: string
     readonly handle: string
     readonly authorityBindingVersion: number
+    readonly authorityBindingScope?: string
   }[]
   readonly bindingGeneration: number
   readonly createdAt: number

@@ -33,6 +33,8 @@ kind: "package-bundle"
 
 Profile registry 只保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC、opaque Profile id、按环境划分的当前 binding handle／version，以及 opaque Keychain handle。同一个人的 staging 与 production binding 解析到同一 Profile；更高的服务端签名 binding version 只原子替换对应环境的旧 handle，并使旧签名 selector 失效。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料，只持久化域隔离 verifier；常量时间校验成功后才授权当前已认证连接。
 
+Registry 可读取 v4 binding scope，读取时不会改写文件。旧 broker 可以续用已知 handle，且不会丢失已保存的 scope；若同一环境已有 scoped binding，未知的无 scope handle 将以 `upgrade_required` 拒绝。当前控制协议不能新建 scoped binding，因此这条兼容路径只恢复已登记的 Profile。
+
 `profile.ensure` 返回绑定 installation、Profile、binding generation、runtime generation 与 schema generation 的 Host 签名 opaque selector。`profile.restore` 接受该 selector、精确 Keychain handle 与新鲜 Main-vault material。跨 installation 复制、binding 轮换后重放、猜测 handle／material，或证明连接断开，都会 fail closed。
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
