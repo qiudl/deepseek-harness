@@ -14520,7 +14520,7 @@ importers:
   packages/session/session-persistence-jsonl:
     dependencies:
       '@deepseek-ai/dsh-host-control-protocol':
-        specifier: workspace:^
+        specifier: workspace:*
         version: link:../../host/control-protocol
       '@deepseek-ai/dsh-llm':
         specifier: workspace:*
