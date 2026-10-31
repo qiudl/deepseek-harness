@@ -59,6 +59,8 @@ describe('profile worker child process', () => {
   it('rejects original plugin roots before starting a restricted worker', async () => {
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
     await expect(factory.createRestricted(spec(tmpdir()))).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(factory.createRestricted({ ...spec(tmpdir()), pluginRoots: [], env: { NODE_OPTIONS: '--require=untrusted' } }))
+      .rejects.toMatchObject({ code: 'unavailable' })
   })
 
   it('reports confirmed process exit separately from an earlier worker error', async () => {

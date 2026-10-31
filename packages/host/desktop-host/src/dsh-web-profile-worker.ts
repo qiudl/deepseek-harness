@@ -179,7 +179,9 @@ export class DshWebProfileWorkerFactory {
    * @returns lifecycle and the attested loopback origin, held privately by Host.
    */
   async createRestricted(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
-    if (process.platform !== 'darwin' || spec.pluginRoots.length !== 0) throw new HostAuthorityError('unavailable')
+    if (process.platform !== 'darwin' || spec.pluginRoots.length !== 0 || Object.keys(spec.env).length !== 0) {
+      throw new HostAuthorityError('unavailable')
+    }
     return this.createWorker(spec, signal, true)
   }
 
