@@ -17,6 +17,7 @@ import { WebServer, type WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
 import AgentDefaultModel from '@deepseek-ai/dsh-agent-default-model'
+import { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
 import { apply, Config, internals } from '../src/index.ts'
 
@@ -168,11 +169,17 @@ describe('web-app runtime glue', () => {
     onTestFinished(async () => { await ctx.fiber.dispose(); await gatewayCtx.fiber.dispose() })
     const { server, routes } = fakeHttpServer()
     ctx.provide('webServer', server)
+    const liveMemoryId = SessionId('memory-live')
+    const archivedMemoryId = SessionId('memory-archived')
     ctx.provide('sessionPersistence', {
-      list: async () => [], stat: async () => undefined,
+      list: async () => [liveMemoryId, archivedMemoryId].map(id => ({
+        header: { id, version: SESSION_FORMAT_VERSION, createdAt: 1, isSeeded: false },
+        revision: 'revision-1',
+      })),
+      stat: async () => undefined,
       open: async () => { throw Error('unexpected Session open') },
     } as never)
-    ctx.provide('sessions', { get: () => undefined } as never)
+    ctx.provide('sessions', { get: (id: string) => id === liveMemoryId ? {} : undefined } as never)
     provideConnection(ctx)
     const gateway = new TypertGatewayService(gatewayCtx, {})
     let browserAdmission: Parameters<typeof gateway.registerBrowserAdmission>[0] | undefined
@@ -227,7 +234,9 @@ describe('web-app runtime glue', () => {
       ['/internal/desktop-remote-session', { operation: 'session.list' }, { value: { items: [] } }],
       ['/internal/desktop-remote-ui', { endpoint: 'boot/injections', payload: { args: {} } },
         { value: { injections: [{ kind: 'script', placement: 'head', text: 'fixtureBoot()' }] } }],
-      ['/internal/desktop-memory-sessions', { after: null }, { items: [], nextAfter: null }],
+      ['/internal/desktop-memory-sessions', { after: null }, {
+        items: [{ sessionId: archivedMemoryId, revision: 'revision-1' }], nextAfter: null,
+      }],
     ] as const) {
       const response = await fetch(`http://127.0.0.1:${address.port}${path}`, {
         method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body),

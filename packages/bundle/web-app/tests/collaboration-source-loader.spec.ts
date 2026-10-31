@@ -397,10 +397,9 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     expect(row?.projections?.values.sessionListMetadata?.blank).toBe(true)
     expect(session.seq).toBe(1)
     expect(stream).not.toHaveBeenCalled()
-    const memory = await factory['readMemorySession'](origin, 'M'.repeat(43), sessionId,
-      new AbortController().signal, () => false)
-    expect(memory.sessionId).toBe(sessionId)
-    expect(memory.text).toBe(`${JSON.stringify(header)}\n`)
+    expect(ctx.sessions.get(SessionId(sessionId))).toBeDefined()
+    await expect(factory['readMemorySession'](origin, 'M'.repeat(43), sessionId,
+      new AbortController().signal, () => false)).rejects.toThrow('unavailable')
     const memoryUrl = `${origin}/internal/desktop-memory-session`
     const memoryBody = JSON.stringify({ session_id: sessionId })
     expect((await fetch(memoryUrl, { method: 'POST', headers: { cookie: 'dsh-auth=browser' },
