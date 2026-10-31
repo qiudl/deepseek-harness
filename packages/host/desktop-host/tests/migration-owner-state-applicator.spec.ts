@@ -11,12 +11,20 @@ const diskFaults = vi.hoisted(() => ({ availableBytes: undefined as bigint | und
   copyNoSpace: false, beforeCopy: undefined as (() => Promise<void>) | undefined,
   afterCopy: undefined as (() => void | Promise<void>) | undefined, lstatPath: undefined as string | undefined,
   unsafeStageRoot: undefined as string | undefined, mutateOnSecondStat: undefined as string | undefined,
-  nonBufferStream: undefined as string | undefined }))
+  nonBufferStream: undefined as string | undefined, failOpenPath: undefined as string | undefined,
+  failClosePath: undefined as string | undefined, captureOpenPath: undefined as string | undefined,
+  capturedHandle: undefined as Awaited<ReturnType<typeof import('node:fs/promises').open>> | undefined }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual,
     open: async (...args: Parameters<typeof actual.open>) => {
+      if (String(args[0]) === diskFaults.failOpenPath) throw new Error('fixture open denied')
       const handle = await actual.open(...args)
+      if (String(args[0]) === diskFaults.captureOpenPath && !diskFaults.capturedHandle) diskFaults.capturedHandle = handle
+      if (String(args[0]) === diskFaults.failClosePath) {
+        const close = handle.close.bind(handle)
+        vi.spyOn(handle, 'close').mockImplementationOnce(async () => { await close(); throw new Error('fixture close failure') })
+      }
       if (String(args[0]) === diskFaults.mutateOnSecondStat) {
         const stat = handle.stat.bind(handle)
         vi.spyOn(handle, 'stat').mockImplementationOnce(async () => stat({ bigint: true }))
@@ -402,7 +410,57 @@ describe('migration owner-state generation applicator', () => {
     await expect(staged.dispose()).rejects.toMatchObject({ code: 'EACCES' })
     await expect(access(staged.root)).resolves.toBeUndefined()
     diskFaults.lstatPath = undefined
-    await staged.dispose()
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await expect(access(staged.root)).resolves.toBeUndefined()
+  })
+
+  it('reports identity and pin-close failures while preserving the staged directory', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-close-denied' })
+    const operation = randomUUID()
+    const stagedRoot = join(await realpath(parent), `restricted-${operation}`)
+    diskFaults.captureOpenPath = stagedRoot
+    onTestFinished(async () => {
+      diskFaults.lstatPath = undefined; diskFaults.captureOpenPath = undefined; diskFaults.capturedHandle = undefined
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
+    const staged = await stageRestrictedProfile({ stagingParent: parent, stagingOperationId: operation, expectedUid: uid,
+      profileRoot: source, ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
+      inspectPersistence: inspectFixture(persistenceRoot), assertCurrent: () => {}, signal: new AbortController().signal })
+    const handle = diskFaults.capturedHandle
+    if (!handle) throw new Error('missing pinned directory handle')
+    const close = handle.close.bind(handle)
+    vi.spyOn(handle, 'close').mockImplementationOnce(async () => { await close(); throw new Error('fixture close failure') })
+    diskFaults.lstatPath = stagedRoot
+    await expect(staged.dispose()).rejects.toMatchObject({ name: 'AggregateError', message: 'restricted_staging_cleanup_unconfirmed' })
+    await expect(access(stagedRoot)).resolves.toBeUndefined()
+    diskFaults.lstatPath = undefined
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+  })
+
+  it('cannot delete an abandoned staging directory on a later cleanup call', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-abandon' })
+    onTestFinished(async () => {
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
+    const staged = await stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
+      ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
+      inspectPersistence: inspectFixture(persistenceRoot), assertCurrent: () => {}, signal: new AbortController().signal })
+    await staged.abandon()
+    await staged.abandon()
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await expect(access(staged.root)).resolves.toBeUndefined()
   })
 
   it('retains a staging directory whose permissions change during creation', async () => {
@@ -426,6 +484,33 @@ describe('migration owner-state generation applicator', () => {
       .rejects.toThrow('restricted_staging_cleanup_unconfirmed')
     await expect(access(stagedRoot)).resolves.toBeUndefined()
   })
+
+  it.each(['open', 'close-after-invalid', 'close-after-stat-error'] as const)(
+    'retains staging when pin ownership is uncertain (%s)', async (mode) => {
+      const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+      const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+      const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+      const persistenceRoot = join(source, 'sessions')
+      await mkdir(persistenceRoot, { mode: 0o700 })
+      const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+        processNonce: 'restricted-fixture-pin-failure' })
+      const operation = randomUUID()
+      const stagedRoot = join(await realpath(parent), `restricted-${operation}`)
+      if (mode === 'open') diskFaults.failOpenPath = stagedRoot
+      if (mode === 'close-after-invalid') { diskFaults.unsafeStageRoot = stagedRoot; diskFaults.failClosePath = stagedRoot }
+      if (mode === 'close-after-stat-error') { diskFaults.lstatPath = stagedRoot; diskFaults.failClosePath = stagedRoot }
+      onTestFinished(async () => {
+        diskFaults.failOpenPath = undefined; diskFaults.failClosePath = undefined
+        diskFaults.unsafeStageRoot = undefined; diskFaults.lstatPath = undefined
+        await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+      })
+      await expect(stageRestrictedProfile({ stagingParent: parent, stagingOperationId: operation, expectedUid: uid,
+        profileRoot: source, ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
+        inspectPersistence: inspectFixture(persistenceRoot), assertCurrent: () => {}, signal: new AbortController().signal }))
+        .rejects.toThrow('restricted_staging_cleanup_unconfirmed')
+      await expect(access(stagedRoot)).resolves.toBeUndefined()
+    },
+  )
 
   it('cleans the staging directory if the packaged web template is unavailable', async () => {
     const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))

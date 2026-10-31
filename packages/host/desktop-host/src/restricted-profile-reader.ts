@@ -68,7 +68,10 @@ export class RestrictedProfileReader {
     this.lifetime.abort()
     this.input.signal.removeEventListener('abort', this.onAbort)
     this.closing = (async () => {
-      await this.workers.disposeAll()
+      try { await this.workers.disposeAll() } catch (error) {
+        try { await this.staging.abandon() } catch (cleanup) { throw new AggregateError([error, cleanup], 'restricted_profile_cleanup_unconfirmed') }
+        throw error
+      }
       await this.staging.dispose()
     })()
     return this.closing
@@ -108,8 +111,12 @@ export async function startRestrictedProfileReader(input: StagingInput & {
     return new RestrictedProfileReader(workers, input.profileId, staged, input, input.onCleanupFailure)
   } catch (error) {
     try {
-      await workers.disposeAll()
-      if (!(error instanceof ProfileWorkerExitUnconfirmedError)) await staged.dispose()
+      try { await workers.disposeAll() } catch (failure) {
+        try { await staged.abandon() } catch (cleanup) { throw new AggregateError([failure, cleanup]) }
+        throw failure
+      }
+      if (error instanceof ProfileWorkerExitUnconfirmedError) await staged.abandon()
+      else await staged.dispose()
     } catch (cleanupError) {
       throw new RestrictedStartupCleanupError(cleanupError)
     }

@@ -31,10 +31,17 @@ const stageCleanupFaults = vi.hoisted(() => new Set<string>())
 const stageCopyLinkFaults = vi.hoisted(() => new Set<string>())
 const stageDiskFullFaults = vi.hoisted(() => new Set<string>())
 const stageCopyCorruptFaults = vi.hoisted(() => new Map<string, string>())
+const stagePinCloseFaults = vi.hoisted(() => new Set<string>())
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open: typeof actual.open = async (...args) => {
     const handle = await actual.open(...args)
+    const root = [...stagePinCloseFaults].find(item => String(args[0]).startsWith(`${item}/restricted-`))
+    if (root) {
+      stagePinCloseFaults.delete(root)
+      const close = handle.close.bind(handle)
+      vi.spyOn(handle, 'close').mockImplementationOnce(async () => { await close(); throw new Error('fixture pin close failed') })
+    }
     const fault = readFaults.get(String(args[0]))
     if (fault === 'short') vi.spyOn(handle, 'read').mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) })
     if (fault === 'changed') {
@@ -413,11 +420,18 @@ describe('offline Profile existing-only inspector', () => {
     let notify!: () => void
     const notified = new Promise<void>((resolve) => { notify = resolve })
     const reader = new RestrictedProfileReader({ disposeAll: async () => { throw new Error('worker cleanup failed') } } as never,
-      profileId, {} as never, { signal: controller.signal } as never, notify)
+      profileId, { abandon: async () => {} } as never, { signal: controller.signal } as never, notify)
     await notified
     await expect(reader.close()).rejects.toThrow('worker cleanup failed')
     await expect(reader.read({ operation: 'session.list', command_id: randomUUID() as HostControlRequestId },
       new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('reports both failures if worker shutdown and pin release fail', async () => {
+    const reader = new RestrictedProfileReader({ disposeAll: async () => { throw new Error('worker stop failed') } } as never,
+      profileId, { abandon: async () => { throw new Error('pin release failed') } } as never,
+      { signal: new AbortController().signal } as never, () => {})
+    await expect(reader.close()).rejects.toMatchObject({ name: 'AggregateError', message: 'restricted_profile_cleanup_unconfirmed' })
   })
 
   it('does not enter a restricted read if authority is cancelled immediately after worker verification', async () => {
@@ -976,6 +990,52 @@ describe('offline Profile existing-only inspector', () => {
     expect(regular.isLocallyBlocked(profileId)).toBe(true)
   })
 
+  it('retains the fence if startup and private worker shutdown both fail', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-start-worker-cleanup-fixture' })
+    const fence = new RestrictedProfileFence(value.hostRoot, uid, ownership)
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') },
+      id => fence.pending(id) !== undefined)
+    const extensions = extensionBarrier()
+    const dispose = vi.spyOn(ProfileWorkerSupervisor.prototype, 'disposeAll').mockRejectedValueOnce(new Error('worker shutdown failed'))
+    onTestFinished(async () => { dispose.mockRestore(); await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), fence, profileId, credentialHandle: 'fixture', assertCurrent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => {},
+      createWorker: async () => { throw new Error('worker startup failed') },
+    }, async () => 'must not return')).rejects.toThrow('restricted_profile_cleanup_unconfirmed')
+    expect(fence.pending(profileId)).toBeDefined()
+    expect(regular.isLocallyBlocked(profileId)).toBe(true)
+  })
+
+  it('retains the fence if worker shutdown and pin release both fail during startup', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-start-pin-cleanup-fixture' })
+    const fence = new RestrictedProfileFence(value.hostRoot, uid, ownership)
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') },
+      id => fence.pending(id) !== undefined)
+    const extensions = extensionBarrier()
+    const dispose = vi.spyOn(ProfileWorkerSupervisor.prototype, 'disposeAll').mockRejectedValueOnce(new Error('worker shutdown failed'))
+    stagePinCloseFaults.add(value.hostRoot)
+    onTestFinished(async () => {
+      stagePinCloseFaults.delete(value.hostRoot); dispose.mockRestore()
+      await extensions.dispose(); await regular.disposeAll(); await ownership.release()
+    })
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), fence, profileId, credentialHandle: 'fixture', assertCurrent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => {},
+      createWorker: async () => { throw new Error('worker startup failed') },
+    }, async () => 'must not return')).rejects.toThrow('restricted_profile_cleanup_unconfirmed')
+    expect(fence.pending(profileId)).toBeDefined()
+    expect(regular.isLocallyBlocked(profileId)).toBe(true)
+  })
+
   it('blocks the Profile if acquiring existing Session locks cannot confirm cleanup', async () => {
     const value = await fixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
@@ -1309,10 +1369,14 @@ describe('offline Profile existing-only inspector', () => {
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
       signal: new AbortController().signal })
+    const original = await lstat(staged.root)
     await rm(staged.root, { recursive: true })
     await mkdir(staged.root, { mode: 0o700 })
+    const replacement = await lstat(staged.root)
+    expect([replacement.dev, replacement.ino]).not.toEqual([original.dev, original.ino])
     const sentinel = join(staged.root, 'replacement')
     await writeFile(sentinel, 'preserve', { mode: 0o600 })
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     await expect(staged.dispose()).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     expect(await readFile(sentinel, 'utf8')).toBe('preserve')
   })

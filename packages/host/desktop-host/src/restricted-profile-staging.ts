@@ -132,6 +132,7 @@ export async function stageRestrictedProfile(input: {
   readonly ownerPaths: AppliedMigrationOwnerState
   readonly verify: () => Promise<void>
   readonly dispose: () => Promise<void>
+  readonly abandon: () => Promise<void>
 }> {
   input.signal.throwIfAborted()
   input.ownership.assertOwner()
@@ -196,26 +197,51 @@ export async function stageRestrictedProfile(input: {
     try { await mkdir(root, { mode: 0o700 }) } catch (error) { throw new RestrictedStagingCleanupError(error) }
   }
   let created: Awaited<ReturnType<typeof lstat>>
+  let pinned: Awaited<ReturnType<typeof open>> | undefined
   try {
+    // Keep the original directory inode alive until cleanup; otherwise a removed
+    // directory can immediately reuse its inode for a replacement on Linux.
+    pinned = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
+    const held = await pinned.stat()
     created = await lstat(root)
     if (!created.isDirectory() || created.isSymbolicLink() || created.uid !== input.expectedUid
-      || (created.mode & 0o077) !== 0) throw new HostAuthorityError('profile_integrity_failed')
-  } catch (error) { throw new RestrictedStagingCleanupError(error) }
+      || (created.mode & 0o077) !== 0 || !held.isDirectory() || held.dev !== created.dev || held.ino !== created.ino) {
+      throw new HostAuthorityError('profile_integrity_failed')
+    }
+  } catch (error) {
+    if (pinned) {
+      try { await pinned.close() } catch (cleanup) { throw new RestrictedStagingCleanupError(new AggregateError([error, cleanup])) }
+    }
+    throw new RestrictedStagingCleanupError(error)
+  }
   let disposed = false
+  let replaced = false
+  const abandon = async () => {
+    if (disposed || replaced) return
+    replaced = true
+    await pinned.close()
+  }
   const dispose = async () => {
     if (disposed) return
-    input.ownership.assertOwner()
-    const current = await lstat(root).catch((error: unknown) => {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined
-      throw error
-    })
-    if (current && (!current.isDirectory() || current.isSymbolicLink() || current.uid !== input.expectedUid
-      || current.dev !== created.dev || current.ino !== created.ino)) throw new HostAuthorityError('recovery_preflight_stale')
-    if (current) {
+    if (replaced) throw new HostAuthorityError('recovery_preflight_stale')
+    try {
       input.ownership.assertOwner()
-      await rm(root, { recursive: true })
+      const current = await lstat(root).catch((error: unknown) => {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined
+        throw error
+      })
+      if (current && (!current.isDirectory() || current.isSymbolicLink() || current.uid !== input.expectedUid
+        || current.dev !== created.dev || current.ino !== created.ino)) throw new HostAuthorityError('recovery_preflight_stale')
+      if (current) {
+        input.ownership.assertOwner()
+        await rm(root, { recursive: true })
+      }
+      await pinned.close()
+      disposed = true
+    } catch (error) {
+      try { await abandon() } catch (cleanup) { throw new AggregateError([error, cleanup], 'restricted_staging_cleanup_unconfirmed') }
+      throw error
     }
-    disposed = true
   }
   try {
     const webTemplate = PROFILE_TEMPLATES.web
@@ -240,7 +266,7 @@ export async function stageRestrictedProfile(input: {
     await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root,
       { root: snapshotRoot, compression: input.persistence.compression }, ownerPaths), { mode: 0o600, flag: 'wx' })
     await verify()
-    return { root, ownerPaths, verify, dispose }
+    return { root, ownerPaths, verify, dispose, abandon }
   } catch (error) {
     try { await dispose() } catch (cleanupError) { throw new RestrictedStagingCleanupError(cleanupError) }
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOSPC') {
