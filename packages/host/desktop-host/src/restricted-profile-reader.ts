@@ -3,7 +3,7 @@ import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
 import type { RestrictedProfileFence } from './restricted-profile-fence.ts'
 import { executeRestrictedSessionCommand } from './session-command.ts'
-import { stageRestrictedProfile } from './restricted-profile-staging.ts'
+import { RestrictedStagingCleanupError, stageRestrictedProfile } from './restricted-profile-staging.ts'
 import type { ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
@@ -93,10 +93,12 @@ export async function startRestrictedProfileReader(input: StagingInput & {
   readonly credentialHandle: string
   readonly createWorker: ProfileWorkerFactory
   readonly onCleanupFailure: () => void
+  readonly beforeWorkerStart?: () => void
 }): Promise<RestrictedProfileReader> {
   const staged = await stageRestrictedProfile(input)
   const workers = new ProfileWorkerSupervisor(input.createWorker)
   try {
+    input.beforeWorkerStart?.()
     await workers.start({ profileId: input.profileId, profileRoot: staged.root,
       credentialHandle: input.credentialHandle, pluginRoots: [], signal: input.signal })
     await staged.verify()
@@ -203,7 +205,8 @@ export async function withRestrictedProfileReader<T>(
               const value = await workers.withInactiveProfile(input.profileId, async () => {
                 const operationId = input.fence.begin(input.profileId)
                 let cleanupConfirmed = true
-                const fencedInput = { ...input, signal: activeSignal, assertCurrent: () => {
+                const fencedInput = { ...input, signal: activeSignal, stagingOperationId: operationId,
+                beforeWorkerStart: () => input.fence.markWorkerPossible(input.profileId, operationId), assertCurrent: () => {
                   assertLocks()
                   input.fence.assertOwned(input.profileId, operationId)
                   claims.assertClaimOpen(input.profileId)
@@ -214,7 +217,7 @@ export async function withRestrictedProfileReader<T>(
                   try {
                     reader = await startRestrictedProfileReader(fencedInput)
                   } catch (error) {
-                    if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
+                    if (error instanceof RestrictedStagingCleanupError || error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
                       cleanupConfirmed = false
                       workers.blockProfile(input.profileId)
                     }
@@ -249,6 +252,7 @@ export async function withRestrictedProfileReader<T>(
                 } finally {
                   if (cleanupConfirmed) {
                     try {
+                      input.fence.markWorkerGone(input.profileId, operationId)
                       finalizeFence = input.fence.prepareClear(input.profileId, operationId, () => { assertLocks(); input.assertAllWritersQuiescent() })
                     } catch (error) {
                       workers.blockProfile(input.profileId)

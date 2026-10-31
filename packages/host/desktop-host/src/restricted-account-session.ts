@@ -15,6 +15,12 @@ import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 
+function processMayBeAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
 function validSessionDirectories(value: RestrictedPersistenceInspection): boolean {
   if (typeof value.root !== 'string' || !isAbsolute(value.root) || resolve(value.root) !== value.root
     || !Number.isSafeInteger(value.sessionCount) || value.sessionCount < 0 || !Array.isArray(value.sessionDirectories)
@@ -140,6 +146,23 @@ export class RestrictedAccountSessionService {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
     assertCurrent()
+    // An old Host may have died before starting a worker or after confirmed cleanup.
+    // Reconcile only that provably empty case while the trusted exclusion is held.
+    if (this.options.fence.emptyRecoveryCandidate(expectedProfileId)) {
+      let invoked = false
+      let closed = false
+      try {
+        await this.options.withAllWritersExcluded(expectedProfileId, async () => {
+          if (closed || invoked) throw new HostAuthorityError('unavailable')
+          invoked = true
+          assertCurrent()
+          this.options.fence.clearEmptyReservation(expectedProfileId, this.options.hostRoot,
+            () => this.options.assertAllWritersQuiescent(expectedProfileId), processMayBeAlive)
+        }, signal)
+      } finally { closed = true }
+      if (!invoked) throw new HostAuthorityError('unavailable')
+      assertCurrent()
+    }
     let value: HostRemoteSessionJson
     try {
       value = await withRestrictedProfileReader(this.options.workers, this.options.extensions, this.options.claims, {

@@ -8,7 +8,7 @@ import { HostAuthorityError } from './types.ts'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const MAX_BYTES = 512
 
-type RecordValue = Readonly<{ version: 1; profileId: string; operationId: string; state: 'pending' | 'cleared' }>
+type RecordValue = Readonly<{ version: 1 | 2; profileId: string; operationId: string; state: 'pending' | 'cleared'; phase?: 'reserved' | 'worker_possible' | 'worker_gone'; ownerGeneration?: string; ownerPid?: number }>
 
 /** Durable, per-Profile admission fence for an isolated worker, under the single-Host lease. */
 export class RestrictedProfileFence {
@@ -36,8 +36,12 @@ export class RestrictedProfileFence {
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { throw new HostAuthorityError('unavailable') }
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
     const record = value as Record<string, unknown>
-    if (Object.keys(record).sort().join(',') !== 'operationId,profileId,state,version' || record.version !== 1
-      || record.profileId !== profileId || typeof record.operationId !== 'string' || !UUID.test(record.operationId)
+    const legacy = record.version === 1 && Object.keys(record).sort().join(',') === 'operationId,profileId,state,version'
+    const current = record.version === 2 && Object.keys(record).sort().join(',') === 'operationId,ownerGeneration,ownerPid,phase,profileId,state,version'
+      && typeof record.ownerGeneration === 'string' && UUID.test(record.ownerGeneration)
+      && Number.isSafeInteger(record.ownerPid) && (record.ownerPid as number) > 0
+      && (record.phase === 'reserved' || record.phase === 'worker_possible' || record.phase === 'worker_gone')
+    if ((!legacy && !current) || record.profileId !== profileId || typeof record.operationId !== 'string' || !UUID.test(record.operationId)
       || (record.state !== 'pending' && record.state !== 'cleared')) throw new HostAuthorityError('unavailable')
     this.ownership.assertOwner()
     return record as RecordValue
@@ -70,8 +74,81 @@ export class RestrictedProfileFence {
   begin(profileId: string): string {
     if (this.pending(profileId)) throw new HostAuthorityError('conflict')
     const operationId = randomUUID()
-    this.write({ version: 1, profileId, operationId, state: 'pending' })
+    this.write({ version: 2, profileId, operationId, state: 'pending', phase: 'reserved', ownerGeneration: this.ownership.generation, ownerPid: this.ownership.ownerPid })
     return operationId
+  }
+
+  /** Mark the point after which a worker may exist, before it is spawned. @internal */
+  markWorkerPossible(profileId: string, operationId: string): void {
+    const current = this.read(profileId)
+    if (!current || current.version !== 2 || current.operationId !== operationId
+      || current.state !== 'pending' || current.phase !== 'reserved'
+      || current.ownerGeneration !== this.ownership.generation) throw new HostAuthorityError('stale')
+    this.write({ ...current, phase: 'worker_possible' })
+  }
+
+  /** Record confirmed worker exit and staging cleanup before releasing the writer guard. @internal */
+  markWorkerGone(profileId: string, operationId: string): void {
+    const current = this.read(profileId)
+    if (!current || current.version !== 2 || current.operationId !== operationId || current.state !== 'pending'
+      || current.ownerGeneration !== this.ownership.generation || current.phase === 'worker_gone') {
+      throw new HostAuthorityError('stale')
+    }
+    this.write({ ...current, phase: 'worker_gone' })
+  }
+
+  /** Return a prior operation with no possible active restricted worker. @internal */
+  emptyRecoveryCandidate(profileId: string): string | undefined {
+    const current = this.read(profileId)
+    return current?.version === 2 && current.state === 'pending'
+      && (current.phase === 'reserved' || current.phase === 'worker_gone') ? current.operationId : undefined
+  }
+
+  /** Return an operation that provably had not begun spawning a worker. @internal */
+  reserved(profileId: string): string | undefined {
+    const current = this.read(profileId)
+    return current?.version === 2 && current.state === 'pending' && current.phase === 'reserved'
+      ? current.operationId : undefined
+  }
+
+  /**
+   * Recover a reservation with no possible worker and no staged files.
+   * The caller must hold external writer exclusion while proving quiescence.
+   * @param profileId - Host-selected Profile.
+   * @param stagingParent - Private Host-owned directory used for staged copies.
+   * @param assertQuiescent - Trusted check performed under external writer exclusion.
+   * @param isProcessAlive - Trusted operating-system liveness check; uncertainty must return true.
+   * @returns Whether an empty reservation was safely cleared.
+   * @internal
+   */
+  clearEmptyReservation(profileId: string, stagingParent: string, assertQuiescent: () => void,
+    isProcessAlive: (pid: number) => boolean): boolean {
+    const operationId = this.emptyRecoveryCandidate(profileId)
+    if (!operationId) return false
+    const record = this.read(profileId)
+    if (!record || record.ownerGeneration === this.ownership.generation || record.ownerPid === undefined
+      || isProcessAlive(record.ownerPid)) return false
+    if (!isAbsolute(stagingParent) || resolve(stagingParent) !== stagingParent) throw new HostAuthorityError('invalid_input')
+    const parent = lstatSync(stagingParent)
+    if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== this.uid || (parent.mode & 0o077) !== 0) {
+      throw new HostAuthorityError('unavailable')
+    }
+    const staged = join(stagingParent, `restricted-${operationId}`)
+    const assertAbsent = () => {
+      try { lstatSync(staged) } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+        throw error
+      }
+      throw new HostAuthorityError('unavailable')
+    }
+    this.ownership.assertOwner()
+    assertAbsent()
+    assertQuiescent()
+    this.ownership.assertOwner()
+    assertAbsent()
+    if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(record.ownerPid)) throw new HostAuthorityError('stale')
+    this.clear(profileId, operationId, () => {})
+    return true
   }
 
   /**

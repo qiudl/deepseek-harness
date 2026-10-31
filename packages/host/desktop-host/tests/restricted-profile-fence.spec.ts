@@ -1,4 +1,7 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { mkdirSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished } from 'vitest'
@@ -11,6 +14,93 @@ const profile = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
 const other = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3151'
 
 describe('restricted Profile durable fence', () => {
+  it('distinguishes reservations before worker spawn and conservatively handles old records', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-phase-'))
+    const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-phase-test' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const operation = fence.begin(profile)
+    expect(fence.reserved(profile)).toBe(operation)
+    expect(new RestrictedProfileFence(root, uid, lock).reserved(profile)).toBe(operation)
+    fence.markWorkerPossible(profile, operation)
+    expect(fence.reserved(profile)).toBeUndefined()
+    expect(fence.pending(profile)).toBe(operation)
+    expect(() => fence.markWorkerPossible(profile, operation)).toThrow('stale')
+    await writeFile(join(root, `${other}.json`), JSON.stringify({ version: 1, profileId: other,
+      operationId: operation, state: 'pending' }), { mode: 0o600 })
+    expect(fence.pending(other)).toBe(operation)
+    expect(fence.reserved(other)).toBeUndefined()
+  })
+
+  it('clears only an empty, unstarted reservation after a trusted quiescence check', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-empty-'))
+    let lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-empty-test' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    let fence = new RestrictedProfileFence(root, uid, lock)
+    const operation = fence.begin(profile)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => false)).toBe(false)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-empty-restarted' })
+    fence = new RestrictedProfileFence(root, uid, lock)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => true)).toBe(false)
+    let checks = 0
+    expect(() => fence.clearEmptyReservation(profile, root, () => {}, () => ++checks > 1)).toThrow('stale')
+    expect(fence.pending(profile)).toBe(operation)
+    expect(() => fence.clearEmptyReservation(profile, root, () => { throw Error('writer_active') }, () => false)).toThrow('writer_active')
+    expect(fence.pending(profile)).toBe(operation)
+    expect(() => fence.clearEmptyReservation(profile, root, () => {
+      mkdirSync(join(root, `restricted-${operation}`), { mode: 0o700 })
+    }, () => false)).toThrow('unavailable')
+    await rm(join(root, `restricted-${operation}`), { recursive: true })
+    await mkdir(join(root, `restricted-${operation}`), { mode: 0o700 })
+    const sentinel = join(root, `restricted-${operation}`, 'existing')
+    await writeFile(sentinel, 'preserve', { mode: 0o600 })
+    expect(() => fence.clearEmptyReservation(profile, root, () => {}, () => false)).toThrow('unavailable')
+    expect(await readFile(sentinel, 'utf8')).toBe('preserve')
+    expect(fence.pending(profile)).toBe(operation)
+    await rm(join(root, `restricted-${operation}`), { recursive: true })
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => false)).toBe(true)
+    expect(fence.pending(profile)).toBeUndefined()
+    const started = fence.begin(profile)
+    fence.markWorkerPossible(profile, started)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => false)).toBe(false)
+    expect(fence.pending(profile)).toBe(started)
+    fence.markWorkerGone(profile, started)
+    expect(fence.emptyRecoveryCandidate(profile)).toBe(started)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => false)).toBe(false)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-empty-restarted-again' })
+    fence = new RestrictedProfileFence(root, uid, lock)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, () => false)).toBe(true)
+  })
+
+  it('recovers an empty reservation after its recorded owner process exits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-owner-exit-'))
+    const owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    await once(owner, 'spawn')
+    if (owner.pid === undefined) throw new Error('missing fixture pid')
+    let lock = await acquireSingleHostLock({ root, uid, pid: owner.pid, processNonce: 'restricted-owner-child-test' })
+    onTestFinished(async () => {
+      if (owner.exitCode === null && owner.signalCode === null) owner.kill('SIGKILL')
+      await lock.release().catch(() => {})
+      await rm(root, { recursive: true, force: true })
+    })
+    const operation = new RestrictedProfileFence(root, uid, lock).begin(profile)
+    await lock.release()
+    lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-owner-restart-test' })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const mayBeAlive = (pid: number) => {
+      try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code !== 'ESRCH' }
+    }
+    expect(fence.pending(profile)).toBe(operation)
+    expect(fence.clearEmptyReservation(profile, root, () => {}, mayBeAlive)).toBe(false)
+    const exited = once(owner, 'exit')
+    owner.kill('SIGKILL')
+    await exited
+    expect(fence.clearEmptyReservation(profile, root, () => {}, mayBeAlive)).toBe(true)
+    expect(fence.pending(profile)).toBeUndefined()
+  })
+
   it('keeps its fence pending until the checked guard has actually released', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-fence-deferred-'))
     const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-deferred' })

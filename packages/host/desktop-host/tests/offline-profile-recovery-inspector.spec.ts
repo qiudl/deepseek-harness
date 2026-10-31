@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import { acquireSingleHostLock, type SingleHostLock } from '../src/single-instance.ts'
 import { RestrictedProfileFence } from '../src/restricted-profile-fence.ts'
+import { stageRestrictedProfile } from '../src/restricted-profile-staging.ts'
 import { RestrictedWriterExclusionCleanupError, withRestrictedProfileReader } from '../src/restricted-profile-reader.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 import { RestrictedAccountSessionService } from '../src/restricted-account-session.ts'
@@ -26,6 +27,7 @@ import type { HostControlRequestId, HostRemoteSessionCommand } from '@deepseek-a
 import { generationLogPath } from '@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts'
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
+const stageCleanupFaults = vi.hoisted(() => new Set<string>())
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open: typeof actual.open = async (...args) => {
@@ -50,7 +52,19 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return entries
   }
-  return { ...actual, open, readdir }
+  const cp: typeof actual.cp = async (...args) => {
+    if ([...stageCleanupFaults].some(root => String(args[1]).startsWith(`${root}/restricted-`))) {
+      throw new Error('fixture_copy_failed')
+    }
+    return actual.cp(...args)
+  }
+  const rm: typeof actual.rm = async (...args) => {
+    if ([...stageCleanupFaults].some(root => String(args[0]).startsWith(`${root}/restricted-`))) {
+      throw new Error('fixture_cleanup_failed')
+    }
+    return actual.rm(...args)
+  }
+  return { ...actual, open, readdir, cp, rm }
 })
 import {
   FileOwnerJsonlMigrationGenerationTarget,
@@ -977,6 +991,47 @@ describe('offline Profile existing-only inspector', () => {
     expect(fence.pending(profileId)).toBeUndefined()
   })
 
+  it('preserves an existing staging directory instead of adopting or deleting it', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-collision-fixture' })
+    onTestFinished(() => ownership.release())
+    const operation = randomUUID()
+    const root = join(value.hostRoot, `restricted-${operation}`)
+    await mkdir(root, { mode: 0o700 })
+    const sentinel = join(root, 'preserve')
+    await writeFile(sentinel, 'existing', { mode: 0o600 })
+    await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, stagingOperationId: operation, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toThrow('restricted_staging_cleanup_unconfirmed')
+    expect(await readFile(sentinel, 'utf8')).toBe('existing')
+  })
+
+  it('retains the fence if staging fails and its private copy cannot be removed', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-cleanup-fixture' })
+    const fence = new RestrictedProfileFence(value.hostRoot, uid, ownership)
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') },
+      id => fence.pending(id) !== undefined)
+    const extensions = extensionBarrier()
+    stageCleanupFaults.add(value.hostRoot)
+    onTestFinished(async () => { stageCleanupFaults.delete(value.hostRoot); await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }),
+      profileId, credentialHandle: 'fixture', assertCurrent: () => {}, assertAllWritersQuiescent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => {}, withAllWritersExcluded: async operation => operation(),
+      createWorker,
+    }, async () => 'must not return')).rejects.toThrow('restricted_staging_cleanup_unconfirmed')
+    expect(createWorker).not.toHaveBeenCalled()
+    expect(fence.pending(profileId)).toBeDefined()
+    expect(regular.isLocallyBlocked(profileId)).toBe(true)
+  })
+
   it('retains the durable fence when external writer quiescence cannot be proven', async () => {
     const value = await bundledFixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
@@ -1033,7 +1088,13 @@ describe('offline Profile existing-only inspector', () => {
           return result
         } finally { writerExclusionHeld = false }
       }, assertAllWritersQuiescent: () => { expect(writerExclusionHeld).toBe(true) }, onCleanupFailure: () => {},
-      createWorker: async () => ({ closeNotifications() {}, abort() { expect(writerExclusionHeld).toBe(true) }, done: Promise.resolve() }),
+      createWorker: async spec => {
+        const operation = fence.pending(profileId)
+        expect(operation).toBeDefined()
+        expect(fence.reserved(profileId)).toBeUndefined()
+        expect(spec.profileRoot).toBe(join(value.hostRoot, `restricted-${operation}`))
+        return { closeNotifications() {}, abort() { expect(writerExclusionHeld).toBe(true) }, done: Promise.resolve() }
+      },
     }, async () => {
       expect(writerExclusionHeld).toBe(true)
       expect(fence.pending(profileId)).toBeDefined()
@@ -1163,6 +1224,24 @@ describe('offline Profile existing-only inspector', () => {
     await expect(restrictedAccountRead(service, authorize, { operation: 'session.create',
       command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
+  it.each(['reserved', 'worker_gone'] as const)(
+    'recovers an empty %s operation from a dead Host before opening restricted history', async phase => {
+    const value = await bundledFixture()
+    const operation = randomUUID()
+    await writeFile(join(value.hostRoot, `${profileId}.json`), JSON.stringify({ version: 2, profileId,
+      operationId: operation, state: 'pending', phase, ownerGeneration: randomUUID(), ownerPid: 2147483647,
+    }), { mode: 0o600 })
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      remoteSession: async () => ({ items: ['history'] }) }))
+    const service = await accountService(value, createWorker)
+    const record = profile()
+    await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174015' as HostControlRequestId }, new AbortController().signal))
+      .resolves.toEqual({ items: ['history'] })
+    expect(createWorker).toHaveBeenCalledOnce()
+    expect(JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')).state).toBe('cleared')
   })
 
   it('requires the trusted broker authority guard before consulting local Account proof', async () => {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
-import { cp, lstat, mkdtemp, open, readdir, realpath, rm, statfs, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, mkdtemp, open, readdir, realpath, rm, statfs, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
@@ -12,6 +12,11 @@ import { MigrationOwnerStateApplicator, type AppliedMigrationOwnerState } from '
 import { restrictedProfileOwnerState } from './restricted-profile-owner-state.ts'
 import type { SingleHostLock } from './single-instance.ts'
 import { HostAuthorityError } from './types.ts'
+
+/** Staged files could not be removed; the durable fence must remain pending. @internal */
+export class RestrictedStagingCleanupError extends Error {
+  constructor(cause: unknown) { super('restricted_staging_cleanup_unconfirmed', { cause }) }
+}
 
 function within(root: string, path: string): boolean {
   const part = relative(root, path)
@@ -108,6 +113,7 @@ async function verifySnapshot(source: string, copy: string, uid: number, signal:
  */
 export async function stageRestrictedProfile(input: {
   readonly stagingParent: string
+  readonly stagingOperationId?: string
   readonly expectedUid: number
   readonly profileRoot: string
   readonly ownerPaths: AppliedMigrationOwnerState
@@ -172,8 +178,20 @@ export async function stageRestrictedProfile(input: {
     throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
   }
   await verify()
-  const root = await mkdtemp(join(parent, 'restricted-'))
-  const created = await lstat(root)
+  if (input.stagingOperationId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(input.stagingOperationId)) {
+    throw new HostAuthorityError('invalid_input')
+  }
+  const root = input.stagingOperationId === undefined ? await mkdtemp(join(parent, 'restricted-'))
+    : join(parent, `restricted-${input.stagingOperationId}`)
+  if (input.stagingOperationId !== undefined) {
+    try { await mkdir(root, { mode: 0o700 }) } catch (error) { throw new RestrictedStagingCleanupError(error) }
+  }
+  let created: Awaited<ReturnType<typeof lstat>>
+  try {
+    created = await lstat(root)
+    if (!created.isDirectory() || created.isSymbolicLink() || created.uid !== input.expectedUid
+      || (created.mode & 0o077) !== 0) throw new HostAuthorityError('profile_integrity_failed')
+  } catch (error) { throw new RestrictedStagingCleanupError(error) }
   let disposed = false
   const dispose = async () => {
     if (disposed) return
@@ -213,7 +231,7 @@ export async function stageRestrictedProfile(input: {
     await verify()
     return { root, ownerPaths, verify, dispose }
   } catch (error) {
-    await dispose()
+    try { await dispose() } catch (cleanupError) { throw new RestrictedStagingCleanupError(cleanupError) }
     if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') {
       throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
     }
