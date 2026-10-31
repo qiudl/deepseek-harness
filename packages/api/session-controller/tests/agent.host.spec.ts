@@ -372,11 +372,12 @@ describe('ApiSession create or adoption', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-controller-concurrent-'))
     tempDirs.push(cwd)
     const meta = header('concurrent-create', cwd)
-    const created = unpublishedAgent(ctx, meta)
+    const created = agent(ctx, meta)
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const create = vi.spyOn(ctx.agents, 'create').mockImplementation(async () => {
       await gate
+      await ctx.agents.register(created)
       return { agent: created, dispose: () => Promise.resolve() }
     })
 
@@ -384,7 +385,7 @@ describe('ApiSession create or adoption', () => {
     const second = agents.adoptExactSession(meta.id, cwd, false)
     release()
 
-    await expect(Promise.all([first, second])).resolves.toEqual([created, created])
+    await expect(Promise.all([first, second])).resolves.toEqual([{ agent: created }, { agent: created }])
     expect(create).toHaveBeenCalledOnce()
   })
 
@@ -398,8 +399,7 @@ describe('ApiSession create or adoption', () => {
       await ordinary.ctx.agents.register(winner)
       throw new Error('raced creation')
     })
-    await expect(ordinary.agents.adoptExactSession(ordinaryMeta.id, cwd, false))
-      .resolves.toBe(winner)
+    expect((await ordinary.agents.adoptExactSession(ordinaryMeta.id, cwd, false)).agent).toBe(winner)
 
     const child = await harness()
     const childCwd = mkdtempSync(join(tmpdir(), 'dsh-session-controller-child-'))
@@ -478,7 +478,9 @@ describe('ApiSession create or adoption', () => {
       dispose: () => Promise.resolve(),
     })
 
-    await expect(agents.adoptExactSession(meta.id, '/workspace', true, 'minimal')).resolves.toBe(resumed)
+    const adopted = await agents.adoptExactSession(meta.id, '/workspace', true, 'minimal')
+    expect(adopted.agent).toBe(resumed)
+    expect(adopted.agentPreset).toBe('minimal')
     expect(resume).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: meta.id }))
   })
 
@@ -560,10 +562,44 @@ describe('ApiSession create or adoption', () => {
     const fresh = agents.createSession({ sessionId: meta.id, cwd, reusable: () => false })
     expect(create).toHaveBeenCalledOnce()
     release()
-    await expect(exact).resolves.toBe(existing)
+    expect((await exact).agent).toBe(existing)
     const result = await fresh
     expect(result.agent.id).not.toBe(meta.id)
     expect(create).toHaveBeenCalledTimes(2)
+  })
+
+  it('captures the exact adoption preset before a queued new-conversation claim changes it', async () => {
+    const { ctx, agents } = await harness()
+    const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-preset-queue-'))
+    tempDirs.push(cwd)
+    const existing = agent(ctx, header('preset-queue', cwd))
+    existing.session.append('agent-preset/selected', { agentPreset: 'first' })
+    await ctx.agents.register(existing)
+    let enter!: () => void
+    let release!: () => void
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    ctx.provide('agentPresets', {
+      resolve: (id?: string) => Promise.resolve({ id: id ?? 'first' }),
+      select: async (_agent: Agent, id: string) => {
+        existing.session.append('agent-preset/selected', { agentPreset: id })
+        enter()
+        await gate
+      },
+    } as never)
+    const exact = agents.adoptExactSession(existing.id, cwd, true, 'first')
+    const newConversation = agents.createSession({ sessionId: existing.id, cwd, agentPreset: 'second', reusable: () => true })
+    await entered
+    try {
+      const exactResult = await exact
+      expect(exactResult.agent).toBe(existing)
+      expect(exactResult.agentPreset).toBe('first')
+    } finally {
+      release()
+    }
+    const laterResult = await newConversation
+    expect(laterResult.agent).toBe(existing)
+    expect(laterResult.agentPreset).toBe('second')
   })
 
   it('checks the named Session cwd before resolving a requested preset', async () => {

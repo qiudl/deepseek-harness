@@ -172,7 +172,6 @@ export async function inspectApiSession(
 /** Owns every operation that may create, resume, or configure a Web Agent. */
 export class ApiSessionAgentController {
   private readonly resumes = new Map<SessionId, Promise<Agent>>()
-  private readonly creations = new Map<SessionId, Promise<Agent>>()
   private readonly claims = new Map<SessionId, Promise<void>>()
   private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
 
@@ -289,45 +288,36 @@ export class ApiSessionAgentController {
    * @param cwd - directory the Session must own.
    * @param checkPersistedIdentity - whether to inspect a cold identity before creation.
    * @param presetId - optional Agent preset the Session must own.
-   * @returns the matching live ordinary Agent.
+   * @returns the matching live Agent and its preset captured inside the identity queue.
    */
   async adoptExactSession(
     sessionId: SessionId,
     cwd: string,
     checkPersistedIdentity: boolean,
     presetId?: string,
-  ): Promise<Agent> {
-    let creation = this.creations.get(sessionId)
-    if (creation === undefined) {
-      creation = this.inOrder(sessionId, () => this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId))
-        .catch((error: unknown) => {
-          const live = this.ctx.agents.get(sessionId)
-          if (live !== undefined) {
-            if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {
-              throw new ApiSessionSubagentOwnership(sessionId)
-            }
-            return live
-          }
+  ): Promise<ApiSessionCreated> {
+    return this.inOrder(sessionId, async () => {
+      let agent: Agent
+      try {
+        agent = await this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId)
+      } catch (error: unknown) {
+        const live = this.ctx.agents.get(sessionId)
+        if (live === undefined) {
           const attached = this.ctx.sessions.get(sessionId)
           if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
             throw new ApiSessionSubagentOwnership(sessionId)
           }
           throw error
-        })
-        .finally(() => { this.creations.delete(sessionId) })
-      this.creations.set(sessionId, creation)
-    }
-    const agent = await creation
-    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
-      throw new ApiSessionSubagentOwnership(sessionId)
-    }
-    if (presetId !== undefined) {
-      this.assertPresetUnchanged(sessionId, presetId, this.presetForSession(agent.session))
-    }
-    if (agent.session.header.cwd !== cwd) {
-      throw new ApiSessionCwdConflict(sessionId, cwd, agent.session.header.cwd)
-    }
-    return agent
+        }
+        agent = live
+      }
+      if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
+        throw new ApiSessionSubagentOwnership(sessionId)
+      }
+      if (presetId !== undefined) this.assertPresetUnchanged(sessionId, presetId, this.presetForSession(agent.session))
+      if (agent.session.header.cwd !== cwd) throw new ApiSessionCwdConflict(sessionId, cwd, agent.session.header.cwd)
+      return this.created(agent)
+    })
   }
 
   /**
