@@ -767,6 +767,26 @@ describe('offline Profile existing-only inspector', () => {
     expect(() => extensions.commit(authority, plan.planId, randomUUID())).toThrow('busy')
   })
 
+  it('blocks extension changes if writer exclusion fails before entering the reader', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-exclusion-cleanup-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
+    const extensions = extensionBarrier()
+    onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    const authority = () => profileId
+    const plan = await extensions.prepare(authority, 'plugin', '{}')
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => {},
+      withAllWritersExcluded: async () => { regular.blockProfile(profileId); throw new Error('exclusion_cleanup_failed') },
+      createWorker: async () => { throw new Error('unexpected isolated worker') },
+    }, async () => 'must not return')).rejects.toThrow('exclusion_cleanup_failed')
+    expect(() => extensions.commit(authority, plan.planId, randomUUID())).toThrow('busy')
+  })
+
   it('retains the durable fence when external writer quiescence cannot be proven', async () => {
     const value = await bundledFixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,

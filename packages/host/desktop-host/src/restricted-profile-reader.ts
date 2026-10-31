@@ -134,74 +134,76 @@ export async function withRestrictedProfileReader<T>(
   },
   use: (reader: RestrictedProfileReader) => Promise<T>,
 ): Promise<T> {
-  return extensions.withRestrictedAccess(input.profileId, () => input.withAllWritersExcluded(async () => {
+  return extensions.withRestrictedAccess(input.profileId, async () => {
     try {
-      const guard = () => {
-        input.signal.throwIfAborted()
-        input.ownership.assertOwner()
-        claims.assertOpen(input.profileId)
-        input.assertAllWritersQuiescent()
-        input.assertCurrent()
-      }
-      guard()
-      return await workers.withInactiveProfile(input.profileId, async () => {
-        const operationId = input.fence.begin(input.profileId)
-        let cleanupConfirmed = true
-        const fencedInput = { ...input, assertCurrent: () => {
-          input.fence.assertOwned(input.profileId, operationId)
-          claims.assertClaimOpen(input.profileId)
+      return await input.withAllWritersExcluded(async () => {
+        const guard = () => {
+          input.signal.throwIfAborted()
+          input.ownership.assertOwner()
+          claims.assertOpen(input.profileId)
+          input.assertAllWritersQuiescent()
           input.assertCurrent()
-        } }
-        try {
-          let reader: RestrictedProfileReader
-          try {
-            reader = await startRestrictedProfileReader(fencedInput)
-          } catch (error) {
-            if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
-              cleanupConfirmed = false
-              workers.blockProfile(input.profileId)
-            }
-            throw error
-          }
-          let abort: (() => void) | undefined
-          try {
-            input.signal.throwIfAborted()
-            const cancelled = new Promise<never>((_resolve, reject) => {
-              abort = () => reject(input.signal.reason)
-              input.signal.addEventListener('abort', abort, { once: true })
-            })
-            const operation = Promise.resolve().then(() => {
-              input.signal.throwIfAborted()
-              return use(reader)
-            })
-            const result = await Promise.race([operation, cancelled])
-            input.signal.throwIfAborted()
-            input.ownership.assertOwner()
-            fencedInput.assertCurrent()
-            return result
-          } finally {
-            if (abort) input.signal.removeEventListener('abort', abort)
-            try {
-              await reader.close()
-            } catch (error) {
-              cleanupConfirmed = false
-              workers.blockProfile(input.profileId)
-              throw error
-            }
-          }
-        } finally {
-          if (cleanupConfirmed) {
-            try {
-              input.fence.clear(input.profileId, operationId, input.assertAllWritersQuiescent)
-            } catch (error) {
-              workers.blockProfile(input.profileId)
-              throw error
-            }
-          }
         }
-      }, guard)
+        guard()
+        return await workers.withInactiveProfile(input.profileId, async () => {
+          const operationId = input.fence.begin(input.profileId)
+          let cleanupConfirmed = true
+          const fencedInput = { ...input, assertCurrent: () => {
+            input.fence.assertOwned(input.profileId, operationId)
+            claims.assertClaimOpen(input.profileId)
+            input.assertCurrent()
+          } }
+          try {
+            let reader: RestrictedProfileReader
+            try {
+              reader = await startRestrictedProfileReader(fencedInput)
+            } catch (error) {
+              if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
+                cleanupConfirmed = false
+                workers.blockProfile(input.profileId)
+              }
+              throw error
+            }
+            let abort: (() => void) | undefined
+            try {
+              input.signal.throwIfAborted()
+              const cancelled = new Promise<never>((_resolve, reject) => {
+                abort = () => reject(input.signal.reason)
+                input.signal.addEventListener('abort', abort, { once: true })
+              })
+              const operation = Promise.resolve().then(() => {
+                input.signal.throwIfAborted()
+                return use(reader)
+              })
+              const result = await Promise.race([operation, cancelled])
+              input.signal.throwIfAborted()
+              input.ownership.assertOwner()
+              fencedInput.assertCurrent()
+              return result
+            } finally {
+              if (abort) input.signal.removeEventListener('abort', abort)
+              try {
+                await reader.close()
+              } catch (error) {
+                cleanupConfirmed = false
+                workers.blockProfile(input.profileId)
+                throw error
+              }
+            }
+          } finally {
+            if (cleanupConfirmed) {
+              try {
+                input.fence.clear(input.profileId, operationId, input.assertAllWritersQuiescent)
+              } catch (error) {
+                workers.blockProfile(input.profileId)
+                throw error
+              }
+            }
+          }
+        }, guard)
+      })
     } finally {
       if (workers.isProfileBlocked(input.profileId)) extensions.blockProfile(input.profileId)
     }
-  }))
+  })
 }
