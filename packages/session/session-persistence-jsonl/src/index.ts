@@ -58,6 +58,30 @@ import {
 } from './generation.ts'
 
 export type { JsonlCompression } from './format.ts'
+export {
+  JsonlMigrationExportService,
+  type MigrationExportChunk,
+  type MigrationExportReceipt,
+  type MigrationExportInventoryProof,
+  type MigrationExportSource,
+  type MigrationSemanticRecord,
+  type MigrationOwnerTransferBundle,
+  type MigrationOwnerStateBundle,
+  type MigrationOwnerStateKind,
+  migrationSemanticRecords,
+  migrationOwnerStateRecords,
+  migrationSourceInventoryDigest,
+} from './migration-export.ts'
+export { FileJsonlMigrationExportSource, SchemaAwareMigrationOwnerStateSource } from './migration-export-source.ts'
+export {
+  FileOwnerMigrationTransferStore,
+  FileOwnerMigrationImportJournal,
+  FileOwnerJsonlMigrationGenerationTarget,
+  MigrationImportCrashFault,
+  OwnerMigrationImportService,
+  type MigrationImportStage,
+  type MigrationImportTarget,
+} from './migration-import.ts'
 
 /**
  * Internal handoff-reuse policy, not deployment configuration: a cold
