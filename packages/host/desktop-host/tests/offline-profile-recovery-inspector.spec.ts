@@ -1,7 +1,7 @@
 import { appendFile, chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
@@ -30,6 +30,7 @@ const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyE
 const stageCleanupFaults = vi.hoisted(() => new Set<string>())
 const stageCopyLinkFaults = vi.hoisted(() => new Set<string>())
 const stageDiskFullFaults = vi.hoisted(() => new Set<string>())
+const stageCopyCorruptFaults = vi.hoisted(() => new Map<string, string>())
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open: typeof actual.open = async (...args) => {
@@ -64,6 +65,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     await actual.cp(...args)
     if ([...stageCopyLinkFaults].some(root => String(args[1]).startsWith(`${root}/restricted-`))) {
       await actual.symlink(String(args[0]), join(String(args[1]), 'unexpected-link'))
+    }
+    for (const [root, path] of stageCopyCorruptFaults) {
+      if (String(args[1]).startsWith(`${root}/restricted-`)) await actual.writeFile(join(String(args[1]), path), 'corrupted')
     }
   }
   const rm: typeof actual.rm = async (...args) => {
@@ -742,6 +746,32 @@ describe('offline Profile existing-only inspector', () => {
     expect(createWorker).not.toHaveBeenCalled()
   })
 
+  it('blocks Account history if a stale inventory is followed by an uncertain lock release', async () => {
+    const value = await bundledFixture()
+    const acquireOriginal = ExistingSessionLockSet.acquire.bind(ExistingSessionLockSet)
+    const acquire = vi.spyOn(ExistingSessionLockSet, 'acquire').mockImplementationOnce(async (...args) => {
+      const locks = await acquireOriginal(...args)
+      const close = locks.close.bind(locks)
+      vi.spyOn(locks, 'close').mockImplementationOnce(() => { close(); throw new Error('release uncertain') })
+      return locks
+    })
+    onTestFinished(() => { acquire.mockRestore() })
+    let inspections = 0
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker, async () => {
+      const inventory = await value.target.inspectRestrictedPersistence()
+      inspections++
+      return inspections === 3 ? { ...inventory, inventoryDigest: '0'.repeat(64) } : inventory
+    }, true)
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ name: 'AggregateError', message: 'session_lock_cleanup_unconfirmed' })
+    await expect(service.close()).rejects.toMatchObject({ code: 'unavailable' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
   it('blocks the Profile when the isolated worker exit cannot be confirmed', async () => {
     const value = await bundledFixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
@@ -1177,6 +1207,29 @@ describe('offline Profile existing-only inspector', () => {
       signal: new AbortController().signal })).rejects.toMatchObject({ code: 'unavailable', diagnosticReason: 'restricted_snapshot_disk_space' })
     expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(false)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('rejects a corrupted copied session and preserves the original session bytes', async () => {
+    const value = await fixture()
+    const id = SessionId('restricted-copy-corruption')
+    await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id, createdAt: 1,
+      cwd: '/work', isSeeded: false }, [])
+    const [directory] = (await value.target.inspectRestrictedPersistence()).sessionDirectories
+    if (!directory) throw new Error('missing fixture session')
+    const name = (await readdir(directory)).find(item => item.endsWith('.jsonl'))
+    if (!name) throw new Error('missing fixture history')
+    const original = join(directory, name)
+    const bytes = await readFile(original)
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-staging-copy-corruption-fixture' })
+    stageCopyCorruptFaults.set(value.hostRoot, relative(value.persistence.root, original))
+    onTestFinished(async () => { stageCopyCorruptFaults.delete(value.hostRoot); await ownership.release() })
+    await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(await readFile(original)).toEqual(bytes)
+    expect((await readdir(value.hostRoot)).some(item => item.startsWith('restricted-'))).toBe(false)
   })
 
   it.each(['owner-path', 'generation', 'compression', 'digest', 'count'] as const)(

@@ -71,6 +71,73 @@ it('admits inactive fallback after the previous worker is confirmed exited', asy
   await workers.disposeAll()
 })
 
+it('blocks an inactive Profile if exited worker notifications cannot be closed', async () => {
+  let markExited!: () => void
+  const exited = new Promise<void>((resolve) => { markExited = resolve })
+  const close = vi.fn().mockImplementationOnce(() => { throw new Error('notification cleanup failed') })
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications: close, abort() {}, done: Promise.resolve(), exited }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await workers.start(input)
+  markExited()
+  await exited
+  await expect(workers.withInactiveProfile('profile', async () => 'fallback')).rejects.toThrow('notification cleanup failed')
+  expect(workers.isLocallyBlocked('profile')).toBe(true)
+  await expect(workers.start(input)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('refuses restricted reads when no worker provides the Session operation', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  const command = { operation: 'session.list' as const, command_id: '123e4567-e89b-42d3-a456-426614174006' as never }
+  await expect(workers.readRestrictedSession('profile', command, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] })
+  await expect(workers.readRestrictedSession('profile', command, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('rechecks a queued inactive reader after its Profile becomes blocked', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  let release!: () => void, entered!: () => void
+  const ready = new Promise<void>((resolve) => { entered = resolve })
+  const current = workers.withPreparation('profile', async () => {
+    entered()
+    await new Promise<void>((resolve) => { release = resolve })
+  })
+  await ready
+  const isolated = workers.withInactiveProfile('profile', async () => 'must not return')
+  const failed = expect(isolated).rejects.toMatchObject({ code: 'unavailable' })
+  workers.blockProfile('profile')
+  release()
+  await current
+  await failed
+  await workers.disposeAll()
+})
+
+it.each(['ensure', 'prepare', 'quiesce'] as const)(
+  'rechecks queued %s work when the Profile becomes blocked', async (kind) => {
+    const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    let release!: () => void, entered!: () => void
+    const ready = new Promise<void>((resolve) => { entered = resolve })
+    const current = workers.withPreparation('profile', async () => {
+      entered()
+      await new Promise<void>((resolve) => { release = resolve })
+    })
+    await ready
+    const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+    const queued = kind === 'ensure' ? workers.ensure(input)
+      : kind === 'prepare' ? workers.withPreparation('profile', async () => {})
+        : workers.withQuiescent('profile', async () => {})
+    const failed = expect(queued).rejects.toMatchObject({ code: 'unavailable' })
+    workers.blockProfile('profile')
+    release()
+    await current
+    await failed
+    await workers.disposeAll()
+  },
+)
+
 it('does not infer process exit from an ordinary worker error', async () => {
   const error = Promise.reject(new Error('worker error without confirmed exit'))
   void error.catch(() => {})
