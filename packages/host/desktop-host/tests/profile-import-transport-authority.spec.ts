@@ -227,6 +227,8 @@ it('pages a verified preview without exposing content and rejects stale or revok
     .toMatchObject({ type: 'error', error: { code: 'stale' } })
   expect(await f.session.handleRequest(request(34, 0)))
     .toMatchObject({ type: 'error', error: { code: 'invalid_frame' } })
+  expect(await f.session.handleRequest(request(0, 34)))
+    .toMatchObject({ type: 'error', error: { code: 'invalid_frame' } })
   f.inspect.mockImplementationOnce(async () => {
     f.host.revokeOwner(f.ownerId)
     return f.preview

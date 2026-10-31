@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rename, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -10,8 +10,9 @@ import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
 
 const compositionState = vi.hoisted(() => ({ calls: 0, drift: false }))
 const fsFaults = vi.hoisted(() => ({ mode: '' as '' | 'lstat-denied' | 'visit-vanished'
-  | 'copy-race' | 'copy-symlink' | 'staged-denied', lstatCalls: 0,
-candidateManifest: '' }))
+  | 'copy-race' | 'copy-symlink' | 'staged-denied' | 'source-denied' | 'state-denied'
+  | 'preflight-mismatch' | 'read-change' | 'sync-mismatch' | 'plan-race' | 'state-race'
+  | 'large-read', lstatCalls: 0, raceWrites: 0, candidateManifest: '' }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const denied = () => Object.assign(Error('injected inaccessible plugin path'), { code: 'EACCES' })
@@ -24,7 +25,50 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         throw Object.assign(Error('injected removed plugin file'), { code: 'ENOENT' })
       }
       if (fsFaults.mode === 'staged-denied' && path.includes('/.web-import-')) throw denied()
+      if (fsFaults.mode === 'source-denied' && path === fsFaults.candidateManifest
+        && ++fsFaults.lstatCalls === 5) throw denied()
+      if (fsFaults.mode === 'state-denied' && path.endsWith('/profiles/web')) throw denied()
       return actual.lstat(...args)
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args)
+      const path = String(args[0])
+      if (fsFaults.mode === 'large-read' && path.endsWith('.bin')) {
+        Object.defineProperty(handle, 'readFile', { value: async () => Buffer.alloc(0) })
+      }
+      if (fsFaults.mode === 'preflight-mismatch' || fsFaults.mode === 'read-change'
+        || fsFaults.mode === 'sync-mismatch') {
+        const stat = handle.stat.bind(handle)
+        let calls = 0
+        Object.defineProperty(handle, 'stat', { value: async (options?: { bigint: true }) => {
+          if (options) {
+            const metadata = await stat(options)
+            calls += 1
+            if (fsFaults.mode === 'preflight-mismatch' && path.endsWith('/package.json')) {
+              Object.defineProperty(metadata, 'size', { value: metadata.size + 1n })
+            }
+            if (fsFaults.mode === 'read-change' && path.endsWith('/package.json') && calls === 2) {
+              Object.defineProperty(metadata, 'mtimeNs', { value: metadata.mtimeNs + 1n })
+            }
+            return metadata
+          }
+          const metadata = await stat()
+          if (fsFaults.mode === 'sync-mismatch' && path.includes('/.web-import-')) {
+            Object.defineProperty(metadata, 'uid', { value: metadata.uid + 1 })
+          }
+          return metadata
+        } })
+      }
+      if ((fsFaults.mode === 'plan-race' || fsFaults.mode === 'state-race')
+        && path.endsWith('/profiles/web/package.json')) {
+        const close = handle.close.bind(handle)
+        Object.defineProperty(handle, 'close', { value: async () => {
+          await close()
+          if (fsFaults.raceWrites++ === 0) await actual.writeFile(path, 'changed between scans',
+            { mode: 0o600 })
+        } })
+      }
+      return handle
     },
     cp: async (...args: Parameters<typeof actual.cp>) => {
       await actual.cp(...args)
@@ -47,7 +91,8 @@ vi.mock('../src/profile-import-plugin-composition.ts', () => ({
   },
 }))
 
-import { inspectProfileImportPluginDirectoryState, inspectStagedProfileImportPluginPublishCandidate,
+import { fingerprintProfileImportPluginWeb, inspectProfileImportPluginDirectoryState,
+  inspectStagedProfileImportPluginPublishCandidate,
   planProfileImportPluginPublish, stageProfileImportPluginPublishCandidate } from '../src/profile-import-plugin-publish-plan.ts'
 
 type Input = Parameters<typeof planProfileImportPluginPublish>[0]
@@ -58,6 +103,7 @@ async function fixture() {
   compositionState.drift = false
   fsFaults.mode = ''
   fsFaults.lstatCalls = 0
+  fsFaults.raceWrites = 0
   const root = await mkdtemp(join(tmpdir(), 'dsh-plugin-publish-state-'))
   onTestFinished(() => rm(root, { recursive: true, force: true }))
   const operationId = randomUUID()
@@ -184,4 +230,54 @@ it.skipIf(process.platform === 'win32')('refuses a copied symlink and inaccessib
   fsFaults.mode = 'staged-denied'
   await expect(inspectStagedProfileImportPluginPublishCandidate(input, plan))
     .rejects.toMatchObject({ code: 'EACCES' })
+})
+
+it.skipIf(process.platform === 'win32')('bounds the total tree and checks the opened file twice', async () => {
+  const first = await fixture()
+  fsFaults.mode = 'preflight-mismatch'
+  await expect(fingerprintProfileImportPluginWeb(first.web, uid))
+    .rejects.toThrow('profile_import_plugin_publish_unsafe')
+  fsFaults.mode = 'read-change'
+  await expect(fingerprintProfileImportPluginWeb(first.web, uid))
+    .rejects.toThrow('profile_import_plugin_publish_changed')
+  fsFaults.mode = ''
+  const modules = join(first.web, 'node_modules')
+  await mkdir(modules, { mode: 0o700 })
+  for (let index = 0; index < 5; index += 1) {
+    const file = join(modules, `${index}.bin`)
+    await writeFile(file, '')
+    await truncate(file, 256 * 1024 * 1024)
+  }
+  fsFaults.mode = 'large-read'
+  await expect(fingerprintProfileImportPluginWeb(first.web, uid))
+    .rejects.toThrow('profile_import_plugin_publish_too_large')
+})
+
+it.skipIf(process.platform === 'win32')('rejects races during planning, copying, syncing, and recovery inspection', async () => {
+  const first = await fixture()
+  fsFaults.mode = 'plan-race'
+  await expect(planProfileImportPluginPublish(first.input))
+    .rejects.toThrow('profile_import_plugin_publish_changed')
+  const second = await fixture()
+  const secondPlan = await planProfileImportPluginPublish(second.input)
+  fsFaults.mode = 'source-denied'
+  await expect(stageProfileImportPluginPublishCandidate(second.input, secondPlan))
+    .rejects.toMatchObject({ code: 'EACCES' })
+  const third = await fixture()
+  const thirdPlan = await planProfileImportPluginPublish(third.input)
+  fsFaults.mode = 'sync-mismatch'
+  await expect(stageProfileImportPluginPublishCandidate(third.input, thirdPlan))
+    .rejects.toThrow('profile_import_plugin_publish_changed')
+  const fourth = await fixture()
+  const fourthPlan = await planProfileImportPluginPublish(fourth.input)
+  await stageProfileImportPluginPublishCandidate(fourth.input, fourthPlan)
+  const stateInput = { profileRoot: fourth.root, operationId: fourth.input.operationId, uid,
+    plan: fourthPlan }
+  fsFaults.mode = 'state-denied'
+  await expect(inspectProfileImportPluginDirectoryState(stateInput))
+    .rejects.toMatchObject({ code: 'EACCES' })
+  fsFaults.mode = 'state-race'
+  fsFaults.raceWrites = 0
+  await expect(inspectProfileImportPluginDirectoryState(stateInput))
+    .rejects.toThrow('profile_import_plugin_publish_changed')
 })
