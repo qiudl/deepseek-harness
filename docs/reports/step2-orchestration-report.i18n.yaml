@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for step2-orchestration-report.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/reports/step2-orchestration-report.md
+/step2-orchestration-report:
+  en: 7f634ae29fabc7d9
+  zh: 33c59f9234f20ace
+/step2-orchestration-report/outcome:
+  en: e0dde07e57a5bceb
+  zh: 63fde911e7dd83a1
+/step2-orchestration-report/subtasks:
+  en: 48cb9b5701160686
+  zh: cba20215fe9ad17d
+/step2-orchestration-report/validation:
+  en: d7fdcf442b16ca1a
+  zh: 1bea363dd920fd80
+/step2-orchestration-report/remaining-work:
+  en: c3e7628bec6ef258
+  zh: ea1d738f4ec14884
