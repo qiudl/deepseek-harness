@@ -173,7 +173,8 @@ export class DshWebProfileWorkerFactory {
   }
 
   /**
-   * Start a macOS history-only worker that cannot fork or write outside its staged Profile.
+   * Start a macOS history-only worker that cannot fork, make direct outbound IP
+   * connections outside loopback, or write outside its staged Profile.
    * This is only one containment layer; the caller must also fence external writers.
    * @param spec - isolated, Host-owned Profile and no original plugin roots.
    * @param signal - owning connection cancellation.
@@ -202,7 +203,7 @@ export class DshWebProfileWorkerFactory {
     const args = [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ]
-    const sandbox = `(version 1) (allow default) (deny process-fork) (deny file-write*) (allow file-write* (subpath ${JSON.stringify(root)}))`
+    const sandbox = `(version 1) (allow default) (deny process-fork) (deny file-write*) (allow file-write* (subpath ${JSON.stringify(root)})) (deny network-outbound) (allow network-outbound (remote ip "localhost:*"))`
     const child = spawn(denyFork ? '/usr/bin/sandbox-exec' : this.options.nodeExecutablePath,
       denyFork ? ['-p', sandbox, this.options.nodeExecutablePath, '--import', RESTRICTED_WORKER_PARENT_MONITOR, ...args] : args, {
       cwd: root,
