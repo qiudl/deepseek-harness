@@ -14,6 +14,44 @@ const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, 
   archiveFd: -1, installError: false }))
 const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0 }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
+const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
+const isolatedReadFaults = vi.hoisted(() => new Map<string, {
+  calls: number
+  at: number
+  mode: 'throw' | 'changed'
+}>())
+const isolatedStageFaults = vi.hoisted(() => ({ missingAt: 0, removeSandboxAt: 0, calls: 0 }))
+vi.mock('../src/private-file-io.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/private-file-io.ts')>()
+  return { ...actual, readOwnerPrivateFile: (...args: Parameters<typeof actual.readOwnerPrivateFile>) => {
+    const bytes = actual.readOwnerPrivateFile(...args)
+    const fault = isolatedReadFaults.get(args[0])
+    if (fault && ++fault.calls === fault.at) {
+      if (fault.mode === 'changed') return Buffer.from('changed staged bytes')
+      throw args[3]()
+    }
+    return bytes
+  } }
+})
+vi.mock('../src/profile-import-plugin-stage.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-stage.ts')>()
+  return { ...actual, inspectStagedProfileImportPluginArchives: async (
+    ...args: Parameters<typeof actual.inspectStagedProfileImportPluginArchives>
+  ) => {
+    const stage = await actual.inspectStagedProfileImportPluginArchives(...args)
+    if (isolatedStageFaults.missingAt || isolatedStageFaults.removeSandboxAt) {
+      isolatedStageFaults.calls += 1
+      if (isolatedStageFaults.calls === isolatedStageFaults.missingAt) return null
+      if (isolatedStageFaults.calls === isolatedStageFaults.removeSandboxAt) {
+        const input = args[0]
+        await (await import('node:fs/promises')).rm(
+          `${input.target.profileRoot}/profile-import-plugin-install/${input.operationId}`,
+          { recursive: true, force: true })
+      }
+    }
+    return stage
+  } }
+})
 vi.mock('yaml', async (importOriginal) => {
   const actual = await importOriginal<typeof import('yaml')>()
   return { ...actual, parseDocument: (...args: Parameters<typeof actual.parseDocument>) => {
@@ -132,7 +170,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     }
     return entries
   }
-  return { ...actual, open, readdir }
+  const mkdir = async (...args: Parameters<typeof actual.mkdir>) => {
+    if (isolatedMkdirFaults.has(String(args[0]))) throw Object.assign(Error('mkdir denied'), { code: 'EACCES' })
+    return actual.mkdir(...args)
+  }
+  return { ...actual, open, readdir, mkdir }
 })
 import {
   FileOwnerJsonlMigrationGenerationTarget,
@@ -1507,6 +1549,178 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
     trustVerifyFaults.failSecond = false
   })
+
+  it.skipIf(process.platform === 'win32')('rechecks isolated install directories and files before recovery', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    const installed = await installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    await chmod(parent, 0o777)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_directory_unsafe')
+    await chmod(parent, 0o700)
+    const archiveDirectory = join(installed.sandboxRoot, '.bundled-plugins')
+    const archive = join(archiveDirectory, `${value.source.digest}.tgz`)
+    const bytes = await readFile(archive)
+    await writeFile(archive, 'changed archive')
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_archive_changed')
+    await writeFile(archive, bytes)
+    const manifestPath = join(installed.sandboxRoot, 'package.json')
+    const manifest = await readFile(manifestPath)
+    await writeFile(manifestPath, '{}')
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    await writeFile(manifestPath, manifest)
+    const receiptPath = join(installed.sandboxRoot, 'install-receipt.json')
+    await chmod(receiptPath, 0o666)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    await chmod(receiptPath, 0o600)
+    await chmod(archive, 0o666)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_archive_changed')
+    await chmod(archive, 0o600)
+    const lockfilePath = join(installed.sandboxRoot, 'pnpm-lock.yaml')
+    const lockfile = await readFile(lockfilePath, 'utf8')
+    const receipt = await readFile(receiptPath, 'utf8')
+    const withExtraPackage = lockfile.replace('packages:\n',
+      'packages:\n  unrelated@1.0.0:\n    version: 1.0.0\n')
+    const rejectLockfile = async (candidate: string) => {
+      await writeFile(lockfilePath, candidate)
+      await writeFile(receiptPath, `${JSON.stringify({ ...JSON.parse(receipt),
+        lockfileDigest: createHash('sha256').update(candidate).digest('hex') })}\n`)
+      await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+        .rejects.toThrow('profile_import_plugin_isolated_resolution_invalid')
+    }
+    await rejectLockfile(withExtraPackage)
+    const wrongIntegrity = lockfile.replace(/sha512-[A-Za-z0-9+/=]+/u, 'sha512-AAAA')
+    expect(wrongIntegrity).not.toBe(lockfile)
+    await rejectLockfile(wrongIntegrity)
+    await rejectLockfile("lockfileVersion: '9.0'\nimporters: []\npackages: {}\nsnapshots: {}\n")
+    await writeFile(lockfilePath, lockfile)
+    await writeFile(receiptPath, receipt)
+    const originalGet = recovery.catalog.get.bind(recovery.catalog)
+    let getCalls = 0
+    const get = vi.spyOn(recovery.catalog, 'get').mockImplementation((name, version) => {
+      getCalls += 1
+      return getCalls === 3 ? undefined : originalGet(name, version)
+    })
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_install_invalid')
+    get.mockRestore()
+    getCalls = 0
+    const changed = vi.spyOn(recovery.catalog, 'get').mockImplementation((name, version) => {
+      const entry = originalGet(name, version)
+      getCalls += 1
+      return getCalls === 3 && entry ? { ...entry, sha256: 'f'.repeat(64) } : entry
+    })
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_isolated_install_invalid')
+    changed.mockRestore()
+    expect(await inspectIsolatedProfileImportPluginInstall(recovery)).toEqual(installed)
+  }, 120_000)
+
+  it.skipIf(process.platform === 'win32')('requires a staged archive and private install parent', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    await expect(inspectIsolatedProfileImportPluginInstall(recovery))
+      .rejects.toThrow('profile_import_plugin_stage_missing')
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_stage_missing')
+    await stageSelectedProfileImportPluginArchives(input)
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    await mkdir(parent, { mode: 0o777 })
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+      .rejects.toThrow('profile_import_plugin_isolated_directory_unsafe')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects isolated installer entry on Windows', async () => {
+    const { recovery } = await fencedPluginArchiveFixture()
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' })
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+        nodeExecutablePath: 'node', pnpmEntrypointPath: 'pnpm' }))
+        .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
+    } finally { Object.defineProperty(process, 'platform', descriptor) }
+  })
+
+  it.skipIf(process.platform === 'win32').each(['missing-lockfile', 'manifest-changed', 'malformed-lockfile'] as const)
+  ('rejects an incomplete isolated install after a successful child exit: %s', async (fault) => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const fakePnpm = join(value.source.hostRoot, 'fake-pnpm.cjs')
+    const script = fault === 'missing-lockfile' ? '' : fault === 'manifest-changed'
+      ? "const fs = require('node:fs'); fs.writeFileSync('pnpm-lock.yaml', 'lockfileVersion: 8\\n'); fs.writeFileSync('package.json', '{}');"
+      : "require('node:fs').writeFileSync('pnpm-lock.yaml', 'lockfileVersion: 8\\n');"
+    await writeFile(fakePnpm, script, { mode: 0o600 })
+    await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath: fakePnpm }))
+      .rejects.toThrow('profile_import_plugin_isolated_resolution_invalid')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects install parent creation and staged archive read faults', async () => {
+    const { value, input, recovery } = await fencedPluginArchiveFixture()
+    const stage = await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    const install = () => installStagedProfileImportPluginsInIsolation({ ...recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    const parent = join(value.target.profileRoot, 'profile-import-plugin-install')
+    isolatedMkdirFaults.add(parent)
+    try { await expect(install()).rejects.toThrow('mkdir denied') }
+    finally { isolatedMkdirFaults.clear() }
+    const archive = join(stage.stageRoot, `${value.source.digest}.tgz`)
+    isolatedReadFaults.set(archive, { calls: 0, at: 1, mode: 'throw' })
+    try { await expect(install()).rejects.toThrow('profile_import_plugin_stage_archive_changed') }
+    finally { isolatedReadFaults.clear() }
+    await rm(join(parent, recovery.operationId), { recursive: true, force: true })
+    isolatedReadFaults.set(archive, { calls: 0, at: 1, mode: 'changed' })
+    try { await expect(install()).rejects.toThrow('profile_import_plugin_stage_archive_changed') }
+    finally { isolatedReadFaults.clear() }
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects an archive stage lost during isolated install', async () => {
+    const { input, recovery } = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.missingAt = 2
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...recovery,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath,
+        signal: new AbortController().signal }))
+        .rejects.toThrow('profile_import_plugin_stage_missing')
+    } finally { isolatedStageFaults.missingAt = 0 }
+  }, 120_000)
+
+  it.skipIf(process.platform === 'win32')('rejects a stage lost during recovery and sandbox removed before final inspection', async () => {
+    const first = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(first.input)
+    const pnpmEntrypointPath = await realpath(process.env.npm_execpath!)
+    await installStagedProfileImportPluginsInIsolation({ ...first.recovery,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.missingAt = 2
+    try {
+      await expect(inspectIsolatedProfileImportPluginInstall(first.recovery))
+        .rejects.toThrow('profile_import_plugin_stage_missing')
+    } finally { isolatedStageFaults.missingAt = 0 }
+
+    const second = await fencedPluginArchiveFixture()
+    await stageSelectedProfileImportPluginArchives(second.input)
+    isolatedStageFaults.calls = 0
+    isolatedStageFaults.removeSandboxAt = 3
+    try {
+      await expect(installStagedProfileImportPluginsInIsolation({ ...second.recovery,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    } finally { isolatedStageFaults.removeSandboxAt = 0 }
+  }, 120_000)
 
   it.each(['private-store', 'installed-package'] as const)
   ('rejects a writable directory in a pnpm linked installation: %s', async (kind) => {
