@@ -871,37 +871,75 @@ it.skipIf(process.platform === 'win32')('blocks the Profile if the reconciliatio
   await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
 })
 
-it.skipIf(process.platform === 'win32')('fails closed when the reconciliation guard swallows a validation failure', async () => {
-  const { config, root } = fixture()
-  const profileId = randomUUID(), operationId = randomUUID()
-  const directory = join(root, 'restricted-fences')
-  mkdirSync(directory, { mode: 0o700 })
-  const path = join(directory, `${profileId}.json`)
-  writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId, state: 'pending',
-    phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
-  const staged = join(root, `restricted-${operationId}`)
-  mkdirSync(staged, { mode: 0o700 })
-  const sentinel = join(staged, 'preserve')
-  writeFileSync(sentinel, 'existing', { mode: 0o600 })
-  const server = { start: async () => undefined, close: async () => undefined }
-  const { startDesktopHostApplication } = await import('../src/startup.ts')
-  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
-    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
-    restrictedHistory: {
-      withAllWritersExcluded: async (_profileId, operation) => {
-        try { return await operation() } catch { return false as never }
+it.skipIf(process.platform === 'win32').each(['omitted', 'substituted'] as const)(
+  'rejects a reconciliation adapter that returns an %s result', async (mode) => {
+    const { config, root } = fixture()
+    const profileId = randomUUID()
+    const directory = join(root, 'restricted-fences')
+    mkdirSync(directory, { mode: 0o700 })
+    const path = join(directory, `${profileId}.json`)
+    writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
+      phase: 'reserved', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+    const server = { start: async () => undefined, close: async () => undefined }
+    const { startDesktopHostApplication } = await import('../src/startup.ts')
+    const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+      platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
+      restrictedHistory: {
+        withAllWritersExcluded: async (_profileId, operation) => {
+          if (mode === 'substituted') await operation()
+          return false as never
+        },
+        assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
       },
-      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
-    },
-  })
-  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
-  if (!application.restrictedHistory) throw new Error('missing restricted reader')
-  await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toMatchObject({ code: 'unavailable' })
-  expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
-  expect(readFileSync(sentinel, 'utf8')).toBe('existing')
-  await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
-  expect(existsSync(join(root, 'host.lock'))).toBe(true)
-})
+    })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    if (!application.restrictedHistory) throw new Error('missing restricted reader')
+    await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(application.workers.isLocallyBlocked(profileId)).toBe(mode === 'substituted')
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
+    if (mode === 'substituted') await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
+    else await application.close()
+  },
+)
+
+it.skipIf(process.platform === 'win32').each(['swallow', 'replace'] as const)(
+  'fails closed when the reconciliation guard handles a validation failure by %s', async (mode) => {
+    const { config, root } = fixture()
+    const profileId = randomUUID(), operationId = randomUUID()
+    const directory = join(root, 'restricted-fences')
+    mkdirSync(directory, { mode: 0o700 })
+    const path = join(directory, `${profileId}.json`)
+    writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId, state: 'pending',
+      phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+    const staged = join(root, `restricted-${operationId}`)
+    mkdirSync(staged, { mode: 0o700 })
+    const sentinel = join(staged, 'preserve')
+    writeFileSync(sentinel, 'existing', { mode: 0o600 })
+    const server = { start: async () => undefined, close: async () => undefined }
+    const { startDesktopHostApplication } = await import('../src/startup.ts')
+    const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+      platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
+      restrictedHistory: {
+        withAllWritersExcluded: async (_profileId, operation) => {
+          try { return await operation() } catch {
+            if (mode === 'replace') throw new Error('replacement guard error')
+            return false as never
+          }
+        },
+        assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+      },
+    })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    if (!application.restrictedHistory) throw new Error('missing restricted reader')
+    const rejected = application.restrictedHistory.reconcileEmptyFence(profileId)
+    if (mode === 'replace') await expect(rejected).rejects.toThrow('replacement guard error')
+    else await expect(rejected).rejects.toMatchObject({ code: 'unavailable' })
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
+    expect(readFileSync(sentinel, 'utf8')).toBe('existing')
+    await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
+    expect(existsSync(join(root, 'host.lock'))).toBe(true)
+  },
+)
 
 it.skipIf(process.platform === 'win32')('recovers an empty old-Host fence before restoring the original Profile', async () => {
   const { config, root } = fixture()

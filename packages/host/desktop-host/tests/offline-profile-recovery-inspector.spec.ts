@@ -419,6 +419,27 @@ describe('offline Profile existing-only inspector', () => {
     await expect(reader.read({ operation: 'session.list', command_id: randomUUID() as HostControlRequestId },
       new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
   })
+
+  it('does not enter a restricted read if authority is cancelled immediately after worker verification', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-cancel-verified-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
+    const extensions = extensionBarrier()
+    const controller = new AbortController()
+    onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    let started = false, checks = 0
+    const use = vi.fn(async () => 'must not return')
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), profileId, credentialHandle: 'fixture',
+      assertCurrent: () => { if (started && ++checks === 3) controller.abort(new Error('authority revoked')) },
+      signal: controller.signal, onCleanupFailure: () => {},
+      createWorker: async () => { started = true; return { closeNotifications() {}, abort() {}, done: Promise.resolve() } },
+    }, use)).rejects.toThrow('authority revoked')
+    expect(use).not.toHaveBeenCalled()
+  })
   async function releasedEmptyProfile() {
     const value = await fixture()
     await rm(join(value.web, 'node_modules'), { recursive: true })
@@ -729,6 +750,32 @@ describe('offline Profile existing-only inspector', () => {
       command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
     await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
       .rejects.toMatchObject({ code: 'unavailable' })
+    await expect(service.close()).rejects.toMatchObject({ code: 'unavailable' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the blocked-Profile state cannot be inspected after a read failure', async () => {
+    const value = await bundledFixture()
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    let checksAfterFailure = -1
+    // Preserve the original receiver below while injecting one failed status lookup.
+    // oxlint-disable-next-line typescript/unbound-method
+    const original = ProfileWorkerSupervisor.prototype.isProfileBlocked
+    const blocked = vi.spyOn(ProfileWorkerSupervisor.prototype, 'isProfileBlocked').mockImplementation(function (profile) {
+      if (checksAfterFailure >= 0 && ++checksAfterFailure === 2) throw new Error('blocked state unreadable')
+      return original.call(this, profile)
+    })
+    const acquire = vi.spyOn(ExistingSessionLockSet, 'acquire').mockImplementationOnce(async () => {
+      checksAfterFailure = 0
+      throw Object.assign(new Error('fixture lock failure'), { code: 'EAGAIN' })
+    })
+    onTestFinished(() => { blocked.mockRestore(); acquire.mockRestore() })
+    const service = await accountService(value, createWorker, undefined, true)
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'busy' })
     await expect(service.close()).rejects.toMatchObject({ code: 'unavailable' })
     expect(createWorker).not.toHaveBeenCalled()
   })
@@ -1068,6 +1115,31 @@ describe('offline Profile existing-only inspector', () => {
     }, async () => { throw new Error('read failed') })).rejects.toThrow('read failed')
     expect(fence.pending(profileId)).toBeUndefined()
     expect(regular.isLocallyBlocked(profileId)).toBe(false)
+  })
+
+  it('blocks a Profile if an exclusion adapter starts its operation after returning', async () => {
+    const value = await fixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-exclusion-late-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
+    const extensions = extensionBarrier()
+    onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    let lateCalled = false
+    const use = vi.fn(async () => 'must not return')
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
+      signal: new AbortController().signal, onCleanupFailure: () => {},
+      withAllWritersExcluded: async (operation) => {
+        queueMicrotask(() => { queueMicrotask(() => { lateCalled = true; void operation().catch(() => {}) }) })
+        return 'synthetic' as never
+      },
+      createWorker: async () => { throw new Error('unexpected isolated worker') },
+    }, use)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(lateCalled).toBe(true)
+    expect(use).not.toHaveBeenCalled()
+    expect(regular.isLocallyBlocked(profileId)).toBe(true)
   })
 
   it.each(['omitted', 'early', 'duplicate', 'substituted'] as const)(
