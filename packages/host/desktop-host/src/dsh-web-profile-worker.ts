@@ -37,6 +37,7 @@ import { parseHostCollaborationArchiveStateValue,
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
+import { RESTRICTED_WORKER_PARENT_MONITOR } from './restricted-worker-parent-monitor.ts'
 
 const execFileAsync = promisify(execFile)
 const gzipAsync = promisify(gzip)
@@ -203,7 +204,7 @@ export class DshWebProfileWorkerFactory {
     ]
     const sandbox = `(version 1) (allow default) (deny process-fork) (deny file-write*) (allow file-write* (subpath ${JSON.stringify(root)}))`
     const child = spawn(denyFork ? '/usr/bin/sandbox-exec' : this.options.nodeExecutablePath,
-      denyFork ? ['-p', sandbox, this.options.nodeExecutablePath, ...args] : args, {
+      denyFork ? ['-p', sandbox, this.options.nodeExecutablePath, '--import', RESTRICTED_WORKER_PARENT_MONITOR, ...args] : args, {
       cwd: root,
       env: {
         ...spec.env,
@@ -224,7 +225,7 @@ export class DshWebProfileWorkerFactory {
           ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: denyFork ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
     })
     const activated = await this.waitForOrigin(child, signal)
     this.generation += 1

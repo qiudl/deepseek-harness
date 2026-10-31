@@ -1,6 +1,7 @@
-import { EventEmitter } from 'node:events'
+import { EventEmitter, once } from 'node:events'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,6 +10,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
 import type { ChildProcess } from 'node:child_process'
 import { ProfileWorkerExitUnconfirmedError, type ProfileWorkerHandle } from '../src/types.ts'
+import { RESTRICTED_WORKER_PARENT_MONITOR } from '../src/restricted-worker-parent-monitor.ts'
 
 function fixture(source: string): string {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-worker-')), 'worker.mjs')
@@ -24,6 +26,18 @@ const spec = (root: string) => ({
   pluginRoots: [join(root, 'plugins')],
   env: {},
 })
+
+async function waitForProcessExit(pid: number): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (true) {
+    try { process.kill(pid, 0) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
+      throw error
+    }
+    if (Date.now() >= deadline) throw new Error('fixture process did not exit')
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+}
 
 class ControlledChild extends EventEmitter {
   readonly stderr = new PassThrough()
@@ -56,6 +70,59 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('terminates a restricted child after the owning IPC channel closes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-parent-monitor-'))
+    const program = join(root, 'worker.mjs')
+    writeFileSync(program, "process.send('ready'); setInterval(() => {}, 1000)")
+    const child = spawn(process.execPath, ['--import', RESTRICTED_WORKER_PARENT_MONITOR, program],
+      { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10_000) })
+    onTestFinished(async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await exited.catch(() => {})
+      rmSync(root, { recursive: true, force: true })
+    })
+    const [message] = await once(child, 'message', { signal: AbortSignal.timeout(10_000) })
+    expect(message).toBe('ready')
+    child.disconnect()
+    await expect(exited).resolves.toEqual([70, null])
+  })
+
+  it.skipIf(process.platform === 'win32')('terminates the restricted child after its Host is killed', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-parent-crash-'))
+    const marker = join(root, 'worker-exited')
+    const workerProgram = join(root, 'worker.cjs')
+    writeFileSync(workerProgram, `process.on('exit', () => require('node:fs').mkdirSync(${JSON.stringify(marker)}));
+      process.send('ready'); setInterval(() => {}, 1000)`)
+    const parentProgram = `const {spawn}=require('node:child_process');
+      const child=spawn(process.execPath,['--import',${JSON.stringify(RESTRICTED_WORKER_PARENT_MONITOR)},${JSON.stringify(workerProgram)}],
+        {stdio:['ignore','ignore','ignore','ipc']});
+      child.once('message',()=>process.send(child.pid)); setInterval(()=>{},1000)`
+    const parent = spawn(process.execPath, ['-e', parentProgram], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const parentExited = once(parent, 'exit', { signal: AbortSignal.timeout(10_000) })
+    let workerPid: number | undefined
+    const watcher = watch(root)
+    onTestFinished(async () => {
+      watcher.close()
+      if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
+      await parentExited.catch(() => {})
+      if (workerPid !== undefined && !existsSync(marker)) {
+        try { process.kill(workerPid, 'SIGKILL') } catch { /* already exited */ }
+      }
+      if (workerPid !== undefined) await waitForProcessExit(workerPid)
+      rmSync(root, { recursive: true, force: true })
+    })
+    const [pid] = await once(parent, 'message', { signal: AbortSignal.timeout(10_000) })
+    expect(typeof pid).toBe('number')
+    workerPid = pid as number
+    const changed = once(watcher, 'change', { signal: AbortSignal.timeout(10_000) })
+    parent.kill('SIGKILL')
+    await parentExited
+    await changed
+    expect(existsSync(marker)).toBe(true)
+    await waitForProcessExit(workerPid)
+  })
+
   it('rejects original plugin roots before starting a restricted worker', async () => {
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
     await expect(factory.createRestricted(spec(tmpdir()))).rejects.toMatchObject({ code: 'unavailable' })
