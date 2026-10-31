@@ -249,6 +249,7 @@ export class DshWebProfileWorkerFactory {
       const bootstrapCookie = await exchangeBootstrap(authenticatedUrl, origin, deadline.signal)
       return { origin, bootstrapCookie }
     } catch (error) {
+      const timedOut = deadline.signal.aborted
       // Startup failure must not release the Profile fence while its child can still run.
       // Subscribe before signalling so a fast exit cannot be missed.
       const exited = child.exitCode !== null || child.signalCode !== null
@@ -256,7 +257,7 @@ export class DshWebProfileWorkerFactory {
         : new Promise<void>(resolve => child.once('close', () => resolve()))
       child.kill('SIGKILL')
       await exited
-      if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
+      if (timedOut) throw new HostAuthorityError('unavailable')
       throw error
     } finally {
       clearTimeout(timer)
