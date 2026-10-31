@@ -63,6 +63,8 @@ const windowsUnsupportedOwnerTests = process.platform === 'win32'
       'packages/host/desktop-host/tests/offline-account-recovery.spec.ts',
       'packages/host/desktop-host/tests/offline-profile-recovery-inspector.spec.ts',
       'packages/host/desktop-host/tests/plugin-command.spec.ts',
+      'packages/host/desktop-host/tests/plugin-tree-snapshot-faults.spec.ts',
+      'packages/host/desktop-host/tests/plugin-tree-snapshot.spec.ts',
       'packages/host/desktop-host/tests/profile-mcp-executor.spec.ts',
       'packages/host/desktop-host/tests/profile-plugin-executor-faults.spec.ts',
       'packages/host/desktop-host/tests/profile-plugin-executor.spec.ts',
@@ -165,6 +167,10 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       'packages/host/desktop-host/src/migration-owner-state-applicator.ts',
       'packages/host/desktop-host/src/offline-profile-recovery.ts',
       'packages/host/desktop-host/src/plugin-command.ts',
+      // The ds-bot preservation transaction uses POSIX ownership and rename semantics;
+      // Windows does not expose this upgrade path. The POSIX lane covers both files.
+      'packages/host/desktop-host/src/plugin-tree-snapshot.ts',
+      'packages/host/desktop-host/src/plugin-upgrade-plan.ts',
       'packages/host/desktop-host/src/posix-extension-files.ts',
       'packages/host/desktop-host/src/profile-mcp-executor.ts',
       'packages/host/desktop-host/src/profile-mcp-storage.ts',
