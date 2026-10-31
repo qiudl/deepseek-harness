@@ -18,6 +18,7 @@ import type {
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionControlProof, HostRemoteSessionJson,
   ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  ProfileMemoryQueryRequest, ProfileMemoryQueryResult, ProfileMemoryEvidenceIdentity,
   ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
   ProfileRemoteUiStreamCommand, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,
@@ -1619,6 +1620,52 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   return { kind: 'output', json_base64url: row.json_base64url, ...(attested ? { analysis_receipt: parseHostCollaborationAnalysisReceipt(row.analysis_receipt) } : {}) }
 }
 
+function memoryDirective(value: unknown): unknown {
+  const row = record(value)
+  exactKeys(row, ['schemaVersion', 'purpose', 'issuer', 'keyId', 'requestId', 'nonce',
+    'hostInstanceId', 'processNonce', 'issuedAt', 'expiresAt', 'operation', 'queryDigest',
+    'limit', 'grant', 'signature'])
+  const grant = record(row.grant)
+  exactKeys(grant, ['grantId', 'generation', 'ownerUserId', 'environmentId', 'computerId',
+    'installationId', 'profileId', 'readerKind'])
+  if (row.schemaVersion !== 1 || row.purpose !== 'dsh_memory_query'
+    || (row.operation !== 'search' && row.operation !== 'evidence')
+    || (grant.readerKind !== 'personal_dsh' && grant.readerKind !== 'personal_coordinator')
+    || generation(grant.generation) < 1
+    || generation(row.limit) > 10 || timestamp(row.expiresAt) <= timestamp(row.issuedAt)) reject()
+  const parsed = {
+    schemaVersion: 1, purpose: 'dsh_memory_query', issuer: boundedText(row.issuer, 2048),
+    keyId: boundedText(row.keyId, 256), requestId: uuid(row.requestId), nonce: nonce(row.nonce),
+    hostInstanceId: uuid(row.hostInstanceId), processNonce: nonce(row.processNonce),
+    issuedAt: row.issuedAt, expiresAt: row.expiresAt, operation: row.operation,
+    queryDigest: digest(row.queryDigest), limit: row.limit,
+    grant: { grantId: uuid(grant.grantId), generation: grant.generation,
+      ownerUserId: boundedText(grant.ownerUserId, 256),
+      environmentId: boundedText(grant.environmentId, 256),
+      computerId: boundedText(grant.computerId, 256),
+      installationId: boundedText(grant.installationId, 256),
+      profileId: boundedText(grant.profileId, 256),
+      readerKind: grant.readerKind === 'personal_coordinator' ? 'personal_coordinator' : 'personal_dsh' },
+    signature: signature(row.signature),
+  }
+  if (Buffer.byteLength(JSON.stringify(parsed), 'utf8') > 4096) reject()
+  return parsed
+}
+
+function memoryIdentity(value: unknown): ProfileMemoryEvidenceIdentity {
+  const row = record(value), source = record(row.source)
+  exactKeys(source, ['ownerUserId', 'installationId', 'profileId', 'sessionId', 'formatVersion'])
+  if (row.kind !== 'user' && row.kind !== 'assistant') reject()
+  const formatVersion = generation(source.formatVersion)
+  if (formatVersion !== 3 && formatVersion !== 4) reject()
+  return { sourceRef: digest(row.sourceRef), sourceVersion: digest(row.sourceVersion),
+    eventSeq: nonnegative(row.eventSeq), kind: row.kind,
+    source: { ownerUserId: boundedText(source.ownerUserId, 256),
+      installationId: boundedText(source.installationId, 256),
+      profileId: boundedText(source.profileId, 256),
+      sessionId: boundedText(source.sessionId, 256), formatVersion } }
+}
+
 function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
   | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
@@ -1643,6 +1690,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileModelTextRequest
   | ProfileLeaseCloseRequest | ProfileExtensionsRequest
   | ProfileRemoteSessionRequest
+  | ProfileMemoryQueryRequest
   | ProfileRemoteUiReadRequest
   | ProfileRemoteUiStreamRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
@@ -1651,6 +1699,41 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
+  if (frame.method === 'profile.memory_query') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'owner_user_id',
+      'computer_id', 'command'])
+    const command = record(params.command)
+    let parsed: ProfileMemoryQueryRequest['params']['command']
+    if (command.action === 'warm') {
+      exactKeys(command, ['action'])
+      parsed = { action: 'warm' }
+    } else if (command.action === 'search') {
+      exactKeys(command, ['action', 'directive', 'query', 'limit'])
+      const query = wireText(command.query, 2000)
+      if (query.length < 1 || query.length > 500 || generation(command.limit) > 10) reject()
+      parsed = { action: 'search', directive: memoryDirective(command.directive), query,
+        limit: command.limit as number }
+    } else if (command.action === 'evidence_chunk') {
+      exactKeys(command, ['action', 'directive', 'source_ref', 'offset'])
+      parsed = { action: 'evidence_chunk', directive: memoryDirective(command.directive),
+        source_ref: digest(command.source_ref), offset: nonnegative(command.offset) }
+    } else return reject()
+    if (parsed.action !== 'warm') {
+      const directive = parsed.directive as { operation: string; limit: number }
+      if (directive.operation !== (parsed.action === 'search' ? 'search' : 'evidence')
+        || directive.limit !== (parsed.action === 'search' ? parsed.limit : 1)) reject()
+    }
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method,
+      params: { ...authorized(params),
+        authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+        account_binding_handle: opaqueHandle(params.account_binding_handle),
+        authority_binding_version: generation(params.authority_binding_version),
+        account_issuer: accountIssuer(params.account_issuer),
+        account_subject: boundedText(params.account_subject, 512),
+        owner_user_id: boundedText(params.owner_user_id, 256),
+        computer_id: boundedText(params.computer_id, 256), command: parsed } }
+  }
   if (frame.method === 'profile.model_claim_confirm') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation',
       'candidate_id', 'source_digest'])
@@ -2248,6 +2331,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileModelTextResult
   | ProfileLeaseCloseResult | ProfileExtensionsResult
   | ProfileRemoteSessionResult
+  | ProfileMemoryQueryResult
   | ProfileRemoteUiReadResult
   | ProfileRemoteUiStreamResult
   | ProfileModelClaimInventoryResult | ProfileModelClaimConfirmResult | ProfileModelClaimApplyResult
@@ -2255,6 +2339,49 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileModelClaimRecoveryStatusResult | ProfileModelClaimRestoreResult | ProfileModelClaimRetryResult {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'result'])
   const result = record(frame.result)
+  if (frame.method === 'profile.memory_query') {
+    if (result.action === 'warm') {
+      exactKeys(result, ['action', 'state'])
+      if (result.state !== 'ready') reject()
+      return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
+        method: frame.method, result: { action: 'warm', state: 'ready' } }
+    }
+    if (result.action === 'search') {
+      exactKeys(result, ['action', 'generation', 'items'])
+      if (!Array.isArray(result.items) || result.items.length > 10) reject()
+      return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
+        method: frame.method, result: { action: 'search', generation: nonnegative(result.generation),
+          items: result.items.map((value) => {
+            const row = record(value)
+            exactKeys(row, ['sourceRef', 'sourceVersion', 'eventSeq', 'kind', 'source', 'snippet'])
+            if (typeof row.snippet !== 'string' || row.snippet.length > 500) reject()
+            return { ...memoryIdentity(row), snippet: row.snippet }
+          }) } }
+    }
+    if (result.action !== 'evidence_chunk') reject()
+    if (result.state === 'missing') {
+      exactKeys(result, ['action', 'state'])
+      return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
+        method: frame.method, result: { action: 'evidence_chunk', state: 'missing' } }
+    }
+    exactKeys(result, ['action', 'state', 'chunk'])
+    if (result.state !== 'ready') reject()
+    const chunk = record(result.chunk)
+    exactKeys(chunk, ['sourceRef', 'sourceVersion', 'eventSeq', 'kind', 'source', 'offset',
+      'totalBytes', 'textDigest', 'bytesBase64url', 'nextOffset'])
+    const offset = nonnegative(chunk.offset), totalBytes = generation(chunk.totalBytes)
+    if (totalBytes > 100_000 || offset >= totalBytes
+      || typeof chunk.bytesBase64url !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(chunk.bytesBase64url)) reject()
+    const bytes = Buffer.from(chunk.bytesBase64url, 'base64url')
+    const end = offset + bytes.byteLength
+    if (bytes.byteLength < 1 || bytes.byteLength > 8192 || end > totalBytes
+      || bytes.toString('base64url') !== chunk.bytesBase64url
+      || (end === totalBytes ? chunk.nextOffset !== null : chunk.nextOffset !== end)) reject()
+    return { version: 1, type: 'result', request_id: uuid(frame.request_id) as HostControlRequestId,
+      method: frame.method, result: { action: 'evidence_chunk', state: 'ready', chunk: {
+        ...memoryIdentity(chunk), offset, totalBytes, textDigest: digest(chunk.textDigest),
+        bytesBase64url: chunk.bytesBase64url, nextOffset: chunk.nextOffset as number | null } } }
+  }
   const request_id = uuid(frame.request_id) as HostControlRequestId
   if (frame.method === 'profile.model_claim_confirm') {
     exactKeys(result, ['confirmation', 'operation_id', 'expires_at'])
