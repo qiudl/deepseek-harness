@@ -127,12 +127,14 @@ export async function withRestrictedProfileReader<T>(
   claims: LegacyClaimWorkerGate,
   input: Parameters<typeof startRestrictedProfileReader>[0] & {
     readonly fence: RestrictedProfileFence
+    /** Hold trusted external writer exclusion until the callback and cleanup finish. */
+    readonly withAllWritersExcluded: <R>(operation: () => Promise<R>) => Promise<R>
     /** Verify worker and externally fenced writers are quiescent before admission and after cleanup. */
     readonly assertAllWritersQuiescent: () => void
   },
   use: (reader: RestrictedProfileReader) => Promise<T>,
 ): Promise<T> {
-  return extensions.withRestrictedAccess(input.profileId, async () => {
+  return extensions.withRestrictedAccess(input.profileId, () => input.withAllWritersExcluded(async () => {
     try {
       const guard = () => {
         input.signal.throwIfAborted()
@@ -201,5 +203,5 @@ export async function withRestrictedProfileReader<T>(
     } finally {
       if (workers.isProfileBlocked(input.profileId)) extensions.blockProfile(input.profileId)
     }
-  })
+  }))
 }

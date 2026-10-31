@@ -23,6 +23,7 @@ export class RestrictedAccountSessionService {
     readonly schemaGeneration: number
     readonly ownership: SingleHostLock
     readonly fence: RestrictedProfileFence
+    readonly withAllWritersExcluded: <R>(profileId: string, operation: () => Promise<R>) => Promise<R>
     readonly assertAllWritersQuiescent: (profileId: string) => void
     readonly workers: ProfileWorkerSupervisor
     readonly extensions: ProfileExtensionOperations
@@ -88,7 +89,9 @@ export class RestrictedAccountSessionService {
       inspectPersistence: () => this.options.inspectPersistence(expectedProfileId),
       expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
       ownership: this.options.ownership, assertCurrent, signal,
-      fence: this.options.fence, assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
+      fence: this.options.fence,
+      withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, operation),
+      assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
       profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
       onCleanupFailure: this.options.onCleanupFailure,
     }, reader => reader.read(command, signal))

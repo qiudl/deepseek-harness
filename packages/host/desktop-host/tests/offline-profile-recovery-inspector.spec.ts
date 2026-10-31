@@ -68,7 +68,9 @@ import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plug
 
 const uid = process.getuid?.() ?? 0
 function testFence(root: string, ownership: SingleHostLock) {
-  return { fence: new RestrictedProfileFence(root, uid, ownership), assertAllWritersQuiescent: () => {} }
+  return { fence: new RestrictedProfileFence(root, uid, ownership), assertAllWritersQuiescent: () => {},
+    withAllWritersExcluded: async <T>(operationOrProfile: (() => Promise<T>) | string, operation?: () => Promise<T>) =>
+      (typeof operationOrProfile === 'function' ? operationOrProfile : operation!)() }
 }
 async function isolatedTestNode(root: string): Promise<string> {
   if (process.env.DSH_TEST_DENY_FORK !== '1') return process.execPath
@@ -767,16 +769,25 @@ describe('offline Profile existing-only inspector', () => {
       id => fence.pending(id) !== undefined)
     const extensions = extensionBarrier()
     let checks = 0
+    let writerExclusionHeld = false
     onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
     const claims = new LegacyClaimWorkerGate(() => false, id => fence.pending(id) !== undefined)
     await expect(withRestrictedProfileReader(regular, extensions, claims, {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership,
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
-      fence, assertAllWritersQuiescent: () => { if (++checks > 2) throw new Error('writer_state_unknown') }, onCleanupFailure: () => {},
+      fence, withAllWritersExcluded: async operation => {
+        writerExclusionHeld = true
+        try { return await operation() } finally { writerExclusionHeld = false }
+      },
+      assertAllWritersQuiescent: () => {
+        expect(writerExclusionHeld).toBe(true)
+        if (++checks > 2) throw new Error('writer_state_unknown')
+      }, onCleanupFailure: () => {},
       createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
     }, async () => 'must not return')).rejects.toThrow('writer_state_unknown')
     expect(new RestrictedProfileFence(value.hostRoot, uid, ownership).pending(profileId)).toBeDefined()
+    expect(writerExclusionHeld).toBe(false)
     expect(regular.isProfileBlocked(profileId)).toBe(true)
     expect(regular.isProfileBlocked('018f0f4c-87f8-7e2d-a2f8-7b93d34e3152')).toBe(false)
   })
@@ -790,19 +801,26 @@ describe('offline Profile existing-only inspector', () => {
       id => fence.pending(id) !== undefined)
     const claims = new LegacyClaimWorkerGate(() => false, id => fence.pending(id) !== undefined)
     const extensions = extensionBarrier()
+    let writerExclusionHeld = false
     onTestFinished(async () => { await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
     const result = await withRestrictedProfileReader(regular, extensions, claims, {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership,
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
-      fence, assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
-      createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
+      fence, withAllWritersExcluded: async operation => {
+        expect(writerExclusionHeld).toBe(false)
+        writerExclusionHeld = true
+        try { return await operation() } finally { writerExclusionHeld = false }
+      }, assertAllWritersQuiescent: () => { expect(writerExclusionHeld).toBe(true) }, onCleanupFailure: () => {},
+      createWorker: async () => ({ closeNotifications() {}, abort() { expect(writerExclusionHeld).toBe(true) }, done: Promise.resolve() }),
     }, async () => {
+      expect(writerExclusionHeld).toBe(true)
       expect(fence.pending(profileId)).toBeDefined()
       expect(regular.isProfileBlocked(profileId)).toBe(true)
       return 'complete'
     })
     expect(result).toBe('complete')
+    expect(writerExclusionHeld).toBe(false)
     expect(fence.pending(profileId)).toBeUndefined()
     await regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] })
   })
