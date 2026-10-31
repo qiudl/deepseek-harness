@@ -13,7 +13,7 @@ const uid = process.getuid?.() ?? 0
 const profile = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
 const other = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3151'
 
-describe('restricted Profile durable fence', () => {
+describe.skipIf(process.platform === 'win32')('restricted Profile durable fence (Unix Host)', () => {
   it('distinguishes reservations before worker spawn and conservatively handles old records', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-fence-phase-'))
     const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-phase-test' })

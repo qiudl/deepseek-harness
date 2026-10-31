@@ -253,7 +253,7 @@ describe('Desktop Session command boundaries', () => {
       event('tool/result', { message: { content: [{ text: '' }] } }),
       event('tool/call', { name: '', arguments: '' }), event('tool/call', { name: 'bash', arguments: '{}' }),
       event('turn/end', { reason: '' }), event('turn/end', { reason: 'complete' }),
-    ] })
+    ], truncated: true })
   })
 
   it.each([undefined, null, {}, { type: 'event' }, { type: 'snapshot', records: null }])(
