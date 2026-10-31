@@ -67,7 +67,11 @@ async function fileDigest(path: string, uid: number, signal: AbortSignal): Promi
     }
     const hash = createHash('sha256')
     const stream = handle.createReadStream({ autoClose: false, signal })
-    for await (const chunk of stream) { signal.throwIfAborted(); hash.update(chunk) }
+    for await (const chunk of stream) {
+      signal.throwIfAborted()
+      if (!Buffer.isBuffer(chunk)) throw new HostAuthorityError('profile_integrity_failed')
+      hash.update(chunk)
+    }
     const after = await handle.stat({ bigint: true })
     const current = await lstat(path, { bigint: true })
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
@@ -123,8 +127,12 @@ export async function stageRestrictedProfile(input: {
   readonly ownership: SingleHostLock
   readonly assertCurrent: () => void
   readonly signal: AbortSignal
-}): Promise<{ readonly root: string; readonly ownerPaths: AppliedMigrationOwnerState;
-  readonly verify: () => Promise<void>; readonly dispose: () => Promise<void> }> {
+}): Promise<{
+  readonly root: string
+  readonly ownerPaths: AppliedMigrationOwnerState
+  readonly verify: () => Promise<void>
+  readonly dispose: () => Promise<void>
+}> {
   input.signal.throwIfAborted()
   input.ownership.assertOwner()
   input.assertCurrent()
@@ -178,7 +186,8 @@ export async function stageRestrictedProfile(input: {
     throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
   }
   await verify()
-  if (input.stagingOperationId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(input.stagingOperationId)) {
+  if (input.stagingOperationId !== undefined
+    && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(input.stagingOperationId)) {
     throw new HostAuthorityError('invalid_input')
   }
   const root = input.stagingOperationId === undefined ? await mkdtemp(join(parent, 'restricted-'))
@@ -196,8 +205,8 @@ export async function stageRestrictedProfile(input: {
   const dispose = async () => {
     if (disposed) return
     input.ownership.assertOwner()
-    const current = await lstat(root).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') return undefined
+    const current = await lstat(root).catch((error: unknown) => {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return undefined
       throw error
     })
     if (current && (!current.isDirectory() || current.isSymbolicLink() || current.uid !== input.expectedUid
@@ -209,11 +218,13 @@ export async function stageRestrictedProfile(input: {
     disposed = true
   }
   try {
-    initProfile(join(root, 'profiles', 'web'), PROFILE_TEMPLATES.web!.bundles)
+    const webTemplate = PROFILE_TEMPLATES.web
+    if (!webTemplate) throw new HostAuthorityError('unavailable')
+    initProfile(join(root, 'profiles', 'web'), webTemplate.bundles)
     const ownerPaths = await new MigrationOwnerStateApplicator(input.expectedUid).apply(root, input.ownerPaths.generation, ownerState)
     const snapshotRoot = join(root, 'sessions')
     await cp(persistence.root, snapshotRoot, { recursive: true, dereference: false, force: false, errorOnExist: true,
-      filter: async path => {
+      filter: async (path) => {
         input.signal.throwIfAborted()
         const part = relative(persistence.root, path)
         if (excludedSnapshotPath(part)) return false
@@ -232,7 +243,7 @@ export async function stageRestrictedProfile(input: {
     return { root, ownerPaths, verify, dispose }
   } catch (error) {
     try { await dispose() } catch (cleanupError) { throw new RestrictedStagingCleanupError(cleanupError) }
-    if ((error as NodeJS.ErrnoException)?.code === 'ENOSPC') {
+    if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOSPC') {
       throw new HostAuthorityError('unavailable', 'restricted_snapshot_disk_space')
     }
     throw error
