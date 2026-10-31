@@ -19,6 +19,20 @@ async function fixture() {
 }
 
 describe.skipIf(process.platform === 'win32')('plugin publish intent journal', () => {
+  it('keeps malformed or absent publish intent closed', async () => {
+    const { root, journal, input } = await fixture()
+    expect(await journal.load(input.operationId)).toBeNull()
+    await expect(journal.advance(null as never, 'switching'))
+      .rejects.toThrow('profile_import_plugin_publish_journal_invalid')
+    const prepared = await journal.create(input)
+    const missing = new FileProfileImportPluginPublishJournal(join(root, 'missing-publish'), uid)
+    await expect(missing.advance(prepared, 'switching'))
+      .rejects.toThrow('profile_import_plugin_publish_journal_stale')
+    await chmod(root, 0o755)
+    await expect(journal.load(input.operationId))
+      .rejects.toThrow('profile_import_plugin_publish_journal_unsafe')
+  })
+
   it('rejects invalid authority and a plan that cannot distinguish old and new web layers', async () => {
     const { root, journal, input } = await fixture()
     expect(() => new FileProfileImportPluginPublishJournal('relative', uid))

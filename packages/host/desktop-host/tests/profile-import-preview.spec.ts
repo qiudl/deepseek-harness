@@ -13,7 +13,7 @@ import { compareProfileImportInventory, inspectProfileImportInventory,
 import { stageSelectedProfileImportSessions } from '../src/profile-import-stage.ts'
 import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
 import { BUNDLED_ARCHIVE_DIRECTORY, BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
-import { inspectProfileImportPluginArchives } from '../src/profile-import-plugin-trust.ts'
+import { inspectProfileImportPluginArchives, lockfileResolutionMatches } from '../src/profile-import-plugin-trust.ts'
 
 const uid = process.getuid?.() ?? 0
 const ownerState: MigrationOwnerStateBundle = { version: 1, documents: [
@@ -57,6 +57,27 @@ async function profile(root: string, name: string, dependencies: Record<string, 
 }
 
 describe.skipIf(process.platform === 'win32')('Slark Profile import preview inventory', () => {
+  it('rejects malformed lockfile evidence and invalid archive selections', async () => {
+    const archive = Buffer.from('trusted archive')
+    expect(lockfileResolutionMatches(null, 'alpha', 'file:alpha.tgz', '1.0.0', archive)).toBe(false)
+    expect(lockfileResolutionMatches('lockfileVersion: 8\n', 'alpha', 'file:alpha.tgz', '1.0.0', archive)).toBe(false)
+    expect(lockfileResolutionMatches('invalid: [', 'alpha', 'file:alpha.tgz', '1.0.0', archive)).toBe(false)
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-plugin-selection-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [])
+    const valid = { ...source, uid, expectedSnapshotDigest: 'a'.repeat(64), selectedPluginNames: [] }
+    for (const invalid of [
+      { ...valid, profileRoot: 'relative' },
+      { ...valid, uid: -1 },
+      { ...valid, expectedSnapshotDigest: 'bad' },
+      { ...valid, selectedPluginNames: ['alpha', 'alpha'] },
+      { ...valid, selectedPluginNames: Array.from({ length: 129 }, (_, index) => `plugin-${index}`) },
+    ]) {
+      await expect(inspectProfileImportPluginArchives(invalid))
+        .rejects.toThrow('profile_import_plugin_selection_invalid')
+    }
+  })
+
   it('keeps equal existing sessions and plugins out of the conflict set', () => {
     const source: ProfileImportInventory = { generation: 1, snapshotDigest: 'a'.repeat(64),
       sessions: [{ id: 'same-session', createdAt: 1, eventCount: 2,
