@@ -664,7 +664,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = {
 'model/selection': ModelSelectionValue
 ```
 
-来源：[`packages/core/agent/src/types.ts:133`](../packages/core/agent/src/types.ts)
+来源：[`packages/core/agent/src/types.ts:140`](../packages/core/agent/src/types.ts)
 
 ### `permission/*`
 

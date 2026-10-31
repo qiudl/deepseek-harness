@@ -105,20 +105,27 @@ declare module '@deepseek-ai/dsh-session/types' {
 
 /** One durable model selection without adapter-owned defaults. */
 export interface ModelSelectionValue {
+  /** Registered provider route. */
   readonly provider: string
+  /** Provider-owned model identity. */
   readonly model: string
+  /** Explicit effort, omitted for the adapter default. */
   readonly reasoningEffort?: string
 }
 
 /** Durable model selection folded from Session events. */
 export interface ModelSelectionProjectionState {
+  /** Selection recorded by the latest model request. */
   readonly lastUsed: ModelSelectionValue | null
+  /** Recorded selection not yet used by a matching request. */
   readonly pending: ModelSelectionValue | null
 }
 
 /** Client view of the durable model selection. */
 export interface ModelSelectionProjection {
+  /** Selection recorded by the latest model request. */
   readonly lastUsed: ModelSelectionValue | null
+  /** Pending selection, or the latest used selection. */
   readonly next: ModelSelectionValue | null
 }
 

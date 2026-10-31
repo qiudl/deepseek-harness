@@ -662,7 +662,7 @@ Source: [`packages/llm/llm-retry/src/types.ts:11`](../packages/llm/llm-retry/src
 'model/selection': ModelSelectionValue
 ```
 
-Source: [`packages/core/agent/src/types.ts:133`](../packages/core/agent/src/types.ts)
+Source: [`packages/core/agent/src/types.ts:140`](../packages/core/agent/src/types.ts)
 
 ### `permission/*`
 
