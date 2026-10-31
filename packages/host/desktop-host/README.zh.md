@@ -56,6 +56,7 @@ Web Profile worker 通过显式子进程环境接收独立随机记忆路由 bea
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
+- **HY 容量尚不足以覆盖完整 Profile 历史**——Host 索引最多接受 20,000 条脱敏记录，但一个 worker 连接最多执行 64 次顺序 embedding 请求，其中包括查询 embedding；固定合成 worker 使用两次请求。m5max 的合成探针即使假设 embedding broker 一次处理八条输入，512 条写入加一次查询仍需 65 批；20,000 条写入在查询前至少需 2,500 批。Host 在 64 次请求全部用尽时拒绝最终投影 ACK，因此不会把没有首次查询预算的 worker 标为就绪。动态 worker 仍需明确索引与查询容量策略，并测量模型和 IPC 构建时间，才能声称覆盖完整历史的语义检索。当前 startup 没有提供产品 worker opener。
 
 <a id="dev-note"></a>
 ### 开发备注
