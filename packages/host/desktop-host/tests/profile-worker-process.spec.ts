@@ -56,6 +56,11 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('rejects original plugin roots before starting a restricted worker', async () => {
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+    await expect(factory.createRestricted(spec(tmpdir()))).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('reports confirmed process exit separately from an earlier worker error', async () => {
     const child = new ControlledChild()
     const handle = await readyHandle(child)
@@ -450,11 +455,11 @@ describe('dsh web Profile worker', () => {
 
   it('kills a child without a usable PID or stdout before accepting readiness', async () => {
     const signals: (string | number | undefined)[] = []
-    const child = {
+    const child = Object.assign(new EventEmitter(), {
       pid: undefined,
       stdout: null,
       kill: (signal?: string | number) => { signals.push(signal); return true },
-    } as unknown as ChildProcess
+    }) as unknown as ChildProcess
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
     })
@@ -463,6 +468,7 @@ describe('dsh web Profile worker', () => {
     }).waitForOrigin.bind(factory)
     await expect(waitForOrigin(child)).rejects.toMatchObject({ code: 'unavailable' })
     expect(signals).toEqual(['SIGKILL'])
+    expect(() => child.emit('error', new Error('spawn failed'))).not.toThrow()
   })
 
   it('waits for the failed startup child to close before reporting failure', async () => {

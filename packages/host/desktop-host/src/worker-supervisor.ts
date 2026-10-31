@@ -697,7 +697,11 @@ export class ProfileWorkerSupervisor {
     this.blockedProfiles.add(profileId)
   }
 
-  /** @param profileId - Host-resolved Profile. @returns Whether its worker state is uncertain. */
+  /**
+   * Check whether uncertain worker cleanup prevents another start for this Profile.
+   * @param profileId - Host-resolved Profile.
+   * @returns Whether its worker state is uncertain.
+   */
   isProfileBlocked(profileId: string): boolean {
     return this.blockedProfiles.has(profileId)
   }

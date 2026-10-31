@@ -66,6 +66,17 @@ import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from '../src/ty
 import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
 
 const uid = process.getuid?.() ?? 0
+async function isolatedTestNode(root: string): Promise<string> {
+  if (process.env.DSH_TEST_DENY_FORK !== '1') return process.execPath
+  if (process.platform !== 'darwin' || /["$`\\]/u.test(process.execPath)) throw new Error('unsupported sandbox fixture')
+  const wrapper = join(root, 'sandbox-node')
+  const probe = join(root, 'fork-probe.cjs')
+  const result = join(root, 'fork-probe-result')
+  if (/["$`\\]/u.test(probe)) throw new Error('unsupported sandbox fixture path')
+  await writeFile(probe, `const fs=require('node:fs'),cp=require('node:child_process');let value;try { value=cp.spawnSync('/usr/bin/true').error?.code ?? 'allowed' } catch(e) { value=e.code } fs.writeFileSync(${JSON.stringify(result)},value);`, { mode: 0o600 })
+  await writeFile(wrapper, `#!/bin/sh\nexec "${process.execPath}" --require "${probe}" "$@"\n`, { mode: 0o700 })
+  return wrapper
+}
 function extensionBarrier() {
   const records = new Map<string, ExtensionReceipt>()
   return new ProfileExtensionOperations({
@@ -975,19 +986,21 @@ describe('offline Profile existing-only inspector', () => {
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
     const entry = fileURLToPath(new URL('../../../../apps/cli/lib/bin.js', import.meta.url))
-    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: await isolatedTestNode(value.hostRoot), dshEntrypointPath: entry })
     const regular = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
     onTestFinished(() => regular.disposeAll())
     await withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
       stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(),
-      ownership, profileId, credentialHandle: 'fixture', createWorker: (spec, signal) => factory.create(spec, signal), onCleanupFailure: () => {},
+      ownership, profileId, credentialHandle: 'fixture', createWorker: (spec, signal) => process.env.DSH_TEST_DENY_FORK === '1'
+        ? factory.createRestricted(spec, signal) : factory.create(spec, signal), onCleanupFailure: () => {},
       assertCurrent: () => {}, signal: new AbortController().signal }, async reader => {
       const command = { operation: 'session.list' as const,
         command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
       const history = await reader.read(command, AbortSignal.timeout(10_000))
       expect(JSON.stringify(history)).toContain('fixture-session')
+      if (process.env.DSH_TEST_DENY_FORK === '1') expect(await readFile(join(value.hostRoot, 'fork-probe-result'), 'utf8')).toBe('EPERM')
       const events = await reader.read({ operation: 'session.history',
         command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId,
         session_id: 'fixture-session', max_events: 100 }, AbortSignal.timeout(10_000))
@@ -1024,13 +1037,15 @@ describe('offline Profile existing-only inspector', () => {
     expect(preflight).toMatchObject({ state: 'compatibility_blocked', compression: 'zstd', unverifiedPluginCount: 1 })
     const before = await treeInventory(value.profileRoot)
     const entry = fileURLToPath(new URL('../../../../apps/cli/lib/bin.js', import.meta.url))
-    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
-    const service = await accountService(value, (spec, signal) => factory.create(spec, signal))
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: await isolatedTestNode(value.hostRoot), dshEntrypointPath: entry })
+    const service = await accountService(value, (spec, signal) => process.env.DSH_TEST_DENY_FORK === '1'
+      ? factory.createRestricted(spec, signal) : factory.create(spec, signal))
     const account = profile()
     const history = await restrictedAccountRead(service, () => account, { operation: 'session.history',
       command_id: '123e4567-e89b-42d3-a456-426614174004' as HostControlRequestId,
       session_id: id, max_events: 100 }, AbortSignal.timeout(30_000))
     expect(JSON.stringify(history)).toContain('old-writer historical prompt')
+    if (process.env.DSH_TEST_DENY_FORK === '1') expect(await readFile(join(value.hostRoot, 'fork-probe-result'), 'utf8')).toBe('EPERM')
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   }, 45_000)
 

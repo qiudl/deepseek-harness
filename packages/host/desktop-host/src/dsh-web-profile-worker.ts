@@ -168,6 +168,22 @@ export class DshWebProfileWorkerFactory {
    * @returns lifecycle plus a Host-verified token-free loopback origin.
    */
   async create(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
+    return this.createWorker(spec, signal, false)
+  }
+
+  /**
+   * Start a macOS history-only worker that cannot fork child processes.
+   * This is only one containment layer; the caller must also fence external writers.
+   * @param spec - isolated, Host-owned Profile and no original plugin roots.
+   * @param signal - owning connection cancellation.
+   * @returns lifecycle and the attested loopback origin, held privately by Host.
+   */
+  async createRestricted(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
+    if (process.platform !== 'darwin' || spec.pluginRoots.length !== 0) throw new HostAuthorityError('unavailable')
+    return this.createWorker(spec, signal, true)
+  }
+
+  private async createWorker(spec: ProfileWorkerSpec, signal: AbortSignal | undefined, denyFork: boolean): Promise<ProfileWorkerHandle> {
     signal?.throwIfAborted()
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
@@ -180,9 +196,11 @@ export class DshWebProfileWorkerFactory {
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
-    const child = spawn(this.options.nodeExecutablePath, [
+    const args = [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
-    ], {
+    ]
+    const child = spawn(denyFork ? '/usr/bin/sandbox-exec' : this.options.nodeExecutablePath,
+      denyFork ? ['-p', '(version 1) (allow default) (deny process-fork)', this.options.nodeExecutablePath, ...args] : args, {
       cwd: root,
       env: {
         ...spec.env,
@@ -217,7 +235,12 @@ export class DshWebProfileWorkerFactory {
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
     const pid = child.pid
-    if (!pid) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
+    if (!pid) {
+      // A failed spawn emits its error asynchronously even though it never had a PID.
+      child.once('error', () => {})
+      child.kill('SIGKILL')
+      throw new HostAuthorityError('unavailable')
+    }
     if (!child.stdout) {
       const exited = child.exitCode !== null || child.signalCode !== null
         ? Promise.resolve()
