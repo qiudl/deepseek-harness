@@ -232,6 +232,17 @@ it.skipIf(process.platform === 'win32')('wires a session import through prepare,
   })
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   if (!options) throw Error('missing server options')
+  const environmentId = randomUUID()
+  await expect(application.host.ensureSlarkAccountProfile({
+    issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'slark-user',
+    authorityEnvironmentId: environmentId, accountBindingHandle: 'slark:startup',
+    authorityBindingVersion: 1, accountAccessToken: 'invalid-token',
+    keyHandle: 'keychain:startup-slark', unlockMaterial: Buffer.alloc(32, 3).toString('base64url'),
+    ownerId: 'owner', expected: { slarkUserId: 'slark-user', environmentId,
+      profileId: randomUUID(), deviceId: randomUUID(),
+      deviceKeyThumbprint: Buffer.alloc(32, 4).toString('base64url'),
+      loginEpoch: 1, bindingEpoch: 1 },
+  })).rejects.toMatchObject({ code: 'unauthorized' })
   const source = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-source',
     unlockMaterial: Buffer.alloc(32, 1).toString('base64url'), ownerId: 'owner' })
   const target = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:import-target',

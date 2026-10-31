@@ -13,7 +13,7 @@ const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
 const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, fstatCalls: 0,
   archiveFd: -1, installError: false }))
 const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0,
-  invalidDependenciesAt: 0 }))
+  invalidDependenciesAt: 0, unknownDependenciesAt: 0 }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -74,12 +74,16 @@ vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
   return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
     const value = actual.readExtensionStateFile(...args)
     if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt
-      || trustManifestFaults.changedAt || trustManifestFaults.invalidDependenciesAt)) {
+      || trustManifestFaults.changedAt || trustManifestFaults.invalidDependenciesAt
+      || trustManifestFaults.unknownDependenciesAt)) {
       trustManifestFaults.count += 1
       if (trustManifestFaults.count === trustManifestFaults.nullAt) return null
       if (trustManifestFaults.count === trustManifestFaults.changedAt) return `${value} `
       if (trustManifestFaults.count === trustManifestFaults.invalidDependenciesAt) {
         return JSON.stringify({ dependencies: [] })
+      }
+      if (trustManifestFaults.count === trustManifestFaults.unknownDependenciesAt) {
+        return JSON.stringify({ dependencies: { 'unknown-plugin': '1.0.0' } })
       }
     }
     return value
@@ -933,8 +937,52 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_target_install_invalid')
     trustManifestFaults.invalidDependenciesAt = 0
     trustManifestFaults.count = 0
+    trustManifestFaults.unknownDependenciesAt = lateManifestRead
+    await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_source_unsupported')
+    trustManifestFaults.unknownDependenciesAt = 0
+    trustManifestFaults.count = 0
+    const originalCatalogGet = catalog.get.bind(catalog)
+    let catalogGetCalls = 0
+    const catalogGetSpy = vi.spyOn(catalog, 'get').mockImplementation((name, version) => {
+      catalogGetCalls += 1
+      return originalCatalogGet(name, version)
+    })
+    await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+    const totalCatalogGets = catalogGetCalls
+    let rejectedSelectedCatalogDrift = false
+    try {
+      for (let at = totalCatalogGets; at > 0 && !rejectedSelectedCatalogDrift; at--) {
+        catalogGetCalls = 0
+        catalogGetSpy.mockImplementation((name, version) => {
+          catalogGetCalls += 1
+          return catalogGetCalls === at && name === 'fixture-plugin'
+            ? undefined : originalCatalogGet(name, version)
+        })
+        try {
+          await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
+        } catch (error) {
+          rejectedSelectedCatalogDrift = (error as Error).message === 'profile_import_plugin_target_install_invalid'
+        }
+      }
+    } finally { catalogGetSpy.mockRestore() }
+    expect(rejectedSelectedCatalogDrift).toBe(true)
     const layerReceiptPath = join(layer.installationRoot, 'layer-receipt.json')
     const layerReceipt = await readFile(layerReceiptPath)
+    const lateReceiptFault = { calls: 0, at: 2, mode: 'changed' as const }
+    isolatedReadFaults.set(layerReceiptPath, lateReceiptFault)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+      expect(lateReceiptFault.calls).toBe(2)
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
+    const unreadableLateReceipt = { calls: 0, at: 2, mode: 'throw' as const }
+    isolatedReadFaults.set(layerReceiptPath, unreadableLateReceipt)
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_install_incomplete')
+      expect(unreadableLateReceipt.calls).toBe(2)
+    } finally { isolatedReadFaults.delete(layerReceiptPath) }
     await unlink(layerReceiptPath)
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_install_incomplete')
