@@ -71,6 +71,8 @@ describe('migration owner-state generation applicator', () => {
     await writeFile(sourceLog, 'original history', { mode: 0o600 })
     await writeFile(join(persistenceRoot, 'owner-state.json'), 'private original state', { mode: 0o600 })
     await writeFile(join(persistenceRoot, 'project', 'session', 'session.lock'), '', { mode: 0o600 })
+    await mkdir(join(persistenceRoot, 'session.lock', 'session'), { recursive: true, mode: 0o700 })
+    await writeFile(join(persistenceRoot, 'session.lock', 'session', 'session.v4.jsonl'), 'other history', { mode: 0o600 })
     const ownership = await acquireSingleHostLock({ root: join(stagingParent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
@@ -85,6 +87,7 @@ describe('migration owner-state generation applicator', () => {
     expect(patch).toContain(join(staged.root, 'sessions'))
     const copiedLog = join(staged.root, 'sessions', 'project', 'session', 'session.v4.jsonl')
     expect(await readFile(copiedLog, 'utf8')).toBe('original history')
+    expect(await readFile(join(staged.root, 'sessions', 'session.lock', 'session', 'session.v4.jsonl'), 'utf8')).toBe('other history')
     await writeFile(copiedLog, 'worker changed its snapshot')
     expect(await readFile(sourceLog, 'utf8')).toBe('original history')
     await expect(access(join(staged.root, 'sessions', 'owner-state.json'))).rejects.toMatchObject({ code: 'ENOENT' })
@@ -191,6 +194,26 @@ describe('migration owner-state generation applicator', () => {
     await expect(stageRestrictedProfile({ ...input, signal: cancelled.signal })).rejects.toMatchObject({ name: 'AbortError' })
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
     expect(await readFile(file, 'utf8')).toBe('original')
+  })
+
+  it('rejects copied history when a source file changes during snapshot creation', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const file = join(persistenceRoot, 'history.jsonl')
+    await writeFile(file, 'original', { mode: 0o600 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-content-fixture' })
+    onTestFinished(async () => { diskFaults.afterCopy = undefined; await ownership.release() })
+    diskFaults.afterCopy = () => writeFileSync(file, 'changed!', { mode: 0o600 })
+    await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
+      ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
+      inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe('changed!')
   })
 
   it('does not delete a staged Profile after losing its Host lock', async () => {

@@ -1,4 +1,6 @@
-import { cp, lstat, mkdtemp, readdir, realpath, rm, statfs, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { constants } from 'node:fs'
+import { cp, lstat, mkdtemp, open, readdir, realpath, rm, statfs, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
@@ -14,6 +16,11 @@ import { HostAuthorityError } from './types.ts'
 function within(root: string, path: string): boolean {
   const part = relative(root, path)
   return part === '' || (part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part))
+}
+
+function excludedSnapshotPath(part: string): boolean {
+  const components = part.split(sep)
+  return part === 'owner-state.json' || (components.length === 3 && components[2] === LEASE_FILENAME)
 }
 
 /** Ensure a copied tree contains only private regular files and directories, never links. */
@@ -33,7 +40,7 @@ async function assertPrivateCopy(path: string, expectedUid: number, signal: Abor
 async function snapshotBytes(root: string, path: string, expectedUid: number, signal: AbortSignal): Promise<bigint> {
   signal.throwIfAborted()
   const part = relative(root, path)
-  if (part === 'owner-state.json' || part.split(sep).at(-1) === LEASE_FILENAME) return 0n
+  if (excludedSnapshotPath(part)) return 0n
   const stat = await lstat(path, { bigint: true })
   if (stat.isSymbolicLink() || stat.uid !== BigInt(expectedUid) || (!stat.isDirectory() && !stat.isFile())
     || (stat.isFile() && ((stat.mode & 0o077n) !== 0n || stat.nlink !== 1n))) {
@@ -43,6 +50,53 @@ async function snapshotBytes(root: string, path: string, expectedUid: number, si
   let total = 0n
   for (const entry of await readdir(path)) total += await snapshotBytes(root, join(path, entry), expectedUid, signal)
   return total
+}
+
+async function fileDigest(path: string, uid: number, signal: AbortSignal): Promise<string> {
+  signal.throwIfAborted()
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const before = await handle.stat({ bigint: true })
+    if (!before.isFile() || before.uid !== BigInt(uid) || (before.mode & 0o077n) !== 0n || before.nlink !== 1n) {
+      throw new HostAuthorityError('profile_integrity_failed')
+    }
+    const hash = createHash('sha256')
+    const stream = handle.createReadStream({ autoClose: false, signal })
+    for await (const chunk of stream) { signal.throwIfAborted(); hash.update(chunk) }
+    const after = await handle.stat({ bigint: true })
+    const current = await lstat(path, { bigint: true })
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs
+      || current.dev !== before.dev || current.ino !== before.ino || current.size !== before.size
+      || current.mtimeNs !== before.mtimeNs || current.ctimeNs !== before.ctimeNs || current.isSymbolicLink()) {
+      throw new HostAuthorityError('recovery_preflight_stale')
+    }
+    signal.throwIfAborted()
+    return hash.digest('hex')
+  } finally { await handle.close() }
+}
+
+/** Compare the copied file tree and bytes, excluding only original owner-state and writer leases. */
+async function verifySnapshot(source: string, copy: string, uid: number, signal: AbortSignal, depth = 0): Promise<void> {
+  signal.throwIfAborted()
+  const sourceStat = await lstat(source)
+  const copyStat = await lstat(copy)
+  if (sourceStat.isSymbolicLink() || copyStat.isSymbolicLink() || sourceStat.uid !== uid || copyStat.uid !== uid) {
+    throw new HostAuthorityError('profile_integrity_failed')
+  }
+  if (sourceStat.isFile() && copyStat.isFile()) {
+    if (await fileDigest(source, uid, signal) !== await fileDigest(copy, uid, signal)) {
+      throw new HostAuthorityError('recovery_preflight_stale')
+    }
+    return
+  }
+  if (!sourceStat.isDirectory() || !copyStat.isDirectory()) throw new HostAuthorityError('recovery_preflight_stale')
+  const visible = (names: string[]) => names.filter(name => !(depth === 2 && name === LEASE_FILENAME)
+    && !(depth === 0 && name === 'owner-state.json')).sort()
+  const sourceNames = visible(await readdir(source))
+  const copyNames = visible(await readdir(copy))
+  if (!isDeepStrictEqual(sourceNames, copyNames)) throw new HostAuthorityError('recovery_preflight_stale')
+  for (const name of sourceNames) await verifySnapshot(join(source, name), join(copy, name), uid, signal, depth + 1)
 }
 
 /**
@@ -144,7 +198,7 @@ export async function stageRestrictedProfile(input: {
       filter: async path => {
         input.signal.throwIfAborted()
         const part = relative(persistence.root, path)
-        if (part === 'owner-state.json' || part.split(sep).at(-1) === LEASE_FILENAME) return false
+        if (excludedSnapshotPath(part)) return false
         const stat = await lstat(path)
         if (stat.isSymbolicLink() || stat.uid !== input.expectedUid || (!stat.isDirectory() && !stat.isFile())
           || (stat.isFile() && ((stat.mode & 0o077) !== 0 || stat.nlink !== 1))) {
@@ -153,6 +207,7 @@ export async function stageRestrictedProfile(input: {
         return true
       } })
     await assertPrivateCopy(snapshotRoot, input.expectedUid, input.signal)
+    await verifySnapshot(persistence.root, snapshotRoot, input.expectedUid, input.signal)
     await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root,
       { root: snapshotRoot, compression: input.persistence.compression }, ownerPaths), { mode: 0o600, flag: 'wx' })
     await verify()
