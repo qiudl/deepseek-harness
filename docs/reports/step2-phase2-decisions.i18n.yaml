@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for step2-phase2-decisions.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/reports/step2-phase2-decisions.md
+/step2-phase-2-recommended-decisions:
+  en: 883028a3729ab1aa
+  zh: c114036f8c4b70a3
+/step2-phase-2-recommended-decisions/1-named-session-identity:
+  en: 0c1ebe73c96a02c6
+  zh: 9d5590c265439c97
+/step2-phase-2-recommended-decisions/2-model-effort-and-projection:
+  en: 588c7f16486c10ba
+  zh: 8db29fbb4473e634
+/step2-phase-2-recommended-decisions/3-client-rollout-and-partial-creation:
+  en: cb6ffce38bac28ff
+  zh: 4aa16e3b49339ca4
+/step2-phase-2-recommended-decisions/4-persistence-versions-and-acceptance-owners:
+  en: 98bed1b274d55832
+  zh: 649a99a365ccc4ae
+/step2-phase-2-recommended-decisions/5-collaboration-ownership-and-cancellation:
+  en: 9a8d2bf75020ba9a
+  zh: c72302a7f2dfed82
