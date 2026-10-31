@@ -83,6 +83,28 @@ function fakeHost(): DesktopHost {
   } as unknown as DesktopHost
 }
 
+it('routes a federated Slark ensure frame to the Slark Profile grant', async () => {
+  const host = fakeHost()
+  const ensureSlarkAccountProfile = vi.fn(async () => ready)
+  Object.assign(host, { ensureSlarkAccountProfile })
+  const { client } = await authorityClient({ host })
+  onTestFinished(() => { client.close() })
+  const expected = {
+    slarkUserId: 'user-1', environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+    profileId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+    deviceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+    deviceKeyThumbprint: 'A'.repeat(43), loginEpoch: 0, bindingEpoch: 1,
+  }
+  await expect(client.ensureSlarkAccountProfile({ authorityEnvironmentId: expected.environmentId,
+    accountBindingHandle: `slark:${expected.profileId}`, authorityBindingVersion: 1,
+    issuer: 'https://accounts.dsh.colorbuyai.com', subject: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3184',
+    accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:slark',
+    unlockMaterial: Buffer.alloc(32, 3).toString('base64url'), expected }))
+    .resolves.toMatchObject({ profileId })
+  expect(ensureSlarkAccountProfile).toHaveBeenCalledOnce()
+  expect(ensureSlarkAccountProfile).toHaveBeenCalledWith(expect.objectContaining({ expected, ownerId }))
+})
+
 async function authorityClient(
   options: Partial<UnixHostServerOptions> = {},
   reply?: (frame: HostControlFrame) => HostControlFrame,

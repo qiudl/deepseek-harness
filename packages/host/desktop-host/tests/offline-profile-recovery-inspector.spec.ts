@@ -15,6 +15,7 @@ const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, 
   archiveFd: -1, installError: false }))
 const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0,
   invalidDependenciesAt: 0, unknownDependenciesAt: 0 }))
+const targetLockFaults = vi.hoisted(() => ({ replacement: '', at: 0, calls: 0 }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -23,6 +24,7 @@ const isolatedReadFaults = vi.hoisted(() => new Map<string, {
   mode: 'throw' | 'changed'
 }>())
 const isolatedStageFaults = vi.hoisted(() => ({ missingAt: 0, removeSandboxAt: 0, calls: 0 }))
+const isolatedInspectFaults = vi.hoisted(() => ({ missingAt: 0, calls: 0 }))
 vi.mock('../src/private-file-io.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/private-file-io.ts')>()
   return { ...actual, readOwnerPrivateFile: (...args: Parameters<typeof actual.readOwnerPrivateFile>) => {
@@ -54,6 +56,16 @@ vi.mock('../src/profile-import-plugin-stage.ts', async (importOriginal) => {
     return stage
   } }
 })
+vi.mock('../src/profile-import-plugin-isolated-install.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/profile-import-plugin-isolated-install.ts')>()
+  return { ...actual, inspectIsolatedProfileImportPluginInstall: async (
+    ...args: Parameters<typeof actual.inspectIsolatedProfileImportPluginInstall>
+  ) => {
+    isolatedInspectFaults.calls += 1
+    if (isolatedInspectFaults.calls === isolatedInspectFaults.missingAt) return null
+    return actual.inspectIsolatedProfileImportPluginInstall(...args)
+  } }
+})
 vi.mock('yaml', async (importOriginal) => {
   const actual = await importOriginal<typeof import('yaml')>()
   return { ...actual, parseDocument: (...args: Parameters<typeof actual.parseDocument>) => {
@@ -74,6 +86,10 @@ vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/posix-extension-files.ts')>()
   return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
     const value = actual.readExtensionStateFile(...args)
+    if (args[0].endsWith('/profiles/web/pnpm-lock.yaml') && targetLockFaults.at) {
+      targetLockFaults.calls += 1
+      if (targetLockFaults.calls === targetLockFaults.at) return targetLockFaults.replacement
+    }
     if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt
       || trustManifestFaults.changedAt || trustManifestFaults.invalidDependenciesAt
       || trustManifestFaults.unknownDependenciesAt)) {
@@ -788,14 +804,42 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
     const baselineSourceArchivePath = join(targetArchives, `${baselineDigest}.tgz`)
+    const targetMergeRoot = join(value.target.profileRoot, 'profile-import-plugin-install',
+      input.operationId, 'target-merge')
+    const targetLockDocument = parseDocument(targetLockBefore.toString())
+    expect(targetLockDocument.hasIn(['packages', `baseline-plugin@${baselineSpec}`])).toBe(true)
+    targetLockDocument.deleteIn(['packages', `baseline-plugin@${baselineSpec}`])
+    targetLockFaults.replacement = String(targetLockDocument)
+    let rejectedBaselineLock = false
+    for (let at = 1; at <= 64 && !rejectedBaselineLock; at++) {
+      targetLockFaults.calls = 0
+      targetLockFaults.at = at
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedBaselineLock = failure?.message === 'profile_import_plugin_target_resolution_invalid'
+          && !!failure.stack?.includes('targetBaseline')
+        if (!failure && targetLockFaults.calls < at) break
+      } finally {
+        targetLockFaults.at = 0
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect(rejectedBaselineLock).toBe(true)
+    isolatedInspectFaults.calls = 0
+    isolatedInspectFaults.missingAt = 1
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_isolated_incomplete')
+    } finally { isolatedInspectFaults.missingAt = 0 }
     isolatedReadFaults.set(baselineSourceArchivePath, { calls: 0, at: 1, mode: 'throw' })
     try {
       await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
         nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
         .rejects.toThrow('profile_import_plugin_target_archive_changed')
     } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
-    const targetMergeRoot = join(value.target.profileRoot, 'profile-import-plugin-install',
-      input.operationId, 'target-merge')
     const getForDependency = catalog.getForDependency.bind(catalog)
     const catalogDriftFailures = new Set([
       'profile_import_plugin_target_source_unsupported',
@@ -823,6 +867,38 @@ describe('offline Profile existing-only inspector', () => {
     const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    let rejectedMissingBaselineEntry = false
+    for (let at = 1; at <= 16 && !rejectedMissingBaselineEntry; at++) {
+      let calls = 0
+      const lookup = vi.spyOn(catalog, 'getForDependency').mockImplementation((name, spec) => {
+        calls += 1
+        return calls === at ? undefined : getForDependency(name, spec)
+      })
+      try {
+        const failure = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedMissingBaselineEntry = failure?.message === 'profile_import_plugin_target_source_unsupported'
+          && !!failure.stack?.includes('verifyCopiedBaselineArchive')
+      } finally { lookup.mockRestore() }
+    }
+    expect(rejectedMissingBaselineEntry).toBe(true)
+    const rejectArchiveReadAt = async (path: string, frame: string) => {
+      let reached = false
+      for (let at = 1; at <= 16 && !reached; at++) {
+        const fault = { calls: 0, at, mode: 'throw' as const }
+        isolatedReadFaults.set(path, fault)
+        try {
+          const failure = await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)
+            .then(() => null, (error: unknown) => error as Error)
+          reached = failure?.message.includes('profile_import_plugin_target_') === true
+            && !!failure.stack?.includes(frame)
+        } finally { isolatedReadFaults.delete(path) }
+      }
+      expect(reached).toBe(true)
+    }
+    await rejectArchiveReadAt(baselineSourceArchivePath, 'verifyCopiedBaselineArchive')
+    await rejectArchiveReadAt(join(resolved.resolutionRoot, '.bundled-plugins',
+      `${value.source.digest}.tgz`), 'profile-import-plugin-target-resolution.ts:342')
     expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toBeNull()
     await chmod(resolved.resolutionRoot, 0o777)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
