@@ -70,6 +70,17 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it('does not keep an otherwise idle restricted child alive', async () => {
+    const child = spawn(process.execPath, ['--import', RESTRICTED_WORKER_PARENT_MONITOR, '-e', ''],
+      { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+    const exited = once(child, 'exit', { signal: AbortSignal.timeout(10_000) })
+    onTestFinished(async () => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await exited.catch(() => {})
+    })
+    await expect(exited).resolves.toEqual([0, null])
+  })
+
   it('terminates a restricted child after the owning IPC channel closes', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-parent-monitor-'))
     const program = join(root, 'worker.mjs')
