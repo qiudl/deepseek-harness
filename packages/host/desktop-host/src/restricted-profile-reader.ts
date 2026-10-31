@@ -16,6 +16,12 @@ class RestrictedStartupCleanupError extends Error {
   }
 }
 
+/** A trusted exclusion adapter could not confirm release of its writer guard. @internal */
+export class RestrictedWriterExclusionCleanupError extends Error {
+  readonly code = 'restricted_writer_exclusion_cleanup_unconfirmed'
+  constructor(cause: unknown) { super('restricted_writer_exclusion_cleanup_unconfirmed', { cause }) }
+}
+
 /** Host-private reader that exposes Session reads but no worker URL, cookie or writable operation. */
 export class RestrictedProfileReader {
   private readonly lifetime = new AbortController()
@@ -127,81 +133,169 @@ export async function withRestrictedProfileReader<T>(
   claims: LegacyClaimWorkerGate,
   input: Parameters<typeof startRestrictedProfileReader>[0] & {
     readonly fence: RestrictedProfileFence
-    /** Hold trusted external writer exclusion until the callback and cleanup finish. */
-    readonly withAllWritersExcluded: <R>(operation: () => Promise<R>) => Promise<R>
+    /**
+     * Hold external writer exclusion through cleanup. Invoke the operation exactly once, await it,
+     * return its result unchanged, and propagate its error unchanged after successful release.
+     * Throw RestrictedWriterExclusionCleanupError if release is uncertain.
+     */
+    readonly withAllWritersExcluded: <R>(operation: () => Promise<R>, signal: AbortSignal) => Promise<R>
+    /** Acquire all existing Session locks inside the tracked exclusion operation. */
+    readonly acquireSessionLocks: (signal: AbortSignal) => Promise<{ assertCurrent(): void; close(): void }>
     /** Verify worker and externally fenced writers are quiescent before admission and after cleanup. */
     readonly assertAllWritersQuiescent: () => void
   },
   use: (reader: RestrictedProfileReader) => Promise<T>,
 ): Promise<T> {
   return extensions.withRestrictedAccess(input.profileId, async () => {
+    let finalizeFence: (() => void) | undefined
+    let operationFailed = false
+    let operationFailure: unknown
+    let operationReturned = false
+    let operationResult: T | undefined
+    let operationPromise: Promise<T> | undefined
+    let operationSettled = false
+    let adapterClosed = false
+    let duplicateInvocation = false
+    const violation = new AbortController()
+    const activeSignal = AbortSignal.any([input.signal, violation.signal])
+    const settleAdapter = async () => {
+      adapterClosed = true
+      if (duplicateInvocation || (operationPromise && !operationSettled)) {
+        workers.blockProfile(input.profileId)
+        violation.abort(new HostAuthorityError('unavailable'))
+        if (operationPromise) await operationPromise.catch(() => {})
+      }
+    }
+    const finishFence = () => {
+      const finish = finalizeFence
+      finalizeFence = undefined
+      if (!finish || workers.isLocallyBlocked(input.profileId)) return
+      try { finish() } catch (error) { workers.blockProfile(input.profileId); throw error }
+    }
     try {
-      return await input.withAllWritersExcluded(async () => {
-        const guard = () => {
-          input.signal.throwIfAborted()
-          input.ownership.assertOwner()
-          claims.assertOpen(input.profileId)
-          input.assertAllWritersQuiescent()
-          input.assertCurrent()
+      const result = await input.withAllWritersExcluded(() => {
+        if (adapterClosed || operationPromise) {
+          duplicateInvocation = true
+          const rejected = Promise.reject<T>(new HostAuthorityError('unavailable'))
+          void rejected.catch(() => {})
+          return rejected
         }
-        guard()
-        return await workers.withInactiveProfile(input.profileId, async () => {
-          const operationId = input.fence.begin(input.profileId)
-          let cleanupConfirmed = true
-          const fencedInput = { ...input, assertCurrent: () => {
-            input.fence.assertOwned(input.profileId, operationId)
-            claims.assertClaimOpen(input.profileId)
-            input.assertCurrent()
-          } }
+        operationPromise = Promise.resolve().then(async () => {
           try {
-            let reader: RestrictedProfileReader
-            try {
-              reader = await startRestrictedProfileReader(fencedInput)
-            } catch (error) {
-              if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
-                cleanupConfirmed = false
-                workers.blockProfile(input.profileId)
-              }
+            let locks: { assertCurrent(): void; close(): void }
+            try { locks = await input.acquireSessionLocks(activeSignal) } catch (error) {
+              if (error instanceof AggregateError) { workers.blockProfile(input.profileId); input.onCleanupFailure() }
               throw error
             }
-            let abort: (() => void) | undefined
             try {
-              input.signal.throwIfAborted()
-              const cancelled = new Promise<never>((_resolve, reject) => {
-                abort = () => reject(input.signal.reason)
-                input.signal.addEventListener('abort', abort, { once: true })
-              })
-              const operation = Promise.resolve().then(() => {
-                input.signal.throwIfAborted()
-                return use(reader)
-              })
-              const result = await Promise.race([operation, cancelled])
-              input.signal.throwIfAborted()
-              input.ownership.assertOwner()
-              fencedInput.assertCurrent()
-              return result
+              const assertLocks = () => {
+                try { locks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+              }
+              const guard = () => {
+                assertLocks()
+                activeSignal.throwIfAborted()
+                input.ownership.assertOwner()
+                claims.assertOpen(input.profileId)
+                input.assertAllWritersQuiescent()
+                input.assertCurrent()
+              }
+              guard()
+              const value = await workers.withInactiveProfile(input.profileId, async () => {
+                const operationId = input.fence.begin(input.profileId)
+                let cleanupConfirmed = true
+                const fencedInput = { ...input, signal: activeSignal, assertCurrent: () => {
+                  assertLocks()
+                  input.fence.assertOwned(input.profileId, operationId)
+                  claims.assertClaimOpen(input.profileId)
+                  input.assertCurrent()
+                } }
+                try {
+                  let reader: RestrictedProfileReader
+                  try {
+                    reader = await startRestrictedProfileReader(fencedInput)
+                  } catch (error) {
+                    if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError) {
+                      cleanupConfirmed = false
+                      workers.blockProfile(input.profileId)
+                    }
+                    throw error
+                  }
+                  let abort: (() => void) | undefined
+                  try {
+                    activeSignal.throwIfAborted()
+                    const cancelled = new Promise<never>((_resolve, reject) => {
+                      abort = () => reject(activeSignal.reason)
+                      activeSignal.addEventListener('abort', abort, { once: true })
+                    })
+                    const operation = Promise.resolve().then(() => {
+                      activeSignal.throwIfAborted()
+                      return use(reader)
+                    })
+                    const result = await Promise.race([operation, cancelled])
+                    activeSignal.throwIfAborted()
+                    input.ownership.assertOwner()
+                    fencedInput.assertCurrent()
+                    return result
+                  } finally {
+                    if (abort) activeSignal.removeEventListener('abort', abort)
+                    try {
+                      await reader.close()
+                    } catch (error) {
+                      cleanupConfirmed = false
+                      workers.blockProfile(input.profileId)
+                      throw error
+                    }
+                  }
+                } finally {
+                  if (cleanupConfirmed) {
+                    try {
+                      finalizeFence = input.fence.prepareClear(input.profileId, operationId, () => { assertLocks(); input.assertAllWritersQuiescent() })
+                    } catch (error) {
+                      workers.blockProfile(input.profileId)
+                      throw error
+                    }
+                  }
+                }
+              }, guard)
+              operationReturned = true
+              operationResult = value
+              return value
             } finally {
-              if (abort) input.signal.removeEventListener('abort', abort)
-              try {
-                await reader.close()
-              } catch (error) {
-                cleanupConfirmed = false
+              try { locks.close() } catch (error) {
                 workers.blockProfile(input.profileId)
+                input.onCleanupFailure()
                 throw error
               }
             }
-          } finally {
-            if (cleanupConfirmed) {
-              try {
-                input.fence.clear(input.profileId, operationId, input.assertAllWritersQuiescent)
-              } catch (error) {
-                workers.blockProfile(input.profileId)
-                throw error
-              }
-            }
-          }
-        }, guard)
-      })
+          } catch (error) {
+            operationFailed = true
+            operationFailure = error
+            throw error
+          } finally { operationSettled = true }
+        })
+        void operationPromise.catch(() => {})
+        return operationPromise
+      }, activeSignal)
+      await settleAdapter()
+      if (!operationPromise || duplicateInvocation || violation.signal.aborted) throw new HostAuthorityError('unavailable')
+      if (operationFailed) { finishFence(); throw operationFailure }
+      if (!operationReturned || !Object.is(result, operationResult)) {
+        workers.blockProfile(input.profileId)
+        throw new HostAuthorityError('unavailable')
+      }
+      finishFence()
+      input.signal.throwIfAborted()
+      input.ownership.assertOwner()
+      input.assertCurrent()
+      return result
+    } catch (error) {
+      await settleAdapter()
+      if ((finalizeFence && (!operationFailed || error !== operationFailure))
+        || error instanceof RestrictedWriterExclusionCleanupError
+        || (typeof error === 'object' && error !== null && 'code' in error
+          && error.code === 'restricted_writer_exclusion_cleanup_unconfirmed')) workers.blockProfile(input.profileId)
+      finishFence()
+      throw error
     } finally {
       if (workers.isProfileBlocked(input.profileId)) extensions.blockProfile(input.profileId)
     }

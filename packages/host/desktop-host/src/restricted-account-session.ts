@@ -49,7 +49,7 @@ export class RestrictedAccountSessionService {
     readonly schemaGeneration: number
     readonly ownership: SingleHostLock
     readonly fence: RestrictedProfileFence
-    readonly withAllWritersExcluded: <R>(profileId: string, operation: () => Promise<R>) => Promise<R>
+    readonly withAllWritersExcluded: <R>(profileId: string, operation: () => Promise<R>, signal: AbortSignal) => Promise<R>
     readonly assertAllWritersQuiescent: (profileId: string) => void
     readonly workers: ProfileWorkerSupervisor
     readonly extensions: ProfileExtensionOperations
@@ -120,12 +120,8 @@ export class RestrictedAccountSessionService {
     const expectedProfileId = profile.profileId
     const expectedGeneration = profile.bindingGeneration
     const expectedKeyHandle = profile.keyHandle
-    let sessionLocks: ExistingSessionLockSet | undefined
     const assertCurrent = () => {
       signal.throwIfAborted()
-      if (sessionLocks) {
-        try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
-      }
       const current = authorize()
       if (current !== profile || current.kind !== 'account' || current.profileId !== expectedProfileId
         || current.bindingGeneration !== expectedGeneration || current.keyHandle !== expectedKeyHandle) {
@@ -153,20 +149,22 @@ export class RestrictedAccountSessionService {
         expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
         ownership: this.options.ownership, assertCurrent, signal,
         fence: this.options.fence,
-        withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, async () => {
+        withAllWritersExcluded: (operation, exclusionSignal) =>
+          this.options.withAllWritersExcluded(expectedProfileId, operation, exclusionSignal),
+        acquireSessionLocks: async exclusionSignal => {
           const current = await this.options.inspectPersistence(expectedProfileId)
-          if (!samePersistence(current, persistence)) {
-            throw new HostAuthorityError('recovery_preflight_stale')
-          }
+          exclusionSignal.throwIfAborted()
+          if (!samePersistence(current, persistence)) throw new HostAuthorityError('recovery_preflight_stale')
+          let locks: ExistingSessionLockSet
           try {
-            sessionLocks = await ExistingSessionLockSet.acquire(current.sessionDirectories, this.options.expectedUid, signal)
+            locks = await ExistingSessionLockSet.acquire(current.sessionDirectories, this.options.expectedUid, exclusionSignal)
           } catch (error) {
             if (error instanceof AggregateError) {
               this.options.workers.blockProfile(expectedProfileId)
               this.cleanupUnconfirmed = true
               this.options.onCleanupFailure()
             }
-            signal.throwIfAborted()
+            exclusionSignal.throwIfAborted()
             const code = (error as NodeJS.ErrnoException | undefined)?.code
             if (code === 'EAGAIN' || code === 'EWOULDBLOCK') throw new HostAuthorityError('busy')
             if (code === 'ENOENT') throw new HostAuthorityError('recovery_preflight_stale')
@@ -174,25 +172,21 @@ export class RestrictedAccountSessionService {
           }
           try {
             const locked = await this.options.inspectPersistence(expectedProfileId)
-            if (!samePersistence(locked, persistence)) {
-              throw new HostAuthorityError('recovery_preflight_stale')
-            }
+            exclusionSignal.throwIfAborted()
+            if (!samePersistence(locked, persistence)) throw new HostAuthorityError('recovery_preflight_stale')
             assertCurrent()
-            return await operation()
-          } finally {
-            try { sessionLocks.close() } catch (error) {
+            return locks
+          } catch (error) {
+            try { locks.close() } catch (cleanupError) {
               this.options.workers.blockProfile(expectedProfileId)
               this.cleanupUnconfirmed = true
               this.options.onCleanupFailure()
-              throw error
-            } finally { sessionLocks = undefined }
+              throw new AggregateError([error, cleanupError], 'session_lock_cleanup_unconfirmed')
+            }
+            throw error
           }
-        }),
-        assertAllWritersQuiescent: () => {
-          if (!sessionLocks) throw new HostAuthorityError('unavailable')
-          try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
-          this.options.assertAllWritersQuiescent(expectedProfileId)
         },
+        assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
         profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
         onCleanupFailure: () => { this.cleanupUnconfirmed = true; this.options.onCleanupFailure() },
       }, reader => reader.read(command, signal))

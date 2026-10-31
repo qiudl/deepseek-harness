@@ -89,6 +89,26 @@ export class RestrictedProfileFence {
     this.write({ ...current, state: 'cleared' })
   }
 
+  /**
+   * Check quiescence while writer exclusion is held, leaving the durable fence pending.
+   * The returned one-use closure must run only after the exclusion adapter releases successfully.
+   * @param profileId - The fenced Profile.
+   * @param operationId - The exact pending operation.
+   * @param assertQuiescent - Trusted check performed while exclusion is held.
+   * @returns A one-use finalizer that clears the same operation after guard release.
+   */
+  prepareClear(profileId: string, operationId: string, assertQuiescent: () => void): () => void {
+    this.assertOwned(profileId, operationId)
+    assertQuiescent()
+    let used = false
+    return () => {
+      if (used) throw new HostAuthorityError('stale')
+      this.assertOwned(profileId, operationId)
+      this.clear(profileId, operationId, () => {})
+      used = true
+    }
+  }
+
   private write(value: RecordValue): void {
     const path = this.path(value.profileId)
     replaceOwnerPrivateFile(this.root, path, 'restricted-fence', Buffer.from(JSON.stringify(value)))

@@ -699,6 +699,13 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Inspect this Host's in-memory cleanup block without consulting durable fences.
+   * @param profileId - Profile to inspect.
+   * @returns Whether this Host observed uncertain cleanup.
+   */
+  isLocallyBlocked(profileId: string): boolean { return this.blockedProfiles.has(profileId) }
+
+  /**
    * Check whether uncertain worker cleanup prevents another start for this Profile.
    * @param profileId - Host-resolved Profile.
    * @returns Whether its worker state is uncertain.

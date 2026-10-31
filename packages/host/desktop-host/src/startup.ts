@@ -228,7 +228,8 @@ export interface StartDesktopHostApplicationDependencies {
   readonly createServer?: (options: UnixHostServerOptions) => UnixHostServer
   /** Host-private composition boundary; this does not enable a control protocol or user entry. */
   readonly restrictedHistory?: {
-    readonly withAllWritersExcluded: <T>(profileId: string, operation: () => Promise<T>) => Promise<T>
+    /** Throw an error with code restricted_writer_exclusion_cleanup_unconfirmed if guard release cannot be confirmed. */
+    readonly withAllWritersExcluded: <T>(profileId: string, operation: () => Promise<T>, signal: AbortSignal) => Promise<T>
     readonly assertAllWritersQuiescent: (profileId: string) => void
     readonly createWorker?: ProfileWorkerFactory
     readonly onCleanupFailure: () => void

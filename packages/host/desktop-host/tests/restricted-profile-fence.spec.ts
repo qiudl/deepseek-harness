@@ -11,6 +11,21 @@ const profile = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3150'
 const other = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3151'
 
 describe('restricted Profile durable fence', () => {
+  it('keeps its fence pending until the checked guard has actually released', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-fence-deferred-'))
+    const lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-deferred' })
+    onTestFinished(async () => { await lock.release(); await rm(root, { recursive: true, force: true }) })
+    const fence = new RestrictedProfileFence(root, uid, lock)
+    const operation = fence.begin(profile)
+    expect(() => fence.prepareClear(profile, operation, () => { throw new Error('writer_alive') })).toThrow('writer_alive')
+    expect(fence.pending(profile)).toBe(operation)
+    const finalize = fence.prepareClear(profile, operation, () => {})
+    expect(new RestrictedProfileFence(root, uid, lock).pending(profile)).toBe(operation)
+    finalize()
+    expect(fence.pending(profile)).toBeUndefined()
+    expect(() => finalize()).toThrow('stale')
+  })
+
   it('survives reopening and requires exact operation and proven quiescence to clear', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-fence-'))
     let lock = await acquireSingleHostLock({ root, uid, pid: process.pid, processNonce: 'restricted-fence-test' })
