@@ -1056,6 +1056,29 @@ describe('offline Profile existing-only inspector', () => {
     expect(await readFile(sentinel, 'utf8')).toBe('existing')
   })
 
+  it.each(['owner-path', 'generation', 'compression', 'digest', 'count'] as const)(
+    'refuses inconsistent staging inputs before creating a private copy (%s)', async (fault) => {
+      const value = await bundledFixture()
+      const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+        processNonce: 'restricted-staging-input-fixture' })
+      onTestFinished(() => ownership.release())
+      const original = await value.target.inspectRestrictedPersistence()
+      const ownerPaths = fault === 'owner-path'
+        ? { ...value.ownerPaths, settingsPath: value.ownerPaths.credentialsPath } : value.ownerPaths
+      await expect(stageRestrictedProfile({ stagingParent: value.hostRoot, expectedUid: uid,
+        profileRoot: value.profileRoot, ownerPaths, persistence: value.persistence,
+        expectedPersistenceInventoryDigest: original.inventoryDigest,
+        inspectPersistence: async () => ({ ...original,
+          generation: fault === 'generation' ? original.generation + 1 : original.generation,
+          compression: fault === 'compression' ? 'zstd' : original.compression,
+          inventoryDigest: fault === 'digest' ? '0'.repeat(64) : original.inventoryDigest,
+          sessionCount: fault === 'count' ? -1 : original.sessionCount }),
+        ownership, assertCurrent: () => {}, signal: new AbortController().signal,
+      })).rejects.toMatchObject({ code: fault === 'owner-path' ? 'profile_integrity_failed' : 'recovery_preflight_stale' })
+      expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(false)
+    },
+  )
+
   it('retains the fence if staging fails and its private copy cannot be removed', async () => {
     const value = await bundledFixture()
     const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
@@ -1408,6 +1431,18 @@ describe('offline Profile existing-only inspector', () => {
       .resolves.toEqual({ items: [] })
     expect(writerBlockedDuringRead).toBe(true)
     expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('rejects a malformed account Profile identifier before starting a worker', async () => {
+    const value = await bundledFixture()
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker)
+    const record = { ...profile(), profileId: '../outside' as PersonProfileRecord['profileId'] }
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    expect(createWorker).not.toHaveBeenCalled()
   })
 
   it.each(['relative-root', 'relative-session', 'outside-session', 'duplicate-session', 'generation'] as const)(
