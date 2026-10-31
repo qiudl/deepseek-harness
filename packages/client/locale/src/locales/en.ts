@@ -34,6 +34,8 @@ export const en = {
   'expand': 'Expand',
   'back': 'Back',
   'brand.localBuild': 'DSH Local Build',
+  'mobile.openNavigation': 'Open navigation',
+  'mobile.closeNavigation': 'Close navigation',
   'mobile.navigation': 'Mobile navigation',
   'mobile.conversations': 'Conversations',
   'mobile.chat': 'Chat',

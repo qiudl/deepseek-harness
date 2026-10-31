@@ -233,7 +233,7 @@ describe('authenticated Unix transport', () => {
     createMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationExport']>,
     createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
-    now: () => number = clock.now,
+    now: (() => number) | null = clock.now,
     offlineRecovery = true,
     createSkillHubPackageStore?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createSkillHubPackageStore']>,
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
@@ -264,7 +264,8 @@ describe('authenticated Unix transport', () => {
     const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
     const server = new UnixHostServer({
       socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
-      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host,
+      ...(now === null ? {} : { now }),
       profilePersistenceGeneration: () => 1,
       ...(createSkillHubPackageStore === undefined ? {} : { createSkillHubPackageStore }),
       ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
@@ -609,6 +610,80 @@ describe('authenticated Unix transport', () => {
         .rejects.toThrow()
       Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.status' }))
       await expect(owner.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unavailable' })
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
+  })
+
+  it('signs one exact private Bot message actor with the current installation and Profile grant', async () => {
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, null)
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: Date.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-bot', unlockMaterial })
+      const actor = {
+        actor_user_id: 'actor-a', environment_id: 'staging',
+        person_profile_id: randomUUID(), workspace_id: randomUUID(), identity_id: randomUUID(),
+        user_auth_version: 7, identity_epoch: 8, profile_epoch: 9, workspace_epoch: 10,
+        runtime_lease_id: randomUUID(), assignment_id: randomUUID(), assignment_generation: 11,
+        selection_publication_version: 12, grant_id: randomUUID(), computer_id: 'computer-1',
+        connection_id: 'connection-1', target_project_id: 'project-1', policy_id: 'policy-1',
+        policy_epoch: 13, policy_digest: 'a'.repeat(64), session_id: 'session-1',
+        call_id: 'call-1', root_call_id: 'root-call-1', source_message_id: 'message-1',
+        binding_id: 'binding-1', bot_id: 'bot-1', room_id: null,
+        logical_operation_key: 'operation-1', request_digest: 'b'.repeat(64),
+      } as const
+      const beforeIssuedAt = Date.now()
+      const proof = await owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor })
+      const afterIssuedAt = Date.now()
+      const hostKeyId = createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex')
+      expect(proof.claims.token_id).toMatch(/^[0-9a-f-]{36}$/u)
+      expect(proof.claims).toMatchObject({
+        ...actor, issuer: 'slark-dsh-host',
+        host_installation_id: identity.installationId, host_profile_id: local.profileId,
+        host_binding_generation: 1, host_key_id: hostKeyId,
+        source_principal: { kind: 'human', id: actor.actor_user_id },
+      })
+      expect(proof.claims.issued_at).toBeGreaterThanOrEqual(beforeIssuedAt)
+      expect(proof.claims.issued_at).toBeLessThanOrEqual(afterIssuedAt)
+      expect(proof.claims.expires_at).toBe(proof.claims.issued_at + 30_000)
+      const [header, payload, signature] = proof.compactJws.split('.')
+      expect(verify(null, Buffer.from(`${header}.${payload}`), keys.publicKey,
+        Buffer.from(signature as string, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const originalInspection = owner.inspection
+      Reflect.set(owner, 'inspection', { ...originalInspection,
+        capabilities: originalInspection.capabilities.filter(value =>
+          value !== 'profile.skillhub_bot_message_actor') })
+      await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'upgrade_required' })
+      Reflect.set(owner, 'inspection', originalInspection)
+      for (const response of [
+        { version: 1, type: 'result', method: 'profile.status', result: {} },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'e30.e30' } },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'A.e30.AA' } },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'eA.e30.AA' } },
+      ]) {
+        Reflect.set(owner, 'call', async () => response)
+        await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      }
+      Reflect.set(owner, 'call', async () => ({ version: 1, type: 'result',
+        method: 'profile.skillhub_bot_message_actor',
+        result: { compact_jws: `${header}.${payload}.${'A'.repeat(86)}` } }))
+      await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
     } finally {
       owner.close()
       other.close()

@@ -44,6 +44,8 @@ Windows 客户端使用私有文件 Worker，在发送 Host 帧前证明已连�
 
 Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路径，保留安装目录中的 Unicode、空格、百分号和井号字符。
 
+Windows Host 启动通过共享的 Host control authority 处理已验证的管道会话。获得 Account 授权后，`profile.collaboration_registration` 使用安装密钥返回与已检查的 Host 进程绑定的签名断言；客户端验证签名后才接受断言。
+
 客户端取消逻辑会接管启动取消后才移交的线程句柄。取消重试预算耗尽时，父线程继续持有该句柄，直到 Worker 后续正常或异常退出，确认可以关闭；预算耗尽不代表已经停止。
 
 `UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接，在任一连接重新打开该 Profile 后仍保有自己的 view lease；租约过期、连接断开和 Profile 撤销仍会使相应租约失效。
@@ -254,6 +256,8 @@ MCP 操作先以排他创建方式持久保存私有备份，再记录检查点�
 插件启停变更持久保存原操作持有的私有配置备份及检查点，绑定包名、备份摘要、变更前后依赖状态修订和阶段。未知启停回执通过 `plugin_restore` 返回包名。插件准备载荷 `{ action: "restore-toggle", operationId }` 创建新的确认恢复操作。Host 仅接受记录的变更前后状态，核验替换原配置后精确得到变更前修订，并从已安装组合包重建原启用和停用条目的运行时预期。清单、锁文件、策略文件或覆盖配置变化时拒绝恢复；备份缺失、被修改或权限公开时也拒绝。恢复保留原文件缺失状态，不调用包管理器，并确认原 worker 状态。历史结果保持不变，通过成功恢复回执关联。备份随证据保留。本操作仅恢复启停配置，安装、更新和卸载的部分变更仍保持未知。
 
 插件包操作在调用命令执行器前持久保存不可变的安装、更新或卸载意图。证据包含精确请求来源、原依赖引用摘要、无关清单/策略/覆盖配置状态摘要、原移除条目 ID 和单调推进的阶段。操作类型和阶段字段必须为字符串；数组和对象不会被强制转换，而是直接拒绝。回执不保存原依赖引用或配置正文。私有回执读写均限制为 64 KiB，以容纳有界的组合包移除 ID。带证据的原未知回执可声明 `plugin_complete`，通过独立确认的 `{ action: "complete-package", operationId }` 计划继续执行。计划绑定包含锁文件的当前修订及原意图摘要，不接受客户端替换来源。
+
+POSIX Host 对内置 ds-bot 0.2.16 的更新会保留共享 Web 配置，并在修改文件前为已安装的插件文件创建快照。回执将历史包身份和归档摘要绑定到原依赖，并记录私有插件快照及迁移前后配置备份的摘要。更新失败时尝试恢复归档、插件快照和原配置，然后确认运行时；恢复未完成或中断时状态保持未知，需要单独确认后继续。配置或备份内容发生变化时拒绝恢复。
 
 继续执行保留无关依赖声明、组合包顺序、策略文件及覆盖配置，仅接受目标缺失、目标匹配原依赖摘要或目标匹配精确请求引用。无关变更使准备失败，命令结束后还会再次核验。命令中断可能合法改变依赖解析，因此部分锁文件变更不纳入无关状态摘要；确认和提交仍绑定完整当前锁文件修订。安装和更新使用原固定来源重新执行 add，并禁用生命周期脚本。卸载时若依赖仍存在则重新执行 remove；依赖已缺失时，用固定 CLI 命令 `plugin --profile web install --no-frozen-lockfile --ignore-scripts` 按当前清单修复依赖树，随后 Host 仅清理原目标的残留组合包登记和独立启停覆盖。必须通过运行时确认和最终修订稳定性核验。再次中断仍保持未知，需要再次显式确认。
 

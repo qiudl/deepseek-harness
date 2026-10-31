@@ -108,6 +108,8 @@ Send 和 Stop 按钮禁用时不显示提示气泡，轮次结束后由 Stop 切
 
 会话级扩展通过 `conversation.input.toolbar` 在工作区和 Agent 预设旁贡献紧凑控件。此行在空白对话中位于输入框上方；已有对话仅在扩展贡献工具栏入口时显示此行。较大的状态内容继续使用 `conversation.input.dock`。
 
+当前普通会话标题提供一个可选 `conversation.session.header.title` slot。业务方可用身份切换器占用它；默认标题仍作为回退。它只替换该标题，保留共用操作、工具入口与 View 页签。祖先与子代理层级仍使用各自原有 slot。首条消息前仍提供此 slot，此时 `displayTitle` 为空且没有默认回退；业务切换器可保持可见，普通空会话 chrome 仍隐藏。
+
 <a id="temporary-composer-entries"></a>
 ## 临时 composer entry
 

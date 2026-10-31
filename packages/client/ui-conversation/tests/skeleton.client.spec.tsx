@@ -139,6 +139,8 @@ function mount(
     /** A composer block another plugin raised for this session. */
     composerBlock?: { reason: string }
     inputToolbar?: boolean
+    /** Domain-owned current ordinary-Session title. */
+    headerTitle?: ReactNode
     /** Mutable view ledger used by registration-order regressions. */
     viewTabs?: ViewTab[]
   } = {},
@@ -200,6 +202,7 @@ function mount(
       seatOwners.push({ key, owner })
     }
     if (key === 'conversation.hero.workspace') { pickerOwner = owner; return null }
+    if (key === 'conversation.session.header.title') return options.headerTitle ?? opts?.fallback ?? null
     if (key === 'conversation.session.header.lineage') {
       lineageOwners.push(owner as ConversationHeaderLineageOwnerProps)
       return opts?.fallback ?? null
@@ -494,6 +497,26 @@ describe('ConversationRoot resident composer', () => {
     expect(b.view.getByText('Child').tagName).toBe('SPAN')
     fireEvent.click(root)
     expect(b.open).toHaveBeenCalledWith(sid('root'))
+  })
+
+  it('lets the current ordinary Session replace its title without duplicating it or replacing view navigation', () => {
+    const b = mount(sessionSnapshotOf(), undefined, undefined, {
+      headerTitle: <select aria-label="Switch Bot"><option>Chief</option></select>,
+    })
+    expect(b.view.getByRole('combobox', { name: 'Switch Bot' })).toBeDefined()
+    expect(b.view.queryByText('Child')).toBeNull()
+    expect(b.slotCalls).toContain('conversation.session.header.actions')
+    expect(b.slotCalls).toContain('conversation.session.header.utilities')
+  })
+
+  it('retains a domain identity switcher before the first Bot message', () => {
+    const b = mount(sessionSnapshotOf({ blank: true }), undefined, undefined, {
+      summaryBlank: true,
+      headerTitle: <select aria-label="Switch Bot"><option>Chief</option></select>,
+    })
+    expect(b.view.getByRole('combobox', { name: 'Switch Bot' })).toBeDefined()
+    expect(b.slotCalls).not.toContain('conversation.session.header.actions')
+    expect(b.view.queryByText('Child')).toBeNull()
   })
 
   it('keeps intermediate subagent breadcrumbs at the compact title size', () => {
