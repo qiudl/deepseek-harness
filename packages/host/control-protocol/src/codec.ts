@@ -1,5 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.ts'
+import { parseHostFriendBotConfirmationChallenge, parseHostFriendBotConfirmationAssertion } from './friend-bot-confirmation.ts'
+import { parseHostFriendBotEnrollmentChallenge, parseHostFriendBotEnrollmentAssertion } from './friend-bot-enrollment.ts'
 import { parseHostBotGroupDeliveryInput, parseHostBotGroupResponse } from './bot-group.ts'
 import { parseHostBotGroupResultProof } from './bot-group-result-proof.ts'
 import { parseWorkbenchCredentialWrite } from './workbench-credentials.js'
@@ -104,6 +106,8 @@ import type {
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileFriendBotConfirmationRequest, ProfileFriendBotConfirmationResult,
+  ProfileFriendBotEnrollmentRequest, ProfileFriendBotEnrollmentResult,
   ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
   ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
   ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult,
@@ -1843,6 +1847,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
   | ProfileBotIdentityRequest
+  | ProfileFriendBotConfirmationRequest
+  | ProfileFriendBotEnrollmentRequest
   | ProfileBotGroupDeliverRequest
   | ProfileBotGroupResultPageRequest
   | ProfileBotGroupResultAckRequest
@@ -2604,6 +2610,22 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityRequest
   }
+  if (frame.method === 'profile.friend_bot_confirmation') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      challenge: parseHostFriendBotConfirmationChallenge(params.challenge),
+    } } satisfies ProfileFriendBotConfirmationRequest
+  }
+  if (frame.method === 'profile.friend_bot_enrollment') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'challenge'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      challenge: parseHostFriendBotEnrollmentChallenge(params.challenge),
+    } } satisfies ProfileFriendBotEnrollmentRequest
+  }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'computer_id',
@@ -2682,6 +2704,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileImportPrepareResult | ProfileImportCommitResult | ProfileImportAbortResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityResult
+  | ProfileFriendBotConfirmationResult
+  | ProfileFriendBotEnrollmentResult
   | ProfileBotGroupDeliverResult
   | ProfileBotGroupResultPageResult
   | ProfileBotGroupResultAckResult
@@ -3162,6 +3186,14 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
+  }
+  if (frame.method === 'profile.friend_bot_confirmation') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostFriendBotConfirmationAssertion(result) } satisfies ProfileFriendBotConfirmationResult
+  }
+  if (frame.method === 'profile.friend_bot_enrollment') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostFriendBotEnrollmentAssertion(result) } satisfies ProfileFriendBotEnrollmentResult
   }
   if (frame.method === 'profile.bot_group_deliver') {
     exactKeys(result, ['reply'])

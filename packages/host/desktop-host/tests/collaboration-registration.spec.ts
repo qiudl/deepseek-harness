@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostCollaborationRegistrationSignaturePayload,
-  encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
+  encodeHostBotGroupResultProofPayload, decodeHostControlFrame, encodeHostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
@@ -12,6 +12,7 @@ import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
+import { friendBotChallengeFixture } from '../../control-protocol/tests/friend-bot-confirmation-fixture.ts'
 
 async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
@@ -72,6 +73,151 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+function friendConfirmationInput(f: Awaited<ReturnType<typeof fixture>>) {
+  const challenge = { ...friendBotChallengeFixture(), owner_user_id: f.ownerId,
+    account_issuer: f.account.issuer, account_subject: f.account.subject,
+    binding_id: f.account.accountBindingHandle,
+    binding_epoch: String(f.account.authorityBindingVersion), bot_id: f.bot.bot_id,
+    host_installation_id: f.identity.installationId,
+    host_public_key: f.identity.installationPublicKey,
+    host_instance_id: f.identity.hostInstanceId, process_nonce: f.identity.processNonce,
+    display_name_digest: createHash('sha256').update(f.bot.display_name, 'utf8').digest('hex'),
+    issued_at: f.time.value, expires_at: f.time.value + 10_000 }
+  return { ...f.account, challenge }
+}
+
+function friendEnrollmentInput(f: Awaited<ReturnType<typeof fixture>>) {
+  const c = friendConfirmationInput(f).challenge
+  const challenge = { schema_version:1 as const,operation:'register_bot' as const,
+    environment_id:c.environment_id,authority_environment_id:f.account.authorityEnvironmentId,
+    request_id:randomUUID(),owner_user_id:c.owner_user_id,
+    account_issuer:c.account_issuer,account_subject:c.account_subject,
+    profile_id:c.profile_id,profile_epoch:c.profile_epoch,
+    identity_id:c.identity_id,identity_epoch:c.identity_epoch,
+    binding_id:c.binding_id,binding_epoch:c.binding_epoch,
+    computer_id:c.computer_id,computer_installation_id:c.computer_installation_id,
+    computer_authorization_version:c.computer_authorization_version,
+    host_installation_id:c.host_installation_id,host_public_key:c.host_public_key,
+    host_instance_id:c.host_instance_id,process_nonce:c.process_nonce,
+    connection_id:c.connection_id,bot_id:c.bot_id,
+    issued_at:c.issued_at,expires_at:c.expires_at,nonce:c.nonce }
+  return { ...f.account,challenge }
+}
+
+it('returns a friend Bot enrollment proof through the authenticated strict wire codec',async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendEnrollmentInput(f)
+  const assertion = await f.client.attestFriendBotEnrollment(input)
+  expect(assertion.challenge).toEqual(input.challenge)
+  expect(assertion.display_name).toBe(f.bot.display_name)
+  const request = f.seen.at(-1)!
+  expect(request.method).toBe('profile.friend_bot_enrollment')
+  expect(JSON.stringify(request)).not.toContain(f.account.keyHandle)
+  expect(JSON.stringify(request)).not.toContain(f.account.unlockMaterial)
+  expect(decodeHostControlFrame(encodeHostControlFrame(request))).toEqual(request)
+  const result = { version:1 as const,type:'result' as const,request_id:request.request_id,
+    method:'profile.friend_bot_enrollment' as const,result:assertion }
+  expect(decodeHostControlFrame(encodeHostControlFrame(result))).toEqual(result)
+  expect(await f.session.handleRequest(request)).toMatchObject({ type:'error',error:{ code:'replayed' } })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_bot_enrollment'
+    ? { ...frame,result:{ ...frame.result,display_name:'Forged Bot' } } : frame)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f))).rejects.toThrow()
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.friend_bot_enrollment')
+  expect(Reflect.set(f.client.inspection,'capabilities',capabilities)).toBe(true)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f)))
+    .rejects.toMatchObject({ code:'upgrade_required' })
+})
+
+it('rejects a mismatched enrollment response and an unavailable Bot signer', async () => {
+  const f = await fixture(); await f.grant()
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.friend_bot_enrollment'
+    ? { ...frame, method: 'profile.friend_bot_confirmation' } as never : frame)
+  await expect(f.client.attestFriendBotEnrollment(friendEnrollmentInput(f)))
+    .rejects.toMatchObject({ code: 'unavailable' })
+
+  const noResolver = await fixture(false); await noResolver.grant()
+  expect(Reflect.set(noResolver.client.inspection, 'capabilities',
+    [...noResolver.client.inspection.capabilities, 'profile.friend_bot_enrollment'])).toBe(true)
+  await expect(noResolver.client.attestFriendBotEnrollment(friendEnrollmentInput(noResolver)))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('returns a friend Bot proof through the authenticated control connection and strict wire codec', async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendConfirmationInput(f)
+  const assertion = await f.client.attestFriendBotConfirmation(input)
+  expect(assertion.challenge).toEqual(input.challenge)
+  const request = f.seen.at(-1)!
+  expect(request.method).toBe('profile.friend_bot_confirmation')
+  expect(JSON.stringify(request)).not.toContain(f.account.keyHandle)
+  expect(JSON.stringify(request)).not.toContain(f.account.unlockMaterial)
+  expect(decodeHostControlFrame(encodeHostControlFrame(request))).toEqual(request)
+  const result = { version: 1 as const, type: 'result' as const, request_id: request.request_id,
+    method: 'profile.friend_bot_confirmation' as const, result: assertion }
+  expect(decodeHostControlFrame(encodeHostControlFrame(result))).toEqual(result)
+  expect(await f.session.handleRequest(request)).toMatchObject({ type: 'error', error: { code: 'replayed' } })
+  expect(() => encodeHostControlFrame({ ...request,
+    params: { ...('params' in request ? request.params : {}), challenge: { ...input.challenge, extra: true } },
+  } as never)).toThrow()
+})
+
+it('requires the current Account grant, selected Bot and negotiated friend capability', async () => {
+  const f = await fixture()
+  const input = friendConfirmationInput(f)
+  await expect(f.client.attestFriendBotConfirmation(input)).rejects.toThrow()
+  await f.grant()
+  await expect(f.client.attestFriendBotConfirmation({ ...input,
+    challenge: { ...input.challenge, owner_user_id: randomUUID() } })).rejects.toThrow()
+  f.setBotResolver(async () => null)
+  await expect(f.client.attestFriendBotConfirmation(input)).rejects.toThrow()
+  f.setBotResolver(async () => f.bot)
+  await expect(f.client.attestFriendBotConfirmation({ ...input,
+    accountBindingHandle: 'another-binding' })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.friend_bot_confirmation')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  const before = f.seen.length
+  await expect(f.client.attestFriendBotConfirmation(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+  const noResolver = await fixture(false); await noResolver.grant()
+  expect(Reflect.set(noResolver.client.inspection, 'capabilities',
+    [...noResolver.client.inspection.capabilities, 'profile.friend_bot_confirmation'])).toBe(true)
+  await expect(noResolver.client.attestFriendBotConfirmation(friendConfirmationInput(noResolver)))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('rejects altered friend proofs and cancellation at the client', async () => {
+  const f = await fixture(); await f.grant()
+  const input = friendConfirmationInput(f)
+  for (const mode of ['signature', 'challenge', 'process'] as const) {
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.friend_bot_confirmation') return frame
+      const assertion = mode === 'signature' ? { ...frame.result, signature: 'A'.repeat(86) }
+        : { ...frame.result, challenge: { ...frame.result.challenge,
+          ...(mode === 'challenge' ? { nonce: Buffer.alloc(32, 9).toString('base64url') } :
+            { host_instance_id: randomUUID() }) } }
+      return { ...frame, result: assertion }
+    })
+    await expect(f.client.attestFriendBotConfirmation(input)).rejects.toThrow()
+  }
+  f.alter(undefined)
+  const cancellation = new AbortController(); cancellation.abort()
+  await expect(f.client.attestFriendBotConfirmation({ ...input,
+    signal: cancellation.signal })).rejects.toThrow()
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.friend_bot_confirmation') f.time.value = Number.NaN
+    return frame
+  })
+  await expect(f.client.attestFriendBotConfirmation(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  f.time.value = input.challenge.issued_at
+  f.alter((frame) => {
+    if (frame.type === 'result' && frame.method === 'profile.friend_bot_confirmation')
+      f.time.value = input.challenge.expires_at
+    return frame
+  })
+  await expect(f.client.attestFriendBotConfirmation(input)).rejects.toMatchObject({ code: 'unauthorized' })
+})
 
 it('resolves an exact Bot only in the currently verified Account Profile', async () => {
   const f = await fixture()

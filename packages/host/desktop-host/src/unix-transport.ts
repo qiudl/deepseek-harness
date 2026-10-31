@@ -2,6 +2,16 @@ import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-p
 import { parseHostBotIdentity, parseHostBotIdentityTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, ProfileBotIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity } from './account-bot-identity.ts'
+import { signAccountFriendBotConfirmation } from './account-friend-bot-confirmation.ts'
+import { signAccountFriendBotEnrollment } from './account-friend-bot-enrollment.ts'
+import { encodeHostFriendBotConfirmationPayload, parseHostFriendBotConfirmationAssertion,
+  parseHostFriendBotConfirmationChallenge,
+  type HostFriendBotConfirmationChallenge, type HostFriendBotConfirmationAssertion,
+  type ProfileFriendBotConfirmationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { encodeHostFriendBotEnrollmentPayload, parseHostFriendBotEnrollmentAssertion,
+  parseHostFriendBotEnrollmentChallenge,
+  type HostFriendBotEnrollmentChallenge, type HostFriendBotEnrollmentAssertion,
+  type ProfileFriendBotEnrollmentRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
   acknowledgeAccountBotGroupResult } from './account-bot-group-delivery.ts'
 import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
@@ -2566,6 +2576,26 @@ export class HostControlAuthority {
             this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.friend_bot_confirmation' ||
+          frame.method === 'profile.friend_bot_enrollment') {
+          const resolve = this.options.resolveBotIdentity
+          if (!resolve) throw new HostAuthorityError('upgrade_required')
+          const signing = {
+            host: this.options.host, workers: { resolveBotIdentity: resolve },
+            account: commandReadAccount(frame.params, ownerId),
+            identity: this.options.identity, signal: context.signal, now: clock,
+          }
+          if (frame.method === 'profile.friend_bot_confirmation') {
+            const result = await signAccountFriendBotConfirmation({
+              ...signing, challenge: frame.params.challenge })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result })
+          } else {
+            const result = await signAccountFriendBotEnrollment({
+              ...signing, challenge: frame.params.challenge })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result })
+          }
         } else if (frame.method === 'profile.bot_group_deliver' ||
           frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
           const operate = this.options.operateBotGroup
@@ -2742,7 +2772,8 @@ export class HostControlAuthority {
             ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
               'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
-          ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
+          ...(this.options.resolveBotIdentity ? ['profile.bot_identity',
+            'profile.friend_bot_confirmation', 'profile.friend_bot_enrollment'] : []),
           ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
               'profile.bot_group_result_ack'] : []),
@@ -4613,6 +4644,110 @@ export class UnixHostClient {
     return identity
   }
 
+  private assertFriendBotBinding(
+    input: {
+      accountBindingHandle: string
+      authorityBindingVersion: number
+      issuer: string
+      subject: string
+    },
+    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
+  ): void {
+    if (challenge.binding_id !== input.accountBindingHandle ||
+      challenge.binding_epoch !== String(input.authorityBindingVersion) ||
+      challenge.account_issuer !== input.issuer || challenge.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+  }
+
+  private assertFriendBotAssertion(
+    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
+    assertion: { challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge
+      signature: string },
+    payload: Uint8Array,
+  ): void {
+    const now = this.now()
+    if (JSON.stringify(assertion.challenge) !== JSON.stringify(challenge) ||
+      assertion.challenge.host_installation_id !== this.inspection.installation_id ||
+      assertion.challenge.host_public_key !== this.inspection.installation_public_key ||
+      assertion.challenge.host_instance_id !== this.inspection.host_instance_id ||
+      assertion.challenge.process_nonce !== this.inspection.process_nonce ||
+      !Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
+      !verify(null, payload, publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(assertion.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+  }
+
+  private async requestFriendBotAssertion(
+    request: ProfileFriendBotConfirmationRequest | ProfileFriendBotEnrollmentRequest,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Request one current Bot signature and verify it against this authenticated Host peer.
+   * @param input - Current Account binding, exact Slark challenge and cancellation.
+   * @returns Signed assertion; Slark still consumes the challenge and checks both Bots online.
+   */
+  async attestFriendBotConfirmation(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly challenge: HostFriendBotConfirmationChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostFriendBotConfirmationAssertion> {
+    input.signal?.throwIfAborted()
+    const challenge = parseHostFriendBotConfirmationChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.friend_bot_confirmation' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    this.assertFriendBotBinding(input, challenge)
+    const request: ProfileFriendBotConfirmationRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_confirmation',
+      params: { ...this.collaborationAccountRequestParams(input), challenge },
+    }
+    const assertion = parseHostFriendBotConfirmationAssertion(
+      await this.requestFriendBotAssertion(request, input.signal))
+    this.assertFriendBotAssertion(challenge, assertion,
+      encodeHostFriendBotConfirmationPayload(challenge))
+    return assertion
+  }
+
+  /**
+   * Read and sign one current Account Bot for Slark's one-use enrollment challenge.
+   * @param input - Current Account binding, exact challenge and cancellation.
+   * @returns Signed assertion for Slark to verify against the current Host.
+   */
+  async attestFriendBotEnrollment(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly challenge: HostFriendBotEnrollmentChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostFriendBotEnrollmentAssertion> {
+    input.signal?.throwIfAborted()
+    const challenge = parseHostFriendBotEnrollmentChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.friend_bot_enrollment' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    this.assertFriendBotBinding(input, challenge)
+    const request: ProfileFriendBotEnrollmentRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_enrollment',
+      params: { ...this.collaborationAccountRequestParams(input), challenge },
+    }
+    const assertion = parseHostFriendBotEnrollmentAssertion(
+      await this.requestFriendBotAssertion(request, input.signal))
+    this.assertFriendBotAssertion(challenge, assertion,
+      encodeHostFriendBotEnrollmentPayload(assertion))
+    return assertion
+  }
+
   /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
   private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest | ProfileBotGroupResultAckRequest,
     signal?: AbortSignal): Promise<HostBotGroupResponse> {
@@ -5604,7 +5739,8 @@ export class UnixHostClient {
       | ProfileImportStatusRequest
       | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest | ProfileCollaborationRegistrationRequest
-      | ProfileBotIdentityRequest | ProfileBotGroupDeliverRequest
+      | ProfileBotIdentityRequest | ProfileFriendBotConfirmationRequest
+      | ProfileFriendBotEnrollmentRequest | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest
   | ProfileWorkspaceAuthorityRequest

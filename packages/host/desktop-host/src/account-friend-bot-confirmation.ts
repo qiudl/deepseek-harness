@@ -1,30 +1,12 @@
 /** REQ-20261028-0025: sign one current Account Bot for a friend-only Slark challenge. */
-import { createHash, createPrivateKey, sign, type KeyObject } from 'node:crypto'
+import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { encodeHostFriendBotConfirmationPayload,
   parseHostFriendBotConfirmationAssertion, parseHostFriendBotConfirmationChallenge,
   type HostFriendBotConfirmationAssertion,
   type HostFriendBotConfirmationChallenge } from '@deepseek-ai/dsh-host-control-protocol'
-import { resolveAccountBotIdentity, type BotIdentityAccount } from './account-bot-identity.ts'
-import type { DesktopHost } from './desktop-host.ts'
-import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { resolveAccountBotIdentity, type FriendBotSigningInput } from './account-bot-identity.ts'
 import { HostAuthorityError } from './types.ts'
 
-interface SigningIdentity {
-  readonly installationId: string
-  readonly installationPublicKey: string
-  readonly hostInstanceId: string
-  readonly processNonce: string
-  readonly installationPrivateKey: KeyObject | string | Buffer
-}
-interface SigningInput {
-  readonly host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
-  readonly workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>
-  readonly account: BotIdentityAccount
-  readonly challenge: HostFriendBotConfirmationChallenge
-  readonly identity: SigningIdentity
-  readonly signal: AbortSignal
-  readonly now: () => number
-}
 const unavailable = (): never => { throw new HostAuthorityError('profile_mismatch') }
 /**
  * Sign the current Account Bot only after a trusted Profile worker confirms its identity.
@@ -32,18 +14,29 @@ const unavailable = (): never => { throw new HostAuthorityError('profile_mismatc
  * @param input - Current Host authority, Account grant, challenged Bot and installation key.
  * @returns Signed assertion for Slark to verify against its current server state.
  */
-export async function signAccountFriendBotConfirmation(input: SigningInput): Promise<HostFriendBotConfirmationAssertion> {
+export async function signAccountFriendBotConfirmation(
+  input: FriendBotSigningInput<HostFriendBotConfirmationChallenge>,
+): Promise<HostFriendBotConfirmationAssertion> {
   input.signal.throwIfAborted()
   const c = parseHostFriendBotConfirmationChallenge(input.challenge)
   const { account, identity } = input
   const currentTime = input.now()
-  if (!Number.isSafeInteger(currentTime) || currentTime < c.issued_at || currentTime >= c.expires_at ||
-    c.owner_user_id !== account.ownerId || c.binding_id !== account.accountBindingHandle ||
-    c.binding_epoch !== String(account.authorityBindingVersion) ||
-    c.account_issuer !== account.issuer || c.account_subject !== account.subject ||
-    c.host_installation_id !== identity.installationId ||
-    c.host_public_key !== identity.installationPublicKey ||
-    c.host_instance_id !== identity.hostInstanceId || c.process_nonce !== identity.processNonce)
+  const withinChallenge = Number.isSafeInteger(currentTime) &&
+    currentTime >= c.issued_at && currentTime < c.expires_at
+  const boundToAccount = [
+    [c.owner_user_id, account.ownerId],
+    [c.binding_id, account.accountBindingHandle],
+    [c.binding_epoch, String(account.authorityBindingVersion)],
+    [c.account_issuer, account.issuer],
+    [c.account_subject, account.subject],
+  ].every(([actual, expected]) => actual === expected)
+  const boundToHost = [
+    [c.host_installation_id, identity.installationId],
+    [c.host_public_key, identity.installationPublicKey],
+    [c.host_instance_id, identity.hostInstanceId],
+    [c.process_nonce, identity.processNonce],
+  ].every(([actual, expected]) => actual === expected)
+  if (!withinChallenge || !boundToAccount || !boundToHost)
     return unavailable()
   input.host.authorizeCollaborationRegistration(account)
   const profileId = input.host.authorizeAccountModelText(account)
