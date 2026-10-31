@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/reports/step2-phase2-decisions.md
 /step2-phase-2-recommended-decisions:
-  en: 883028a3729ab1aa
-  zh: c114036f8c4b70a3
+  en: 4a365761ab97958d
+  zh: d7bcb1e2fce39a4b
 /step2-phase-2-recommended-decisions/1-named-session-identity:
   en: 0c1ebe73c96a02c6
   zh: 9d5590c265439c97

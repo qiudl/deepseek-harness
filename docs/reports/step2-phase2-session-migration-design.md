@@ -2,13 +2,15 @@
 
 English | [中文](step2-phase2-session-migration-design.zh.md)
 
+Exact commit identifiers for the labels are recorded in `~/coding/logs/step2-commit-identifiers.md`.
+
 ## Summary
 
-This proposed design integrates fork commit `727d4318` with upstream `dsh-v0.2.2-alpha.2` (`f3803c9697`). It is a review artifact, not an implemented compatibility guarantee. The implementation must preserve fork Host authority and collaboration behavior while adopting the upstream Agent-owned model and Session creation changes.
+This proposed design integrates fork commit `fork-baseline` with upstream `dsh-v0.2.2-alpha.2` (`upstream-tag-commit`). It is a review artifact, not an implemented compatibility guarantee. The implementation must preserve fork Host authority and collaboration behavior while adopting the upstream Agent-owned model and Session creation changes.
 
 ## Evidence and current call paths
 
-Fork references below name files at `727d4318`; upstream references name files at tag `dsh-v0.2.2-alpha.2`. Line numbers refer to those revisions, not a future merge.
+Fork references below name files at `fork-baseline`; upstream references name files at tag `dsh-v0.2.2-alpha.2`. Line numbers refer to those revisions, not a future merge.
 
 Fork creation: `packages/api/session-controller/src/commands.ts:108` validates placement and requires a workspace for dedicated collaboration, chooses an identity, and calls `agent.ts:240` `ensureSession`. The latter shares an in-flight creation for the same identity, rejects subagent ownership, mismatched preset or cwd, and returns that identity. The command attaches it to the workspace before marking dedicated collaboration (`commands.ts:137` and `:148`); attachment failure reports the identity already created.
 

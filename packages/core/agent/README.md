@@ -154,9 +154,7 @@ Accepted history and steering are append-only; a blocked submission sends no req
 
 #### What the model sees
 
-The live `Agent.model` records an explicit choice in its Session and reconstructs it from the model-selection projection after resume. The Agent driver installs the selection for prompt assembly and request routing.
-
-Registrations through `agent.ctx` can shadow prompt sections or tools and can install agent-only interceptors during unpublished setup, so one agent sees a different prompt and tool set than its neighbors. Model selection captures one provider/model/effort value before prompt assembly and applies it to the same step's request; a later concurrent change waits for another step.
+The live `Agent.model` records an explicit choice in its Session and reconstructs it from the model-selection projection after resume. The Agent driver installs the selection for prompt assembly and request routing. Registrations through `agent.ctx` can shadow prompt sections or tools and can install agent-only interceptors during unpublished setup, so one agent sees a different prompt and tool set than its neighbors. Model selection captures one provider/model/effort value before prompt assembly and applies it to the same step's request; a later concurrent change waits for another step.
 
 #### Token effect
 

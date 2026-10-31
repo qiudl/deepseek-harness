@@ -63,6 +63,8 @@ interface Agent {
   readonly id: SessionId
   /** The provider route and model this agent's requests use. */
   readonly options: AgentOptions
+  /** Session-backed model selection used by this Agent. */
+  readonly model: AgentModel
   /** The live session this agent drives; its log is the durable source of truth. */
   readonly session: Session
   /** Agent-owned access to durable pending work. */

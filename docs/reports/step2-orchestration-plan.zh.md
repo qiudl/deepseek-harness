@@ -2,7 +2,9 @@
 
 [English](step2-orchestration-plan.md) | 中文
 
-各任务从 `31c779effb` 创建独立 worktree，保留全部 fork 改动。每项任务只提交已验证的工作，并记录实际命令及剩余风险。
+提交标签对应的精确标识保存在 `~/coding/logs/step2-commit-identifiers.md`。
+
+各任务从 `orchestration-start` 创建独立 worktree，保留全部 fork 改动。每项任务只提交已验证的工作，并记录实际命令及剩余风险。
 
 ## 任务依赖图
 

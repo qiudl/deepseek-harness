@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/reports/step2-orchestration-plan.md
 /step2-orchestration-plan:
-  en: 2a0b8e0d010a35b8
-  zh: eb4ec17d9ba12e3a
+  en: f27b8856c070f27c
+  zh: ccf5f3c14ab92f58
 /step2-orchestration-plan/task-graph:
   en: 1db676c00b984d6f
   zh: 7d1a88225c93e6e5

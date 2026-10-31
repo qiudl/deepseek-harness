@@ -2,7 +2,9 @@
 
 English | [中文](step2-orchestration-plan.zh.md)
 
-The tasks start from `31c779effb` in separate worktrees and retain all fork changes. Each task commits only validated work and records exact commands and outstanding risks.
+Exact commit identifiers for the labels are recorded in `~/coding/logs/step2-commit-identifiers.md`.
+
+The tasks start from `orchestration-start` in separate worktrees and retain all fork changes. Each task commits only validated work and records exact commands and outstanding risks.
 
 ## Task graph
 

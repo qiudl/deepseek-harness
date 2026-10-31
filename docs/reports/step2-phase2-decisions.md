@@ -2,7 +2,9 @@
 
 English | [中文](step2-phase2-decisions.zh.md)
 
-These recommendations are pending human review. The user authorized implementation along them; each implementation still needs its stated tests. References name fork `727d4318` or upstream tag `dsh-v0.2.2-alpha.2`, as indicated.
+Exact commit identifiers for the labels are recorded in `~/coding/logs/step2-commit-identifiers.md`.
+
+These recommendations are pending human review. The user authorized implementation along them; each implementation still needs its stated tests. References name fork `fork-baseline` or upstream tag `dsh-v0.2.2-alpha.2`, as indicated.
 
 ## 1. Named Session identity
 

@@ -1,4 +1,7 @@
-# Bilingual-pair consistency record.
+# Bilingual-pair consistency record for REQ-20261031-0003-step2-phase1.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/reports/REQ-20261031-0003-step2-phase1.md
 /req-20261031-0003-step2-phase-1-mapping:
-  en: ab3315e0e6689835
-  zh: 8b0f7b8459f0f845
+  en: d691dee31549bdca
+  zh: 5e7de1ee6ca17ea8

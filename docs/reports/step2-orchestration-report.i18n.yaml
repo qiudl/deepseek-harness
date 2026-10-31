@@ -3,17 +3,17 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/reports/step2-orchestration-report.md
 /step2-orchestration-report:
-  en: 7f634ae29fabc7d9
-  zh: 33c59f9234f20ace
+  en: 10b1a762c6ed5a82
+  zh: 1d5e8981cf1cf2f9
 /step2-orchestration-report/outcome:
-  en: e0dde07e57a5bceb
-  zh: 63fde911e7dd83a1
+  en: 79007f52e9380577
+  zh: 970c6915da0219de
 /step2-orchestration-report/subtasks:
-  en: 48cb9b5701160686
-  zh: cba20215fe9ad17d
+  en: fd60c54a5be349d2
+  zh: be5a8cfc24989ceb
 /step2-orchestration-report/validation:
-  en: d7fdcf442b16ca1a
-  zh: 1bea363dd920fd80
+  en: a4832591eac6b231
+  zh: 3570495368e0b4b0
 /step2-orchestration-report/remaining-work:
-  en: c3e7628bec6ef258
-  zh: ea1d738f4ec14884
+  en: 4bd79af1d972969a
+  zh: 623d10cbbdd5a546

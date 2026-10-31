@@ -8,7 +8,7 @@ Read this before changing anything under `packages/`. It assumes you know Cordis
 
 [Cordis](cordis-primer.md) is the framework under dsh: plugins contribute services, typed events, and reversible effects to a shared context. Every part of the product is a plugin, including the model adapter, the tool registry, the session log, and the agent loop itself, so each is replaceable from configuration.
 
-There is no privileged core to patch: you extend dsh by mounting a plugin beside the others, and registrations are effects that unwind when their plugin unloads.
+No privileged core needs patching: extend dsh by mounting plugins; registrations unwind when their plugin unloads.
 
 ## Profiles and bundles
 
@@ -28,13 +28,13 @@ YAML controls HMR: base enables config-only `dsh-hmr`; headless, SDK and ACP dis
 
 Base includes [Plugin Manager](../packages/boot/plugin-manager/README.md) for Web and agents.
 
-To see the tree your machine boots:
+Inspect the boot tree:
 
 ```sh
 dsh --profile web --dump-config
 ```
 
-Any row it prints can be replaced by a patch of your own.
+Patches can replace any printed row.
 
 Composition mechanics are in [app-boot](../packages/boot/app-boot/README.md#profiles); config fields are in the generated [config catalog](config-catalog.md).
 

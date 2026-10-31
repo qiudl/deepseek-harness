@@ -2,7 +2,9 @@
 
 [English](step2-phase2-decisions.md) | 中文
 
-以下建议均待人工复核。用户已授权按建议实施；各实现仍须完成所列测试。证据分别指向 fork `727d4318` 或上游标签 `dsh-v0.2.2-alpha.2`。
+提交标签对应的精确标识保存在 `~/coding/logs/step2-commit-identifiers.md`。
+
+以下建议均待人工复核。用户已授权按建议实施；各实现仍须完成所列测试。证据分别指向 fork `fork-baseline` 或上游标签 `dsh-v0.2.2-alpha.2`。
 
 ## 1. 指定 Session 身份
 

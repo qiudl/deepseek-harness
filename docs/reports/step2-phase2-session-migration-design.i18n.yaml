@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/reports/step2-phase2-session-migration-design.md
 /step2-phase-2-session-migration-design:
-  en: 12d2e129aedafd78
-  zh: 78680d8a6a14e7e8
+  en: 90149c4093d360a6
+  zh: db15b45bdb0db854
 /step2-phase-2-session-migration-design/summary:
-  en: 21ab9e363dcb73d1
-  zh: dc7d42ca17e6f0fa
+  en: 85ae4d1b63b05cd7
+  zh: 8448c2628c6dcc5d
 /step2-phase-2-session-migration-design/evidence-and-current-call-paths:
-  en: d95003d8c2f6bbcd
-  zh: 78f0162253803b78
+  en: fbee598df6e8eed9
+  zh: ca35af307bf5bfd3
 /step2-phase-2-session-migration-design/proposed-integration:
   en: 5059acbaf6fdc58e
   zh: 719b46bfdead38c9

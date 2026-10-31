@@ -2,13 +2,15 @@
 
 [English](step2-phase2-session-migration-design.md) | 中文
 
+提交标签对应的精确标识保存在 `~/coding/logs/step2-commit-identifiers.md`。
+
 ## 摘要
 
-本设计拟将 fork 提交 `727d4318` 与上游 `dsh-v0.2.2-alpha.2`（`f3803c9697`）整合。这是待评审方案，并不代表兼容性已经实现。实现须保留 fork 的 Host 权限及协作行为，同时接入上游由 Agent 持有的模型选择和 Session 创建变更。
+本设计拟将 fork 提交 `fork-baseline` 与上游 `dsh-v0.2.2-alpha.2`（`upstream-tag-commit`）整合。这是待评审方案，并不代表兼容性已经实现。实现须保留 fork 的 Host 权限及协作行为，同时接入上游由 Agent 持有的模型选择和 Session 创建变更。
 
 ## 现有语义与调用链
 
-以下 fork 路径与行号对应 `727d4318`；上游路径与行号对应 `dsh-v0.2.2-alpha.2` 标签，不代表未来合并后的行号。
+以下 fork 路径与行号对应 `fork-baseline`；上游路径与行号对应 `dsh-v0.2.2-alpha.2` 标签，不代表未来合并后的行号。
 
 fork 创建链：`packages/api/session-controller/src/commands.ts:108` 校验位置，要求专用协作指定工作区，选择身份后调用 `agent.ts:240` 的 `ensureSession`。后者对同一身份共享进行中的创建，拒绝子代理所有权、预设或 cwd 不匹配，并返回该身份。命令先附加工作区，再标记专用协作（`commands.ts:137`、`:148`）；附加失败会报告已经创建的身份。
 
