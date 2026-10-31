@@ -75,9 +75,11 @@ async function isolatedTestNode(root: string): Promise<string> {
   if (process.platform !== 'darwin' || /["$`\\]/u.test(process.execPath)) throw new Error('unsupported sandbox fixture')
   const wrapper = join(root, 'sandbox-node')
   const probe = join(root, 'fork-probe.cjs')
-  const result = join(root, 'fork-probe-result')
+  const forbidden = join(root, 'forbidden-sandbox-write')
+  const original = join(root, 'sandbox-original')
+  await writeFile(original, 'unchanged', { mode: 0o600 })
   if (/["$`\\]/u.test(probe)) throw new Error('unsupported sandbox fixture path')
-  await writeFile(probe, `const fs=require('node:fs'),cp=require('node:child_process');let value;try { value=cp.spawnSync('/usr/bin/true').error?.code ?? 'allowed' } catch(e) { value=e.code } fs.writeFileSync(${JSON.stringify(result)},value);`, { mode: 0o600 })
+  await writeFile(probe, `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');let fork,write,link,hardlink;try { fork=cp.spawnSync('/usr/bin/true').error?.code ?? 'allowed' } catch(e) { fork=e.code } try { fs.writeFileSync(${JSON.stringify(forbidden)},'bad');write='allowed' } catch(e) { write=e.code } try { const p=path.join(process.env.DSH_HOME,'probe-link');fs.symlinkSync(${JSON.stringify(original)},p);fs.writeFileSync(p,'bad');link='allowed' } catch(e) { link=e.code } try { fs.linkSync(${JSON.stringify(original)},path.join(process.env.DSH_HOME,'probe-hardlink'));hardlink='allowed' } catch(e) { hardlink=e.code } fs.writeFileSync(path.join(process.env.DSH_HOME,'sandbox-probe-result'),JSON.stringify({fork,write,link,hardlink}));`, { mode: 0o600 })
   await writeFile(wrapper, `#!/bin/sh\nexec "${process.execPath}" --require "${probe}" "$@"\n`, { mode: 0o700 })
   return wrapper
 }
@@ -1055,7 +1057,13 @@ describe('offline Profile existing-only inspector', () => {
         command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
       const history = await reader.read(command, AbortSignal.timeout(10_000))
       expect(JSON.stringify(history)).toContain('fixture-session')
-      if (process.env.DSH_TEST_DENY_FORK === '1') expect(await readFile(join(value.hostRoot, 'fork-probe-result'), 'utf8')).toBe('EPERM')
+      if (process.env.DSH_TEST_DENY_FORK === '1') {
+        const staged = Reflect.get(reader, 'staging') as { root: string }
+        expect(JSON.parse(await readFile(join(staged.root, 'sandbox-probe-result'), 'utf8')))
+          .toEqual({ fork: 'EPERM', write: 'EPERM', link: 'EPERM', hardlink: 'EPERM' })
+        await expect(lstat(join(value.hostRoot, 'forbidden-sandbox-write'))).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(await readFile(join(value.hostRoot, 'sandbox-original'), 'utf8')).toBe('unchanged')
+      }
       const events = await reader.read({ operation: 'session.history',
         command_id: '123e4567-e89b-42d3-a456-426614174001' as HostControlRequestId,
         session_id: 'fixture-session', max_events: 100 }, AbortSignal.timeout(10_000))
@@ -1100,7 +1108,8 @@ describe('offline Profile existing-only inspector', () => {
       command_id: '123e4567-e89b-42d3-a456-426614174004' as HostControlRequestId,
       session_id: id, max_events: 100 }, AbortSignal.timeout(30_000))
     expect(JSON.stringify(history)).toContain('old-writer historical prompt')
-    if (process.env.DSH_TEST_DENY_FORK === '1') expect(await readFile(join(value.hostRoot, 'fork-probe-result'), 'utf8')).toBe('EPERM')
+    if (process.env.DSH_TEST_DENY_FORK === '1') await expect(lstat(join(value.hostRoot, 'forbidden-sandbox-write')))
+      .rejects.toMatchObject({ code: 'ENOENT' })
     expect(await treeInventory(value.profileRoot)).toEqual(before)
   }, 45_000)
 
