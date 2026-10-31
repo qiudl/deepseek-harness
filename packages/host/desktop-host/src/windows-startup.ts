@@ -548,10 +548,23 @@ async function startWindowsDesktopHostApplicationWithTrust(
             linkBundledPluginPeerPackages(webRoot(root), config.dshEntrypointPath)
           },
           acknowledge: async (profileId, packageName, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const { loaded, overlays } = loadComposition(profileRoot(profileId))
-            const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
-            await reactivatePlugin(profileId, expected, context)
+            // REQ-20261028-0021: the worker's plugin manager rewrites the Profile manifest while
+            // it settles after an install, so the composition can momentarily lack the package the
+            // manifest check just confirmed; wait it out inside the operation's own lifetime
+            // instead of recording a false executor_failed.
+            const deadline = Date.now() + 90_000
+            for (;;) {
+              context.guard(); context.signal.throwIfAborted()
+              try {
+                const { loaded, overlays } = loadComposition(profileRoot(profileId))
+                const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+                await reactivatePlugin(profileId, expected, context)
+                return
+              } catch (error) {
+                if (!(error instanceof Error && error.message === 'plugin_bundle_missing') || Date.now() >= deadline) throw error
+                await new Promise<void>((resolve) => { setTimeout(resolve, 200) })
+              }
+            }
           },
         })
       }
