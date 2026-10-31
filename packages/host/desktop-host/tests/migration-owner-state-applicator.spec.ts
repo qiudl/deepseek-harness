@@ -152,7 +152,9 @@ describe('migration owner-state generation applicator', () => {
     await symlink(paths.credentialsPath, join(persistenceRoot, 'unexpected-link'))
     const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-link-fixture' })
-    onTestFinished(async () => { await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true }) })
+    onTestFinished(async () => {
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
@@ -191,7 +193,7 @@ describe('migration owner-state generation applicator', () => {
     expect(await readFile(file, 'utf8')).toBe('original')
     diskFaults.copyNoSpace = false
     const cancelled = new AbortController()
-    diskFaults.afterCopy = () => cancelled.abort()
+    diskFaults.afterCopy = () => { cancelled.abort() }
     await expect(stageRestrictedProfile({ ...input, signal: cancelled.signal })).rejects.toMatchObject({ name: 'AbortError' })
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
     expect(await readFile(file, 'utf8')).toBe('original')
@@ -211,7 +213,7 @@ describe('migration owner-state generation applicator', () => {
       diskFaults.afterCopy = undefined
       await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
     })
-    diskFaults.afterCopy = () => writeFileSync(file, 'changed!', { mode: 0o600 })
+    diskFaults.afterCopy = () => { writeFileSync(file, 'changed!', { mode: 0o600 }) }
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
@@ -219,7 +221,7 @@ describe('migration owner-state generation applicator', () => {
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
     expect(await readFile(file, 'utf8')).toBe('changed!')
     await writeFile(file, 'original', { mode: 0o600 })
-    diskFaults.afterCopy = () => writeFileSync(join(persistenceRoot, 'new-session.jsonl'), 'new', { mode: 0o600 })
+    diskFaults.afterCopy = () => { writeFileSync(join(persistenceRoot, 'new-session.jsonl'), 'new', { mode: 0o600 }) }
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
@@ -255,7 +257,7 @@ describe('migration owner-state generation applicator', () => {
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
     const file = join(paths.storageRoot, 'workspace.json')
-    const original = JSON.parse(await readFile(file, 'utf8'))
+    const original = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
     let checks = 0
     await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
@@ -295,7 +297,7 @@ describe('migration owner-state generation applicator', () => {
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
     const file = join(paths.storageRoot, 'workspace.json')
-    const original = JSON.parse(await readFile(file, 'utf8'))
+    const original = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
     await expect(startRestrictedProfileReader({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
       inspectPersistence: inspectFixture(persistenceRoot), profileId: 'profile', credentialHandle: 'fixture',
@@ -318,7 +320,7 @@ describe('migration owner-state generation applicator', () => {
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
     let release!: () => void, entered!: () => void
-    const started = new Promise<void>(resolve => { entered = resolve })
+    const started = new Promise<void>((resolve) => { entered = resolve })
     let authorized = true
     const reader = await startRestrictedProfileReader({ stagingParent: parent, expectedUid: uid, profileRoot: source,
       ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
@@ -326,7 +328,7 @@ describe('migration owner-state generation applicator', () => {
       profileId: 'profile', credentialHandle: 'fixture', signal: new AbortController().signal, onCleanupFailure: () => {},
       assertCurrent: () => { if (!authorized) throw new Error('owner_revoked') },
       createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
-        remoteSession: async () => { await new Promise<void>(resolve => { release = resolve; entered() }); return { items: ['private'] } } }),
+        remoteSession: async () => { await new Promise<void>((resolve) => { release = resolve; entered() }); return { items: ['private'] } } }),
     })
     onTestFinished(() => reader.close())
     const pending = reader.read({ operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never },

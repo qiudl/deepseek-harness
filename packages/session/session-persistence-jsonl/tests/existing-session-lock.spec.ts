@@ -24,7 +24,7 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
     await chmod(lock, 0o644)
     const before = await lstat(lock, { bigint: true })
     const fence = await ExistingSessionLock.acquire(root, uid)
-    onTestFinished(() => fence.close())
+    onTestFinished(() => { fence.close() })
     fence.assertCurrent()
     const after = await lstat(lock, { bigint: true })
     expect(await readFile(lock, 'utf8')).toBe('')
@@ -40,7 +40,7 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
     const { root, lock } = await fixture()
     await writeFile(lock, '', { mode: 0o600 })
     const fence = await ExistingSessionLock.acquire(root, uid)
-    onTestFinished(() => fence.close())
+    onTestFinished(() => { fence.close() })
     const program = `import {open} from 'node:fs/promises';
       import {tryLockExclusive} from '@deepseek-ai/node-addon-system/flock';
       const file=await open(process.argv[1],'r');
@@ -54,9 +54,12 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
       const exited = once(child, 'exit')
       let timeout: ReturnType<typeof setTimeout> | undefined
       const deadline = new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error('lock contender timed out')), 10_000)
+        timeout = setTimeout(() => { reject(new Error('lock contender timed out')) }, 10_000)
       })
-      try { return (await Promise.race([exited, deadline]))[0] } finally {
+      try {
+        const exitCode: unknown = (await Promise.race([exited, deadline]))[0]
+        return exitCode
+      } finally {
         clearTimeout(timeout)
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
         await exited.catch(() => {})
@@ -94,14 +97,14 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
     const { root, lock } = await fixture()
     await writeFile(lock, '', { mode: 0o600 })
     const fence = await ExistingSessionLock.acquire(root, uid)
-    onTestFinished(() => fence.close())
+    onTestFinished(() => { fence.close() })
     await unlink(lock)
     await writeFile(lock, 'replacement', { mode: 0o600 })
-    expect(() => fence.assertCurrent()).toThrow('session_fence_stale')
+    expect(() => { fence.assertCurrent() }).toThrow('session_fence_stale')
     fence.close()
     fence.close()
     expect(await readFile(lock, 'utf8')).toBe('replacement')
-    expect(() => fence.assertCurrent()).toThrow('session_fence_stale')
+    expect(() => { fence.assertCurrent() }).toThrow('session_fence_stale')
   })
 
   it('rolls back earlier acquisitions if any session is already owned', async () => {
@@ -117,10 +120,10 @@ describe.skipIf(process.platform === 'win32')('existing session lock', () => {
     released.close()
     await writer.release()
     const set = await ExistingSessionLockSet.acquire([second, first], uid)
-    onTestFinished(() => set.close())
+    onTestFinished(() => { set.close() })
     set.assertCurrent()
     set.close()
-    expect(() => set.assertCurrent()).toThrow('session_fence_stale')
+    expect(() => { set.assertCurrent() }).toThrow('session_fence_stale')
   })
 
   it('rejects duplicate and relative paths before acquiring anything', async () => {
