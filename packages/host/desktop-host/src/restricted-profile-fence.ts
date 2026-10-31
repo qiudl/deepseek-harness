@@ -118,16 +118,16 @@ export class RestrictedProfileFence {
    * @param stagingParent - Private Host-owned directory used for staged copies.
    * @param assertQuiescent - Trusted check performed under external writer exclusion.
    * @param isProcessAlive - Trusted operating-system liveness check; uncertainty must return true.
-   * @returns Whether an empty reservation was safely cleared.
+   * @returns A one-use finalizer, or undefined when recovery cannot be proven safe.
    * @internal
    */
-  clearEmptyReservation(profileId: string, stagingParent: string, assertQuiescent: () => void,
-    isProcessAlive: (pid: number) => boolean): boolean {
+  prepareEmptyReservationClear(profileId: string, stagingParent: string, assertQuiescent: () => void,
+    isProcessAlive: (pid: number) => boolean): (() => void) | undefined {
     const operationId = this.emptyRecoveryCandidate(profileId)
-    if (!operationId) return false
+    if (!operationId) return undefined
     const record = this.read(profileId)
     if (!record || record.ownerGeneration === this.ownership.generation || record.ownerPid === undefined
-      || isProcessAlive(record.ownerPid)) return false
+      || isProcessAlive(record.ownerPid)) return undefined
     if (!isAbsolute(stagingParent) || resolve(stagingParent) !== stagingParent) throw new HostAuthorityError('invalid_input')
     const parent = lstatSync(stagingParent)
     if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== this.uid || (parent.mode & 0o077) !== 0) {
@@ -147,8 +147,17 @@ export class RestrictedProfileFence {
     this.ownership.assertOwner()
     assertAbsent()
     if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(record.ownerPid)) throw new HostAuthorityError('stale')
-    this.clear(profileId, operationId, () => {})
-    return true
+    let used = false
+    return () => {
+      if (used) throw new HostAuthorityError('stale')
+      this.ownership.assertOwner()
+      assertAbsent()
+      if (this.emptyRecoveryCandidate(profileId) !== operationId || isProcessAlive(record.ownerPid!)) {
+        throw new HostAuthorityError('stale')
+      }
+      this.clear(profileId, operationId, () => {})
+      used = true
+    }
   }
 
   /**

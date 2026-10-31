@@ -779,6 +779,129 @@ it.skipIf(process.platform === 'win32')('stops Profile workers and retains owner
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
 })
 
+it.skipIf(process.platform === 'win32')('cancels pending fence reconciliation before releasing Host ownership', async () => {
+  const { config, root } = fixture()
+  const profileId = randomUUID()
+  const directory = join(root, 'restricted-fences')
+  mkdirSync(directory, { mode: 0o700 })
+  const path = join(directory, `${profileId}.json`)
+  writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
+    phase: 'reserved', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let enter!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, _operation, signal) => {
+        enter()
+        return await new Promise<never>((_resolve, reject) => {
+          if (signal.aborted) reject(signal.reason)
+          else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+      },
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  if (!application.restrictedHistory) throw new Error('missing restricted reader')
+  const pending = application.restrictedHistory.reconcileEmptyFence(profileId)
+  const rejected = expect(pending).rejects.toMatchObject({ code: 'unavailable' })
+  await entered
+  await application.close()
+  await rejected
+  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect(existsSync(join(root, 'host.lock'))).toBe(false)
+})
+
+it.skipIf(process.platform === 'win32')('retains the fence and Host ownership if reconciliation guard release fails', async () => {
+  const { config, root } = fixture()
+  const profileId = randomUUID()
+  const directory = join(root, 'restricted-fences')
+  mkdirSync(directory, { mode: 0o700 })
+  const path = join(directory, `${profileId}.json`)
+  writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
+    phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => { await operation(); throw new Error('release failed') },
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  if (!application.restrictedHistory) throw new Error('missing restricted reader')
+  await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toThrow('release failed')
+  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect(application.workers.isProfileBlocked(profileId)).toBe(true)
+  await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('fails closed when the reconciliation guard swallows a validation failure', async () => {
+  const { config, root } = fixture()
+  const profileId = randomUUID(), operationId = randomUUID()
+  const directory = join(root, 'restricted-fences')
+  mkdirSync(directory, { mode: 0o700 })
+  const path = join(directory, `${profileId}.json`)
+  writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId, state: 'pending',
+    phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+  const staged = join(root, `restricted-${operationId}`)
+  mkdirSync(staged, { mode: 0o700 })
+  const sentinel = join(staged, 'preserve')
+  writeFileSync(sentinel, 'existing', { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => {
+        try { return await operation() } catch { return false as never }
+      },
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  if (!application.restrictedHistory) throw new Error('missing restricted reader')
+  await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toMatchObject({ code: 'unavailable' })
+  expect(JSON.parse(readFileSync(path, 'utf8')).state).toBe('pending')
+  expect(readFileSync(sentinel, 'utf8')).toBe('existing')
+  await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('recovers an empty old-Host fence before restoring the original Profile', async () => {
+  const { config, root } = fixture()
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  let starts = 0, exclusions = 0
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async () => { starts += 1; return { closeNotifications() {}, abort() {}, done: Promise.resolve() } },
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => { exclusions += 1; return operation() },
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
+  const profile = await application.host.bootstrapLocalProfile({ keyHandle: 'keychain:startup', unlockMaterial, ownerId: 'owner' })
+  await application.workers.dispose(profile.profileId)
+  const fencePath = join(root, 'restricted-fences', `${profile.profileId}.json`)
+  const operationId = randomUUID()
+  writeFileSync(fencePath, JSON.stringify({ version: 2, profileId: profile.profileId, operationId,
+    state: 'pending', phase: 'worker_gone', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+  expect(application.workers.isProfileBlocked(profile.profileId)).toBe(true)
+  await expect(application.host.restoreLocalProfile({ ...profile, keyHandle: 'keychain:startup', unlockMaterial,
+    ownerId: 'owner' })).resolves.toMatchObject(profile)
+  expect(exclusions).toBe(1)
+  expect(starts).toBe(2)
+  expect(application.workers.isProfileBlocked(profile.profileId)).toBe(false)
+})
+
 it.skipIf(process.platform === 'win32')('keeps Host ownership when startup cleanup is unconfirmed', async () => {
   const { config, root } = fixture()
   const failure = new Error('server start failed')

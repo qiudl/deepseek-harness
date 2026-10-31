@@ -7,7 +7,7 @@ import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
 import type { MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 import type { OfflineProfileRecoveryInspector } from './offline-profile-recovery.ts'
-import { withRestrictedProfileReader } from './restricted-profile-reader.ts'
+import { RestrictedWriterExclusionCleanupError, withRestrictedProfileReader } from './restricted-profile-reader.ts'
 import type { SingleHostLock } from './single-instance.ts'
 import type { RestrictedProfileFence } from './restricted-profile-fence.ts'
 import { HostAuthorityError, type ProfileWorkerFactory } from './types.ts'
@@ -43,7 +43,7 @@ function samePersistence(left: RestrictedPersistenceInspection, right: Restricte
 /** Host-private, one-shot Account history reader. It does not grant a view or remote access. */
 export class RestrictedAccountSessionService {
   private readonly lifetime = new AbortController()
-  private readonly active = new Set<Promise<HostRemoteSessionJson>>()
+  private readonly active = new Set<Promise<unknown>>()
   private closed = false
   private cleanupUnconfirmed = false
   private closing?: Promise<void>
@@ -91,6 +91,64 @@ export class RestrictedAccountSessionService {
       signal.throwIfAborted()
       return value
     } finally { this.active.delete(operation) }
+  }
+
+  /**
+   * Clear a provably empty prior-Host reservation before a Profile worker starts.
+   * @param profileId - Host-resolved Profile, never an untrusted path.
+   * @param signal - Optional owner-lifetime cancellation.
+   * @returns Whether a stale empty marker was cleared under writer exclusion.
+   * @internal
+   */
+  async reconcileEmptyFence(profileId: string, signal?: AbortSignal): Promise<boolean> {
+    if (this.closed || !PROFILE_ID.test(profileId)) throw new HostAuthorityError('unavailable')
+    if (!this.options.fence.emptyRecoveryCandidate(profileId)) return false
+    const combined = signal ? AbortSignal.any([signal, this.lifetime.signal]) : this.lifetime.signal
+    const operation = Promise.resolve().then(async () => {
+      let invoked = false, completed = false, closed = false, callbackFailed = false
+      let callbackFailure: unknown
+      let finalize: (() => void) | undefined
+      let result: boolean
+      try {
+        result = await this.options.withAllWritersExcluded(profileId, async () => {
+          if (closed || invoked) throw new HostAuthorityError('unavailable')
+          invoked = true
+          try {
+            combined.throwIfAborted()
+            finalize = this.options.fence.prepareEmptyReservationClear(profileId, this.options.hostRoot,
+              () => this.options.assertAllWritersQuiescent(profileId), processMayBeAlive)
+            completed = true
+            return finalize !== undefined
+          } catch (error) {
+            callbackFailed = true
+            callbackFailure = error
+            throw error
+          }
+        }, combined)
+      } catch (error) {
+        if (completed || (callbackFailed && error !== callbackFailure) || error instanceof RestrictedWriterExclusionCleanupError
+          || (typeof error === 'object' && error !== null && 'code' in error
+            && error.code === 'restricted_writer_exclusion_cleanup_unconfirmed')) {
+          this.options.workers.blockProfile(profileId)
+          this.cleanupUnconfirmed = true
+          this.options.onCleanupFailure()
+        }
+        throw error
+      } finally { closed = true }
+      if (!invoked || !completed || result !== (finalize !== undefined)) {
+        if (invoked) {
+          this.options.workers.blockProfile(profileId)
+          this.cleanupUnconfirmed = true
+          this.options.onCleanupFailure()
+        }
+        throw new HostAuthorityError('unavailable')
+      }
+      combined.throwIfAborted()
+      finalize?.()
+      return result
+    })
+    this.active.add(operation)
+    try { return await operation } finally { this.active.delete(operation) }
   }
 
   /** Cancel all readers and wait for their cleanup before releasing Host ownership. */
@@ -146,23 +204,8 @@ export class RestrictedAccountSessionService {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
     assertCurrent()
-    // An old Host may have died before starting a worker or after confirmed cleanup.
-    // Reconcile only that provably empty case while the trusted exclusion is held.
-    if (this.options.fence.emptyRecoveryCandidate(expectedProfileId)) {
-      let invoked = false
-      let closed = false
-      try {
-        await this.options.withAllWritersExcluded(expectedProfileId, async () => {
-          if (closed || invoked) throw new HostAuthorityError('unavailable')
-          invoked = true
-          assertCurrent()
-          this.options.fence.clearEmptyReservation(expectedProfileId, this.options.hostRoot,
-            () => this.options.assertAllWritersQuiescent(expectedProfileId), processMayBeAlive)
-        }, signal)
-      } finally { closed = true }
-      if (!invoked) throw new HostAuthorityError('unavailable')
-      assertCurrent()
-    }
+    await this.reconcileEmptyFence(expectedProfileId, signal)
+    assertCurrent()
     let value: HostRemoteSessionJson
     try {
       value = await withRestrictedProfileReader(this.options.workers, this.options.extensions, this.options.claims, {

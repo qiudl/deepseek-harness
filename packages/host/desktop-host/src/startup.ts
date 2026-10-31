@@ -557,8 +557,10 @@ export async function startDesktopHostApplication(
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
       () => scoped.dispose(), claimRestart)
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> =>
-      workers.withPreparation(profile.profileId, scoped => prepareWorker(profile, scoped, claimRestart))
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+      await restrictedHistory?.reconcileEmptyFence(profile.profileId)
+      return workers.withPreparation(profile.profileId, scoped => prepareWorker(profile, scoped, claimRestart))
+    }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -577,31 +579,34 @@ export async function startDesktopHostApplication(
     const ensureRecoveredProfileWorker = async (
       profile: PersonProfileRecord,
       preflight: OfflineProfileRecoveryPreflight,
-    ): Promise<void> => workers.withPreparation(profile.profileId, async scoped => {
-      claimWorkerGate.assertOpen(profile.profileId)
-      await recoveryInspector.prepareConfirmedProfile(profile, preflight)
-      try {
-        await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
-          profileId: profile.profileId,
-          profileRoot: join(root, 'profiles', profile.profileId),
-          credentialHandle: profile.keyHandle,
-          pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-        }),
-        /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
-        () => scoped.dispose())
-        // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
-        // Reinspect and pin those generated links into the Profile-owned content-addressed closure
-        // before returning an offline grant, so replacing the App cannot break the next launch.
-        const stabilized = await recoveryInspector.inspect(profile, {
-          runtimeGeneration: config.runtimeGeneration,
-          schemaGeneration: config.schemaGeneration,
-        })
-        await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
-      } catch (error) {
-        await scoped.dispose().catch(() => undefined)
-        throw error
-      }
-    })
+    ): Promise<void> => {
+      await restrictedHistory?.reconcileEmptyFence(profile.profileId)
+      return workers.withPreparation(profile.profileId, async scoped => {
+        claimWorkerGate.assertOpen(profile.profileId)
+        await recoveryInspector.prepareConfirmedProfile(profile, preflight)
+        try {
+          await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
+            profileId: profile.profileId,
+            profileRoot: join(root, 'profiles', profile.profileId),
+            credentialHandle: profile.keyHandle,
+            pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
+          }),
+          /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
+          () => scoped.dispose())
+          // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
+          // Reinspect and pin those generated links into the Profile-owned content-addressed closure
+          // before returning an offline grant, so replacing the App cannot break the next launch.
+          const stabilized = await recoveryInspector.inspect(profile, {
+            runtimeGeneration: config.runtimeGeneration,
+            schemaGeneration: config.schemaGeneration,
+          })
+          await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
+        } catch (error) {
+          await scoped.dispose().catch(() => undefined)
+          throw error
+        }
+      })
+    }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
