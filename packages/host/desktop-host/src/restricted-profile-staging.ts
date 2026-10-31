@@ -17,14 +17,15 @@ function within(root: string, path: string): boolean {
 }
 
 /** Ensure a copied tree contains only private regular files and directories, never links. */
-async function assertPrivateCopy(path: string, expectedUid: number): Promise<void> {
+async function assertPrivateCopy(path: string, expectedUid: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
   const stat = await lstat(path)
   if (stat.isSymbolicLink() || stat.uid !== expectedUid || (!stat.isDirectory() && !stat.isFile())
     || (stat.isFile() && ((stat.mode & 0o077) !== 0 || stat.nlink !== 1))) {
     throw new HostAuthorityError('profile_integrity_failed')
   }
   if (stat.isDirectory()) {
-    for (const entry of await readdir(path)) await assertPrivateCopy(join(path, entry), expectedUid)
+    for (const entry of await readdir(path)) await assertPrivateCopy(join(path, entry), expectedUid, signal)
   }
 }
 
@@ -151,7 +152,7 @@ export async function stageRestrictedProfile(input: {
         }
         return true
       } })
-    await assertPrivateCopy(snapshotRoot, input.expectedUid)
+    await assertPrivateCopy(snapshotRoot, input.expectedUid, input.signal)
     await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root,
       { root: snapshotRoot, compression: input.persistence.compression }, ownerPaths), { mode: 0o600, flag: 'wx' })
     await verify()

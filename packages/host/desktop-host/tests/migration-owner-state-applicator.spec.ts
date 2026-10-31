@@ -4,7 +4,8 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
-const diskFaults = vi.hoisted(() => ({ availableBytes: undefined as bigint | undefined, copyNoSpace: false }))
+const diskFaults = vi.hoisted(() => ({ availableBytes: undefined as bigint | undefined,
+  copyNoSpace: false, afterCopy: undefined as (() => void) | undefined }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual,
@@ -16,7 +17,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         await actual.writeFile(join(String(args[1]), 'partial'), 'partial')
         throw Object.assign(new Error('disk full'), { code: 'ENOSPC' })
       }
-      return actual.cp(...args)
+      await actual.cp(...args)
+      diskFaults.afterCopy?.()
     },
   }
 })
@@ -165,7 +167,10 @@ describe('migration owner-state generation applicator', () => {
     await writeFile(file, 'original', { mode: 0o600 })
     const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-disk-fixture' })
-    onTestFinished(async () => { diskFaults.availableBytes = undefined; diskFaults.copyNoSpace = false; await ownership.release() })
+    onTestFinished(async () => {
+      diskFaults.availableBytes = undefined; diskFaults.copyNoSpace = false; diskFaults.afterCopy = undefined
+      await ownership.release()
+    })
     const input = { stagingParent: parent, expectedUid: uid, profileRoot: source, ownerPaths: paths,
       persistence: { root: persistenceRoot, compression: 'none' as const },
       inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
@@ -178,6 +183,12 @@ describe('migration owner-state generation applicator', () => {
     diskFaults.copyNoSpace = true
     await expect(stageRestrictedProfile(input)).rejects.toMatchObject({ code: 'unavailable',
       diagnosticReason: 'restricted_snapshot_disk_space' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe('original')
+    diskFaults.copyNoSpace = false
+    const cancelled = new AbortController()
+    diskFaults.afterCopy = () => cancelled.abort()
+    await expect(stageRestrictedProfile({ ...input, signal: cancelled.signal })).rejects.toMatchObject({ name: 'AbortError' })
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
     expect(await readFile(file, 'utf8')).toBe('original')
   })
