@@ -6,7 +6,7 @@ Exact commit identifiers for the labels are recorded in `~/coding/logs/step2-com
 
 ## Outcome
 
-Host creation, client forwarding and Agent-owned model selection are integrated. The `dsh-v0.2.2-alpha.2` merge is in progress on the local pin branch; its conflicts are resolved, but the merge commit awaits the remaining checks. No branch was pushed.
+Host creation, client forwarding and Agent-owned model selection are integrated. The `dsh-v0.2.2-alpha.2` merge was committed on `req/REQ-20261031-0003-pin-0.2.2-alpha.2`. Publication of the pin branch and downstream runtime validation are tracked separately.
 
 ## Subtasks
 

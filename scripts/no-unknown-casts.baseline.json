@@ -1317,15 +1317,9 @@
   "packages/host/desktop-host/tests/account-access-token.spec.ts": {
     "c9da2bbd63d402c70f1ef8ac2bc892a22ad9fda0222c548916ee3399b2642ba4": 2
   },
-  "packages/host/desktop-host/tests/extensions-wire.spec.ts": {
-    "ca2f63e543857b184897cdef4fe85cf018ebf50b47439568b3b5d55b0a2b6da5": 1
-  },
   "packages/host/desktop-host/tests/macos-default-bindings.spec.ts": {
     "c148ec23925e54c9bf0e0969b881a154e651bfbeb0d861e564895797eb57fa3a": 1,
     "f6971702d461d014b5f2daefd896ff1b8360e57e9ada69ebcc6470eec8cef5fe": 1
-  },
-  "packages/host/desktop-host/tests/mcp-loader-composition.spec.ts": {
-    "ca2f63e543857b184897cdef4fe85cf018ebf50b47439568b3b5d55b0a2b6da5": 1
   },
   "packages/host/desktop-host/tests/mcp-runtime-ack.spec.ts": {
     "2628886da0d90f295da042af8fc53e0c9022539182513793f55d72e77bd440a7": 1,

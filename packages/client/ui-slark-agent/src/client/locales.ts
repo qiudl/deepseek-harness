@@ -737,6 +737,7 @@ export const ja = {
   'task.moreWorkspaceMessages': 'コラボレーションの記録をさらに表示',
 } satisfies Record<keyof typeof zh, string>
 
+/** Spanish copy. */
 export const es = {
   'duet.start': 'Conversación de voz Duet',
   'voice.menu': 'Entrada de voz',
@@ -978,6 +979,7 @@ export const es = {
   'task.moreWorkspaceMessages': 'Ver más registros de colaboración',
 } satisfies Record<keyof typeof zh, string>
 
+/** French copy. */
 export const fr = {
   'duet.start': 'Conversation vocale Duet',
   'voice.menu': 'Saisie vocale',
@@ -1219,6 +1221,7 @@ export const fr = {
   'task.moreWorkspaceMessages': 'Voir plus de journaux de collaboration',
 } satisfies Record<keyof typeof zh, string>
 
+/** German copy. */
 export const de = {
   'duet.start': 'Duet-Sprachgespräch',
   'voice.menu': 'Spracheingabe',
@@ -1460,6 +1463,7 @@ export const de = {
   'task.moreWorkspaceMessages': 'Weitere Zusammenarbeitseinträge anzeigen',
 } satisfies Record<keyof typeof zh, string>
 
+/** Portuguese copy. */
 export const pt = {
   'duet.start': 'Conversa de voz Duet',
   'voice.menu': 'Entrada de voz',
@@ -1701,6 +1705,7 @@ export const pt = {
   'task.moreWorkspaceMessages': 'Ver mais registros de colaboração',
 } satisfies Record<keyof typeof zh, string>
 
+/** Russian copy. */
 export const ru = {
   'duet.start': 'Голосовой разговор Duet',
   'voice.menu': 'Голосовой ввод',

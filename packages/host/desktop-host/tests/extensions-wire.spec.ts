@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { boot, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ModuleLoaderV2 } from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { startHttpMcpFixture } from '../../../mcp/mcp-client/tests/http-fixture.ts'
@@ -47,6 +48,11 @@ it('installs MCP through the authenticated socket into the leased Profile and re
         // Resolve real plugins through Vitest so coverage needs no built lib tree.
         context.loader.internal = {
           version: 'v2',
+          loadCache: new Map() as ModuleLoaderV2['loadCache'],
+          register() { throw Error('unexpected Loader register') },
+          getOrCreateModuleJob() { throw Error('unexpected Loader module job') },
+          resolveSync() { throw Error('unexpected Loader resolve') },
+          load() { throw Error('unexpected Loader load') },
           async import(specifier: string) {
             if (specifier === '@deepseek-ai/dsh-system-prompt') return import('@deepseek-ai/dsh-system-prompt')
             if (specifier === '@deepseek-ai/dsh-tools') return import('@deepseek-ai/dsh-tools')
@@ -54,7 +60,7 @@ it('installs MCP through the authenticated socket into the leased Profile and re
             if (specifier === '@deepseek-ai/dsh-mcp-client') return import('@deepseek-ai/dsh-mcp-client')
             throw Error(`unexpected Loader import: ${specifier}`)
           },
-        } as unknown as NonNullable<typeof context.loader.internal>
+        }
       })
     for (const entry of entries) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeDefined()
     for (const entry of removed) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeUndefined()
