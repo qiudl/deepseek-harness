@@ -708,6 +708,34 @@ describe('dsh web Profile worker', () => {
     stubborn.emit('exit', null, 'SIGKILL')
     await expect(stopped.done).resolves.toBeUndefined()
 
+    const erroredOnStop = controlledWebChild()
+    const stopFailure = handle(erroredOnStop as unknown as ChildProcess, 'http://127.0.0.1:6', cookie, 6)
+    stopFailure.abort()
+    const rejectedStop = expect(stopFailure.done).rejects.toThrow('stop error')
+    erroredOnStop.emit('error', new Error('stop error'))
+    erroredOnStop.emit('exit', null, 'SIGTERM')
+    await rejectedStop
+    await new Promise(resolve => setImmediate(resolve))
+
+    const unkillable = controlledWebChild()
+    unkillable.kill = signal => {
+      if (signal === 'SIGKILL') throw new Error('kill failed')
+      return true
+    }
+    const unconfirmed = handle(unkillable as unknown as ChildProcess, 'http://127.0.0.1:7', cookie, 7)
+    const rejectedKill = expect(unconfirmed.done).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+    unconfirmed.abort()
+    await rejectedKill
+    unkillable.emit('exit', null, 'SIGKILL')
+
+    const refusedKill = controlledWebChild()
+    refusedKill.kill = signal => signal !== 'SIGKILL'
+    const refused = handle(refusedKill as unknown as ChildProcess, 'http://127.0.0.1:8', cookie, 8)
+    const rejectedRefusal = expect(refused.done).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+    refused.abort()
+    await rejectedRefusal
+    refusedKill.emit('exit', null, 'SIGKILL')
+
     let forceKill!: () => void
     const setTimer = vi.spyOn(globalThis, 'setTimeout').mockImplementationOnce((callback) => {
       forceKill = callback

@@ -457,8 +457,16 @@ export class DshWebProfileWorkerFactory {
         if (requestedStop || settled) return
         requestedStop = true
         child.kill('SIGTERM')
-        const timer = setTimeout(() => { if (!settled) child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
-        void done.finally(() => { clearTimeout(timer) })
+        const timer = setTimeout(() => {
+          if (settled) return
+          try {
+            if (!child.kill('SIGKILL') && !settled) throw new Error('worker_kill_unconfirmed')
+          } catch (error) {
+            settled = true
+            rejectDone(new ProfileWorkerExitUnconfirmedError(error))
+          }
+        }, this.options.abortTimeoutMs ?? 5_000)
+        void done.then(() => clearTimeout(timer), () => clearTimeout(timer))
       },
       done,
     }
