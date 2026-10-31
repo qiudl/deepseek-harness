@@ -87,7 +87,7 @@ export async function attestMacOSListener(pid: number, origin: string): Promise<
   const port = new URL(origin).port
   const { stdout } = await execFileAsync('/usr/sbin/lsof', [
     '-nP', '-a', '-p', String(pid), `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-Fn',
-  ], { encoding: 'utf8', maxBuffer: 64 * 1024 })
+  ], { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 30_000 })
   if (!stdout.split(/\r?\n/u).includes(`p${String(pid)}`)) throw new HostAuthorityError('unavailable')
 }
 
@@ -245,7 +245,17 @@ export class DshWebProfileWorkerFactory {
     }, this.options.readyTimeoutMs ?? 30_000)
     try {
       const { authenticatedUrl, origin } = await ready
-      await (this.options.attestListener ?? attestMacOSListener)(pid, origin)
+      if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
+      let abortAttestation!: () => void
+      const aborted = new Promise<never>((_resolve, reject) => {
+        abortAttestation = () => reject(new HostAuthorityError('unavailable'))
+        deadline.signal.addEventListener('abort', abortAttestation, { once: true })
+      })
+      try {
+        await Promise.race([(this.options.attestListener ?? attestMacOSListener)(pid, origin), aborted])
+      } finally {
+        deadline.signal.removeEventListener('abort', abortAttestation)
+      }
       const bootstrapCookie = await exchangeBootstrap(authenticatedUrl, origin, deadline.signal)
       return { origin, bootstrapCookie }
     } catch (error) {

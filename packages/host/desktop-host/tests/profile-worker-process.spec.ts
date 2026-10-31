@@ -492,6 +492,35 @@ describe('dsh web Profile worker', () => {
     await expect(wait).rejects.toBe(failure)
   })
 
+  it('bounds a stalled listener attestation and waits for its worker to exit', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    let killed = false
+    child.kill = () => { killed = true; child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
+    let enter!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 25,
+      attestListener: async () => { enter(); await new Promise<void>(() => {}) } })
+    const wait = (factory as unknown as { waitForOrigin(child: ChildProcess): Promise<unknown> })
+      .waitForOrigin(child as unknown as ChildProcess)
+    child.stdout.write('dsh web: http://127.0.0.1:4123/?token=fixture\n')
+    await entered
+    let timer!: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('attestation was not bounded')), 3_000)
+      timer.unref()
+    })
+    try {
+      await expect(Promise.race([wait, timeout])).rejects.toMatchObject({ code: 'unavailable' })
+    } finally { clearTimeout(timer) }
+    expect(killed).toBe(true)
+  }, 5_000)
+
   it('settles Web worker handles once across error, exit, and forced abort paths', async () => {
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, abortTimeoutMs: 10,
