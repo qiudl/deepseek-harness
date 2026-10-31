@@ -32,6 +32,75 @@ it('holds the original Profile stopped until the isolated reader releases its re
   await workers.disposeAll()
 })
 
+it('serializes Profile preparation before any isolated reader can start', async () => {
+  const events: string[] = []
+  const workers = new ProfileWorkerSupervisor(async () => {
+    events.push('worker-start')
+    return { closeNotifications() {}, abort() { events.push('worker-stop') }, done: Promise.resolve() }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  let enter!: () => void, release!: () => void
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const preparation = workers.withPreparation('profile', async (scope) => {
+    events.push('prepare-start')
+    enter()
+    await new Promise<void>(resolve => { release = resolve })
+    events.push('prepare-end')
+    await scope.ensure(input)
+  })
+  await entered
+  const isolated = workers.withQuiescent('profile', async () => { events.push('isolated-start') })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(events).toEqual(['prepare-start'])
+  release()
+  await preparation
+  await isolated
+  expect(events).toEqual(['prepare-start', 'prepare-end', 'worker-start', 'worker-stop', 'isolated-start'])
+  await workers.disposeAll()
+})
+
+it('rejects use of a preparation scope after it ends or for another Profile', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  let retained!: { ensure(value: typeof input): Promise<void> }
+  await workers.withPreparation('profile', async scope => {
+    retained = scope
+    await expect(scope.ensure({ ...input, profileId: 'other' })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  })
+  await expect(retained.ensure(input)).rejects.toMatchObject({ code: 'stale' })
+  await workers.disposeAll()
+})
+
+it('keeps the Profile fenced until unawaited scoped startup settles', async () => {
+  let finish!: () => void, entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const events: string[] = []
+  const workers = new ProfileWorkerSupervisor(async () => {
+    entered()
+    await new Promise<void>(resolve => { finish = resolve })
+    return { closeNotifications() {}, abort() { events.push('worker-stop') }, done: Promise.resolve() }
+  })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  const preparation = workers.withPreparation('profile', async scope => { void scope.ensure(input) })
+  await started
+  const isolated = workers.withQuiescent('profile', async () => { events.push('isolated-start') })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(events).toEqual([])
+  finish()
+  await preparation
+  await isolated
+  expect(events).toEqual(['worker-stop', 'isolated-start'])
+  await workers.disposeAll()
+})
+
+it('does not report preparation success when unawaited scoped startup fails', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => { throw new Error('startup failed') })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await expect(workers.withPreparation('profile', async scope => { void scope.ensure(input) }))
+    .rejects.toThrow('startup failed')
+  await workers.disposeAll()
+})
+
 it('releases a Profile reservation after the isolated operation fails', async () => {
   const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
   await expect(workers.withQuiescent('profile', async () => { throw new Error('isolated failure') }))

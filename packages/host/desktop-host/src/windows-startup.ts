@@ -390,7 +390,8 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const claimMarker = new ProfileClaimMarker(new WindowsProfileClaimMarkerFiles({
         profilesRoot: win32.join(config.root, 'profiles'), userSid, bindings,
       }))
-      const ensureWorker = async (profile: PersonProfileRecord): Promise<void> => {
+      const ensureWorker = async (profile: PersonProfileRecord): Promise<void> =>
+        workers.withPreparation(profile.profileId, async scoped => {
         const prepared = prepareWindowsIsolatedProfile({
           root: config.root,
           profileId: profile.profileId,
@@ -400,13 +401,13 @@ async function startWindowsDesktopHostApplicationWithTrust(
           bindings,
         })
         if (claimMarker.pending(profile.profileId)) throw new HostAuthorityError('unavailable')
-        await workers.ensure({
+        await scoped.ensure({
           profileId: profile.profileId,
           profileRoot: prepared.profileRoot,
           credentialHandle: profile.keyHandle,
           pluginRoots: prepared.pluginRoots,
         })
-      }
+      })
       const host = new DesktopHost({
         registry,
         clock,

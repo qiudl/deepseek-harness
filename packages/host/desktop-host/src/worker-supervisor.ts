@@ -25,6 +25,11 @@ interface StartProfileWorkerInput {
   readonly signal?: AbortSignal
 }
 
+interface ProfilePreparationScope {
+  ensure(input: StartProfileWorkerInput): Promise<void>
+  dispose(): Promise<void>
+}
+
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
 export class ProfileWorkerSupervisor {
   private closed = false
@@ -586,6 +591,48 @@ export class ProfileWorkerSupervisor {
    */
   async dispose(profileId: string): Promise<void> {
     return this.serial(profileId, () => this.disposeOwned(profileId))
+  }
+
+  /** Serialize all Profile preparation, including its worker lifecycle, with isolated reads.
+   * The scoped operations cannot be retained after the callback or used for another Profile.
+   * @param profileId - Profile whose preparation is serialized.
+   * @param operation - All preparation and worker lifecycle steps.
+   * @returns The operation's result after queued scoped work settles.
+   */
+  async withPreparation<T>(profileId: string, operation: (scope: ProfilePreparationScope) => Promise<T>): Promise<T> {
+    if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+    return this.serial(profileId, async () => {
+      if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+      let active = true
+      let tail = Promise.resolve()
+      let failed = false
+      let failure: unknown
+      const enqueue = (work: () => Promise<void>): Promise<void> => {
+        if (!active) return Promise.reject(new HostAuthorityError('stale'))
+        const next = tail.then(work)
+        tail = next.catch(error => { if (!failed) { failed = true; failure = error } })
+        return next
+      }
+      const scope: ProfilePreparationScope = {
+        ensure: input => {
+          if (input.profileId !== profileId) return Promise.reject(new HostAuthorityError('profile_mismatch'))
+          return enqueue(async () => {
+            if (this.closed || this.blockedProfiles.has(profileId)) throw new HostAuthorityError('unavailable')
+            if (!this.workers.has(profileId)) await this.startOwned(input)
+          })
+        },
+        dispose: () => enqueue(async () => {
+          try { await this.disposeOwned(profileId) } catch (error) { this.blockProfile(profileId); throw error }
+        }),
+      }
+      try {
+        const result = await operation(scope)
+        active = false
+        await tail
+        if (failed) throw failure
+        return result
+      } finally { active = false; await tail }
+    })
   }
 
   /**

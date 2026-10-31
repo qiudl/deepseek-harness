@@ -500,7 +500,8 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> =>
+      workers.withPreparation(profile.profileId, async scoped => {
       const profilesRoot = join(root, 'profiles')
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
@@ -527,13 +528,13 @@ export async function startDesktopHostApplication(
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+      await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
       }),
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
-      () => workers.dispose(profile.profileId), claimRestart)
-    }
+      () => scoped.dispose(), claimRestart)
+    })
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
     const recoveryInspector = new OfflineProfileRecoveryInspector({
@@ -552,18 +553,18 @@ export async function startDesktopHostApplication(
     const ensureRecoveredProfileWorker = async (
       profile: PersonProfileRecord,
       preflight: OfflineProfileRecoveryPreflight,
-    ): Promise<void> => {
+    ): Promise<void> => workers.withPreparation(profile.profileId, async scoped => {
       claimWorkerGate.assertOpen(profile.profileId)
       await recoveryInspector.prepareConfirmedProfile(profile, preflight)
       try {
-        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+        await claimWorkerGate.start(profile.profileId, () => scoped.ensure({
           profileId: profile.profileId,
           profileRoot: join(root, 'profiles', profile.profileId),
           credentialHandle: profile.keyHandle,
           pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
         }),
         /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
-        () => workers.dispose(profile.profileId))
+        () => scoped.dispose())
         // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
         // Reinspect and pin those generated links into the Profile-owned content-addressed closure
         // before returning an offline grant, so replacing the App cannot break the next launch.
@@ -573,10 +574,10 @@ export async function startDesktopHostApplication(
         })
         await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
       } catch (error) {
-        await workers.dispose(profile.profileId).catch(() => undefined)
+        await scoped.dispose().catch(() => undefined)
         throw error
       }
-    }
+    })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
