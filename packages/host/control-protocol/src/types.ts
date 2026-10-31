@@ -1,4 +1,18 @@
+import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { HostBotChatSubmission } from './bot-chat-submission.ts'
+import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
+import type { WorkbenchSettingsWrite } from './workbench-settings.js'
+import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
+import type { HostRootAnalysisDiagnostic } from './root-analysis-diagnostic.ts'
+import type { RecoveryDescribeInput, RecoveryValidateInput, RecoveryDescriptor, RecoveryValidation } from './recovery-materials.ts'
+import type { HostRootPlanningEvidence } from './root-planning-evidence.ts'
+import type { HostRootPlanningAttemptDescriptor, HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion } from './root-planning-attempt-authority.ts'
+import type { HostSavedAnalysisFields, HostRootAnalysisOutput } from './root-analysis-output.ts'
+import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootJournalCommand, HostRootJournalMetadata, HostRootAnalysisInput, HostRootSubmissionTarget, HostRootSubmissionDescriptor } from './root-authority.ts'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostCollaborationDeliveryChunk, HostCollaborationDeliveryResult } from './collaboration-delivery.ts'
+import type { HostSkillHubExecutionReceipt } from './skillhub-execution-receipt.ts'
+import type { SkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 
 /** Current on-wire Host control protocol version. */
 export type HostControlProtocolVersion = 1
@@ -39,6 +53,10 @@ export type HostMigrationTransferId = Branded<'HostMigrationTransferId'>
 export type HostMigrationImportId = Branded<'HostMigrationImportId'>
 /** Connection-bound authority for one verified owner-local legacy inventory. */
 export type HostMigrationSourceAuthority = Branded<'HostMigrationSourceAuthority'>
+/** Short-lived Host candidate id for one offline Account Profile preflight. */
+export type HostRecoveryCandidateId = Branded<'HostRecoveryCandidateId'>
+/** Desktop idempotency key for one confirmed offline recovery operation. */
+export type HostRecoveryOperationId = Branded<'HostRecoveryOperationId'>
 
 /**
  * Negotiated operation token. A capability is syntax-checked, sorted, and
@@ -61,9 +79,62 @@ export type HostControlErrorCode =
   | 'conflict'
   | 'busy'
   | 'upgrade_required'
+  | 'script_approval_required'
+  /** A definite extension validation refusal (already installed, entry conflict, unknown bundled version); never transient. */
+  | 'extension_refused'
   | 'migration_required'
   | 'unavailable'
   | 'internal_error'
+  | 'profile_not_found'
+  | 'profile_ambiguous'
+  | 'profile_integrity_failed'
+  | 'runtime_incompatible'
+  | 'recovery_proof_mismatch'
+  | 'recovery_preflight_stale'
+  | 'recovery_in_progress'
+  | 'recovery_worker_failed'
+  | 'recovery_timeout_unknown'
+  | 'scope_mismatch'
+  | 'selector_stale'
+  | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
+
+/** Read-only historical ownership description, authenticated by the existing connection tuple. */
+export interface ProfileRecoveryMaterialsDescribeRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly params: HostAuthorizedParams & RecoveryDescribeInput
+}
+/** Installation-signed historical facts; no worker or binding authority is granted. */
+export interface ProfileRecoveryMaterialsDescribeResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.describe'
+  readonly result: { readonly descriptor: RecoveryDescriptor; readonly signature: HostControlSignature }
+}
+/** Fresh original-Host validation of an imported historical descriptor and material proof. */
+export interface ProfileRecoveryMaterialsValidateRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly params: HostAuthorizedParams & RecoveryValidateInput
+}
+/** Transport-authenticated read-only observation, separately fenced by Main before file commit. */
+export interface ProfileRecoveryMaterialsValidateResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_materials.validate'
+  readonly result: RecoveryValidation
+}
 
 /** Initial challenge request; it is the only payload decoded before negotiation. */
 export interface HostInspectRequest {
@@ -92,6 +163,8 @@ export interface HostInspectResult {
     readonly runtime_generation: number
     readonly schema_generation: number
     readonly process_nonce: HostControlNonce
+    /** Fresh for each Host authority process, stable across its client connections. */
+    readonly boot_nonce: HostControlNonce
     readonly capabilities: readonly HostControlCapability[]
     readonly challenge_signature: HostControlSignature
     readonly executable_signature_digest: HostControlSha256
@@ -142,6 +215,7 @@ export interface ProfileEnsureRequest {
     readonly account_binding_handle: HostAccountBindingHandle
     readonly authority_environment_id: HostAuthorityEnvironmentId
     readonly authority_binding_version: number
+    readonly authority_binding_scope?: HostControlSha256
     readonly account_access_token?: string
     readonly account_issuer: string
     readonly account_subject: string
@@ -182,6 +256,481 @@ export interface ProfileRestoreResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.restore'
   readonly result: { readonly state: 'ready'; readonly profile_id: HostProfileId; readonly profile_selector: string }
+}
+
+/** Bootstrap one device-local Profile without any account identity or cloud authority. */
+export interface ProfileBootstrapLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bootstrap_local'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+  }
+}
+
+/** Local Profile provisioning result; the selector is Host-signed and identity-free. */
+export interface ProfileBootstrapLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bootstrap_local'
+  readonly result: {
+    readonly state: 'ready'
+    readonly profile_id: HostProfileId
+    readonly profile_selector: string
+    readonly persistence_generation: number
+  }
+}
+
+/** Restore one local-only Profile through a Host-signed selector and Main-vault material. */
+export interface ProfileRestoreLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.restore_local'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+  }
+}
+
+/** Refreshed local Profile selector after a successful restore. */
+export interface ProfileRestoreLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.restore_local'
+  readonly result: {
+    readonly state: 'ready'
+    readonly profile_id: HostProfileId
+    readonly profile_selector: string
+    readonly persistence_generation: number
+  }
+}
+
+/** Open a previously unlocked local-only Profile by Host-signed selector. */
+export interface ProfileOpenLocalRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_local'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string }
+}
+
+/** Local Profile lease result has the same non-secret surface as an account lease. */
+export interface ProfileOpenLocalResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_local'
+  readonly result: ProfileOpenResult['result']
+}
+
+/** Inspect only Account Profiles named by Main-vault key handles. */
+export interface ProfileRecoveryInspectRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_inspect'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handles: readonly string[]
+    readonly expected_runtime_generation: number
+    readonly expected_schema_generation: number
+  }
+}
+
+/** Anonymous recovery candidates; Profile ids, key handles, and paths are excluded. */
+export interface ProfileRecoveryInspectResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_inspect'
+  readonly result: {
+    readonly candidates: readonly {
+      readonly state: 'recoverable' | 'compatibility_blocked'
+      readonly candidate_id: HostRecoveryCandidateId
+      readonly profile_kind: 'account'
+      readonly binding_count: number
+      readonly persistence_generation: number
+      readonly session_count: number
+      readonly plugin_count: number
+      readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+      readonly preflight_digest: HostControlSha256
+      readonly reason_code?: string
+    }[]
+  }
+}
+
+/** Confirm one inspected offline Account Profile with ephemeral Main-vault material. */
+export interface ProfileRecoverOfflineAccountRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recover_offline_account'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_key_handle: string
+    readonly profile_unlock_material: string
+    readonly recovery_operation_id: HostRecoveryOperationId
+    readonly candidate_id: HostRecoveryCandidateId
+    readonly preflight_digest: HostControlSha256
+  }
+}
+
+/** Offline grant plus a selector signed in the offline-only domain. */
+export interface ProfileRecoverOfflineAccountResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recover_offline_account'
+  readonly result: {
+    readonly state: 'offline_ready'
+    readonly profile_selector: string
+    readonly access_scope: 'offline_local'
+    readonly persistence_generation: number
+    readonly runtime_generation: number
+  }
+}
+
+/** Open an Account Profile through an offline-domain selector. */
+export interface ProfileOpenOfflineAccountRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_offline_account'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string }
+}
+
+/** Offline-only view lease; access scope is explicit on the wire. */
+export interface ProfileOpenOfflineAccountResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.open_offline_account'
+  readonly result: ProfileOpenResult['result'] & { readonly access_scope: 'offline_local' }
+}
+
+/** Query one process-local recovery operation without restarting it. */
+export interface ProfileRecoveryStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_status'
+  readonly params: HostAuthorizedParams & { readonly recovery_operation_id: HostRecoveryOperationId }
+}
+
+/** Stable recovery operation state without secrets or Profile identifiers. */
+export interface ProfileRecoveryStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.recovery_status'
+  readonly result:
+    | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+    | { readonly state: 'failed'; readonly reason_code: 'recovery_worker_failed' }
+}
+
+/** Online-issued clock anchor scoped by the authorized Profile and Host installation. */
+export type HostSkillHubClockAnchorId = Branded<'HostSkillHubClockAnchorId'>
+
+/** Independent checkpoint revision and digest held by the Host process. */
+export interface HostSkillHubClockWitnessValue {
+  readonly revision: string
+  readonly digest: string
+}
+
+/** Read a witness or advance its exact revision without replacing an existing anchor. */
+export type HostSkillHubClockWitnessCommand =
+  | { readonly kind: 'read' }
+  | {
+    readonly kind: 'compare_and_set'
+    readonly previous: HostSkillHubClockWitnessValue | null
+    readonly next: HostSkillHubClockWitnessValue
+  }
+
+/** Profile-granted access to an independent Host-process witness. */
+export interface ProfileSkillHubClockWitnessRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_witness'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_id: HostProfileId
+    readonly binding_generation: string
+    readonly host_key_id: HostControlSha256
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly command: HostSkillHubClockWitnessCommand
+  }
+}
+
+/** Read uses applied=null; compare-and-set reports whether the next value was committed. */
+export interface ProfileSkillHubClockWitnessResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_witness'
+  readonly result: {
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly value: HostSkillHubClockWitnessValue | null
+    readonly applied: boolean | null
+  }
+}
+
+/** Host-issued anchors prevent an evicted witness from being initialized again. */
+export type HostSkillHubClockV2Command =
+  | { readonly kind: 'epoch' }
+  | { readonly kind: 'issue'
+    readonly purpose: 'asset' | 'work'
+    readonly active_asset_anchor_id: HostSkillHubClockAnchorId | null }
+  | {
+    readonly kind: 'witness'
+    readonly anchor_id: HostSkillHubClockAnchorId
+    readonly epoch: HostControlNonce
+    readonly ticket: HostControlNonce | null
+    readonly command: HostSkillHubClockWitnessCommand
+  }
+
+/** Profile-granted issue, epoch read or exact witness operation for the V2 ledger. */
+export interface ProfileSkillHubClockV2Request {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_v2'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly profile_id: HostProfileId
+    readonly binding_generation: string
+    readonly host_key_id: HostControlSha256
+    readonly command: HostSkillHubClockV2Command
+  }
+}
+
+/** Current epoch, Host-issued ticket or exact witness verdict. */
+export interface ProfileSkillHubClockV2Result {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_clock_v2'
+  readonly result:
+    | { readonly kind: 'epoch'; readonly epoch: HostControlNonce }
+    | {
+      readonly kind: 'issued'
+      readonly anchor_id: HostSkillHubClockAnchorId
+      readonly epoch: HostControlNonce
+      readonly ticket: HostControlNonce
+    }
+    | {
+      readonly kind: 'witness'
+      readonly anchor_id: HostSkillHubClockAnchorId
+      readonly epoch: HostControlNonce
+      readonly value: HostSkillHubClockWitnessValue | null
+      readonly applied: boolean | null
+    }
+}
+
+/** Open the same Profile through a Main-only local view lease. */
+export interface ProfileSkillHubBindingRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_binding'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly actor_user_id: string
+    readonly computer_id: string
+    readonly challenge_id: string
+  }
+}
+
+/** Host-signed exact local Profile fact for one Slark challenge. */
+export interface ProfileSkillHubBindingResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_binding'
+  readonly result: {
+    readonly version: 1
+    readonly actorUserId: string
+    readonly computerId: string
+    readonly installationId: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly challengeId: string
+    readonly signature: string
+  }
+}
+
+/** Ask the current Host/Profile grant to sign one Server-resolved private Bot message actor. */
+export interface ProfileSkillHubBotMessageActorRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly input: SkillHubBotMessageActorInput
+  }
+}
+
+/** Compact EdDSA JWS signed only by the current installation key. */
+export interface ProfileSkillHubBotMessageActorResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_bot_message_actor'
+  readonly result: { readonly compact_jws: string }
+}
+
+/** Fixed package coordinates carried with every Host-controlled ZIP fragment. */
+export interface HostSkillHubPackagePlan {
+  readonly operationId: string
+  readonly packageId: string
+  readonly profileId: string
+  readonly hostKeyId: string
+  readonly bindingGeneration: string
+  readonly expectedRevision: string
+  readonly versionId: string
+  readonly skillSlug: string
+  readonly version: string
+  readonly archiveSha256: string
+  readonly manifestSha256: string
+}
+
+/** Upload one bounded fragment under the current connection's Profile grant. */
+export interface ProfileSkillHubPackageChunkRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_chunk'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly plan: HostSkillHubPackagePlan
+    readonly total_bytes: number
+    readonly offset: number
+    readonly chunk_base64url: string
+  }
+}
+
+/** Preparation acknowledgment; it is not an activation or load receipt. */
+export interface ProfileSkillHubPackageChunkResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_chunk'
+  readonly result: { readonly next_offset: number; readonly prepared: boolean }
+}
+
+/** Host-signed activation fact; readiness does not attest runtime loading. */
+export interface HostSkillHubPackageSignedReceipt {
+  readonly version: 1
+  readonly installationId: string
+  readonly challengeId: string
+  readonly operationId: string
+  readonly packageId: string
+  readonly profileId: string
+  readonly hostKeyId: string
+  readonly bindingGeneration: string
+  readonly revision: string
+  readonly versionId: string
+  readonly archiveSha256: string
+  readonly manifestSha256: string
+  readonly readiness: 'prepared'
+  readonly loadEvidenceId: null
+  readonly signature: HostControlSignature
+}
+
+/** The same Profile grant gates both CAS activation and receipt readback. */
+export interface ProfileSkillHubPackageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package'
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string
+    readonly challenge_id: string } & (
+    { readonly action: 'activate'
+      readonly operation_id: string
+      readonly binding_generation: string
+      readonly expected_revision: string }
+    | { readonly action: 'current'
+      readonly package_id: string })
+}
+
+/** Signed activation or current-readback result; null means no active package. */
+export interface ProfileSkillHubPackageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package'
+  readonly result: { readonly receipt: HostSkillHubPackageSignedReceipt | null }
+}
+
+/** One immutable package object selected by an exact signed activation receipt. */
+export type HostSkillHubPackageSnapshotTarget =
+  | { readonly kind: 'manifest' }
+  | { readonly kind: 'file'; readonly path: string }
+
+/** Read one bounded chunk without following the package's mutable current pointer. */
+export interface ProfileSkillHubPackageSnapshotRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+  }
+}
+
+/** Exact-operation bytes bounded below the Host frame ceiling. */
+export interface ProfileSkillHubPackageSnapshotResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_package_snapshot'
+  readonly result: {
+    readonly operation_id: string
+    readonly manifest_sha256: HostControlSha256
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly total_bytes: number
+    readonly chunk_base64url: string
+    readonly complete: boolean
+  }
+}
+
+/** Daemon-observed execution fields that the authorized Host binds to one fixed package. */
+export type HostSkillHubExecutionReport = Pick<HostSkillHubExecutionReceipt,
+  'effectId' | 'requestDigest' | 'subject' | 'registryId' | 'hostId' | 'profileId'
+  | 'bindingGeneration' | 'equipmentRevision' | 'hostRevision'
+  | 'computerAuthorizationVersion' | 'sandboxOperationId' | 'containerId' | 'backendId'
+  | 'image' | 'entry' | 'args' | 'exitCode' | 'stdoutSha256' | 'stderrSha256'
+  | 'interrupted' | 'quiescent' | 'network' | 'readonly'>
+
+/** Ask the current Profile-authorized Host to sign one completed sandbox report. */
+export interface ProfileSkillHubExecutionReceiptRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly params: HostAuthorizedParams & {
+    readonly profile_selector: string
+    readonly package_receipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+  }
+}
+
+/** Installation-signed execution fact for the exact fixed package and sandbox result. */
+export interface ProfileSkillHubExecutionReceiptResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.skillhub_execution_receipt'
+  readonly result: { readonly receipt: HostSkillHubExecutionReceipt }
 }
 
 /** Open the same Profile through a Main-only local view lease. */
@@ -240,6 +789,711 @@ export interface ProfileViewActivateResult {
     readonly expires_at: number
     readonly bootstrap_cookie: { readonly name: string; readonly value: string }
   }
+}
+
+/** Registry identities requested through the authenticated Host connection. */
+export interface HostWorkspaceModelSelectionTarget {
+  readonly workspace_id: Branded<'WorkspaceId'>
+  readonly session_id: Branded<'SessionId'>
+}
+
+/** Read-only effective choice; it is not an executable configuration snapshot or Source proof. */
+export interface HostWorkspaceModelSelection extends HostWorkspaceModelSelectionTarget {
+  readonly provider: string
+  readonly model: string
+  readonly reasoning_effort?: string
+}
+
+/** Inspect a Session only in the Profile selected by a verified Account binding. */
+export interface ProfileWorkspaceModelSelectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly params: HostAuthorizedParams & HostWorkspaceModelSelectionTarget & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+  }
+}
+
+/** Minimal selection fields; no message, path, provider configuration, or worker token. */
+export interface ProfileWorkspaceModelSelectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_model_selection'
+  readonly result: HostWorkspaceModelSelection
+}
+
+/** Server challenge bound to one collaboration registration operation and Account. */
+export interface HostCollaborationRegistrationChallenge {
+  readonly registration_request_id: Branded<'CollaborationRegistrationRequestId'>
+  readonly challenge_id: Branded<'CollaborationRegistrationChallengeId'>
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+
+/** Installation signature over the challenge and current Host process; grants no Source authority. */
+export interface HostCollaborationRegistrationAssertion {
+  readonly schema_version: 2
+  readonly challenge: HostCollaborationRegistrationChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+
+/** Sign only after this connection has verified the challenged Account and binding. */
+export interface ProfileCollaborationRegistrationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostCollaborationRegistrationChallenge
+  }
+}
+
+/** Exact signed registration assertion without paths, vault handles or credentials. */
+export interface ProfileCollaborationRegistrationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_registration'
+  readonly result: HostCollaborationRegistrationAssertion
+}
+
+/** Account-bound read of one Bot in the selected Profile; no private chat fields. */
+export interface ProfileBotIdentityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly bot_id: string
+  }
+}
+
+/** Bounded Bot identity or explicit absence from an exclusive-writer Profile. */
+export interface ProfileBotIdentityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
+}
+
+/** Account-bound page of public Bot identities in the selected Profile. */
+export interface ProfileBotRosterRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_roster'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly after_bot_id: string
+    readonly limit: number
+  }
+}
+
+/** Validated page or explicit absence when the exclusive writer is unavailable. */
+export interface ProfileBotRosterResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_roster'
+  readonly result: { readonly page: import('./bot-identity.ts').HostBotRosterPage | null }
+}
+
+/** Current Account Profile prepares a Slark Source for one existing native room. */
+export interface ProfileNativeRoomRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly room_id: string
+  }
+}
+
+/** Signed room-to-bridge Source or absence from the Profile writer. */
+export interface ProfileNativeRoomResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room'
+  readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
+}
+
+/** Account-bound member and message operation for an existing native room. */
+export interface ProfileNativeRoomOperationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_operation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly command: import('./native-room-operations.ts').HostNativeRoomCommand
+  }
+}
+
+/** Exact result of a private Account-bound room operation. */
+export interface ProfileNativeRoomOperationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_operation'
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply } |
+    { readonly reply: Extract<import('./native-room-operations.ts').HostNativeRoomReply,
+      { state: 'turns' }>
+    readonly turn_assertion: import('./native-room-turn-assertion.ts').HostNativeRoomTurnAssertion }
+}
+
+/** Result chunks are separate from ordinary room operations and require Slark authority. */
+export interface ProfileNativeAgentResultRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> &
+    import('./native-agent-result.ts').HostNativeAgentResultInput
+}
+
+/** Profile receipt for one Account-verified native Agent result chunk. */
+export interface ProfileNativeAgentResultResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_agent_result'
+  readonly result: { readonly reply: import('./native-room-operations.ts').HostNativeRoomReply }
+}
+
+/** Account-bound delivery from a signed Slark group to the current Bot Profile. */
+export interface ProfileBotGroupDeliverRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupDeliveryInput
+}
+
+/** Durable worker receipt; a transport failure leaves the original delivery uncertain. */
+export interface ProfileBotGroupDeliverResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
+/** Separate owner stop capability bound to one Bot delivery and decision request. */
+export interface ProfileBotGroupStopRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_stop'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupStopInput
+}
+/** Bounded worker receipt for the owner-authorized stop request. */
+export interface ProfileBotGroupStopResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_stop'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
+/** Read a Bot result only while the original Slark delivery remains authorized. */
+export interface ProfileBotGroupResultPageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly after: number }
+}
+/** Host result frame carrying a verified Bot result and optional proof. */
+export interface ProfileBotGroupResultPageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse
+    readonly proof: import('./bot-group-result-proof.ts').HostBotGroupResultProof | null }
+}
+
+/** Acknowledge one already persisted Slark result under its original live delivery. */
+export interface ProfileBotGroupResultAckRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly result_id: string }
+}
+/** Host result frame after the Profile worker acknowledges one Bot result. */
+export interface ProfileBotGroupResultAckResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
+/** Server nonce bound to Account and one registry workspace/ordinary Session. */
+export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
+  readonly request_id: HostControlRequestId
+  readonly challenge_nonce: HostControlNonce
+  readonly expires_at: number
+  readonly audience: string
+  readonly environment_id: HostAuthorityEnvironmentId
+  readonly account_issuer: string
+  readonly account_subject: Branded<'AccountSubject'>
+}
+/** Installation signature for registry ownership only; no Source/journal/model dispatch grant. */
+export interface HostWorkspaceAuthorityAssertion {
+  readonly schema_version: 1
+  readonly challenge: HostWorkspaceAuthorityChallenge
+  readonly installation_id: InstallationId
+  readonly installation_public_key: HostControlPublicKey
+  readonly host_instance_id: HostInstanceId
+  readonly process_nonce: HostControlNonce
+  readonly signature: HostControlSignature
+}
+/** Account-verified, Main-only workspace ownership read and signature. */
+export interface ProfileWorkspaceAuthorityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostWorkspaceAuthorityChallenge
+  }
+}
+/** Signed workspace/Session ownership without model choice or message content. */
+export interface ProfileWorkspaceAuthorityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.workspace_authority'
+  readonly result: HostWorkspaceAuthorityAssertion
+}
+
+/** Server challenge for one durable Registry archive phase, separate from membership proof. */
+export interface HostCollaborationArchiveStateChallenge extends HostWorkspaceAuthorityChallenge {
+  readonly archive_token: string
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'
+}
+/** Installation signature over one observed Registry phase. */
+export interface HostCollaborationArchiveStateAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostCollaborationArchiveStateChallenge
+}
+/** Private parent-to-worker lookup target; desired phase is deliberately absent. */
+export interface HostCollaborationArchiveStateTarget extends HostWorkspaceModelSelectionTarget {
+  readonly archive_token: string
+  readonly environment_id: string
+  readonly account_issuer: string
+  readonly account_subject: string
+}
+/** Local phase observed without a caller-selected expectation. */
+export interface HostCollaborationArchiveStateValue {
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'
+}
+/** Account-verified private control read; browser view leases cannot invoke it. */
+export interface ProfileCollaborationArchiveStateRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_state'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostCollaborationArchiveStateChallenge
+  }
+}
+/** Signed read response from the current Account Profile. */
+export interface ProfileCollaborationArchiveStateResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_state'
+  readonly result: HostCollaborationArchiveStateAssertion
+}
+
+/** One prepared Slark group bound to the original Session before cloud activation. */
+export interface HostGroupInputFenceChallenge extends HostWorkspaceAuthorityChallenge {
+  readonly group_id: string
+  readonly group_version: number
+}
+/** Exact durable fence echoed by the Profile worker before Host signing. */
+export type HostGroupInputFenceValue = Readonly<Pick<HostGroupInputFenceChallenge,
+  'workspace_id' | 'session_id' | 'group_id' | 'group_version'>>
+/** Installation signature issued only after the Profile durably closes old input. */
+export interface HostGroupInputFenceAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostGroupInputFenceChallenge
+}
+/** Account-verified request to install the original Session's durable group fence. */
+export interface ProfileGroupInputFenceRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostGroupInputFenceChallenge
+  }
+}
+/** Signed acknowledgement of the exact local group and version. */
+export interface ProfileGroupInputFenceResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.group_input_fence'
+  readonly result: HostGroupInputFenceAssertion
+}
+
+/** Exact Account and Session identity used to recover a persisted archive token. */
+export interface HostCollaborationArchiveIntentTarget extends HostWorkspaceModelSelectionTarget {
+  readonly environment_id: string
+  readonly account_issuer: string
+  readonly account_subject: string
+}
+/** A missing intent never carries a token; existing intents reveal the original token only to Main/Daemon. */
+export type HostCollaborationArchiveIntentValue =
+  | Readonly<{ archive_phase: 'missing'; archive_token: null }>
+  | Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored'; archive_token: string }>
+/** Account-bound recovery lookup, separate from browser view reads. */
+export interface ProfileCollaborationArchiveIntentRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_intent'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly target: HostCollaborationArchiveIntentTarget
+  }
+}
+/** Original durable token or explicit absence from the selected Account Profile. */
+export interface ProfileCollaborationArchiveIntentResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_intent'
+  readonly result: HostCollaborationArchiveIntentValue
+}
+
+/** Main/Daemon-owned durable mutation against the current Account Profile worker. */
+export interface HostCollaborationArchiveTransitionTarget extends HostCollaborationArchiveStateTarget {
+  readonly action: 'stage' | 'prepared' | 'archive' | 'restore' | 'finish_release'
+}
+/** Durable phase returned after a worker mutation or same-token retry. */
+export interface HostCollaborationArchiveTransitionResult {
+  readonly archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' | 'released'
+}
+/** Account-bound control frame for one Registry mutation. */
+export interface ProfileCollaborationArchiveTransitionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_transition'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly target: HostCollaborationArchiveTransitionTarget
+  }
+}
+/** Current Profile worker's durable phase after that mutation. */
+export interface ProfileCollaborationArchiveTransitionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.collaboration_archive_transition'
+  readonly result: HostCollaborationArchiveTransitionResult
+}
+
+/** Persistent Source identity within one Profile; no caller model or journal metadata. */
+export interface HostCollaborationSourceTarget extends HostWorkspaceModelSelectionTarget {
+  readonly source_message_id: string
+  readonly source_revision: string
+}
+/** Profile journal observation; the digest covers the complete committed Source snapshot. */
+export interface HostCollaborationSourceDescriptor extends HostCollaborationSourceTarget {
+  readonly snapshot_digest: string
+}
+/** Main-only bounded journal JSON. Consumers must validate the complete Source schema and digest before admission. */
+export interface HostCollaborationSourceSnapshot {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly snapshot_json: string
+}
+/** Read original Source content through this connection's verified Account; never accepts content overrides. */
+export interface ProfileSourceSnapshotRequest extends Omit<ProfileWorkspaceModelSelectionRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_snapshot'
+  readonly params: ProfileWorkspaceModelSelectionRequest['params'] & HostCollaborationSourceTarget & {
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly offset: number
+  }
+}
+/** Original Source payload without prepared calls, provider configuration, or unlock material. */
+export interface ProfileSourceSnapshotResult extends Omit<ProfileWorkspaceModelSelectionResult, 'method' | 'result'> {
+  readonly method: 'profile.source_snapshot'
+  readonly result: Readonly<{ descriptor:HostCollaborationSourceDescriptor;offset:number;total_bytes:number;chunk_base64url:string }>
+}
+/** Original Source output evidence; syntax does not grant dispatch or task admission. */
+export type HostSourceAnalysisOutput = Readonly<{ state: 'missing'; descriptor: Readonly<HostCollaborationSourceDescriptor> }>
+  | Readonly<{ state: 'saved'; descriptor: Readonly<HostCollaborationSourceDescriptor> } & HostSavedAnalysisFields>
+/** Parent commands retain no caller-selected model or Account binding digest. */
+export type HostCollaborationAnalysisCommand =
+  | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+  | Readonly<{ action: 'read_source_output'; target: HostCollaborationSourceTarget }>
+  | Readonly<{ action: 'read_root_output'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'read_root_diagnostic'; target: HostRootSubmissionTarget }>
+  | Readonly<{ action: 'prepare_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'capture_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'start_captured_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'release_captured_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'recover_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'reconcile_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'resume_root'; input: HostRootAnalysisInput }>
+  | Readonly<{ action: 'prepare'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'resume_source'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'capture_reply'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'prepare_clarification'; input: HostRemoteSessionJson }>
+  | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
+/** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
+export type HostCollaborationAnalysisResult =
+  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback'; record: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
+  | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
+  | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
+  | Readonly<{ kind: 'root_output'; evidence: HostRootAnalysisOutput }>
+  | Readonly<{ kind: 'root_diagnostic'; evidence: HostRootAnalysisDiagnostic }>
+  | Readonly<{ kind: 'root_prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_captured'; capture: HostRemoteSessionJson; context_receipt?: import('./root-text-context.ts').HostRootTextContextReceipt }>
+  | Readonly<{ kind: 'root_capture_released'; root: HostRootSubmissionDescriptor }>
+  | Readonly<{ kind: 'prepared'; preparation: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'reply_source'; capture: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'output'; json_base64url: string; analysis_receipt?: HostCollaborationAnalysisReceipt }>
+/** Main-only analysis in this connection's token-verified Account Profile. */
+export interface ProfileCollaborationAnalysisRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly params: Omit<ProfileSourceSnapshotRequest['params'], 'offset' | keyof HostCollaborationSourceTarget> & {
+    readonly command: HostCollaborationAnalysisCommand
+  }
+}
+/** Durable preparation or saved original output; neither grants task admission. */
+export interface ProfileCollaborationAnalysisResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_analysis'
+  readonly result: HostCollaborationAnalysisResult
+}
+/** Main-only full reply upload into the currently authorized Account Profile. */
+export interface ProfileCollaborationDeliveryRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly command: HostCollaborationDeliveryChunk
+  }
+}
+/** Sequential progress or installation-signed durable commit, without the answer. */
+export interface ProfileCollaborationDeliveryResult extends Omit<ProfileCollaborationAnalysisResult, 'method' | 'result'> {
+  readonly method: 'profile.collaboration_delivery'
+  readonly result: HostCollaborationDeliveryResult
+}
+/** Server nonce bound to one Source and current registered Host epoch. */
+export interface HostSourceAuthorityChallenge extends HostWorkspaceAuthorityChallenge, HostCollaborationSourceDescriptor {
+  readonly host_epoch: string
+}
+/** Installation signature for committed Source contents; no target execution grant. */
+export interface HostSourceAuthorityAssertion extends Omit<HostWorkspaceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostSourceAuthorityChallenge
+}
+/** Account-verified root observation; the signer must read the original journal binding. */
+export interface ProfileRootAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootAuthorityChallenge }
+}
+/** Signature in the dedicated root domain, retaining the original source/root/command. */
+export interface ProfileRootAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_authority'
+  readonly result: HostRootAuthorityAssertion
+}
+/** Account-verified, Main-only persistent Source observation and signature. */
+export interface ProfileSourceAuthorityRequest extends Omit<ProfileWorkspaceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.source_authority'
+  readonly params: HostAuthorizedParams & {
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly challenge: HostSourceAuthorityChallenge
+  }
+}
+/** Signed Source coordinates and full snapshot digest, without message content. */
+export interface ProfileSourceAuthorityResult extends Omit<ProfileWorkspaceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.source_authority'
+  readonly result: HostSourceAuthorityAssertion
+}
+
+/** Profile-owned committed transfer grant; coordinates or digests supplied by Desktop grant no access. */
+export interface HostCollaborationReferenceGrant extends HostCollaborationSourceDescriptor {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Exact private lookup of an independently committed Source-bound reference selection. */
+export interface HostCollaborationReferenceTarget extends HostCollaborationSourceTarget {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Correlates one independently authorized reference selection. */
+export type HostCollaborationReferenceRequestId = Branded<'HostCollaborationReferenceRequestId'>
+/** One addressed recipient in the original Source. */
+export type HostCollaborationMentionId = Branded<'HostCollaborationMentionId'>
+/** Locator selection without caller bytes, paths, media type or computed digests. */
+export type HostCollaborationReferenceSelection = Readonly<{
+  source: Readonly<{ workspace_id: string; session_id: string; source_message_id: string; revision: string }>
+  reference_request_id: HostCollaborationReferenceRequestId
+  source_kind: 'message' | 'file'
+  source_locator: string
+  source_version: string
+  range: Readonly<{ unit: 'whole' }> | Readonly<{ unit: 'quote'; text: string }>
+    | Readonly<{ unit: 'utf16' | 'byte'; start: number; end: number }>
+  recipient_mention_ids: readonly HostCollaborationMentionId[]
+  source_evidence_spans: readonly Readonly<{ source_message_id: string; source_revision: string; start: number; end: number }>[]
+}>
+/** Computed Profile metadata; consumers still validate the full request and user sharing intent. */
+export type HostCollaborationReferenceCapture = Readonly<{
+  descriptor: HostCollaborationSourceDescriptor
+  request: HostRemoteSessionJson
+  reference_request_digest: HostControlSha256
+}>
+/** Parent-only capture in this connection's current token-verified Account Profile. */
+export interface ProfileReferenceCaptureRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_capture'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & {
+    readonly selection: HostCollaborationReferenceSelection
+  }
+}
+/** Selection metadata without selected bytes or a reference transfer assertion. */
+export interface ProfileReferenceCaptureResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_capture'
+  readonly result: HostCollaborationReferenceCapture
+}
+/** Original Source and committed reference identity, with a byte offset for bounded reads. */
+export interface HostCollaborationReferenceContentTarget extends HostCollaborationReferenceTarget {
+  readonly offset: number
+}
+/** One exact reference byte chunk; consumers verify the complete content hash before use. */
+export interface HostCollaborationReferenceContentChunk {
+  readonly descriptor: HostCollaborationSourceDescriptor
+  readonly reference_request_digest: HostControlSha256
+  readonly content_digest: HostControlSha256
+  readonly offset: number
+  readonly total_bytes: number
+  readonly chunk_base64url: string
+}
+/** Parent-only byte read using the current token-verified Account and separate Reference capability. */
+export interface ProfileReferenceContentRequest extends Omit<ProfileSourceSnapshotRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_content'
+  readonly params: ProfileSourceSnapshotRequest['params'] & { readonly reference_request_digest: HostControlSha256 }
+}
+/** Bounded reference bytes; this response does not authorize cloud sharing or recipient task admission. */
+export interface ProfileReferenceContentResult extends Omit<ProfileSourceSnapshotResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_content'
+  readonly result: HostCollaborationReferenceContentChunk
+}
+/** Server nonce binds the original Source and the complete immutable reference reservation request. */
+export interface HostReferenceAuthorityChallenge extends HostSourceAuthorityChallenge {
+  readonly reference_request_digest: HostControlSha256
+}
+/** Installation signature over a separate Profile transfer grant; no target execution authority. */
+export interface HostReferenceAuthorityAssertion extends Omit<HostSourceAuthorityAssertion, 'challenge'> {
+  readonly challenge: HostReferenceAuthorityChallenge
+}
+/** Main-only transfer attestation requires current Account access and a separate committed Profile grant. */
+export interface ProfileReferenceAuthorityRequest extends Omit<ProfileSourceAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.reference_authority'
+  readonly params: Omit<ProfileSourceAuthorityRequest['params'], 'challenge'> & {
+    readonly challenge: HostReferenceAuthorityChallenge
+  }
+}
+/** Signed reference reservation digest without content, filesystem paths or credentials. */
+export interface ProfileReferenceAuthorityResult extends Omit<ProfileSourceAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.reference_authority'
+  readonly result: HostReferenceAuthorityAssertion
+}
+
+/** One bounded text request authorized by this connection's verified Account grant. */
+export interface ProfileModelTextRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly text: string
+  }
+}
+
+/** Text and model identity, or a classified failure without provider details. */
+export interface ProfileModelTextResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_text'
+  readonly result:
+    | {
+      readonly state: 'complete'
+      readonly provider: string
+      readonly model: string
+      readonly text: string
+    }
+    | {
+      readonly state: 'rejected'
+      readonly code: 'invalid_input' | 'no_default_model' | 'missing_credential'
+        | 'provider_failed' | 'cancelled' | 'timeout' | 'response_too_large'
+    }
 }
 
 /** Revoke one Main-owned personal view lease. */
@@ -552,8 +1806,561 @@ export interface HostControlErrorFrame {
   }
 }
 
+/** Opaque confirmation plan identifier. */
+export type HostExtensionPlanId = Branded<'HostExtensionPlanId'>
+/** Durable extension operation identifier used for retry and recovery. */
+export type HostExtensionOperationId = Branded<'HostExtensionOperationId'>
+/** Wire market kinds; installation availability is determined by the negotiated Host provider. */
+export type HostExtensionKind = 'plugin' | 'mcp' | 'skill'
+/** Paths and executable arguments are never accepted as operation selectors. */
+export type HostExtensionCommand =
+  | { readonly action: 'inventory'; readonly kind: HostExtensionKind }
+  | { readonly action: 'prepare'; readonly kind: HostExtensionKind; readonly payload: string }
+  | {
+    readonly action: 'commit'
+    readonly plan_id: HostExtensionPlanId
+    readonly operation_id: HostExtensionOperationId
+    readonly script_digest?: HostControlSha256
+  }
+  | { readonly action: 'status' | 'cancel'; readonly operation_id: HostExtensionOperationId }
+/** Secret-free extension metadata returned to the trusted broker. */
+export type HostExtensionResponse =
+  | {
+    readonly state: 'prepared'
+    readonly plan_id: HostExtensionPlanId
+    readonly kind: HostExtensionKind
+    readonly digest: HostControlSha256
+    readonly expires_at: number
+    readonly scripts?: readonly { readonly name: string; readonly command: string }[]
+    readonly script_digest?: HostControlSha256
+  }
+  | {
+    readonly state: 'inventory'
+    /** Explicit support for confirmed GitHub directory archives; absent means unsupported. */
+    readonly plugin_remove?: boolean
+    readonly plugin_update?: boolean
+    readonly plugin_toggle?: boolean
+    readonly skill_archives?: boolean
+    readonly skill_remove?: boolean
+    readonly skill_replace?: boolean
+    readonly skill_files?: boolean
+    readonly skill_invocation?: boolean
+    readonly mcp_remove?: boolean
+    readonly mcp_update?: boolean
+    readonly kind: HostExtensionKind
+    readonly entries: readonly {
+      readonly id: string
+      readonly name: string
+      readonly transport: string
+      readonly model_invocable?: boolean
+      readonly user_invocable?: boolean
+      readonly skill_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+      readonly skill_status?: 'effective' | 'shadowed' | 'not_visible'
+      readonly effective_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+      readonly plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported'
+    }[]
+  }
+  | {
+    readonly state: 'receipt'
+    readonly skill_restore?: string
+    readonly mcp_restore?: true
+    readonly plugin_restore?: string
+    readonly plugin_complete?: { readonly action: 'install' | 'update' | 'remove'; readonly package_name: string; readonly spec?: string }
+    readonly completed_by?: HostExtensionOperationId
+    readonly completes_operation?: HostExtensionOperationId
+    readonly restored_by?: HostExtensionOperationId
+    readonly restores_operation?: HostExtensionOperationId
+    readonly operation_id: HostExtensionOperationId
+    readonly outcome: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown'
+    readonly cancellation_requested: boolean
+    readonly created_at: number
+    readonly updated_at: number
+    readonly skill_source?: 'absent' | 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'
+    readonly reason?: 'revision_conflict' | 'authority_revoked' | 'expired' | 'interrupted' | 'executor_failed'
+  }
+/** Extension commands bind only to a Main-held view lease. */
+export interface ProfileExtensionsRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.extensions'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: HostExtensionCommand
+  }
+}
+/** Bounded metadata; payloads, credentials and filesystem paths are excluded. */
+export interface ProfileExtensionsResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.extensions'
+  readonly result: HostExtensionResponse
+}
+
+/** JSON returned from one bounded remote Session command. */
+export type HostRemoteSessionJson =
+  | null | boolean | number | string
+  | readonly HostRemoteSessionJson[]
+  | { readonly [key: string]: HostRemoteSessionJson }
+
+/** Opaque-to-browser claim returned by the selected Profile and retained by the daemon. */
+export interface HostRemoteSessionControlProof {
+  readonly controller_id: string
+  readonly generation: string
+  readonly epoch: number
+}
+
+/** Closed command set exposed to a remote personal client through a leased Profile. */
+export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.chat.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotChatSubmission }
+  | { readonly operation: 'bot.chat.receipt'
+    readonly command_id: HostControlRequestId
+    readonly request: HostBotChatSubmission }
+  | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
+  | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
+  | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
+  | {
+    readonly operation: 'control.status'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+  }
+  | {
+    readonly operation: 'control.acquire'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly takeover: boolean
+    readonly expected_epoch?: number
+  }
+  | {
+    readonly operation: 'control.renew' | 'control.release'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly controller_id: string
+    readonly generation: string
+    readonly epoch: number
+  }
+  | { readonly operation: 'session.list'; readonly command_id: HostControlRequestId }
+  | { readonly operation: 'directory.pick'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string }
+  | { readonly operation: 'workspace.create'
+    readonly command_id: HostControlRequestId
+    readonly client_id: string
+    readonly grant_id: string
+    readonly path: string }
+  | { readonly operation: 'session.create'
+    readonly command_id: HostControlRequestId
+    readonly workspace_id?: string
+    readonly session_id?: string }
+  | { readonly operation: 'remote.event.respond'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly client_id: string
+    readonly event_id: string
+    readonly outcome: 'allowed-once' | 'rejected' | 'next' }
+  | {
+    readonly operation: 'session.history'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly max_events: number
+  }
+  | {
+    readonly operation: 'session.prompt'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly mode: 'queue'
+    readonly content: readonly { readonly type: 'text'; readonly text: string }[]
+    readonly client_time_zone?: string
+  }
+  | {
+    readonly operation: 'session.cancel' | 'session.delete'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+  }
+  | {
+    readonly operation: 'session.rename'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly title: string
+  }
+  | {
+    readonly operation: 'session.select_model'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly provider: string
+    readonly model: string
+    readonly reasoning_effort?: string
+  }
+  | {
+    readonly operation: 'session.select_agent'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly agent_preset: string
+  }
+  | {
+    readonly operation: 'approval.poll'
+    readonly command_id: HostControlRequestId
+    readonly wait_ms: number
+    readonly cursor?: string
+  }
+  | {
+    readonly operation: 'approval.respond'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly approval_id: string
+    readonly outcome: 'allowed-once' | 'rejected'
+    readonly operation_digest?: HostControlSha256
+  }
+
+/** Execute one command only through the Profile worker selected by this view lease. */
+export interface ProfileRemoteSessionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_session'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: HostRemoteSessionCommand
+  }
+}
+
+/** Bounded worker projection; credentials, paths, cookies and launch tokens are excluded. */
+export interface ProfileRemoteSessionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_session'
+  readonly result: { readonly value: HostRemoteSessionJson }
+}
+
+/** Exact read RPC carried only by a live Host-owned Profile view lease.
+ * Gzip asset offsets address compressed bytes and require signed `profile.remote_ui_asset_gzip` capability.
+ */
+export interface ProfileRemoteUiReadRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly endpoint: 'bot/chat' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+      | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
+      | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
+      | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'
+    readonly payload: { readonly args: HostRemoteSessionJson }
+  }
+}
+
+/** One small read projection; the control channel rejects responses above 64 KiB. */
+export interface ProfileRemoteUiReadResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_read'
+  readonly result: { readonly value: HostRemoteSessionJson }
+}
+
+/** Only selected native read streams may cross a live Profile view lease. */
+export type ProfileRemoteUiStreamCommand =
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'terminal/stream'; readonly item_chunks?: true; readonly payload: WorkbenchTerminalStreamPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workspaceFiles/changes'; readonly payload: WorkbenchChangesPayload }
+  | { readonly action: 'open'; readonly stream_id: string; readonly endpoint: 'workbench/read'; readonly payload: WorkbenchReadPayload }
+  | {
+    readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/follow'
+    readonly item_chunks?: true
+    readonly payload: { readonly args: { readonly request: {
+      readonly address: { readonly kind: 'session'; readonly sessionId: string }
+        | {
+          readonly kind: 'subagent'
+          readonly parentSessionId: string
+          readonly childSessionId: string
+          readonly mode: 'one-shot' | 'continuable'
+        }
+      readonly maxMessages?: number
+      readonly assistantStream?: true
+      readonly turnWindow?: { readonly minMessages: number; readonly minTurns: number }
+    } } }
+  }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'workspace/follow'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: '$events'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'open'
+    readonly stream_id: string
+    readonly endpoint: 'session/list'
+    readonly payload: { readonly args: Record<string, never> } }
+  | { readonly action: 'poll' | 'close'; readonly stream_id: string }
+
+/** One short, lease-authorized stream control RPC. */
+export interface ProfileRemoteUiStreamRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+    readonly command: ProfileRemoteUiStreamCommand
+  }
+}
+
+/** At most 16 KiB of one JSON event per frame; terminal errors carry no details. */
+export interface ProfileRemoteUiStreamResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.remote_ui_stream'
+  readonly result: { readonly type: 'opened' | 'idle' | 'end' | 'error' | 'closed' }
+    | { readonly type: 'chunk'; readonly bytes: string; readonly final: boolean }
+}
+
+/** Inspect legacy model candidates through a token-verified Account view. */
+export interface ProfileModelClaimInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly params: HostAuthorizedParams & {
+    readonly view_lease_id: HostViewLeaseId
+    readonly lease_generation: number
+    readonly runtime_generation: number
+  }
+}
+
+/** Redacted source candidates; credentials, references and paths are excluded. */
+export interface ProfileModelClaimInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_inventory'
+  readonly result: {
+    readonly source_digest: HostControlSha256
+    readonly candidates: readonly {
+      readonly id: string
+      readonly provider: string
+      readonly kind: 'llm' | 'web-search'
+      readonly credential: 'present' | 'missing' | 'none'
+      readonly shared_credential: boolean
+    }[]
+    readonly unsupported_settings: number
+    readonly unassigned_credential_references: number
+    readonly unassigned_credential_records: number
+  }
+}
+
+/** Confirm one displayed candidate against a fresh source digest and Account view. */
+export interface ProfileModelClaimConfirmRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly params: ProfileModelClaimInventoryRequest['params'] & {
+    readonly candidate_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** One-use, connection-owned authority for a single claim transaction. */
+export interface ProfileModelClaimConfirmResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_confirm'
+  readonly result: {
+    readonly confirmation: string
+    readonly operation_id: string
+    readonly expires_at: number
+  }
+}
+
+/** Consume a confirmed claim authority on its originating Host connection. */
+export interface ProfileModelClaimApplyRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly params: HostAuthorizedParams & { readonly confirmation: string }
+}
+
+/** Redacted result of the committed provider claim. */
+export interface ProfileModelClaimApplyResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_apply'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
+/** Account proof accepted only for an already recorded legacy model claim. */
+export type ProfileModelClaimRecoveryProof = HostAuthorizedParams & {
+  readonly account_access_token: string
+  readonly account_issuer: string
+  readonly account_subject: string
+  readonly authority_environment_id: HostAuthorityEnvironmentId
+  readonly account_binding_handle: string
+  readonly authority_binding_version: number
+  readonly profile_key_handle: string
+  readonly profile_unlock_material: string
+}
+
+/** Find this Account's unfinished claims when Desktop lost the candidate id. */
+export interface ProfileModelClaimRecoveryInventoryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly params: ProfileModelClaimRecoveryProof
+}
+
+/** Bounded, secret-free pending receipts. */
+export interface ProfileModelClaimRecoveryInventoryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_inventory'
+  readonly result: { readonly receipts: readonly {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+    readonly state: 'pending' | 'committed' | 'restored'
+  }[] }
+}
+
+/** Query a legacy claim receipt using the current Account and vault proof. */
+export interface ProfileModelClaimRecoveryStatusRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly params: ProfileModelClaimRecoveryProof & { readonly candidate_id: string }
+}
+
+/** Redacted receipt or an unclaimed state for the authorized Account. */
+export interface ProfileModelClaimRecoveryStatusResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_recovery_status'
+  readonly result: { readonly state: 'unclaimed' } | {
+    readonly state: 'pending' | 'committed' | 'restored'
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Restore one interrupted claim from its durable private preimage. */
+export interface ProfileModelClaimRestoreRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+  }
+}
+
+/** Restoration outcome without source or target credential data. */
+export interface ProfileModelClaimRestoreResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_restore'
+  readonly result: { readonly state: 'restored'; readonly cleanup_pending: boolean }
+}
+
+/** Retry only a durable claim already reserved for this Account Profile. */
+export interface ProfileModelClaimRetryRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly params: ProfileModelClaimRecoveryProof & {
+    readonly candidate_id: string
+    readonly operation_id: string
+    readonly source_digest: HostControlSha256
+  }
+}
+
+/** Redacted outcome of a resumed, verified claim. */
+export interface ProfileModelClaimRetryResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.model_claim_retry'
+  readonly result: { readonly state: 'committed'; readonly cleanup_pending: boolean }
+}
+
 /** Every frame understood before a later protocol task adds negotiated payloads. */
 export type HostControlFrame =
+  | ProfileSkillHubBindingRequest
+  | ProfileSkillHubBindingResult
+  | ProfileSkillHubBotMessageActorRequest
+  | ProfileSkillHubBotMessageActorResult
+  | ProfileSkillHubPackageChunkRequest
+  | ProfileSkillHubPackageChunkResult
+  | ProfileSkillHubPackageRequest
+  | ProfileSkillHubPackageResult
+  | ProfileSkillHubPackageSnapshotRequest
+  | ProfileSkillHubPackageSnapshotResult
+  | ProfileSkillHubExecutionReceiptRequest
+  | ProfileSkillHubExecutionReceiptResult
+  | ProfileSkillHubClockWitnessRequest
+  | ProfileSkillHubClockWitnessResult
+  | ProfileSkillHubClockV2Request
+  | ProfileSkillHubClockV2Result
+  | ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsDescribeResult
+  | ProfileRecoveryMaterialsValidateRequest | ProfileRecoveryMaterialsValidateResult
+  | ProfileRemoteSessionRequest
+  | ProfileRemoteSessionResult
+  | ProfileRemoteUiReadRequest
+  | ProfileRemoteUiReadResult
+  | ProfileRemoteUiStreamRequest
+  | ProfileRemoteUiStreamResult
+  | ProfileExtensionsRequest
+  | ProfileExtensionsResult
+  | ProfileModelClaimInventoryRequest
+  | ProfileModelClaimInventoryResult
+  | ProfileModelClaimConfirmRequest
+  | ProfileModelClaimConfirmResult
+  | ProfileModelClaimApplyRequest
+  | ProfileModelClaimApplyResult
+  | ProfileModelClaimRecoveryInventoryRequest
+  | ProfileModelClaimRecoveryInventoryResult
+  | ProfileModelClaimRecoveryStatusRequest
+  | ProfileModelClaimRecoveryStatusResult
+  | ProfileModelClaimRestoreRequest
+  | ProfileModelClaimRestoreResult
+  | ProfileModelClaimRetryRequest
+  | ProfileModelClaimRetryResult
   | HostInspectRequest
   | HostInspectResult
   | ProfileStatusRequest
@@ -562,10 +2369,78 @@ export type HostControlFrame =
   | ProfileEnsureResult
   | ProfileRestoreRequest
   | ProfileRestoreResult
+  | ProfileBootstrapLocalRequest
+  | ProfileBootstrapLocalResult
+  | ProfileRestoreLocalRequest
+  | ProfileRestoreLocalResult
   | ProfileOpenRequest
   | ProfileOpenResult
+  | ProfileOpenLocalRequest
+  | ProfileOpenLocalResult
+  | ProfileRecoveryInspectRequest
+  | ProfileRecoveryInspectResult
+  | ProfileRecoverOfflineAccountRequest
+  | ProfileRecoverOfflineAccountResult
+  | ProfileOpenOfflineAccountRequest
+  | ProfileOpenOfflineAccountResult
+  | ProfileRecoveryStatusRequest
+  | ProfileRecoveryStatusResult
   | ProfileViewActivateRequest
   | ProfileViewActivateResult
+  | ProfileWorkspaceModelSelectionRequest
+  | ProfileWorkspaceModelSelectionResult
+  | ProfileCollaborationRegistrationRequest
+  | ProfileCollaborationRegistrationResult
+  | ProfileBotIdentityRequest
+  | ProfileBotIdentityResult
+  | ProfileBotRosterRequest
+  | ProfileBotRosterResult
+  | ProfileNativeRoomRequest
+  | ProfileNativeRoomResult
+  | ProfileNativeRoomOperationRequest
+  | ProfileNativeRoomOperationResult
+  | ProfileNativeAgentResultRequest
+  | ProfileNativeAgentResultResult
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupDeliverResult
+  | ProfileBotGroupStopRequest
+  | ProfileBotGroupStopResult
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckRequest
+  | ProfileBotGroupResultAckResult
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileWorkspaceAuthorityResult
+  | ProfileCollaborationArchiveStateRequest
+  | ProfileCollaborationArchiveStateResult
+  | ProfileGroupInputFenceRequest
+  | ProfileGroupInputFenceResult
+  | ProfileCollaborationArchiveIntentRequest
+  | ProfileCollaborationArchiveIntentResult
+  | ProfileCollaborationArchiveTransitionRequest
+  | ProfileCollaborationArchiveTransitionResult
+  | ProfileRootJournalRequest
+  | ProfileRootJournalResult
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootPlanningAttemptAuthorityResult
+  | ProfileRootAuthorityRequest
+  | ProfileRootAuthorityResult
+  | ProfileSourceAuthorityRequest
+  | ProfileSourceAuthorityResult
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceAuthorityResult
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceCaptureResult
+  | ProfileReferenceContentRequest
+  | ProfileReferenceContentResult
+  | ProfileCollaborationAnalysisRequest
+  | ProfileCollaborationAnalysisResult
+  | ProfileCollaborationDeliveryRequest
+  | ProfileCollaborationDeliveryResult
+  | ProfileSourceSnapshotRequest
+  | ProfileSourceSnapshotResult
+  | ProfileModelTextRequest
+  | ProfileModelTextResult
   | ProfileLeaseCloseRequest
   | ProfileLeaseCloseResult
   | MigrationExportBeginRequest
@@ -587,3 +2462,51 @@ export type HostControlFrame =
   | MigrationExportInventoryResult
   | MigrationExistingSourceInventoryRequest
   | MigrationExistingSourceInventoryResult
+
+/** Installation signature binding one saved analysis output; it grants no task authority. */
+export type HostCollaborationAnalysisReceipt = Readonly<{
+  schema_version: 1
+  authority_environment_id: string
+  account_binding_handle: string
+  authority_binding_version: number
+  account_issuer: string
+  account_subject: string
+  installation_id: string
+  installation_public_key: string
+  host_instance_id: string
+  process_nonce: string
+  dispatch: Readonly<{
+    attempt_request_id: string
+    plan_id: string
+    expected_plan_revision: string
+    attempt_id: string
+    attempt_fence: string
+    input_manifest_digest: string
+    source_digest: string
+    lease_expires_at: string
+    dispatch_granted: true
+  }>
+  output_digest: string
+  signature: string
+}>
+/** Account-authorized private root journal read or acknowledgement. */
+export interface ProfileRootJournalRequest extends Omit<ProfileCollaborationAnalysisRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_journal'
+  readonly params: Omit<ProfileCollaborationAnalysisRequest['params'], 'command'> & { readonly command: HostRootJournalCommand }
+}
+/** Bounded metadata; complete Source bytes use profile.source_snapshot. */
+export interface ProfileRootJournalResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_journal'
+  readonly result: HostRootJournalMetadata
+}
+
+/** Authenticated current-Account request for one persisted fresh planning attempt. */
+export interface ProfileRootPlanningAttemptAuthorityRequest extends Omit<ProfileRootAuthorityRequest, 'method' | 'params'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly params: Omit<ProfileRootAuthorityRequest['params'], 'challenge'> & { readonly challenge: HostRootPlanningAttemptAuthorityChallenge }
+}
+/** Fresh attempt proof, never an execution or dispatch grant. */
+export interface ProfileRootPlanningAttemptAuthorityResult extends Omit<ProfileRootAuthorityResult, 'method' | 'result'> {
+  readonly method: 'profile.root_planning_attempt_authority'
+  readonly result: HostRootPlanningAttemptAuthorityAssertion
+}

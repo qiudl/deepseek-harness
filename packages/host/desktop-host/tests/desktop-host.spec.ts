@@ -1,8 +1,14 @@
-import { generateKeyPairSync } from 'node:crypto'
-import { linkSync, mkdtempSync, readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign, verify } from 'node:crypto'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
+  SKILLHUB_EXECUTION_RECEIPT_DOMAIN,
+  encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { createConnection } from 'node:net'
+import AdmZip from 'adm-zip'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import {
   ApprovalAuthority,
   ContextLeaseAuthority,
@@ -14,12 +20,16 @@ import {
   RestartingMigrationTarget,
   ProfileWorkerSupervisor,
   SessionCommandAuthority,
+  SingleHostLock,
   UnixHostClient,
   UnixHostServer,
   acquireSingleHostLock,
+  createSkillHubPackageInstallationStore,
   discoverUnixHost,
   personIndex,
 } from '../src/index.ts'
+import { discoverWindowsHost } from '../src/client.ts'
+import { windowsNamedPipePath } from '../src/windows-named-pipe-policy.ts'
 
 const dir = (): string => mkdtempSync(join(tmpdir(), 'dsh-desktop-host-'))
 const clock = { now: () => 1_000 }
@@ -55,11 +65,29 @@ describe('person profile registry', () => {
     await expect(registry.resolveAccount({ issuer: 'https://other.example', subject: 'opaque-user' })).resolves.toBeNull()
   })
 
-  it('keeps local-anonymous profiles isolated from account binding', async () => {
+  it('keeps one local Profile key-unlocked, idempotent, and isolated from account binding', async () => {
     const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 8), clock })
-    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous' })
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    const restored = await registry.createLocalAnonymous({ keyHandle: 'keychain:anonymous', unlockMaterial })
+    expect(restored).toEqual(local)
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', unlockMaterial) }).not.toThrow()
+    expect(() => { registry.verifyUnlock(local, 'keychain:anonymous', Buffer.alloc(32, 8).toString('base64url')) })
+      .toThrow(/unauthorized/)
     await expect(registry.bindAccount(local.profileId, { issuer: 'https://account.deepseek.com', subject: 'user' }))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
+  })
+
+  it('bootstraps, restores, and opens a local Profile without an Account token', async () => {
+    const registry = new ProfileRegistry({ root: dir(), deviceIndexKey: Buffer.alloc(32, 10), clock })
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined })
+    const local = await host.bootstrapLocalProfile({ keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-1' })
+    const opened = await host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' })
+    expect(opened.profileId).toBe(local.profileId)
+    host.revokeOwner('owner-1')
+    await expect(host.openLocalProfile({ profileId: local.profileId, ownerId: 'owner-1' }))
+      .rejects.toMatchObject({ code: 'profile_locked' })
+    await expect(host.restoreLocalProfile({ ...local, keyHandle: 'keychain:local', unlockMaterial, ownerId: 'owner-2' }))
+      .resolves.toEqual(local)
   })
 
   it('uses issuer-qualified, device-keyed HMAC indexes', () => {
@@ -94,11 +122,57 @@ describe('person profile registry', () => {
     })).rejects.toMatchObject({ code: 'conflict' })
   })
 
+  it('moves one bound Profile to a replacement Account issuer only with the same binding and unlock key', async () => {
+    const root = dir()
+    const key = Buffer.alloc(32, 4)
+    const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    const legacy = await registry.registerAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    await expect(registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 1, keyHandle: 'keychain:same', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'stale' })
+    const replacement = await registry.registerAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 2, keyHandle: 'keychain:same', unlockMaterial,
+    })
+
+    expect(replacement.profileId).toBe(legacy.profileId)
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toBeNull()
+    await expect(registry.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+
+    const restarted = new ProfileRegistry({ root, deviceIndexKey: key, clock })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:other', unlockMaterial,
+    })).rejects.toMatchObject({ code: 'profile_mismatch' })
+    await expect(restarted.registerAccount({
+      issuer: 'https://accounts.third.example', subject: 'same-person',
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:stable',
+      authorityBindingVersion: 3, keyHandle: 'keychain:same',
+      unlockMaterial: Buffer.alloc(32, 8).toString('base64url'),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(restarted.resolveAccount({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'same-person',
+    })).resolves.toMatchObject({ profileId: legacy.profileId })
+  })
+
   it('rejects symlink, hardlink, and malformed registry authority files', async () => {
     const key = Buffer.alloc(32, 6)
     const root = dir()
     const registry = new ProfileRegistry({ root, deviceIndexKey: key, clock })
-    await registry.createLocalAnonymous({ keyHandle: 'keychain:one' })
+    await registry.createLocalAnonymous({ keyHandle: 'keychain:one', unlockMaterial })
     const path = join(root, 'profiles.json')
     const backup = join(root, 'profiles.backup')
     linkSync(path, backup)
@@ -126,6 +200,8 @@ describe('person profile registry', () => {
 })
 
 describe('authenticated Unix transport', () => {
+  const recoveryKeyHandle = 'A'.repeat(43)
+  const recoveryPreflightDigest = 'a'.repeat(64)
   const executableDigest = '1'.repeat(64)
   const desktopDigest = '2'.repeat(64)
   const uid = process.getuid?.() ?? 501
@@ -142,11 +218,24 @@ describe('authenticated Unix transport', () => {
     schemaGeneration: 1,
   }
 
+  function signedSelector(domain: string, payload: unknown): string {
+    const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
+  function signedEncodedSelector(domain: string, encoded: string): string {
+    const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), identity.installationPrivateKey).toString('base64url')
+    return `${encoded}.${signature}`
+  }
+
   async function fixture(
     createMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationExport']>,
     createMigrationImport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createMigrationImport']>,
     createLegacyMigrationExport?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createLegacyMigrationExport']>,
-    now: () => number = clock.now,
+    now: (() => number) | null = clock.now,
+    offlineRecovery = true,
+    createSkillHubPackageStore?: NonNullable<ConstructorParameters<typeof UnixHostServer>[0]['createSkillHubPackageStore']>,
   ): Promise<{ server: UnixHostServer; host: DesktopHost; socketPath: string }> {
     const root = dir()
     const socketPath = join(root, 'host.sock')
@@ -156,17 +245,29 @@ describe('authenticated Unix transport', () => {
       authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
       unlockMaterial,
     })
+    await registry.registerAccount({
+      issuer: slarkIssuer, subject: 'offline-recovery', keyHandle: recoveryKeyHandle, unlockMaterial,
+    })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
       verifyAccountAccessToken: verifyTestAccountToken,
       ensureProfileWorker: async () => undefined,
+      ...(offlineRecovery ? {
+        inspectOfflineAccountProfile: async () => ({
+          state: 'recoverable' as const, compatibility: 'current' as const, persistenceGeneration: 11,
+          sessionCount: 86, pluginCount: 6, preflightDigest: recoveryPreflightDigest,
+        }),
+        ensureRecoveredProfileWorker: async () => undefined,
+      } : {}),
       activateProfileView: async () => ({ origin: 'http://127.0.0.1:4123', generation: 7, bootstrapCookie }),
     })
     const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
     const server = new UnixHostServer({
       socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
-      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host, now,
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity, host,
+      ...(now === null ? {} : { now }),
       profilePersistenceGeneration: () => 1,
+      ...(createSkillHubPackageStore === undefined ? {} : { createSkillHubPackageStore }),
       ...(createMigrationExport === undefined ? {} : { createMigrationExport }),
       ...(createMigrationImport === undefined ? {} : { createMigrationImport }),
       ...(createLegacyMigrationExport === undefined ? {} : { createLegacyMigrationExport }),
@@ -174,6 +275,42 @@ describe('authenticated Unix transport', () => {
     await server.start()
     return { server, host, socketPath }
   }
+
+  it('can retry the same server after its socket parent appears', async () => {
+    const root = dir()
+    const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: identity.processNonce })
+    const parent = join(root, 'late')
+    const socketPath = join(parent, 'host.sock')
+    const server = new UnixHostServer({
+      socketPath, ownership, expectedUid: uid, allowedDesktopExecutableDigests: new Set([desktopDigest]),
+      attestPeer: async () => ({ uid, executableSignatureDigest: desktopDigest }), identity,
+      host: {} as never, profilePersistenceGeneration: () => 1,
+    })
+    await expect(server.start()).rejects.toSatisfy((error: unknown) => error instanceof Error
+      && 'code' in error && typeof error.code === 'string' && /^(?:EACCES|ENOENT)$/u.test(error.code))
+    mkdirSync(parent)
+    await expect(server.start()).resolves.toBeUndefined()
+    await server.close()
+    await ownership.release()
+  })
+
+  it('advertises offline recovery only when both recovery adapters are installed', async () => {
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, false)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_inspect')
+    expect(client.inspection.capabilities).not.toContain('profile.recover_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.open_offline_account')
+    expect(client.inspection.capabilities).not.toContain('profile.recovery_status')
+    await expect(client.extensions({ viewLeaseId: randomUUID(), leaseGeneration: 1, runtimeGeneration: 5,
+      command: { action: 'inventory', kind: 'mcp' } })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(client.isConnected()).toBe(true)
+    client.close()
+    await server.close()
+  })
 
   it('verifies UID, installation key, executable digest, and serves the exact Desktop adapter', async () => {
     const { server, socketPath } = await fixture()
@@ -209,7 +346,719 @@ describe('authenticated Unix transport', () => {
     await server.close()
   })
 
-  it('reports an upgrade requirement locally before sending token-bearing ensure to an older Host', async () => {
+  it('switches independent login bindings through the authenticated socket and fences retired selectors', async () => {
+    const { server, socketPath } = await fixture()
+    onTestFinished(async () => { await server.close() })
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    onTestFinished(() => { client.close() })
+    const common = { issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), keyHandle: 'keychain:u1', unlockMaterial }
+    const first = { ...common, accountBindingHandle: 'feishu', authorityBindingVersion: 5, authorityBindingScope: 'a'.repeat(64) }
+    const second = { ...common, accountBindingHandle: 'email', authorityBindingVersion: 1, authorityBindingScope: 'b'.repeat(64) }
+    const original = await client.ensureAccountProfile(first)
+    const switched = await client.ensureAccountProfile(second)
+    expect(switched.profileId).toBe(original.profileId)
+    expect((await client.ensureAccountProfile(first)).profileId).toBe(original.profileId)
+    await client.ensureAccountProfile({ ...second, accountBindingHandle: 'email-rebound', authorityBindingVersion: 2 })
+    await expect(client.restoreProfile({ ...second, profileSelector: switched.profileSelector }))
+      .rejects.toMatchObject({ code: 'stale' })
+    await expect(client.ensureAccountProfile(second)).rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('keeps the existing Profile when a newer binding replaces its Account issuer', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const current = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 1,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    const replacement = await client.ensureAccountProfile({
+      issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'u1',
+      authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken('https://accounts.staging.dsh.colorbuyai.com', 'u1'),
+      accountBindingHandle: 'binding:opaque', authorityBindingVersion: 2,
+      keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    expect(replacement.profileId).toBe(current.profileId)
+    client.close()
+    await server.close()
+  })
+
+  it('bootstraps, restores, and opens a local Profile through the Unix adapter without Account credentials', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const local = await client.bootstrapLocalProfile({ keyHandle: 'keychain:local-wire', unlockMaterial })
+    expect(local.persistenceGeneration).toBe(1)
+    const opened = await client.openLocalProfile({ profileSelector: local.profileSelector })
+    expect(opened.profileId).toBe(local.profileId)
+
+    client.close()
+    const restoredClient = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    await expect(restoredClient.restoreLocalProfile({
+      profileSelector: local.profileSelector, keyHandle: 'keychain:local-wire', unlockMaterial,
+    })).resolves.toMatchObject({ profileId: local.profileId, persistenceGeneration: 1 })
+    restoredClient.close()
+    await server.close()
+  })
+
+  it('retains a Profile clock witness across granted connections and refuses stale CAS or another target', async () => {
+    const { server, socketPath } = await fixture()
+    const options = { socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now }
+    const owner = await UnixHostClient.connect(options)
+    const other = await UnixHostClient.connect(options)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-witness', unlockMaterial })
+      const target = { profileId: local.profileId, bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      const input = { profileSelector: local.profileSelector, ...target, anchorId: randomUUID() }
+      await expect(other.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      expect(await owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .toEqual({ anchorId: input.anchorId, value: null, applied: null })
+      expect((await owner.skillHubClockWitness({ ...input,
+        command: { kind: 'compare_and_set', previous: null, next: zero } })).applied).toBe(true)
+      for (const change of [{ profileId: randomUUID() }, { hostKeyId: 'b'.repeat(64) },
+        { bindingGeneration: '2' }])
+        await expect(owner.skillHubClockWitness({ ...input, ...change, command: { kind: 'read' } }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      const next = { revision: '1', digest: 'b'.repeat(64) }
+      const contenders = await Promise.all([0, 1].map(() => owner.skillHubClockWitness({
+        ...input, command: { kind: 'compare_and_set', previous: zero, next },
+      })))
+      expect(contenders.filter(value => value.applied)).toHaveLength(1)
+      expect((await owner.skillHubClockWitness({ ...input,
+        command: { kind: 'compare_and_set', previous: next, next: zero } })).applied).toBe(false)
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      const originalInspection = owner.inspection
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        Reflect.set(owner, 'inspection', originalInspection)
+        for (const result of [{ anchor_id: randomUUID(), value: next, applied: null },
+          { anchor_id: input.anchorId, value: next, applied: true }]) {
+          Reflect.set(owner, 'call', async () => ({ type: 'result',
+            method: 'profile.skillhub_clock_witness', result }))
+          await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+        for (const result of [{ anchor_id: input.anchorId, value: next, applied: null },
+          { anchor_id: input.anchorId, value: zero, applied: true },
+          { anchor_id: input.anchorId, value: { ...next, digest: 'c'.repeat(64) }, applied: true },
+          { anchor_id: input.anchorId, value: null, applied: true }]) {
+          Reflect.set(owner, 'call', async () => ({ type: 'result',
+            method: 'profile.skillhub_clock_witness', result }))
+          await expect(owner.skillHubClockWitness({ ...input,
+            command: { kind: 'compare_and_set', previous: zero, next } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+        for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.open' }]) {
+          Reflect.set(owner, 'call', async () => frame)
+          await expect(owner.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+            .rejects.toMatchObject({ code: 'unavailable' })
+        }
+      } finally {
+        Reflect.set(owner, 'call', originalCall)
+        Reflect.set(owner, 'inspection', originalInspection)
+      }
+      owner.close()
+      await other.restoreLocalProfile({ profileSelector: local.profileSelector,
+        keyHandle: 'keychain:clock-witness', unlockMaterial })
+      expect(await other.skillHubClockWitness({ ...input, command: { kind: 'read' } }))
+        .toEqual({ anchorId: input.anchorId, value: next, applied: null })
+    } finally { owner.close(); other.close(); await server.close() }
+  })
+
+  it('issues Profile-granted V2 anchors and requires their one-time initialization tickets', async () => {
+    const { server, socketPath } = await fixture()
+    const options = { socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now }
+    const owner = await UnixHostClient.connect(options)
+    const other = await UnixHostClient.connect(options)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-v2', unlockMaterial })
+      const input = { profileSelector: local.profileSelector, profileId: local.profileId,
+        bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      await expect(other.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } })
+      expect(issued.kind).toBe('issued')
+      if (issued.kind !== 'issued') throw Error('expected issued anchor')
+      expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+        .toEqual({ kind: 'epoch', epoch: issued.epoch })
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      const command = { kind: 'witness' as const, anchor_id: issued.anchor_id, epoch: issued.epoch,
+        ticket: issued.ticket, command: { kind: 'compare_and_set' as const, previous: null, next: zero } }
+      await expect(owner.skillHubClockV2({ ...input, command: { ...command, ticket: null } }))
+        .rejects.toMatchObject({ code: 'stale' })
+      expect(await owner.skillHubClockV2({ ...input, command }))
+        .toEqual({ kind: 'witness', anchor_id: issued.anchor_id, epoch: issued.epoch,
+          value: zero, applied: true })
+      expect((await owner.skillHubClockV2({ ...input, command })).kind).toBe('witness')
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      const originalInspection = owner.inspection
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        Reflect.set(owner, 'inspection', originalInspection)
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_clock_v2',
+          result: { kind: 'issued', anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: issued.ticket } }))
+        await expect(owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      } finally {
+        Reflect.set(owner, 'call', originalCall)
+        Reflect.set(owner, 'inspection', originalInspection)
+      }
+      owner.close()
+      await other.restoreLocalProfile({ profileSelector: local.profileSelector,
+        keyHandle: 'keychain:clock-v2', unlockMaterial })
+      expect(await other.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: null,
+        command: { kind: 'read' } } })).toEqual({ kind: 'witness', anchor_id: issued.anchor_id,
+        epoch: issued.epoch, value: zero, applied: null })
+    } finally { owner.close(); other.close(); await server.close() }
+  })
+
+  it('T24860 rotates V2 epoch at the 4097th initialized anchor through Unix Host transport', async () => {
+    const { server, socketPath } = await fixture()
+    const owner = await UnixHostClient.connect({ socketPath, expectedUid: uid,
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now })
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:clock-v2-capacity', unlockMaterial })
+      const input = { profileSelector: local.profileSelector, profileId: local.profileId,
+        bindingGeneration: '1',
+        hostKeyId: createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex') }
+      const zero = { revision: '0', digest: 'a'.repeat(64) }
+      const initialize = async () => {
+        const issued = await owner.skillHubClockV2({ ...input, command: { kind: 'issue', purpose: 'asset', active_asset_anchor_id: null } })
+        if (issued.kind !== 'issued') throw Error('expected issued anchor')
+        const result = await owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+          anchor_id: issued.anchor_id, epoch: issued.epoch, ticket: issued.ticket,
+          command: { kind: 'compare_and_set', previous: null, next: zero } } })
+        expect(result).toEqual({ kind: 'witness', anchor_id: issued.anchor_id,
+          epoch: issued.epoch, value: zero, applied: true })
+        return issued
+      }
+      const first = await initialize()
+      for (let i = 1; i < 4096; i++) await initialize()
+      const next = await initialize()
+      expect(next.epoch).not.toBe(first.epoch)
+      await expect(owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: first.anchor_id, epoch: first.epoch, ticket: null,
+        command: { kind: 'read' } } })).rejects.toMatchObject({ code: 'stale' })
+      await expect(owner.skillHubClockV2({ ...input, command: { kind: 'witness',
+        anchor_id: first.anchor_id, epoch: next.epoch, ticket: first.ticket,
+        command: { kind: 'compare_and_set', previous: null, next: zero } } }))
+        .rejects.toMatchObject({ code: 'stale' })
+      expect(await owner.skillHubClockV2({ ...input, command: { kind: 'epoch' } }))
+        .toEqual({ kind: 'epoch', epoch: next.epoch })
+    } finally { owner.close(); await server.close() }
+  }, 60_000)
+
+  it('signs a separate SkillHub challenge only for a currently authorized Host-local Profile', async () => {
+    const { server, socketPath } = await fixture()
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-local', unlockMaterial })
+      const challengeId = randomUUID()
+      const request = { profileSelector: local.profileSelector, actorUserId: 'slark-user',
+        computerId: 'slark-computer', challengeId }
+      const proof = await owner.signSkillHubProfileBinding(request)
+      expect(proof).toMatchObject({
+        version: 1, actorUserId: request.actorUserId, computerId: request.computerId,
+        installationId: identity.installationId, profileId: local.profileId, challengeId,
+        bindingGeneration: '1',
+      })
+      const { signature, ...unsigned } = proof
+      expect(verify(null, Buffer.from(SKILLHUB_PROFILE_BINDING_DOMAIN
+        + encodeSkillHubProfileBindingPayload(unsigned)), keys.publicKey,
+      Buffer.from(signature, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.signSkillHubProfileBinding({ ...request, profileSelector: local.profileSelector + 'A' }))
+        .rejects.toThrow()
+      Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.status' }))
+      await expect(owner.signSkillHubProfileBinding(request)).rejects.toMatchObject({ code: 'unavailable' })
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
+  })
+
+  it('signs one exact private Bot message actor with the current installation and Profile grant', async () => {
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, null)
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: Date.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-bot', unlockMaterial })
+      const actor = {
+        actor_user_id: 'actor-a', environment_id: 'staging',
+        person_profile_id: randomUUID(), workspace_id: randomUUID(), identity_id: randomUUID(),
+        user_auth_version: 7, identity_epoch: 8, profile_epoch: 9, workspace_epoch: 10,
+        runtime_lease_id: randomUUID(), assignment_id: randomUUID(), assignment_generation: 11,
+        selection_publication_version: 12, grant_id: randomUUID(), computer_id: 'computer-1',
+        connection_id: 'connection-1', target_project_id: 'project-1', policy_id: 'policy-1',
+        policy_epoch: 13, policy_digest: 'a'.repeat(64), session_id: 'session-1',
+        call_id: 'call-1', root_call_id: 'root-call-1', source_message_id: 'message-1',
+        binding_id: 'binding-1', bot_id: 'bot-1', room_id: null,
+        logical_operation_key: 'operation-1', request_digest: 'b'.repeat(64),
+      } as const
+      const beforeIssuedAt = Date.now()
+      const proof = await owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor })
+      const afterIssuedAt = Date.now()
+      const hostKeyId = createHash('sha256').update(Buffer.from(publicKey, 'base64url')).digest('hex')
+      expect(proof.claims.token_id).toMatch(/^[0-9a-f-]{36}$/u)
+      expect(proof.claims).toMatchObject({
+        ...actor, issuer: 'slark-dsh-host',
+        host_installation_id: identity.installationId, host_profile_id: local.profileId,
+        host_binding_generation: 1, host_key_id: hostKeyId,
+        source_principal: { kind: 'human', id: actor.actor_user_id },
+      })
+      expect(proof.claims.issued_at).toBeGreaterThanOrEqual(beforeIssuedAt)
+      expect(proof.claims.issued_at).toBeLessThanOrEqual(afterIssuedAt)
+      expect(proof.claims.expires_at).toBe(proof.claims.issued_at + 30_000)
+      const [header, payload, signature] = proof.compactJws.split('.')
+      expect(verify(null, Buffer.from(`${header}.${payload}`), keys.publicKey,
+        Buffer.from(signature as string, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      const originalInspection = owner.inspection
+      Reflect.set(owner, 'inspection', { ...originalInspection,
+        capabilities: originalInspection.capabilities.filter(value =>
+          value !== 'profile.skillhub_bot_message_actor') })
+      await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'upgrade_required' })
+      Reflect.set(owner, 'inspection', originalInspection)
+      for (const response of [
+        { version: 1, type: 'result', method: 'profile.status', result: {} },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'e30.e30' } },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'A.e30.AA' } },
+        { version: 1, type: 'result', method: 'profile.skillhub_bot_message_actor',
+          result: { compact_jws: 'eA.e30.AA' } },
+      ]) {
+        Reflect.set(owner, 'call', async () => response)
+        await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+      }
+      Reflect.set(owner, 'call', async () => ({ version: 1, type: 'result',
+        method: 'profile.skillhub_bot_message_actor',
+        result: { compact_jws: `${header}.${payload}.${'A'.repeat(86)}` } }))
+      await expect(owner.signSkillHubBotMessageActor({ profileSelector: local.profileSelector, actor }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
+  })
+
+  it('prepares a complete SkillHub ZIP only on the granted Host connection', async () => {
+    const packagesRoot = dir()
+    let rejectSnapshot: 'authority' | 'generic' | undefined
+    let stored: Awaited<ReturnType<typeof createSkillHubPackageInstallationStore>> | undefined
+    const { server, socketPath } = await fixture(undefined, undefined, undefined, clock.now, true,
+      async (profileId, generation, hostKeyId) => {
+        if (rejectSnapshot === 'authority') throw new HostAuthorityError('unauthorized')
+        if (rejectSnapshot === 'generic') throw new Error('snapshot unavailable')
+        stored ??= await createSkillHubPackageInstallationStore(packagesRoot, profileId, hostKeyId, generation)
+        return stored
+      })
+    const connectionOptions = {
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+    const owner = await UnixHostClient.connect(connectionOptions)
+    const other = await UnixHostClient.connect(connectionOptions)
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-zip', unlockMaterial })
+      const markdown = Buffer.from('---\nname: example\ndescription: Example\nversion: 1.0.0\n---\n# Example\n')
+      const reference = randomBytes(70_000)
+      const zip = new AdmZip()
+      zip.addFile('SKILL.md', markdown)
+      zip.addFile('empty.txt', Buffer.alloc(0))
+      zip.addFile('references/data.bin', reference)
+      const archive = zip.toBuffer()
+      expect(archive.length).toBeGreaterThan(32768)
+      const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+      const hostKeyId = sha(Buffer.from(publicKey, 'base64url'))
+      const plan = {
+        operationId: randomUUID(), packageId: 'package-1', profileId: local.profileId,
+        hostKeyId, bindingGeneration: '1', expectedRevision: '0', versionId: 'version-1',
+        skillSlug: 'example', version: '1.0.0', archiveSha256: sha(archive),
+        manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', markdown.length, sha(markdown)],
+            ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
+            ['references/data.bin', '0644', reference.length, sha(reference)]]])),
+      }
+      await expect(other.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan: { ...plan, bindingGeneration: '2' }, archive })).rejects.toMatchObject({ code: 'profile_mismatch' })
+      expect(stored).toBeUndefined()
+      await owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive })
+      expect(await stored?.current(plan.packageId)).toBeNull()
+      expect(await owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })).toBeNull()
+      await expect(other.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '2', expectedRevision: '0',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'profile_mismatch' })
+      const receipt = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() })
+      expect(receipt).toMatchObject({ operationId: plan.operationId, profileId: local.profileId, hostKeyId })
+      const { signature, ...unsigned } = receipt
+      expect(verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+        + encodeSkillHubPackageReceiptPayload(unsigned)), keys.publicKey,
+      Buffer.from(signature, 'base64url'))).toBe(true)
+      expect(receipt.revision).toBe('1')
+      expect(receipt.readiness).toBe('prepared')
+      expect(receipt.loadEvidenceId).toBeNull()
+      const execution = { effectId: randomUUID(), requestDigest: '1'.repeat(64),
+        subject: 'human-1', registryId: 'registry-1', hostId: 'host-1', profileId: local.profileId,
+        bindingGeneration: '1', equipmentRevision: '4', hostRevision: '5',
+        computerAuthorizationVersion: '6', sandboxOperationId: randomUUID(),
+        containerId: '2'.repeat(64), backendId: '3'.repeat(64),
+        image: `sha256:${'4'.repeat(64)}`, entry: 'scripts/run.cjs', args: [] as const,
+        exitCode: 0, stdoutSha256: sha('output'), stderrSha256: sha(''), interrupted: false,
+        quiescent: true as const, network: 'none' as const, readonly: true as const }
+      const executionReceipt = await owner.signSkillHubExecutionReceipt({
+        profileSelector: local.profileSelector, packageReceipt: receipt, execution,
+      })
+      expect(executionReceipt).toMatchObject({ ...execution,
+        schema: 'slark-dsh-profile-execution-receipt/v1',
+        hostInstallationId: identity.installationId, hostKeyId,
+        packageOperationId: receipt.operationId, packageId: receipt.packageId,
+        versionId: receipt.versionId, archiveSha256: receipt.archiveSha256,
+        manifestSha256: receipt.manifestSha256, publicKey })
+      const { signature: executionSignature, ...unsignedExecution } = executionReceipt
+      expect(verify(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+        + encodeSkillHubExecutionReceiptPayload(unsignedExecution)), keys.publicKey,
+      Buffer.from(executionSignature, 'base64url'))).toBe(true)
+      await expect(other.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: { ...receipt, manifestSha256: 'b'.repeat(64) }, execution }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      rejectSnapshot = 'authority'
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unauthorized' })
+      rejectSnapshot = 'generic'
+      await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+        packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
+      rejectSnapshot = undefined
+      const repeated = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+        challengeId: randomUUID() })
+      expect(repeated).toMatchObject({ operationId: receipt.operationId, revision: receipt.revision })
+      expect(repeated.signature).not.toBe(receipt.signature)
+      await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      const currentReceipt = await owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })
+      expect(currentReceipt).toMatchObject({ operationId: receipt.operationId, revision: receipt.revision })
+      expect(currentReceipt?.signature).not.toBe(receipt.signature)
+      await expect(other.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: plan.packageId, challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(await stored?.readFile(plan.packageId, 'SKILL.md')).toEqual(markdown)
+      expect(await stored?.readFile(plan.packageId, 'references/data.bin')).toEqual(reference)
+      const upgradedMarkdown = Buffer.from(
+        '---\nname: example\ndescription: Example\nversion: 1.0.1\n---\n# Upgraded\n',
+      )
+      const upgradedZip = new AdmZip()
+      upgradedZip.addFile('SKILL.md', upgradedMarkdown)
+      const upgradedArchive = upgradedZip.toBuffer()
+      const upgradedPlan = {
+        ...plan, operationId: randomUUID(), expectedRevision: '1', versionId: 'version-2',
+        version: '1.0.1', archiveSha256: sha(upgradedArchive),
+        manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', upgradedMarkdown.length, sha(upgradedMarkdown)]]])),
+      }
+      await owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan: upgradedPlan, archive: upgradedArchive })
+      const upgradedReceipt = await owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+        operationId: upgradedPlan.operationId, bindingGeneration: '1', expectedRevision: '1',
+        challengeId: randomUUID() })
+      expect(upgradedReceipt.operationId).not.toBe(receipt.operationId)
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'references/data.bin' }, offset: 1,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      const manifestChunk = await owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+      })
+      expect(manifestChunk).toMatchObject({
+        operationId: receipt.operationId, manifestSha256: receipt.manifestSha256,
+        target: { kind: 'manifest' }, offset: 0, complete: true,
+      })
+      expect(sha(manifestChunk.bytes)).toBe(receipt.manifestSha256)
+      const manifest = JSON.parse(manifestChunk.bytes.toString('utf8')) as unknown[]
+      expect(manifest).toEqual(['slark-skillhub-manifest-v1', [
+        ['SKILL.md', '0644', markdown.length, sha(markdown)],
+        ['empty.txt', '0644', 0, sha(Buffer.alloc(0))],
+        ['references/data.bin', '0644', reference.length, sha(reference)],
+      ]])
+      rejectSnapshot = 'authority'
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'SKILL.md' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+      rejectSnapshot = undefined
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'empty.txt' }, offset: 0,
+      })).resolves.toMatchObject({ totalBytes: 0, bytes: Buffer.alloc(0), complete: true })
+      const chunks: Buffer[] = []
+      let readOffset = 0
+      do {
+        const chunk = await owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt,
+          target: { kind: 'file', path: 'references/data.bin' }, offset: readOffset,
+        })
+        expect(chunk).toMatchObject({ operationId: receipt.operationId,
+          target: { kind: 'file', path: 'references/data.bin' }, offset: readOffset,
+          totalBytes: reference.length })
+        expect(chunk.bytes.length).toBeLessThanOrEqual(32 * 1024)
+        chunks.push(chunk.bytes)
+        readOffset += chunk.bytes.length
+        if (chunk.complete) break
+      } while (readOffset < reference.length)
+      expect(Buffer.concat(chunks)).toEqual(reference)
+      await expect(other.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt: { ...receipt, manifestSha256: 'b'.repeat(64) },
+        target: { kind: 'manifest' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'file', path: 'missing.txt' }, offset: 0,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'manifest' }, offset: manifestChunk.totalBytes,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.readSkillHubPackageSnapshotChunk({
+        profileSelector: local.profileSelector, receipt,
+        target: { kind: 'manifest' }, offset: manifestChunk.totalBytes + 1,
+      })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan, archive: Buffer.alloc(0) })).rejects.toMatchObject({ code: 'unavailable' })
+      await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector,
+        plan, archive: Buffer.from('wrong') })).rejects.toMatchObject({ code: 'unavailable' })
+      const originalCall: unknown = Reflect.get(owner, 'call')
+      try {
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package_chunk',
+          result: { next_offset: 1, prepared: false } }))
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt: null } }))
+        await expect(owner.activateSkillHubPackage({ profileSelector: local.profileSelector,
+          operationId: plan.operationId, bindingGeneration: '1', expectedRevision: '0',
+          challengeId: randomUUID() })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt } }))
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async (request: { params: { challenge_id: string } }) => ({
+          type: 'result', method: 'profile.skillhub_package', result: { receipt: {
+            ...receipt, challengeId: request.params.challenge_id, packageId: 'other-package',
+          } },
+        }))
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package_snapshot',
+          result: { operation_id: upgradedReceipt.operationId, manifest_sha256: receipt.manifestSha256,
+            target: { kind: 'manifest' }, offset: 0, total_bytes: 2,
+            chunk_base64url: Buffer.from('{}').toString('base64url'), complete: true } }))
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result',
+          method: 'profile.skillhub_execution_receipt', result: { receipt: {
+            ...executionReceipt, effectId: randomUUID(),
+          } } }))
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.status' }))
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'unavailable' })
+        Reflect.set(owner, 'call', async () => ({ type: 'result', method: 'profile.skillhub_package',
+          result: { receipt: null } }))
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'unavailable' })
+      } finally { Reflect.set(owner, 'call', originalCall) }
+      const originalInspection = Reflect.get(owner, 'inspection')
+      try {
+        Reflect.set(owner, 'inspection', { ...originalInspection, capabilities: [] })
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.readSkillHubPackageSnapshotChunk({
+          profileSelector: local.profileSelector, receipt, target: { kind: 'manifest' }, offset: 0,
+        })).rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'upgrade_required' })
+      } finally { Reflect.set(owner, 'inspection', originalInspection) }
+    } finally {
+      owner.close()
+      other.close()
+      await server.close()
+    }
+  })
+
+  it('refuses package commands when an older Host has no package store', async () => {
+    const { server, socketPath } = await fixture()
+    const owner = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    try {
+      const local = await owner.bootstrapLocalProfile({ keyHandle: 'keychain:skillhub-old-host', unlockMaterial })
+      const markdown = Buffer.from('---\nname: example\ndescription: Example\nversion: 1.0.0\n---\n')
+      const zip = new AdmZip()
+      zip.addFile('SKILL.md', markdown)
+      const archive = zip.toBuffer()
+      const sha = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+      const plan = {
+        operationId: randomUUID(), packageId: 'package-1', profileId: local.profileId,
+        hostKeyId: sha(Buffer.from(publicKey, 'base64url')), bindingGeneration: '1',
+        expectedRevision: '0', versionId: 'version-1', skillSlug: 'example', version: '1.0.0',
+        archiveSha256: sha(archive), manifestSha256: sha(JSON.stringify(['slark-skillhub-manifest-v1',
+          [['SKILL.md', '0644', markdown.length, sha(markdown)]]])),
+      }
+      const inspection = Reflect.get(owner, 'inspection')
+      Reflect.set(owner, 'inspection', { ...inspection,
+        capabilities: [...inspection.capabilities, 'profile.skillhub_package_chunk', 'profile.skillhub_package',
+          'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] })
+      try {
+        await expect(owner.prepareSkillHubPackage({ profileSelector: local.profileSelector, plan, archive }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        await expect(owner.currentSkillHubPackage({ profileSelector: local.profileSelector,
+          packageId: plan.packageId, challengeId: randomUUID() }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        const receipt = { version: 1 as const, installationId: identity.installationId,
+          challengeId: randomUUID(), operationId: plan.operationId, packageId: plan.packageId,
+          profileId: plan.profileId, hostKeyId: plan.hostKeyId, bindingGeneration: '1', revision: '1',
+          versionId: plan.versionId, archiveSha256: plan.archiveSha256,
+          manifestSha256: plan.manifestSha256, readiness: 'prepared' as const, loadEvidenceId: null,
+          signature: 'A'.repeat(86) as never }
+        await expect(owner.readSkillHubPackageSnapshotChunk({ profileSelector: local.profileSelector,
+          receipt, target: { kind: 'manifest' }, offset: 0 }))
+          .rejects.toMatchObject({ code: 'upgrade_required' })
+        const execution = { effectId: randomUUID(), requestDigest: '1'.repeat(64), subject: 'human-1',
+          registryId: 'registry-1', hostId: 'host-1', profileId: local.profileId,
+          bindingGeneration: '1', equipmentRevision: '1', hostRevision: '1',
+          computerAuthorizationVersion: '1', sandboxOperationId: randomUUID(),
+          containerId: '2'.repeat(64), backendId: '3'.repeat(64), image: `sha256:${'4'.repeat(64)}`,
+          entry: 'scripts/run.cjs', args: [] as const, exitCode: 0, stdoutSha256: '5'.repeat(64),
+          stderrSha256: '6'.repeat(64), interrupted: false, quiescent: true as const,
+          network: 'none' as const, readonly: true as const }
+        await expect(owner.signSkillHubExecutionReceipt({ profileSelector: local.profileSelector,
+          packageReceipt: receipt, execution })).rejects.toMatchObject({ code: 'upgrade_required' })
+      } finally { Reflect.set(owner, 'inspection', inspection) }
+    } finally { owner.close(); await server.close() }
+  })
+
+  it('recovers and opens an offline Account Profile through a domain-separated selector', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle] })
+    expect(inspected.candidates).toEqual([expect.objectContaining({
+      state: 'recoverable', bindingCount: 0, sessionCount: 86, pluginCount: 6,
+      preflightDigest: recoveryPreflightDigest,
+    })])
+    const candidate = inspected.candidates[0]!
+    const operationId = randomUUID()
+    const recovered = await client.recoverOfflineAccountProfile({
+      profileKeyHandle: recoveryKeyHandle, profileUnlockMaterial: unlockMaterial,
+      recoveryOperationId: operationId, candidateId: candidate.candidateId,
+      preflightDigest: candidate.preflightDigest,
+    })
+    expect(recovered).toMatchObject({
+      state: 'offline_ready', accessScope: 'offline_local', persistenceGeneration: 11,
+    })
+    await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
+      .resolves.toEqual({ state: 'offline_ready' })
+    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector }))
+      .resolves.toMatchObject({ accessScope: 'offline_local' })
+    await expect(client.openLocalProfile({ profileSelector: recovered.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+
+    const connected = await client.ensureAccountProfile({
+      issuer: slarkIssuer, subject: 'u1', authorityEnvironmentId: stagingEnvironmentId,
+      accountAccessToken: accountToken(slarkIssuer, 'u1'), accountBindingHandle: 'binding:opaque',
+      authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
+    })
+    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector }))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+    client.close()
+    await server.close()
+  })
+
+  it.each(['profile.ensure_account_token', 'profile.ensure_binding_scope'])('requires %s before ensure', async (capability) => {
     const { server, socketPath } = await fixture()
     const client = await UnixHostClient.connect({
       socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
@@ -217,11 +1066,12 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
     const inspection = client.inspection as { capabilities: typeof client.inspection.capabilities }
-    inspection.capabilities = inspection.capabilities.filter(value => value !== 'profile.ensure_account_token')
+    inspection.capabilities = inspection.capabilities.filter(value => value !== capability)
     await expect(client.ensureAccountProfile({
       issuer: slarkIssuer, subject: 'older-host-user', authorityEnvironmentId: stagingEnvironmentId,
       accountAccessToken: accountToken(slarkIssuer, 'older-host-user'),
       accountBindingHandle: 'binding:older-host', authorityBindingVersion: 1,
+      authorityBindingScope: 'a'.repeat(64),
       keyHandle: 'keychain:older-host', unlockMaterial,
     })).rejects.toMatchObject({ code: 'upgrade_required' })
     client.close()
@@ -380,6 +1230,52 @@ describe('authenticated Unix transport', () => {
     client.close(); await server.close()
   })
 
+  it('rejects validly signed Profile selectors with malformed semantic payloads', async () => {
+    const { server, socketPath } = await fixture()
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const valid = {
+      version: 1,
+      installation_id: identity.installationId,
+      profile_id: randomUUID(),
+      binding_generation: 1,
+      runtime_generation: identity.runtimeGeneration,
+      schema_generation: identity.schemaGeneration,
+    }
+    const malformed = [
+      { ...valid, extra: true },
+      { ...valid, version: 2 },
+      { ...valid, installation_id: randomUUID() },
+      { ...valid, profile_id: 1 },
+      { ...valid, binding_generation: 0 },
+      { ...valid, binding_generation: 1.5 },
+      { ...valid, runtime_generation: identity.runtimeGeneration + 1 },
+      { ...valid, schema_generation: identity.schemaGeneration + 1 },
+    ]
+    for (const payload of malformed) {
+      await expect(client.openLocalProfile({
+        profileSelector: signedSelector('dsh-profile-selector/v1', payload),
+      })).rejects.toMatchObject({ code: 'stale' })
+    }
+    for (const payload of ['null', '[]']) {
+      const encoded = Buffer.from(payload.padEnd(24)).toString('base64url')
+      await expect(client.openLocalProfile({
+        profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+      })).rejects.toMatchObject({ code: 'unauthorized' })
+    }
+    const encoded = Buffer.from('{'.padEnd(24)).toString('base64url')
+    await expect(client.openLocalProfile({
+      profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
+    })).rejects.toMatchObject({ code: 'unauthorized' })
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
+    })).rejects.toMatchObject({ code: 'stale' })
+    client.close(); await server.close()
+  })
+
   it('revokes only the disconnected connection unlock while another environment remains unlocked', async () => {
     const { server, socketPath } = await fixture()
     const connect = () => UnixHostClient.connect({
@@ -476,10 +1372,8 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: () => now,
     })
-    const profile = await client.ensureAccountProfile({
-      issuer: slarkIssuer, subject: 'legacy-user', authorityEnvironmentId: stagingEnvironmentId,
-      accountAccessToken: accountToken(slarkIssuer, 'legacy-user'),
-      accountBindingHandle: 'binding:legacy', authorityBindingVersion: 1, keyHandle: 'keychain:legacy', unlockMaterial,
+    const profile = await client.bootstrapLocalProfile({
+      keyHandle: 'keychain:legacy-local', unlockMaterial,
     })
     const proof = await client.getExistingMigrationSourceInventory({ targetProfileSelector: profile.profileSelector })
     expect(proof.sourceInventoryAuthority).toMatch(/^[A-Za-z0-9_-]{43}$/u)
@@ -544,11 +1438,94 @@ describe('authenticated Unix transport', () => {
       importId, expectedStageVersion: 2, targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 3, semanticDigest })
+    await expect(client.abortMigrationImport({
+      importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+    }))
+      .resolves.toEqual({ stageVersion: 4 })
     await expect(client.commitMigrationImport({
       importId, expectedStageVersion: 3, expectedCurrentGeneration: 1,
       targetProfileSelector: profile.profileSelector,
     }))
       .resolves.toEqual({ stageVersion: 4, activeGeneration: 2 })
+    client.close(); await server.close()
+  })
+
+  it('maps migration export failures to bounded public authority codes', async () => {
+    const exportId = 'a'.repeat(48)
+    let failure: unknown = new Error('migration_export_busy')
+    const migrationExport = {
+      async inventory() { throw failure },
+      async begin() {
+        return { exportId, transferId: 'b'.repeat(48), transferDigest: 'c'.repeat(64), schemaVersion: 1,
+          sourceGeneration: 'd'.repeat(64), recordCount: 1, firstEventSequence: 0, lastEventSequence: 0,
+          semanticDigest: 'e'.repeat(64), chunkCount: 1 }
+      },
+      read() { return { exportId, chunkIndex: 0, records: [], chunkDigest: 'f'.repeat(64), final: true } },
+    }
+    const { server, socketPath } = await fixture(() => migrationExport)
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:export-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      [new HostAuthorityError('busy'), 'busy'],
+      ['non-error', 'unavailable'],
+      [new Error('migration_export_busy'), 'busy'],
+      [new Error('migration_export_not_found'), 'stale'],
+      [new Error('migration_export_bounds_invalid'), 'unavailable'],
+      [new Error('migration_export_request_invalid'), 'unavailable'],
+      [new Error('migration_inventory_changed'), 'conflict'],
+      [new Error('migration_source_changed'), 'conflict'],
+      [new Error('migration_export_too_large'), 'conflict'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.getMigrationExportInventory({ sourceProfileSelector: profile.profileSelector }))
+        .rejects.toMatchObject({ code })
+    }
+    client.close(); await server.close()
+  })
+
+  it('maps migration import failures to bounded public authority codes', async () => {
+    const importId = 'a'.repeat(48)
+    const semanticDigest = 'b'.repeat(64)
+    let failure: unknown = new Error('migration_import_invalid')
+    const { server, socketPath } = await fixture(undefined, () => ({
+      async stage() { return { importId, version: 2, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async status() { return { importId, version: 2, state: 'staged' as const, targetGeneration: 2, recordCount: 1, semanticDigest } },
+      async verify() { return { importId, version: 3, semanticDigest } },
+      async commit() { return { importId, version: 4, targetGeneration: 2 } },
+      async abort() { throw failure },
+    }))
+    const client = await UnixHostClient.connect({
+      socketPath, expectedUid: uid, trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    })
+    const profile = await client.bootstrapLocalProfile({ keyHandle: 'keychain:import-errors', unlockMaterial })
+    const cases: Array<[unknown, string]> = [
+      ['non-error', 'unavailable'],
+      [new Error('migration_import_invalid'), 'unavailable'],
+      [new Error('migration_import_not_found'), 'stale'],
+      [new Error('migration_import_stale'), 'stale'],
+      [new Error('migration_import_conflict'), 'conflict'],
+      [new Error('migration_import_state'), 'conflict'],
+      [new Error('migration_import_generation_changed'), 'conflict'],
+      [new Error('migration_import_already_committed'), 'conflict'],
+      [new Error('migration_import_not_abortable'), 'conflict'],
+      [new Error('migration_import_mismatch'), 'unauthorized'],
+      [new Error('migration_import_unsafe'), 'unauthorized'],
+      [new Error('unexpected'), 'unavailable'],
+    ]
+    for (const [reason, code] of cases) {
+      failure = reason
+      await expect(client.abortMigrationImport({
+        importId, expectedStageVersion: 3, targetProfileSelector: profile.profileSelector,
+      })).rejects.toMatchObject({ code })
+    }
     client.close(); await server.close()
   })
 
@@ -562,8 +1539,112 @@ describe('authenticated Unix transport', () => {
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     }
     expect(await discoverUnixHost(base)).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+    expect(await discoverUnixHost({ ...base, endpointRegistrationId: 'invalid' }))
+      .toEqual({ state: 'unknown', code: 'transport_unavailable' })
     symlinkSync(join(root, 'target'), base.socketPath)
     expect(await discoverUnixHost(base)).toEqual({ state: 'unknown', code: 'host_unverified' })
+  })
+
+  it('discovers a running Unix Host and fails closed on protocol trust mismatch', async () => {
+    const { server, socketPath } = await fixture()
+    const base = {
+      socketPath, expectedUid: uid, trustedEndpoint: true as const,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
+    }
+
+    const running = await discoverUnixHost(base)
+    expect(running.state).toBe('running')
+    if (running.state === 'running') running.client.close()
+    await expect(discoverUnixHost({ ...base, trustedInstallationId: randomUUID() }))
+      .resolves.toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
+  })
+
+  it('discovers a Windows named-pipe Host through the same signed challenge protocol', async () => {
+    const { server, socketPath } = await fixture()
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+      connectSocket: () => createConnection(socketPath),
+    })
+    expect(result.state).toBe('running')
+    if (result.state === 'running') {
+      expect(result.inspection.installation_id).toBe(identity.installationId)
+      result.client.close()
+    }
+    await server.close()
+  })
+
+  it('fails closed before connecting when a Windows registration names the wrong pipe', async () => {
+    let connections = 0
+    const result = await discoverWindowsHost({
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: String.raw`\\.\pipe\slark-dsh-host-v1-${'0'.repeat(64)}`,
+      trustedEndpoint: true,
+      endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180',
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      connectSocket: () => {
+        connections += 1
+        return createConnection(join(dir(), 'must-not-connect.sock'))
+      },
+    })
+    expect(result).toEqual({ state: 'unknown', code: 'host_unverified' })
+    expect(connections).toBe(0)
+  })
+
+  it('distinguishes a missing trusted Windows pipe from a failed signed challenge', async () => {
+    const endpointRegistrationId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3180'
+    const pipePath = windowsNamedPipePath({
+      installationId: identity.installationId,
+      endpointRegistrationId,
+    })
+    const base = {
+      platform: 'win32',
+      arch: 'x64',
+      socketPath: pipePath,
+      trustedEndpoint: true as const,
+      endpointRegistrationId,
+      trustedInstallationId: identity.installationId,
+      trustedInstallationPublicKey: publicKey,
+      trustedExecutableSignatureDigest: executableDigest,
+      now: clock.now,
+    }
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        connectSocket: () => createConnection(join(dir(), 'missing.sock')),
+      }),
+    ).toEqual({ state: 'stopped', code: 'trusted_host_not_running' })
+
+    const { server, socketPath } = await fixture()
+    const otherKey = generateKeyPairSync('ed25519').publicKey
+      .export({ format: 'der', type: 'spki' }) as Buffer
+    expect(
+      await discoverWindowsHost({
+        ...base,
+        trustedInstallationPublicKey: otherKey.subarray(-32).toString('base64url'),
+        connectSocket: () => createConnection(socketPath),
+      }),
+    ).toEqual({ state: 'unknown', code: 'host_unverified' })
+    await server.close()
   })
 
   it('fences replay, expiry, and a restarted Host process nonce', () => {
@@ -592,36 +1673,181 @@ describe('authenticated Unix transport', () => {
 })
 
 describe('single Host ownership', () => {
+  it('rejects forged leases and validates every caller-owned identity field', async () => {
+    expect(() => { new SingleHostLock('/tmp/forged', {
+      pid: 1, uid: 1, processNonce: 'forged-0123456789', ownerId: 'forged',
+    }, Symbol('forged')) }).toThrow(HostAuthorityError)
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const base = { root, pid: 1, uid: statSync(root).uid, processNonce: 'nonce-0123456789abcdef' }
+    for (const options of [
+      { ...base, pid: 1.5 },
+      { ...base, uid: -1 },
+      { ...base, processNonce: 'short' },
+      { ...base, processNonce: 'x'.repeat(257) },
+      { ...base, processNonce: 'nonce-0123456789\n' },
+    ]) {
+      await expect(acquireSingleHostLock(options)).rejects.toMatchObject({ code: 'invalid_input' })
+    }
+  })
+
+  it('fails closed on malformed, shared, and permission-open lock records', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const path = join(root, 'host.lock')
+    writeFileSync(path, '{}\n', { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    writeFileSync(path, JSON.stringify({ pid: 1, uid, processNonce: 'old', ownerId: 'owner' }), { mode: 0o600 })
+    chmodSync(path, 0o666)
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    chmodSync(path, 0o600)
+    linkSync(path, join(root, 'shared.lock'))
+    await expect(acquireSingleHostLock({ root, pid: 2, uid, processNonce: 'nonce-0123456789abcdef', isProcessAlive: () => false }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('uses the real liveness probe and makes release idempotent while fencing stale calls', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'owner-0123456789abcdef' })
+    await expect(acquireSingleHostLock({ root, pid: process.pid + 1, uid, processNonce: 'other-0123456789abcdef' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+    await owner.release()
+    await expect(owner.release()).resolves.toBeUndefined()
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+
+    const permission = Object.assign(new Error('not permitted'), { code: 'EPERM' })
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => { throw permission })
+    onTestFinished(() => { kill.mockRestore() })
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 123, uid, processNonce: 'old', ownerId: 'old' }), { mode: 0o600 })
+    await expect(acquireSingleHostLock({ root, pid: 456, uid, processNonce: 'new-owner-0123456789' }))
+      .rejects.toMatchObject({ code: 'conflict' })
+  })
+
+  it('fences a lock whose process nonce changes without relying on owner-id mismatch', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const owner = await acquireSingleHostLock({ root, pid: 1, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const path = join(root, 'host.lock')
+    const record = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    writeFileSync(path, JSON.stringify({ ...record, processNonce: 'changed-0123456789abcdef' }), { mode: 0o600 })
+    expect(() => { owner.assertOwner() }).toThrow(HostAuthorityError)
+  })
+
   it('admits one owner and refuses a live competing owner', async () => {
     const root = dir()
-    const first = await acquireSingleHostLock({ root, pid: 111, uid: 501, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
-    await expect(acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    const first = await acquireSingleHostLock({ root, pid: 111, uid, processNonce: 'nonce-a-0123456789', isProcessAlive: pid => pid === 111 })
+    await expect(acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'nonce-b-0123456789', isProcessAlive: pid => pid === 111 }))
       .rejects.toMatchObject({ code: 'conflict' })
     await first.release()
   })
 
   it('recovers a stale regular lock but refuses a symlink-shaped lock', async () => {
     const root = dir()
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid: 501, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
-    const owner = await acquireSingleHostLock({ root, pid: 222, uid: 501, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 111, uid, processNonce: 'old', ownerId: 'stale-owner' }), { mode: 0o600 })
+    const owner = await acquireSingleHostLock({ root, pid: 222, uid, processNonce: 'new-0123456789abcdef', isProcessAlive: () => false })
     await owner.release()
     symlinkSync(join(root, 'missing-target'), join(root, 'host.lock'))
-    await expect(acquireSingleHostLock({ root, pid: 333, uid: 501, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
+    await expect(acquireSingleHostLock({ root, pid: 333, uid, processNonce: 'newer-0123456789abcdef', isProcessAlive: () => false }))
       .rejects.toMatchObject({ code: 'conflict' })
   })
 
   it('rejects unsafe process ids and refuses to unlink a swapped owner record', async () => {
     const root = dir()
-    await expect(acquireSingleHostLock({ root, pid: -1, uid: 501, processNonce: 'nonce-0123456789abcdef' }))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const uid = statSync(root).uid
+    await expect(acquireSingleHostLock({ root, pid: -1, uid, processNonce: 'nonce-0123456789abcdef' }))
       .rejects.toMatchObject({ code: 'invalid_input' })
-    const owner = await acquireSingleHostLock({ root, pid: 123, uid: 501, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
+    const owner = await acquireSingleHostLock({ root, pid: 123, uid, processNonce: 'owner-0123456789abcdef', isProcessAlive: () => true })
     unlinkSync(join(root, 'host.lock'))
-    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid: 501, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
-    await expect(owner.release()).rejects.toBeInstanceOf(HostAuthorityError)
+    writeFileSync(join(root, 'host.lock'), JSON.stringify({ pid: 124, uid, processNonce: 'attacker-0123456789', ownerId: 'attacker' }), { mode: 0o600 })
+    await expect(owner.release()).rejects.toMatchObject({ code: 'stale' })
+    const replacedOwner: unknown = JSON.parse(readFileSync(join(root, 'host.lock'), 'utf8'))
+    expect(replacedOwner).toMatchObject({ ownerId: 'attacker' })
   })
 })
 
 describe('session, approval, and context authority', () => {
+  it('fails closed on malformed journals and preserves every recovered terminal outcome', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const path = join(root, 'nested', 'journal.jsonl')
+    const journal = new FileHostJournal(path)
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '')
+    expect(journal.read()).toEqual([])
+    writeFileSync(path, '{}')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, '{}\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    writeFileSync(path, 'not-json\n')
+    expect(() => journal.read()).toThrow(HostAuthorityError)
+    expect(() => new FileHostJournal(root).read()).toThrow()
+
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'invalid',
+        payloadHash: 'a'.repeat(64), outcome: undefined, at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+    expect(() => {
+      journal.append({
+        kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'large',
+        payloadHash: 'a'.repeat(64), outcome: 'x'.repeat(1024 * 1024), at: 1,
+      })
+    }).toThrow(HostAuthorityError)
+
+    writeFileSync(path, [
+      { kind: 'command_started', profileId: 'p', sessionId: 's', commandId: 'started', payloadHash: 'a'.repeat(64), at: 1 },
+      { kind: 'command_committed', profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64), outcome: 42, at: 2 },
+      { kind: 'command_failed', profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'c'.repeat(64), at: 3 },
+    ].map(event => JSON.stringify(event)).join('\n') + '\n')
+    const authority = new SessionCommandAuthority(journal, clock)
+    expect(authority.outcome('p', 'started')).toEqual({ status: 'unknown' })
+    expect(authority.outcome('p', 'committed')).toEqual({ status: 'committed', value: 42 })
+    expect(authority.outcome('p', 'failed')).toEqual({ status: 'failed' })
+    expect(authority.outcome('p', 'missing')).toBeNull()
+    let executed = false
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'committed', payloadHash: 'b'.repeat(64) }, async () => {
+      executed = true
+    })).resolves.toEqual({ status: 'committed', value: 42 })
+    expect(executed).toBe(false)
+    await expect(authority.run({ profileId: 'p', sessionId: 's', commandId: 'failed', payloadHash: 'd'.repeat(64) }, async () => {}))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+  })
+
+  it('deduplicates active commands and records execution failure before admitting the next write', async () => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const journal = new FileHostJournal(join(root, 'journal.jsonl'))
+    const authority = new SessionCommandAuthority(journal, clock)
+    const input = { profileId: 'p', sessionId: 's', commandId: 'active', payloadHash: 'a'.repeat(64) }
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const active = authority.run(input, async () => { await blocked; throw new Error('execution failed') })
+    expect(authority.run(input, async () => 'duplicate')).toBe(active)
+    await expect(authority.run({ ...input, payloadHash: 'b'.repeat(64) }, async () => 'conflict'))
+      .rejects.toMatchObject({ code: 'idempotency_conflict' })
+    await expect(authority.run({ ...input, commandId: 'invalid', payloadHash: 'A'.repeat(64) }, async () => 'invalid'))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const next = authority.run({ ...input, commandId: 'next', payloadHash: 'c'.repeat(64) }, async () => 'next')
+    release()
+    await expect(active).rejects.toThrow('execution failed')
+    await expect(next).resolves.toEqual({ status: 'committed', value: 'next' })
+    expect(authority.outcome('p', 'active')).toEqual({ status: 'failed' })
+    await expect(authority.run(input, async () => 'must not run')).resolves.toEqual({ status: 'failed' })
+    await new Promise<void>(resolve => setImmediate(resolve))
+  })
+
   it('serializes the same profile/session, permits other sessions, and recovers started commands as unknown', async () => {
     const journal = new FileHostJournal(join(dir(), 'journal.jsonl'))
     const authority = new SessionCommandAuthority(journal, clock)
@@ -662,6 +1888,34 @@ describe('session, approval, and context authority', () => {
 })
 
 describe('worker and Desktop-only bundle', () => {
+  it('delegates migration staging and activates a committed generation', async () => {
+    const calls: string[] = []
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async (generation) => { calls.push(`prepare:${generation}`) },
+      importOwnerState: async (generation) => { calls.push(`owner:${generation}`) },
+      importSession: async (generation, header, events) => {
+        calls.push(`session:${generation}:${String(header.id)}:${String(events.length)}`)
+      },
+      semanticRecords: async (generation) => { calls.push(`records:${generation}`); return [] },
+      activeGeneration: async () => { calls.push('active'); return 4 },
+      commitGeneration: async (expected, next) => { calls.push(`commit:${expected}->${next}`) },
+      abortGeneration: async (generation) => { calls.push(`abort:${generation}`) },
+    }, async (generation) => { calls.push(`activate:${generation}`) })
+
+    await target.prepareEmptyGeneration(5)
+    await target.importOwnerState(5, { version: 1, documents: [] })
+    await target.importSession(5, { id: 'migrated' } as never, [])
+    expect(await target.semanticRecords(5)).toEqual([])
+    expect(await target.activeGeneration()).toBe(4)
+    await target.abortGeneration(5)
+    await target.commitGeneration(4, 5)
+
+    expect(calls).toEqual([
+      'prepare:5', 'owner:5', 'session:5:migrated:0', 'records:5', 'active',
+      'abort:5', 'commit:4->5', 'activate:5',
+    ])
+  })
+
   it('rolls the active persistence pointer back when the replacement worker cannot start', async () => {
     let active = 4
     const commits: string[] = []
@@ -682,6 +1936,27 @@ describe('worker and Desktop-only bundle', () => {
     await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
     expect(active).toBe(4)
     expect(commits).toEqual(['4->5', '5->4'])
+  })
+
+  it('preserves the replacement activation error when rollback activation also fails', async () => {
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      throw new Error(generation === 5 ? 'replacement worker failed' : 'rollback worker failed')
+    })
+
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
+    expect(active).toBe(4)
   })
 
   it('isolates worker inputs and waits for quiescence after closing notifications', async () => {
@@ -837,5 +2112,120 @@ describe('worker and Desktop-only bundle', () => {
       ownerId: 'connection-rollback',
     })).rejects.toThrow('worker failed')
     expect(host.getProfileStatus({ authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:rollback', authorityBindingVersion: 1, ownerId: 'connection-rollback' })).toEqual({ state: 'unbound' })
+  })
+
+  it.each(['missing', 'failed'] as const)('preserves the original account registration when a replacement worker is %s', async (failure) => {
+    const root = dir()
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: 'https://accounts.staging.dsh.colorbuyai.com', subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ...(failure === 'failed' ? { ensureProfileWorker: async () => { throw new Error('worker failed') } } : {}),
+    })
+    const input = {
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-preserve',
+    }
+    await expect(host.ensureAccountProfile(input)).rejects.toThrow(failure === 'failed' ? 'worker failed' : 'unavailable')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    expect(await restarted.resolveAccount(source)).toEqual(original)
+    expect(await restarted.resolveAccount(target)).toBeNull()
+    const retry = new DesktopHost({
+      registry: restarted, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {},
+    })
+    expect((await retry.ensureAccountProfile(input)).profileId).toBe(original.profileId)
+  })
+
+  it('does not undo a newer registration when an older replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const source = { issuer: slarkIssuer, subject: 'original-person' }
+    const target = { issuer: slarkIssuer, subject: 'replacement-person' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:concurrent',
+      authorityBindingVersion: 1, keyHandle: 'keychain:concurrent', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5, verifyAccountAccessToken: verifyTestAccountToken,
+      ensureProfileWorker: async () => {
+        await registry.registerAccount({ ...target, ...binding, authorityBindingVersion: 3 })
+        throw new Error('older worker failed')
+      },
+    })
+    await expect(host.ensureAccountProfile({
+      ...target, ...binding, authorityBindingVersion: 2,
+      accountAccessToken: accountToken(target.issuer, target.subject), ownerId: 'connection-concurrent',
+    })).rejects.toMatchObject({ code: 'stale' })
+    expect(registry.resolveBinding(stagingEnvironmentId, binding.accountBindingHandle, 3)?.profileId).toBe(original.profileId)
+  })
+
+  it('leaves an unchanged registration intact when worker preparation fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 4), clock })
+    const input = { issuer: slarkIssuer, subject: 'unchanged', keyHandle: 'keychain:unchanged', unlockMaterial }
+    const original = await registry.registerAccount(input)
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount(input, async () => { throw new Error('worker failed') }))
+      .rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    expect(await registry.resolveAccount(input)).toBe(original)
+  })
+
+  it('preserves unrelated profiles when a replacement worker fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const local = await registry.createLocalAnonymous({ keyHandle: 'keychain:independent', unlockMaterial })
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:preserve-others',
+      authorityBindingVersion: 1, keyHandle: 'keychain:preserve-others', unlockMaterial,
+    }
+    const source = { issuer: slarkIssuer, subject: 'source-with-neighbors' }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const neighbor = await registry.registerAccount({ issuer: slarkIssuer, subject: 'neighbor', keyHandle: 'keychain:neighbor', unlockMaterial })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    await expect(registry.provisionAccount({
+      ...source, ...binding, subject: 'replacement-with-neighbors', authorityBindingVersion: 2,
+    }, async () => { throw new Error('worker failed') })).rejects.toThrow('worker failed')
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
+    const restarted = new ProfileRegistry(options)
+    for (const profile of [local, original, neighbor]) expect(restarted.resolveProfile(profile.profileId)).toEqual(profile)
+  })
+
+  it('does not start a worker or alter the registry when replacement persistence fails', async (context) => {
+    const root = dir()
+    context.onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const options = { root, deviceIndexKey: Buffer.alloc(32, 4), clock }
+    const registry = new ProfileRegistry(options)
+    const source = { issuer: slarkIssuer, subject: 'persist-source' }
+    const binding = {
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:persist-failure',
+      authorityBindingVersion: 1, keyHandle: 'keychain:persist-failure', unlockMaterial,
+    }
+    const original = await registry.registerAccount({ ...source, ...binding })
+    const before = readFileSync(join(root, 'profiles.json'), 'utf8')
+    const failing = new ProfileRegistry({ ...options, persistSnapshot: () => { throw new Error('write failed') } })
+    let workerStarts = 0
+    await expect(failing.provisionAccount({
+      ...source, ...binding, subject: 'persist-target', authorityBindingVersion: 2,
+    }, async () => { workerStarts += 1 })).rejects.toThrow('write failed')
+    expect(workerStarts).toBe(0)
+    expect(await failing.resolveAccount(source)).toEqual(original)
+    expect(readFileSync(join(root, 'profiles.json'), 'utf8')).toBe(before)
   })
 })

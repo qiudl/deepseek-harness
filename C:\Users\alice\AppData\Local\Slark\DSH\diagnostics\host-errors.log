@@ -1,0 +1,8 @@
+{"ts":"2026-10-31T02:29:19.499Z","event":"control-session","reason":"unauthorized","method":"profile.workspace_model_selection"}
+{"ts":"2026-10-31T02:29:19.512Z","event":"control-session","reason":"unauthorized","method":"profile.collaboration_registration"}
+{"ts":"2026-10-31T02:29:19.528Z","event":"control-session","reason":"hostcontrolprotocolerror","method":"profile.collaboration_delivery"}
+{"ts":"2026-10-31T02:29:19.534Z","event":"control-session","reason":"error","method":"profile.skillhub_package"}
+{"ts":"2026-10-31T02:29:19.539Z","event":"control-session","reason":"unavailable","method":"profile.remote_session"}
+{"ts":"2026-10-31T02:29:19.540Z","event":"control-session","reason":"unavailable","method":"profile.remote_ui_read"}
+{"ts":"2026-10-31T02:29:19.541Z","event":"control-session","reason":"unavailable","method":"profile.remote_ui_stream"}
+{"ts":"2026-10-31T02:29:19.549Z","event":"control-session","reason":"upgrade_required","method":"profile.extensions"}

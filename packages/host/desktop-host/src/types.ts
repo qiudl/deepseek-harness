@@ -1,4 +1,11 @@
+import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootJournalCommand, HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostCollaborationReferenceGrant, HostControlSha256,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 
 /** Stable profile id that reveals no account or environment identifier. */
 export type PersonProfileId = Branded<'PersonProfileId'>
@@ -8,6 +15,13 @@ export type ProfileViewLeaseId = Branded<'ProfileViewLeaseId'>
 export type ProfileViewActivationHandle = Branded<'ProfileViewActivationHandle'>
 /** Session-scoped enterprise context lease. */
 export type ContextLeaseId = Branded<'ContextLeaseId'>
+/** Process-local opaque candidate for one inspected offline Account Profile. */
+export type OfflineProfileRecoveryCandidateId = Branded<'OfflineProfileRecoveryCandidateId'>
+/** Desktop-minted idempotency key for one confirmed offline recovery operation. */
+export type OfflineProfileRecoveryOperationId = Branded<'OfflineProfileRecoveryOperationId'>
+
+/** Mutually exclusive authority granted to one authenticated Host connection. */
+export type ProfileAccessScope = 'connected' | 'local_profile' | 'offline_local'
 
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
@@ -24,12 +38,39 @@ export type HostAuthorityErrorCode =
   | 'idempotency_conflict'
   | 'busy'
   | 'upgrade_required'
+  | 'script_approval_required'
+  | 'extension_refused'
   | 'unavailable'
+  | 'profile_not_found'
+  | 'profile_ambiguous'
+  | 'profile_integrity_failed'
+  | 'runtime_incompatible'
+  | 'recovery_proof_mismatch'
+  | 'recovery_preflight_stale'
+  | 'recovery_in_progress'
+  | 'recovery_worker_failed'
+  | 'recovery_timeout_unknown'
+  | 'scope_mismatch'
+  | 'selector_stale'
+  | 'lease_conflict'
+  | 'identity_mismatch'
+  | 'installation_mismatch'
+  | 'material_invalid'
+  | 'legacy_verifier_unsupported'
+  | 'schema_unsupported'
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {
-  /** @param code - Stable code safe for the local broker. */
-  constructor(readonly code: HostAuthorityErrorCode) {
+  /**
+   * @param code - Stable code safe for the local broker.
+   * @param diagnosticReason - Optional finer stable reason (for example which local-restore step
+   *   rejected the request). Local diagnostics only: it never crosses the control protocol, so the
+   *   broker still receives `code`.
+   */
+  constructor(
+    readonly code: HostAuthorityErrorCode,
+    readonly diagnosticReason?: string,
+  ) {
     super(`DSH Host authority rejected operation: ${code}`)
     this.name = 'HostAuthorityError'
   }
@@ -52,6 +93,8 @@ export interface PersonProfileRecord {
     readonly authorityEnvironmentId: string
     readonly handle: string
     readonly authorityBindingVersion: number
+    /** Hash of the assertion issuer's login identity; versions are ordered only within this scope. */
+    readonly authorityBindingScope?: string
   }[]
   readonly bindingGeneration: number
   readonly createdAt: number
@@ -68,6 +111,24 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
+  readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
+  /** Page public Bot identities only from the selected exclusive-writer Profile. */
+  readonly listBotRoster?: (afterBotId: string, limit: number, signal: AbortSignal) =>
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null>
+  /** Prepare a native room's bridge Source in the selected Profile writer. */
+  readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>
+  /** Run one native room member or message operation in the selected Profile writer. */
+  readonly operateNativeRoom?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomReply>
+  /** Send or reconcile one Bot group event through the private Profile service. */
+  readonly operateBotGroup?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupResponse>
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>
@@ -77,6 +138,89 @@ export interface ProfileWorkerHandle {
   readonly generation?: number
   /** Signed browser cookie exchanged owner-side; it never enters Renderer or logs. */
   readonly bootstrapCookie?: { readonly name: string; readonly value: string }
+  /** Host-only text model call; no worker token or credential enters a view lease. */
+  readonly generateText?: (text: string, signal: AbortSignal) => Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }>
+  /** Host-only Session choice inspection; no source proof or executable configuration. */
+  readonly inspectWorkspaceModelSelection?: (
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ) => Promise<HostWorkspaceModelSelection>
+  readonly inspectCollaborationArchiveState?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveStateTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveStateValue>
+  readonly inspectCollaborationArchiveIntent?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveIntentTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveIntentValue>
+  /** Parent-only durable mutation; the Account coordinator must reconcile uncertain replies by token. */
+  readonly transitionCollaborationArchive?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostCollaborationArchiveTransitionResult>
+  /** Parent-only durable original Session input fence. */
+  readonly installGroupInputFence?: (
+    challenge: import('@deepseek-ai/dsh-host-control-protocol').HostGroupInputFenceChallenge,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostGroupInputFenceValue>
+  /**
+   * Private Parent analysis command; this handle grants no Account/cloud authority.
+   * @param command - Prepare/dispatch JSON with the original binding digest; caller keeps Account/peer current.
+   * @param signal - Current Parent cancellation; the private token never enters a view lease.
+   * @returns a bounded non-executable preparation or untrusted model JSON saved before acknowledgement.
+   */
+  readonly collaborationAnalysis?:(command:HostRemoteSessionJson,signal:AbortSignal)=>Promise<HostRemoteSessionJson>
+  /**
+   * Save a complete reply through the selected worker's private write capability.
+   * @param command - Readable cloud projection and coordinator-authenticated account namespace.
+   * @param signal - Parent cancellation; the worker token stays outside view leases.
+   * @returns Bounded untrusted local commit JSON, without an answer echo or cloud authorization.
+   */
+  readonly receiveCollaborationDelivery?: (command: HostCollaborationDeliveryCapsule, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  /** Host-only root binding read; private token never enters a view lease. */
+  readonly rootJournal?: (command: HostRootJournalCommand, signal: AbortSignal) => Promise<HostRootJournalMetadata>
+  /** Host-only root metadata; no view lease access. */
+  /** Current unused attempt from this worker's live owner and original parent binding. */
+  readonly inspectRootPlanningAttempt?: (target: HostRootSubmissionTarget, attemptId: HostControlRequestId,
+    binding: string, signal: AbortSignal) => Promise<HostRootPlanningAttemptDescriptor>
+  readonly inspectCollaborationRoot?: (target: HostRootSubmissionTarget, signal: AbortSignal) => Promise<HostRootSubmissionDescriptor>
+  /** Host-only committed Source read; no message content or worker token enters a view lease. */
+  readonly inspectCollaborationSource?: (
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceDescriptor>
+  /** Independent committed selection lookup; a supplied digest never creates or authorizes a grant. */
+  readonly readCollaborationReferenceGrant?: (
+    target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
+  /**
+   * Capture an already authorized selection through the independent private Reference capability.
+   * Returns bounded untrusted metadata; the parent must validate it before cloud use, and it grants no transfer authority.
+   */
+  readonly captureCollaborationReferenceSelection?: (
+    selection: HostRemoteSessionJson, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Current Source-bound selected bytes through the independent Reference token, never a view lease. */
+  readonly readCollaborationReferenceContent?: (
+    target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
+  /** Original journal content for Main cloud admission; never carried by a view lease. */
+  readonly readCollaborationSourceSnapshot?: (
+    target: HostCollaborationSourceTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceSnapshot>
+  /** Host-only closed Session command; no worker token enters a view lease. */
+  readonly remoteSession?: (
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Host-only, read-only Web DSH RPC; worker token never enters a view lease. */
+  readonly remoteUiRead?: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>
+  /** Host-only native Session event stream; the reader owns cancellation. */
+  readonly remoteUiStream?: (endpoint: string, payload: unknown, signal: AbortSignal, itemChunks?: boolean) => AsyncIterable<unknown>
 }
 
 /** Factory that starts one isolated profile worker. */
@@ -90,6 +234,45 @@ export interface ProfileOpenResult {
   readonly leaseGeneration: number
   readonly expiresAt: number
   readonly runtimeGeneration: number
+}
+
+/** Safe, non-identifying facts returned by an offline Account Profile preflight. */
+export interface OfflineProfileRecoveryCandidate {
+  readonly state: 'recoverable' | 'compatibility_blocked'
+  readonly candidateId: OfflineProfileRecoveryCandidateId
+  readonly profileKind: 'account'
+  readonly bindingCount: number
+  readonly persistenceGeneration: number
+  readonly sessionCount: number
+  readonly pluginCount: number
+  readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+  readonly preflightDigest: string
+  readonly reasonCode?: string
+}
+
+/** Host-internal preflight facts supplied by the persistence/runtime inspector. */
+export type OfflineProfileRecoveryPreflight = Omit<OfflineProfileRecoveryCandidate,
+  'candidateId' | 'profileKind' | 'bindingCount'>
+
+/** Result of a confirmed offline Account Profile recovery. */
+export interface OfflineProfileRecoveryResult {
+  readonly state: 'offline_ready'
+  readonly profileId: PersonProfileId
+  readonly accessScope: 'offline_local'
+  readonly persistenceGeneration: number
+  readonly runtimeGeneration: number
+  /** Internal selector fence consumed by the Host transport; not returned on the wire. */
+  readonly bindingGeneration: number
+}
+
+/** Stable, secret-free state for an idempotent offline recovery operation. */
+export type OfflineProfileRecoveryStatus =
+  | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+  | { readonly state: 'failed'; readonly reasonCode: 'recovery_worker_failed' }
+
+/** View lease available only through the offline Account entry point. */
+export interface OfflineProfileOpenResult extends ProfileOpenResult {
+  readonly accessScope: 'offline_local'
 }
 
 /** Verified Main-only loopback view activation. */

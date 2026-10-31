@@ -1,0 +1,34 @@
+{
+  "assertion": {
+    "schema_version": 1,
+    "challenge": {
+      "schema_version": 1,
+      "source_challenge": {
+        "request_id": "10000000-0000-4000-8000-000000000001",
+        "challenge_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "expires_at": 2000,
+        "audience": "https://slark.example.test",
+        "environment_id": "20000000-0000-4000-8000-000000000002",
+        "account_issuer": "https://accounts.example.test",
+        "account_subject": "30000000-0000-4000-8000-000000000003",
+        "workspace_id": "40000000-0000-4000-8000-000000000004",
+        "session_id": "source-session",
+        "source_message_id": "message-1",
+        "source_revision": "1",
+        "snapshot_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "host_epoch": "1"
+      },
+      "namespace_id": "n2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "root_task_id": "70000000-0000-4000-8000-000000000007",
+      "root_trace_id": "cccccccccccccccccccccccccccccccc",
+      "command_id": "80000000-0000-4000-8000-000000000008",
+      "payload_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "installation_id": "50000000-0000-4000-8000-000000000005",
+    "installation_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "host_instance_id": "60000000-0000-4000-8000-000000000006",
+    "process_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "payload": "dsh-collaboration-root-authority/v1\u0000[1,\"10000000-0000-4000-8000-000000000001\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",2000,\"https://slark.example.test\",\"20000000-0000-4000-8000-000000000002\",\"https://accounts.example.test\",\"30000000-0000-4000-8000-000000000003\",\"40000000-0000-4000-8000-000000000004\",\"source-session\",\"message-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"1\",\"n2_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"70000000-0000-4000-8000-000000000007\",\"cccccccccccccccccccccccccccccccc\",\"80000000-0000-4000-8000-000000000008\",\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"50000000-0000-4000-8000-000000000005\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"60000000-0000-4000-8000-000000000006\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"]"
+}

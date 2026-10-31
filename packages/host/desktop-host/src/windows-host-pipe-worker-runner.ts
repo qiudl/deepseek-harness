@@ -1,0 +1,143 @@
+import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import { WindowsHostPipeConnectionBridge } from './windows-host-pipe-connection-bridge.ts'
+import type { WindowsHostWorkerMessage } from './windows-host-worker-bridge.ts'
+import type { WindowsHostFrameDuplex } from './windows-named-pipe-request-loop.ts'
+import { runWindowsNamedPipeRequestLoop } from './windows-named-pipe-request-loop.ts'
+import {
+  withCancellableAcceptedWindowsNamedPipe,
+  type WindowsNamedPipeLifecycleBindings,
+} from './windows-named-pipe-lifecycle.ts'
+import type { WindowsNamedPipePolicy } from './windows-named-pipe-policy.ts'
+import type { WindowsWorkerStopFlag } from './windows-worker-io-cancellation.ts'
+
+/** Minimal MessagePort face retained by the router thread and each blocking slot thread. */
+export interface WindowsHostPipeWorkerPort {
+  send(message: WindowsHostWorkerMessage): void | Promise<void>
+  subscribe(accept: (message: unknown) => void): () => void
+}
+
+/** Complete injected ownership boundary for one per-connection blocking slot thread. */
+export interface WindowsHostPipeWorkerRunnerOptions<Evidence> {
+  readonly generation: number
+  readonly policy: WindowsNamedPipePolicy
+  readonly stopFlag: WindowsWorkerStopFlag
+  readonly cancellation: {
+    openCurrentThreadHandle(): bigint
+    abandonUnhandedThreadHandle(threadHandle: bigint): void
+  }
+  readonly lifecycleBindings: WindowsNamedPipeLifecycleBindings
+  readonly attest: (handle: bigint) => Evidence | Promise<Evidence>
+  readonly createConnectionId: () => string
+  readonly createChannel: (handle: bigint) => WindowsHostFrameDuplex
+  readonly port: WindowsHostPipeWorkerPort
+}
+
+/** Aggregate diagnostics emitted only after native pipe cleanup has completed. */
+export interface WindowsHostPipeWorkerRunResult {
+  readonly connectionsServed: number
+  readonly requestsHandled: number
+}
+
+function errorReason(error: unknown): Error {
+  return error instanceof Error ? error : new Error('Windows Host pipe Worker failed')
+}
+
+/**
+ * Run one attested named-pipe connection inside its own dedicated slot thread.
+ * Native handles never cross into Host business logic: canonical requests travel through
+ * the generation-bound bridge, while the parent retains the per-connection Host session.
+ * The slot accepts exactly one client, serves it, and exits; the router thread spawns the
+ * next slot as soon as this one connects, so concurrent clients never starve each other.
+ */
+/** Client-side closes while the Worker is writing are a finished connection, not a host failure. */
+function isPeerDisconnected(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const code = (error as { win32Code?: unknown }).win32Code
+  // 232 ERROR_NO_DATA, 109 ERROR_BROKEN_PIPE, 233 ERROR_PIPE_NOT_CONNECTED
+  return code === 232 || code === 109 || code === 233
+}
+
+export async function runWindowsHostPipeWorker<Evidence>(
+  options: WindowsHostPipeWorkerRunnerOptions<Evidence>,
+): Promise<WindowsHostPipeWorkerRunResult> {
+  let controlFailure: Error | undefined
+  const bridge = new WindowsHostPipeConnectionBridge({
+    generation: options.generation,
+    stopRequested: () => options.stopFlag.requested(),
+    send: message => options.port.send(message),
+  })
+  const unsubscribe = options.port.subscribe((message) => {
+    try { bridge.receive(message) } catch (error) {
+      controlFailure = errorReason(error)
+      options.stopFlag.request()
+    }
+  })
+  try {
+    if (!options.stopFlag.requested()) {
+      const threadHandle = options.cancellation.openCurrentThreadHandle()
+      try { await bridge.announceReady(threadHandle) } catch (error) {
+        let cleanupFailure: unknown
+        try { options.cancellation.abandonUnhandedThreadHandle(threadHandle) } catch (cleanupError) {
+          cleanupFailure = cleanupError
+        }
+        if (cleanupFailure !== undefined) {
+          throw new AggregateError(
+            [errorReason(error), errorReason(cleanupFailure)],
+            'Windows Host Worker ready handoff and handle cleanup failed',
+          )
+        }
+        throw error
+      }
+    }
+    let outcome
+    try {
+      outcome = await withCancellableAcceptedWindowsNamedPipe({
+        policy: options.policy,
+        bindings: options.lifecycleBindings,
+        stopRequested: () => options.stopFlag.requested(),
+        attest: options.attest,
+        serve: async (handle) => {
+          await bridge.openConnection(options.createConnectionId())
+          try {
+            const result = await runWindowsNamedPipeRequestLoop({
+              channel: options.createChannel(handle),
+              stopRequested: () => options.stopFlag.requested(),
+              handleRequest: (request: HostControlFrame) => bridge.handleRequest(request),
+            })
+            if (!result.stopped) await bridge.closeConnection(result.requestsHandled)
+            return result
+          } catch (error) {
+            // REQ-20261026-0023: a Desktop probe that hangs up mid-write (Win32 232) used to abort
+            // the whole Worker, so the account Profile never started. Close this slot's connection
+            // and let the thread exit instead of turning a client disconnect into a host failure.
+            if (!isPeerDisconnected(error)) throw error
+            console.error(`[dsh-host] connection closed by the Desktop peer: ${
+              (error as Error).message
+            }`)
+            // The parent already counted the handled requests; closing with any other count
+            // poisons the slot bridge and leaks an open connection on the router (0023 only
+            // covered a zero-request read-side hangup, but Win32 232 surfaces on WriteFile).
+            // A stop that raced the hangup owns the connection teardown instead.
+            const requestsHandled = bridge.requestsHandled
+            if (bridge.state === 'connected') await bridge.closeConnection(requestsHandled)
+            return { requestsHandled, stopped: false }
+          }
+        },
+      })
+    } catch (error) {
+      throw controlFailure ?? error
+    }
+    if (controlFailure !== undefined) throw controlFailure
+    const result: WindowsHostPipeWorkerRunResult = outcome.state === 'served'
+      ? { connectionsServed: 1, requestsHandled: outcome.result.requestsHandled }
+      : { connectionsServed: 0, requestsHandled: 0 }
+    // A cleanly finished slot exits without the stop handshake; the router retires its thread.
+    if (outcome.state === 'served' && !outcome.result.stopped && !options.stopFlag.requested()) {
+      return result
+    }
+    await bridge.announceStopped()
+    return result
+  } finally {
+    unsubscribe()
+  }
+}

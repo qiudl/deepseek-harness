@@ -103,17 +103,20 @@ interface RetainedExport {
   readonly chunks: readonly MigrationExportChunk[]
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (typeof value === 'object' && value !== null) {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().filter(key => record[key] !== undefined)
-      .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
-  }
+function canonicalValue(value: unknown): unknown {
   if (value === undefined || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
     throw new Error('migration_export_non_json_value')
   }
-  return JSON.stringify(value)
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right, 'en'))
+    .map(([key, entry]) => [key, canonicalValue(entry)]))
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalValue(value))
 }
 
 function digest(value: unknown): string {
@@ -140,6 +143,8 @@ function headerPayload(header: SessionHeader): unknown {
     origin: header.origin,
     delegationDepth: header.delegationDepth,
     agentPreset: header.agentPreset,
+    // fork 0.1.2 header 扩展字段 seedLength/scope 在 0.1.3 SessionHeader 不存在（0.1.3 移入 meta.inheritedEventCount，
+    // scope=durable plugin scope 属 P5 未路由）；payload 语义相应收敛，见 REQ-0020 F1 判定记录。
   }
 }
 
@@ -246,9 +251,8 @@ function sameSnapshots(
 ): boolean {
   if (left.length !== right.length) return false
   return left.every((snapshot, index) => {
-    const candidate = right[index]
-    return candidate !== undefined
-      && candidate.header.id === snapshot.header.id
+    const candidate = right[index] as SessionPersistenceSnapshot
+    return candidate.header.id === snapshot.header.id
       && candidate.revision === snapshot.revision
   })
 }
@@ -372,7 +376,7 @@ export class JsonlMigrationExportService {
         sessions.push({ header: structuredClone(inspection.meta), events: structuredClone(inspection.events) })
         for (const record of additions) {
           if (records.length >= request.maxRecords) throw new Error('migration_export_too_large')
-          encodedBytes += Buffer.byteLength(canonicalJson(record)) + (records.length === 0 ? 0 : 1)
+          encodedBytes += Buffer.byteLength(canonicalJson(record)) + 1
           if (encodedBytes > request.maxBytes) throw new Error('migration_export_too_large')
           records.push(record)
         }
@@ -402,7 +406,6 @@ export class JsonlMigrationExportService {
           chunkRecords[chunkRecords.length - 1] = candidate
         }
       }
-      if (chunkRecords.length === 0) chunkRecords.push([])
       const chunks = chunkRecords.map((chunk, chunkIndex): MigrationExportChunk => ({
         exportId,
         chunkIndex,

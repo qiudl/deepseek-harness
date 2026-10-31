@@ -2,7 +2,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
-import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionLogOffset, type SessionEvent, type SessionHeader, type SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import {
   migrationOwnerStateRecords,
@@ -10,13 +10,34 @@ import {
   type MigrationOwnerStateBundle,
   type MigrationOwnerTransferBundle,
   type MigrationSemanticRecord,
-} from './migration-export.ts'
-import { eventLines, logPath, toHeaderLine } from './format.ts'
+} from './migration-export.js'
+import {
+  eventLines,
+  generationLogFilename,
+  logPath,
+  parseGenerationLogFilename,
+  toHeaderLine,
+} from './format.js'
+import { LEASE_FILENAME } from './lease-filename.js'
 
 const HEX_256 = /^[a-f0-9]{64}$/u
 const OPAQUE_ID = /^[a-f0-9]{32,64}$/u
 const INSTALLATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const MAX_TRANSFER_BYTES = 256 * 1024 * 1024
+
+function sessionInheritedEventCount(meta: SessionHeader, events: readonly SessionEvent[]): SessionLogOffsetType {
+  let cut: SessionLogOffsetType | undefined
+  for (const event of events) {
+    if (event.type === 'session/end-seed' && event.data.inherited === true) cut = SessionLogOffset(event.seq)
+  }
+  if (meta.isSeeded && cut === undefined) {
+    throw new Error('corrupt session log: seeded v2 header lacks an inherited end-seed marker')
+  }
+  if (!meta.isSeeded && cut !== undefined) {
+    throw new Error('corrupt session log: unseeded v2 header contains an inherited end-seed marker')
+  }
+  return cut ?? SessionLogOffset(0)
+}
 
 async function syncDirectory(path: string): Promise<void> {
   const handle = await open(path, 'r')
@@ -60,7 +81,7 @@ export class FileOwnerMigrationTransferStore {
     validateBundle(bundle)
     await this.ensureRoot()
     const bytes = Buffer.from(JSON.stringify(bundle))
-    if (bytes.byteLength < 1 || bytes.byteLength > MAX_TRANSFER_BYTES) {
+    if (bytes.byteLength > MAX_TRANSFER_BYTES) {
       throw new Error('migration_transfer_too_large')
     }
     const transferId = randomBytes(24).toString('hex')
@@ -133,18 +154,11 @@ export class FileOwnerMigrationTransferStore {
   }
 
   private file(transferId: string): string {
-    const file = join(this.root, `${transferId}.json`)
-    if (dirname(file) !== this.root) throw new Error('migration_transfer_invalid')
-    return file
+    return join(this.root, `${transferId}.json`)
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_transfer_root_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_transfer_root_unsafe')
   }
 }
 
@@ -160,6 +174,22 @@ export interface MigrationImportTarget {
 }
 
 type ActiveGenerationRecord = Readonly<{ version: number; generation: number }>
+
+async function ensurePrivateRoot(root: string, expectedUid: number, unsafeCode: string): Promise<void> {
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  const metadata = await lstat(root)
+  if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== expectedUid
+    || (metadata.mode & 0o077) !== 0) throw new Error(unsafeCode)
+}
+
+/** Read-only facts for one already-materialized persistence generation. */
+export interface ExistingPersistenceInspection {
+  readonly root: string
+  readonly compression: 'none'
+  readonly generation: number
+  readonly sessionCount: number
+  readonly inventoryDigest: string
+}
 
 /**
  * File-backed generation target for production JSONL composition. Imported
@@ -196,12 +226,65 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
   async activePersistenceConfig(): Promise<{ root: string; compression: 'none'; generation: number }> {
     const generation = await this.activeGeneration()
     const root = this.generationRoot(generation)
-    try {
-      await this.ensureOwnedDirectory(root, true)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    }
+    await this.ensureOwnedDirectory(root, true)
     return { root: await this.checkedGenerationRoot(generation), compression: 'none', generation }
+  }
+
+  /**
+   * Validate and inspect an existing active generation without creating roots,
+   * active records, owner state, sessions, or any other Profile artifact.
+   * @returns canonical persistence root plus digest-only semantic records.
+   */
+  async inspectExistingPersistence(): Promise<ExistingPersistenceInspection> {
+    const { generation } = await this.loadExistingActive()
+    const root = await this.checkedGenerationRoot(generation)
+    const ownerState = await this.readOwnerState(generation)
+    const sessions: Array<Readonly<{ project: string; session: string; files: readonly string[]; sizes: readonly string[] }>> = []
+    for (const project of await readdir(root, { withFileTypes: true })) {
+      if (project.name === 'owner-state.json' && project.isFile() && !project.isSymbolicLink()) continue
+      if (!project.isDirectory() || project.isSymbolicLink()) throw new Error('migration_generation_unsafe')
+      const projectPath = join(root, project.name)
+      for (const session of await readdir(projectPath, { withFileTypes: true })) {
+        if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_generation_unsafe')
+        const sessionPath = join(projectPath, session.name)
+        const directoryFiles = (await readdir(sessionPath)).sort()
+        if (directoryFiles.length === 0 && session.name === 'preset-user-default') continue
+        const files = directoryFiles.filter(name => name !== LEASE_FILENAME)
+        const ordinaryGenerations = files.filter(name => parseGenerationLogFilename(name, 'none') !== undefined)
+        const legacyZstd = files.filter(name => parseGenerationLogFilename(name, 'zstd') !== undefined)
+        const metadata = files.filter(name => name === 'migration-records.json')
+        const recognized = ordinaryGenerations.length + legacyZstd.length + metadata.length
+        if (recognized !== files.length || ordinaryGenerations.length + legacyZstd.length < 1
+          || (ordinaryGenerations.length > 0 && legacyZstd.length > 0)
+          || (legacyZstd.length > 0 && JSON.stringify(legacyZstd) !== JSON.stringify(['session.jsonl.zstd']))) {
+          throw new Error('migration_generation_unsafe')
+        }
+        if (directoryFiles.includes(LEASE_FILENAME)) {
+          const lock = await lstat(join(sessionPath, LEASE_FILENAME), { bigint: true })
+          if (!lock.isFile() || lock.isSymbolicLink() || lock.uid !== BigInt(this.expectedUid)
+            || (lock.mode & 0o022n) !== 0n || lock.nlink !== 1n || lock.size !== 0n) {
+            throw new Error('migration_generation_unsafe')
+          }
+        }
+        const sizes: string[] = []
+        for (const name of files) {
+          const metadata = await lstat(join(sessionPath, name), { bigint: true })
+          if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== BigInt(this.expectedUid)
+            || (metadata.mode & 0o077n) !== 0n || metadata.nlink !== 1n || metadata.size < 1n) {
+            throw new Error('migration_generation_unsafe')
+          }
+          sizes.push(`${String(metadata.size)}:${String(metadata.mtimeNs)}:${String(metadata.ctimeNs)}`)
+        }
+        sessions.push({ project: project.name, session: session.name, files, sizes })
+      }
+    }
+    sessions.sort((left, right) => `${left.project}/${left.session}`.localeCompare(`${right.project}/${right.session}`, 'en'))
+    const inventoryDigest = createHash('sha256').update(JSON.stringify({
+      ownerStateDigest: migrationSemanticDigest(migrationOwnerStateRecords(ownerState)), sessions,
+    })).digest('hex')
+    return {
+      root, compression: 'none', generation, sessionCount: sessions.length, inventoryDigest,
+    }
   }
 
   async prepareEmptyGeneration(generation: number): Promise<void> {
@@ -223,7 +306,10 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     const project = dirname(dirname(log))
     await this.ensureOwnedDirectory(project, true)
     await this.ensureOwnedDirectory(dirname(log), false)
-    const body = `${JSON.stringify(toHeaderLine(header))}\n${eventLines(events)}${events.length === 0 ? '' : '\n'}`
+    const body = `${JSON.stringify(toHeaderLine(
+      header,
+      sessionInheritedEventCount(header, events),
+    ))}\n${eventLines(events)}${events.length === 0 ? '' : '\n'}`
     await this.writeExclusive(log, body)
     const recordsFile = join(dirname(log), 'migration-records.json')
     await this.writeExclusive(recordsFile, `${JSON.stringify(migrationSemanticRecords([{ header, events }]))}\n`)
@@ -255,7 +341,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
         if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_generation_unsafe')
         const sessionPath = join(projectPath, session.name)
         const names = (await readdir(sessionPath)).sort()
-        if (JSON.stringify(names) !== JSON.stringify(['migration-records.json', 'session.jsonl'])) {
+        if (JSON.stringify(names) !== JSON.stringify(['migration-records.json', generationLogFilename(SESSION_FORMAT_VERSION, 'none')])) {
           throw new Error('migration_generation_unsafe')
         }
         const file = join(sessionPath, 'migration-records.json')
@@ -296,26 +382,36 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     this.validateGeneration(generation)
     if (await this.activeGeneration() === generation) throw new Error('migration_import_already_committed')
     const directory = this.generationRoot(generation)
-    const within = relative(join(this.root, 'generations'), directory)
-    if (!within || within.startsWith(`..${sep}`)) throw new Error('migration_generation_invalid')
     await rm(directory, { recursive: true, force: true })
     await syncDirectory(join(this.root, 'generations'))
   }
 
   private async loadActive(): Promise<ActiveGenerationRecord> {
     await this.ensureRoot()
+    try {
+      return await this.loadExistingActive()
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const initial = { version: 1, generation: this.initialGeneration }
+    try { await this.writeActive(initial) } catch (error) {
+      if (!(error instanceof Error && error.message === 'migration_generation_stale')) throw error
+    }
+    return this.loadActive()
+  }
+
+  private async loadExistingActive(): Promise<ActiveGenerationRecord> {
+    for (const directory of [this.root, join(this.root, 'generations'), join(this.root, 'active')]) {
+      const metadata = await lstat(directory)
+      if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
+        || (metadata.mode & 0o077) !== 0) throw new Error('migration_generation_unsafe')
+    }
     const directory = join(this.root, 'active')
     const versions = (await readdir(directory))
       .map(name => /^active\.(\d+)\.json$/u.exec(name)?.[1])
       .filter((value): value is string => value !== undefined)
       .map(Number).filter(Number.isSafeInteger).sort((a, b) => b - a)
-    if (versions[0] === undefined) {
-      const initial = { version: 1, generation: this.initialGeneration }
-      try { await this.writeActive(initial) } catch (error) {
-        if (!(error instanceof Error && error.message === 'migration_generation_stale')) throw error
-      }
-      return this.loadActive()
-    }
+    if (versions[0] === undefined) throw Object.assign(new Error('migration_generation_missing'), { code: 'ENOENT' })
     const file = join(directory, `active.${versions[0]}.json`)
     const metadata = await lstat(file)
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
@@ -335,12 +431,13 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     await this.writeExclusive(temporary, `${JSON.stringify(value)}\n`)
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(directory)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_generation_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
@@ -394,7 +491,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
 
   private assertContained(root: string, path: string): void {
     const within = relative(root, path)
-    if (!within || within === '..' || within.startsWith(`..${sep}`) || basename(path) !== 'session.jsonl') {
+    if (!within || within === '..' || within.startsWith(`..${sep}`) || basename(path) !== generationLogFilename(SESSION_FORMAT_VERSION, 'none')) {
       throw new Error('migration_generation_unsafe')
     }
   }
@@ -517,22 +614,18 @@ export class FileOwnerMigrationImportJournal {
     }
     try {
       await link(temporary, file)
+      await unlink(temporary)
       await syncDirectory(this.root)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error('migration_import_stale')
       throw error
     } finally {
-      await unlink(temporary)
+      await rm(temporary, { force: true })
     }
   }
 
   private async ensureRoot(): Promise<void> {
-    await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const metadata = await lstat(this.root)
-    if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
-      || (metadata.mode & 0o077) !== 0) {
-      throw new Error('migration_import_journal_unsafe')
-    }
+    await ensurePrivateRoot(this.root, this.expectedUid, 'migration_import_journal_unsafe')
   }
 }
 

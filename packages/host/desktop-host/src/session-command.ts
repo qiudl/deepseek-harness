@@ -1,12 +1,13 @@
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
+import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
+import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
+import { parseCommandJournalEvent, type JournalEvent } from './command-journal-event.ts'
 import type { HostClock } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 
-type JournalEvent =
-  | { readonly kind: 'command_started'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
-  | { readonly kind: 'command_committed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly outcome: unknown; readonly at: number }
-  | { readonly kind: 'command_failed'; readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string; readonly at: number }
+export type { JournalEvent } from './command-journal-event.ts'
 
 /** Fsync-backed append-only command journal. */
 export class FileHostJournal {
@@ -17,7 +18,12 @@ export class FileHostJournal {
    * @param event - command lifecycle fact to persist.
    */
   append(event: JournalEvent): void {
-    const line = `${JSON.stringify(event)}\n`
+    let line: string
+    try {
+      const encoded = JSON.stringify(event)
+      parseCommandJournalEvent(JSON.parse(encoded) as unknown)
+      line = `${encoded}\n`
+    } catch { throw new HostAuthorityError('invalid_input') }
     if (Buffer.byteLength(line) > 1024 * 1024) throw new HostAuthorityError('invalid_input')
     const fd = openSync(this.path, 'a', 0o600)
     try { writeSync(fd, line); fsyncSync(fd) } finally { closeSync(fd) }
@@ -34,8 +40,16 @@ export class FileHostJournal {
       throw error
     }
     if (source !== '' && !source.endsWith('\n')) throw new HostAuthorityError('unavailable')
-    return source.split('\n').filter(Boolean).map(line => JSON.parse(line) as JournalEvent)
+    try {
+      return source.split('\n').filter(Boolean).map(line => parseCommandJournalEvent(JSON.parse(line) as unknown))
+    } catch { throw new HostAuthorityError('unavailable') }
   }
+}
+
+/** Durable command journal contract shared by platform file authorities. */
+export interface HostJournal {
+  append(event: JournalEvent): void
+  read(): readonly JournalEvent[]
 }
 
 interface CommandInput { readonly profileId: string; readonly sessionId: string; readonly commandId: string; readonly payloadHash: string }
@@ -47,7 +61,7 @@ export class SessionCommandAuthority {
   private readonly tails = new Map<string, Promise<void>>()
   private readonly pending = new Map<string, { payloadHash: string; promise: Promise<CommandOutcome> }>()
 
-  constructor(private readonly journal: FileHostJournal, private readonly clock: HostClock) {
+  constructor(private readonly journal: HostJournal, private readonly clock: HostClock) {
     for (const event of journal.read()) {
       const key = `${event.profileId}\0${event.commandId}`
       if (event.kind === 'command_started') this.outcomes.set(key, { payloadHash: event.payloadHash, outcome: { status: 'unknown' } })
@@ -87,7 +101,7 @@ export class SessionCommandAuthority {
     }
     const sessionKey = `${input.profileId}\0${input.sessionId}`
     const predecessor = this.tails.get(sessionKey) ?? Promise.resolve()
-    const promise = predecessor.catch(() => undefined).then(async () => {
+    const promise = predecessor.then(async () => {
       this.journal.append({ kind: 'command_started', ...input, at: this.clock.now() })
       try {
         const value = await execute()
@@ -105,9 +119,35 @@ export class SessionCommandAuthority {
     const tail = promise.then(() => undefined, () => undefined)
     this.tails.set(sessionKey, tail)
     void tail.finally(() => {
-      if (this.pending.get(commandKey)?.promise === promise) this.pending.delete(commandKey)
+      this.pending.delete(commandKey)
       if (this.tails.get(sessionKey) === tail) this.tails.delete(sessionKey)
     })
     return promise
   }
+}
+
+const READ_OPERATIONS = new Set<HostRemoteSessionCommand['operation']>([
+  'session.list', 'session.history', 'approval.poll', 'control.status', 'directory.pick',
+])
+
+/** Apply durable idempotency to mutations before forwarding them to one Profile worker. */
+export async function executeRemoteSessionCommand(input: {
+  readonly authority: SessionCommandAuthority
+  readonly workers: ProfileWorkerSupervisor
+  readonly profileId: string
+  readonly command: HostRemoteSessionCommand
+  readonly signal: AbortSignal
+}): Promise<HostRemoteSessionJson> {
+  if (READ_OPERATIONS.has(input.command.operation)) {
+    return input.workers.remoteSession(input.profileId, input.command, input.signal)
+  }
+  const sessionId = 'session_id' in input.command ? input.command.session_id : '$profile'
+  const outcome = await input.authority.run({
+    profileId: input.profileId,
+    sessionId,
+    commandId: input.command.command_id,
+    payloadHash: createHash('sha256').update(JSON.stringify(input.command)).digest('hex'),
+  }, () => input.workers.remoteSession(input.profileId, input.command, input.signal))
+  if (outcome.status !== 'committed') throw new HostAuthorityError('unavailable')
+  return outcome.value as HostRemoteSessionJson
 }

@@ -1,7 +1,74 @@
-import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
+import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotIdentity, parseHostBotIdentityTarget,
+  parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
+  encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
+  matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeAgentResultInput, type ProfileNativeAgentResultRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomTurnAssertion,
+  encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, HostBotRosterPage,
+  HostNativeRoomSource, HostNativeRoomAssertion, ProfileBotIdentityRequest, ProfileBotRosterRequest,
+  ProfileNativeRoomRequest, ProfileNativeRoomOperationRequest,
+  HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostNativeRoomTurnAssertion } from '@deepseek-ai/dsh-host-control-protocol'
+import { resolveAccountBotIdentity, listAccountBotRoster,
+  prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
+import { deliverAccountNativeAgentResultChunk } from './account-native-agent-result.ts'
+import { deliverAccountBotGroup, readAccountBotGroupResultPage,
+  acknowledgeAccountBotGroupResult, stopAccountBotGroupDelivery } from './account-bot-group-delivery.ts'
+import { matchesHostBotGroupResponse, parseHostBotGroupDeliveryInput,
+  parseHostBotGroupStopInput,
+  parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
+  type HostBotGroupPublicKeyring, type ProfileBotGroupDeliverRequest,
+  type ProfileBotGroupStopRequest,
+  type ProfileBotGroupResultPageRequest, type HostBotGroupResultProof,
+  type ProfileBotGroupResultAckRequest,
+  encodeHostBotGroupResultProofPayload,
+} from '@deepseek-ai/dsh-host-control-protocol'
+import { HostRecoveryMaterials } from './recovery-materials.ts'
+import {
+  parseRecoveryDescribeInput, parseRecoveryValidateInput,
+  type RecoveryDescribeInput, type RecoveryValidateInput, type RecoveryValidation,
+  type ProfileRecoveryMaterialsDescribeRequest, type ProfileRecoveryMaterialsDescribeResult,
+  type ProfileRecoveryMaterialsValidateRequest, type ProfileRecoveryMaterialsValidateResult,
+} from '@deepseek-ai/dsh-host-control-protocol'
+import { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { SKILLHUB_PROFILE_BINDING_DOMAIN, encodeSkillHubProfileBindingPayload,
+  SKILLHUB_PACKAGE_RECEIPT_DOMAIN, encodeSkillHubPackageReceiptPayload,
+  SKILLHUB_EXECUTION_RECEIPT_DOMAIN, encodeSkillHubExecutionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import {
+  SKILLHUB_BOT_MESSAGE_ACTOR_SCHEMA, SKILLHUB_BOT_MESSAGE_ACTOR_AUDIENCE,
+  SKILLHUB_BOT_MESSAGE_ACTOR_PURPOSE, SKILLHUB_BOT_MESSAGE_ACTOR_JWS_TYPE,
+  encodeSkillHubBotMessageActorClaims, parseSkillHubBotMessageActorClaims,
+  parseSkillHubBotMessageActorProtectedHeader, matchesSkillHubBotMessageActorInput,
+} from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationContinuationReceipt, encodeHostCollaborationContinuationReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostCollaborationConsumptionReceipt, encodeHostCollaborationConsumptionReceiptPayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { matchHostRootPlanningEvidence } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootPlanningAttemptAuthorityChallenge, parseHostRootPlanningAttemptAuthorityAssertion,
+  encodeHostRootPlanningAttemptAuthorityPayload, matchHostRootPlanningAttemptTarget, matchHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootPlanningAttemptAuthorityChallenge, HostRootPlanningAttemptAuthorityAssertion,
+  ProfileRootPlanningAttemptAuthorityRequest, HostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostSourceAnalysisOutput, matchHostSourceAnalysisOutput, parseHostRootAnalysisOutput, matchHostRootAnalysisOutput } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata, type ProfileRootJournalRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRootAuthorityChallenge, parseHostRootAuthorityAssertion, encodeHostRootAuthorityPayload, parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRootAuthorityChallenge, HostRootAuthorityAssertion, HostRootSubmissionTarget, HostRootSubmissionDescriptor, ProfileRootAuthorityRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { createHash, createPrivateKey, createPublicKey, randomBytes, randomUUID, sign, verify, type KeyObject } from 'node:crypto'
 import { chmodSync, lstatSync, unlinkSync } from 'node:fs'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import type {
+  HostCollaborationDeliveryCapsule, HostCollaborationDeliveryReceipt, ProfileCollaborationDeliveryRequest,
+  HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
+  HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
+  ProfileRemoteUiReadRequest, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
+  ProfileModelClaimInventoryRequest,
+  ProfileModelClaimRecoveryInventoryRequest,
+  ProfileModelClaimConfirmRequest, ProfileModelClaimApplyRequest,
+  ProfileModelClaimRecoveryStatusRequest, ProfileModelClaimRestoreRequest,
+  ProfileModelClaimRetryRequest,
   HostControlCapability,
   HostControlClientInstanceId,
   HostControlErrorCode,
@@ -15,15 +82,58 @@ import type {
   HostControlSignature,
   HostInspectRequest,
   HostInspectResult,
-  HostAuthorizedParams,
   HostInstanceId,
   InstallationId,
   ProfileLeaseCloseRequest,
   ProfileEnsureRequest,
   ProfileRestoreRequest,
+  ProfileBootstrapLocalRequest,
+  ProfileRestoreLocalRequest,
   ProfileOpenRequest,
+  ProfileSkillHubBindingRequest,
+  ProfileSkillHubBindingResult,
+  ProfileSkillHubBotMessageActorRequest,
+  SkillHubBotMessageActorInput,
+  SkillHubBotMessageActorClaims,
+  ProfileSkillHubPackageChunkRequest,
+  ProfileSkillHubPackageRequest,
+  ProfileSkillHubPackageSnapshotRequest,
+  HostSkillHubPackageSnapshotTarget,
+  HostSkillHubPackageSignedReceipt,
+  HostSkillHubExecutionReceipt,
+  HostSkillHubExecutionReport,
+  ProfileSkillHubExecutionReceiptRequest,
+  HostSkillHubClockWitnessCommand, HostSkillHubClockWitnessValue, HostSkillHubClockAnchorId,
+  ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result,
+  HostSkillHubClockV2Command, HostProfileId,
+  ProfileOpenLocalRequest,
   ProfileViewActivateRequest,
+  HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
+  HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
+  HostCollaborationArchiveStateTarget, ProfileCollaborationArchiveStateRequest,
+  HostGroupInputFenceChallenge, HostGroupInputFenceAssertion, ProfileGroupInputFenceRequest,
+  HostCollaborationArchiveIntentTarget, HostCollaborationArchiveIntentValue,
+  ProfileCollaborationArchiveIntentRequest,
+  HostCollaborationArchiveTransitionTarget, HostCollaborationArchiveTransitionResult,
+  ProfileCollaborationArchiveTransitionRequest,
+  HostCollaborationAnalysisCommand, HostCollaborationAnalysisResult, ProfileCollaborationAnalysisRequest,
+  HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostSourceAuthorityChallenge, HostSourceAuthorityAssertion,
+  ProfileSourceAuthorityRequest,
+  HostCollaborationReferenceGrant, HostReferenceAuthorityChallenge, HostReferenceAuthorityAssertion, ProfileReferenceAuthorityRequest,
+  HostCollaborationReferenceSelection, HostCollaborationReferenceCapture, ProfileReferenceCaptureRequest,
+  HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk, ProfileReferenceContentRequest,
+  ProfileSourceSnapshotRequest, HostCollaborationSourceSnapshot,
+  HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection,
+  ProfileWorkspaceModelSelectionRequest,
+  HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
+  ProfileCollaborationRegistrationRequest,
+  ProfileModelTextRequest,
+  ProfileModelTextResult,
   ProfileStatusRequest,
+  ProfileRecoveryInspectRequest,
+  ProfileRecoverOfflineAccountRequest,
+  ProfileOpenOfflineAccountRequest,
+  ProfileRecoveryStatusRequest,
   MigrationExportBeginRequest,
   MigrationExportInventoryRequest,
   MigrationExistingSourceInventoryRequest,
@@ -33,18 +143,148 @@ import type {
   MigrationImportStageRequest,
   MigrationImportStatusRequest,
   MigrationImportVerifyRequest,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
+import type { LegacyClaimCoordinator, LegacyClaimReceipt, LegacyClaimOutcome } from './legacy-claim-coordinator.ts'
 import {
   HOST_CONTROL_MAX_FRAME_BYTES,
   decodeHostControlFrame,
   encodeHostControlFrame,
   encodeHostInspectSignaturePayload,
+  encodeHostWorkspaceAuthorityPayload, parseHostWorkspaceAuthorityChallenge, parseHostWorkspaceAuthorityAssertion,
+  encodeHostCollaborationArchiveStatePayload, parseHostCollaborationArchiveStateChallenge,
+  parseHostCollaborationArchiveStateAssertion,
+  encodeHostGroupInputFencePayload, parseHostGroupInputFenceChallenge, parseHostGroupInputFenceAssertion,
+  parseHostCollaborationArchiveIntentTarget, parseHostCollaborationArchiveIntentValue,
+  parseHostCollaborationArchiveTransitionTarget, parseHostCollaborationArchiveTransitionResult,
+  encodeHostSourceAuthorityPayload, parseHostSourceAuthorityChallenge, parseHostSourceAuthorityAssertion,
+  encodeHostReferenceAuthorityPayload, parseHostReferenceAuthorityChallenge, parseHostReferenceAuthorityAssertion,
+  parseHostCollaborationReferenceSelection, parseHostCollaborationReferenceCapture,
+  parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk, parseHostCollaborationReferenceGrant,
+  parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult,
+  parseHostCollaborationAnalysisReceipt, encodeHostCollaborationAnalysisReceiptPayload,
+  parseHostCollaborationDeliveryCapsule, parseHostCollaborationDeliveryReceipt, parseHostCollaborationDeliveryResult,
+  matchesHostCollaborationDeliveryCommit, encodeHostCollaborationDeliveryReceiptPayload,
+  parseHostCollaborationSourceSnapshot, parseHostCollaborationSourceSnapshotChunk, parseHostCollaborationSourceTarget,
+  parseHostCollaborationSourceDescriptor,
+  encodeHostCollaborationRegistrationSignaturePayload,
+  parseHostCollaborationRegistrationChallenge,
+  parseHostCollaborationRegistrationAssertion,
   migrationProfileSelectorHash,
-} from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
-import type { HostAuthorityErrorCode, PersonProfileId, ProfileOpenResult, ProfileViewLeaseId } from './types.ts'
+} from '@deepseek-ai/dsh-host-control-protocol'
+import type {
+  HostAuthorityErrorCode,
+  OfflineProfileOpenResult,
+  PersonProfileId,
+  ProfileOpenResult,
+  ProfileViewLeaseId,
+} from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
+import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
+import type { LegacyModelClaimInventory } from './legacy-migration-source.ts'
+import type { ProfileExtensionOperations } from './extension-operations.ts'
+import { HostControlServerSession } from './host-control-session.ts'
+import { CollaborationDeliveryUploads, type CollaborationDeliveryReceiver } from './collaboration-delivery-uploads.ts'
+import { SkillHubPackageUploads } from './skillhub-package-uploads.ts'
+import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from './skillhub-package-snapshot-reads.ts'
+import { SkillHubClockWitnesses, SkillHubClockWitnessTickets } from './skillhub-clock-witness.ts'
+import type { createSkillHubPackageInstallationStore, SkillHubPackageSnapshot } from './skillhub-package-install.ts'
+import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
 import type { SingleHostLock } from './single-instance.ts'
+
+function collaborationReadAuthorizer(
+  host: DesktopHost,
+  account: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0],
+  expiresAt: number,
+  signal: AbortSignal,
+  clock: () => number,
+): () => string {
+  return () => {
+    signal.throwIfAborted()
+    const now = clock()
+    if (expiresAt <= now || expiresAt - now > 300_000) throw new HostAuthorityError('stale')
+    host.authorizeCollaborationRegistration(account)
+    return host.authorizeAccountModelText(account)
+  }
+}
+function challengeReadAccount(
+  params: { account_binding_handle: string; authority_binding_version: number },
+  challenge: Pick<HostWorkspaceAuthorityChallenge, 'environment_id' | 'account_issuer' | 'account_subject'>,
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+): Parameters<DesktopHost['authorizeCollaborationRegistration']>[0] {
+  return {
+    authorityEnvironmentId: challenge.environment_id,
+    accountBindingHandle: params.account_binding_handle,
+    authorityBindingVersion: params.authority_binding_version,
+    ownerId,
+    issuer: challenge.account_issuer,
+    subject: challenge.account_subject,
+  }
+}
+function challengeReadAuthorizer(host: DesktopHost, params: Parameters<typeof challengeReadAccount>[0],
+  challenge: Parameters<typeof challengeReadAccount>[1] & { expires_at: number },
+  ownerId: Parameters<typeof challengeReadAccount>[2], signal: AbortSignal, clock: () => number): () => string {
+  return collaborationReadAuthorizer(host, challengeReadAccount(params, challenge, ownerId), challenge.expires_at, signal, clock)
+}
+function sourceChallengeTarget(challenge: HostSourceAuthorityChallenge): HostCollaborationSourceTarget {
+  return { workspace_id: challenge.workspace_id, session_id: challenge.session_id,
+    source_message_id: challenge.source_message_id, source_revision: challenge.source_revision }
+}
+function matchesSourceChallenge(result: HostCollaborationSourceDescriptor, c: HostSourceAuthorityChallenge): boolean {
+  return result.workspace_id === c.workspace_id && result.session_id === c.session_id
+    && result.source_message_id === c.source_message_id && result.source_revision === c.source_revision
+    && result.snapshot_digest === c.snapshot_digest
+}
+function assertionIdentityFields(identity: HostIdentity) {
+  return {
+    installation_id: identity.installationId as InstallationId,
+    installation_public_key: identity.installationPublicKey as HostControlPublicKey,
+    host_instance_id: identity.hostInstanceId as HostInstanceId,
+    process_nonce: identity.processNonce as HostControlNonce,
+  }
+}
+function nativeRoomAccountAssertionFields(
+  params: Pick<ProfileCollaborationAnalysisRequest['params'],
+    'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' |
+    'account_issuer' | 'account_subject'>,
+  identity: HostIdentity, issuedAt: number,
+) {
+  return {
+    authority_environment_id: params.authority_environment_id,
+    account_binding_handle: params.account_binding_handle,
+    authority_binding_version: params.authority_binding_version,
+    account_issuer: params.account_issuer, account_subject: params.account_subject,
+    ...assertionIdentityFields(identity), issued_at: issuedAt,
+  }
+}
+function commandReadAccount(
+  params: Pick<ProfileCollaborationAnalysisRequest['params'],
+    'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' | 'account_issuer' | 'account_subject'>,
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+): Parameters<DesktopHost['authorizeCollaborationRegistration']>[0] {
+  return challengeReadAccount(params, {
+    environment_id: params.authority_environment_id,
+    account_issuer: params.account_issuer,
+    account_subject: params.account_subject as HostWorkspaceAuthorityChallenge['account_subject'],
+  }, ownerId)
+}
+function archiveProfileReadAuthorizer(
+  host: DesktopHost,
+  params: ProfileCollaborationArchiveIntentRequest['params'] | ProfileCollaborationArchiveTransitionRequest['params'],
+  ownerId: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]['ownerId'],
+  signal: AbortSignal,
+  clock: () => number,
+): () => string {
+  const target = params.target
+  if (target.environment_id !== params.authority_environment_id
+    || target.account_issuer !== params.account_issuer
+    || target.account_subject !== params.account_subject) throw new HostAuthorityError('profile_mismatch')
+  return collaborationReadAuthorizer(host, commandReadAccount(params, ownerId), params.expires_at, signal, clock)
+}
+function signAuthorityPayload(identity: HostIdentity, payload: Uint8Array): HostControlSignature {
+  return sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
+}
 
 /** Native peer evidence supplied by the embedding Desktop/Host process. */
 export interface UnixPeerEvidence { readonly uid: number; readonly executableSignatureDigest: string }
@@ -71,6 +311,163 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** The owning Host creates a private package root for the selected Profile. */
+  readonly createSkillHubPackageStore?: (profileId: string, bindingGeneration: string,
+    hostKeyId: string) => ReturnType<typeof createSkillHubPackageInstallationStore>
+  /** Read public Bot identity only in the selected Account Profile's exclusive writer. */
+  readonly resolveBotIdentity?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
+  /** Page public Bot identities from the current Account Profile. */
+  readonly listBotRoster?: (profileId: string, afterBotId: string, limit: number,
+    signal: AbortSignal) => Promise<HostBotRosterPage | null>
+  /** Prepare a native room Source in the current Account Profile. */
+  readonly prepareNativeRoom?: (profileId: string, roomId: string,
+    signal: AbortSignal) => Promise<HostNativeRoomSource | null>
+  /** Operate one native room member or message cursor in the Account Profile. */
+  readonly operateNativeRoom?: (profileId: string, command: HostNativeRoomCommand,
+    signal: AbortSignal) => Promise<HostNativeRoomReply>
+  /** Private worker command after signed Slark and current Account authorization. */
+  readonly operateBotGroup?: (profileId: string, command: HostBotGroupCommand,
+    signal: AbortSignal) => Promise<HostBotGroupResponse>
+  /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
+  readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
+  /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
+  readonly diagnostics?: HostDiagnostics
+  /** Read effective choice only in the Account-authorized Profile worker. */
+  readonly inspectWorkspaceModelSelection?: (
+    profileId: string,
+    target: HostWorkspaceModelSelectionTarget,
+    signal: AbortSignal,
+  ) => Promise<HostWorkspaceModelSelection>
+  /** Read a token-bound archive phase from the authorized Profile's durable Registry. */
+  readonly inspectCollaborationArchiveState?: (
+    profileId: string,
+    target: HostCollaborationArchiveStateTarget,
+    signal: AbortSignal,
+  ) => Promise<Readonly<{ archive_phase: 'staged' | 'prepared' | 'archived' | 'restored' }>>
+  /** Install the local group fence before signing cloud activation proof. */
+  readonly installGroupInputFence?: (
+    profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
+  ) => Promise<Readonly<{ workspace_id: string; session_id: string; group_id: string; group_version: number }>>
+  /** Recover the original token from the current Account Profile only. */
+  readonly inspectCollaborationArchiveIntent?: (
+    profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationArchiveIntentValue>
+  /** Mutate only the current Account Profile's durable archive intent. */
+  readonly transitionCollaborationArchive?: (
+    profileId: string, target: HostCollaborationArchiveTransitionTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationArchiveTransitionResult>
+  /** Read root metadata only from the Account-authorized Profile's durable journal. */
+  readonly rootJournal?: (profileId: string, command: HostRootJournalCommand, signal: AbortSignal) => Promise<HostRootJournalMetadata>
+  /** Read committed root binding metadata. */
+  readonly inspectCollaborationRoot?: (
+    profileId: string, target: HostRootSubmissionTarget, signal: AbortSignal,
+  ) => Promise<HostRootSubmissionDescriptor>
+  /** Private owner must read the persisted current unused attempt and verify its live preparation and Account ownership.
+   * Absence, supersession, dispatch, uncertain writes, cancellation or expired preparation rejects; no caller-provided metadata.
+   */
+  readonly inspectRootPlanningAttempt?: (
+    profileId: string, target: HostRootSubmissionTarget, attemptId: HostControlRequestId, binding: string, signal: AbortSignal,
+  ) => Promise<HostRootPlanningAttemptDescriptor>
+  /** Read a committed Source digest in the Account-authorized Profile worker. */
+  readonly inspectCollaborationSource?: (
+    profileId: string,
+    target: HostCollaborationSourceTarget,
+    signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceDescriptor>
+  /** Read an independently committed user transfer grant in the current Account Profile; never echo a caller challenge. */
+  readonly readCollaborationReferenceGrant?: (
+    profileId: string, target: HostCollaborationSourceTarget, requestDigest: HostControlSha256, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceGrant>
+  /** Capture an explicitly authorized selection through the current Account Profile's private Reference capability. */
+  readonly captureCollaborationReferenceSelection?: (
+    profileId: string, selection: HostCollaborationReferenceSelection, signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Selected-byte chunks through the current Account Profile's independent Reference capability. */
+  readonly readCollaborationReferenceContent?: (
+    profileId: string, target: HostCollaborationReferenceContentTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationReferenceContentChunk>
+  /** Original Source JSON from the verified Account Profile; no prepared or credential fields. */
+  readonly readCollaborationSourceSnapshot?: (
+    profileId: string, target: HostCollaborationSourceTarget, signal: AbortSignal,
+  ) => Promise<HostCollaborationSourceSnapshot>
+  /** Private analysis command in the currently authorized Account worker. */
+  /** Root preparation is supported by this worker composition; old workers never advertise it. */
+  readonly rootAnalysisSupported?: boolean
+  /** Worker persists Roots before preparing any planning input and retains their original calls. */
+  readonly rootCaptureSupported?: boolean
+  readonly rootAnalysisRecoverySupported?: boolean
+  /** Worker can read saved ordinary Source output without model preparation. */
+  readonly sourceAnalysisRecoverySupported?: boolean
+  /** Allows handoff of an original live, undispatched Source preparation. */
+  readonly sourceLiveResumeSupported?: boolean
+  /** Worker supports read-only lookup of already admitted roots without preparation. */
+  readonly rootLookupSupported?: boolean
+  /** Supports read-only lookup of pending roots for cloud receipt reconciliation. */
+  readonly rootPendingLookupSupported?: boolean
+  /** Allows lookup of an original live, undispatched root analysis preparation. */
+  readonly rootLiveResumeSupported?: boolean
+  /** Worker owns new attempt preparation, inspection and one-shot dispatch. */
+  readonly rootExecutionSupported?: boolean
+  /** Private original-Session feedback receiver is composed in the Profile. */
+  readonly rootFeedbackSupported?: boolean
+  readonly rootContinuationSupported?: boolean
+  readonly rootPlanningSupported?: boolean
+  readonly collaborationAnalysis?:
+  (profileId: string, command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
+  /** Capture one current Account Profile worker for the entire private reply upload. */
+  readonly collaborationDeliveryReceiver?: (profileId: string) => CollaborationDeliveryReceiver
+  /** Call the Profile worker without exposing its private model token to Desktop. */
+  readonly generateModelText?: (profileId: string, text: string, signal: AbortSignal) => Promise<{
+    readonly provider: string
+    readonly model: string
+    readonly text: string
+  }>
+  /** Execute one bounded mobile session command inside the lease-selected Profile worker. */
+  readonly remoteSession?: (
+    profileId: string,
+    command: HostRemoteSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<HostRemoteSessionJson>
+  /** Invoke only an exact read RPC in the Profile selected by the live view lease. */
+  readonly remoteUiRead?: (
+    profileId: string, endpoint: ProfileRemoteUiReadRequest['params']['endpoint'],
+    payload: ProfileRemoteUiReadRequest['params']['payload'], signal: AbortSignal,
+  ) => Promise<unknown>
+  /** Advertise Bot admission and reconciliation only for the bundled Profile worker. */
+  readonly remoteBotChatSupported?: boolean
+  /** Advertise existing Bot chat reads only for the bundled Profile worker. */
+  readonly remoteUiBotChatSupported?: boolean
+  /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
+  readonly remoteUiAssetGzipSupported?: boolean
+  /** Advertise source-side history fragmentation only when the worker implements it. */
+  readonly remoteUiItemChunksSupported?: boolean
+  /** Open only native read streams in the lease-selected worker. */
+  readonly remoteUiStream?: (
+    profileId: string, endpoint: 'session/follow' | 'workspace/follow' | '$events' | 'session/list' | 'workbench/read' | 'workspaceFiles/changes' | 'terminal/stream', payload: Extract<ProfileRemoteUiStreamRequest['params']['command'],
+      { action: 'open' }>['payload'], signal: AbortSignal, itemChunks?: boolean,
+  ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>
+  /** Read-only source inspection; omitted on hosts without a validated legacy source. */
+  readonly inspectModelClaimSource?: (signal?: AbortSignal) => Promise<LegacyModelClaimInventory>
+  /** Initial claims require a fresh, connection-owned confirmation and a live Account view. */
+  readonly modelClaimTransaction?: Pick<LegacyClaimCoordinator, 'claim'> & Partial<Pick<LegacyClaimCoordinator, 'retry'>>
+  /** Worker-independent recovery of a durable same-Account claim receipt. */
+  readonly modelClaimRecovery?: Pick<LegacyClaimCoordinator, 'pendingReceipts' | 'status' | 'restore'>
+  readonly extensions?: {
+    readonly operations: ProfileExtensionOperations
+    readonly kinds: readonly HostExtensionKind[]
+    readonly skillArchives?: boolean
+    readonly pluginRemove?: boolean
+    readonly pluginUpdate?: boolean
+    readonly pluginToggle?: boolean
+    readonly skillRemove?: boolean
+    readonly skillReplace?: boolean
+    readonly skillFiles?: boolean
+    readonly skillInvocation?: boolean
+    readonly mcpRemove?: boolean
+    readonly mcpUpdate?: boolean
+    inventory(profileId: string, kind: HostExtensionKind, signal?: AbortSignal):
+    Promise<readonly { id: string; name: string; transport: string }[]>
+  }
   readonly createMigrationExport?: (
     ownerId: string,
     profileId: string,
@@ -80,6 +477,8 @@ export interface UnixHostServerOptions {
     targetProfileId: string,
   ) => MigrationExportService | Promise<MigrationExportService>
   readonly createMigrationImport?: (ownerId: string, profileId: string) => MigrationImportService
+  /** Existing-only inspection: must not provision directories, owner state, workers or bindings. */
+  readonly recoveryMaterialsPersistenceGeneration?: (profileId: string, signal: AbortSignal) => number | Promise<number>
   readonly profilePersistenceGeneration: (profileId: string) => number | Promise<number>
   readonly now?: () => number
 }
@@ -186,6 +585,26 @@ interface MigrationExportChunk {
   readonly final: boolean
 }
 
+/** Reject a reference response when its current Account or Source changed during the provider read. */
+async function recheckReferenceSource(
+  inspect: NonNullable<UnixHostServerOptions['inspectCollaborationSource']>, authorize: () => string,
+  profileId: string, target: HostCollaborationSourceTarget, before: HostCollaborationSourceDescriptor, signal: AbortSignal,
+): Promise<void> {
+  const after = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, signal))
+  if (authorize() !== profileId || JSON.stringify(after) !== JSON.stringify(before))
+    throw new HostAuthorityError('profile_mismatch')
+}
+
+/** Transport-independent Host account, Profile, and migration authority inputs. */
+export type HostControlAuthorityOptions = Pick<
+  UnixHostServerOptions,
+  'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
+    | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'prepareNativeRoom' | 'operateNativeRoom'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+>
+
 /** Client trust roots and native Host process attestation. */
 export interface UnixHostClientOptions {
   readonly socketPath: string
@@ -203,21 +622,30 @@ export type UnixHostDiscovery =
   | { readonly state: 'stopped'; readonly code: 'trusted_host_not_running' }
   | { readonly state: 'unknown'; readonly code: 'host_unverified' | 'transport_unavailable' }
 
-interface HandshakeState {
-  readonly clientInstanceId: HostControlClientInstanceId
-  readonly hostInstanceId: HostInstanceId
-  readonly processNonce: HostControlNonce
-}
-
 const capabilities = [
   'host.inspect',
   'profile.lease_close',
   'profile.ensure',
   'profile.ensure_account_token',
+  'profile.ensure_binding_scope',
+  'profile.bootstrap_local',
   'profile.open',
+  'profile.open_local',
+  'profile.skillhub_binding',
+  'profile.skillhub_bot_message_actor',
+  'profile.skillhub_clock_witness',
+  'profile.skillhub_clock_v2',
   'profile.restore',
+  'profile.restore_local',
   'profile.status',
   'profile.view_activate',
+] as const satisfies readonly string[]
+
+const recoveryCapabilities = [
+  'profile.recovery_inspect',
+  'profile.recover_offline_account',
+  'profile.open_offline_account',
+  'profile.recovery_status',
 ] as const satisfies readonly string[]
 
 function nonce(): HostControlNonce { return randomBytes(32).toString('base64url') as HostControlNonce }
@@ -251,29 +679,162 @@ interface ProfileSelectorPayload {
   readonly schema_generation: number
 }
 
+interface OfflineProfileSelectorPayload extends ProfileSelectorPayload {
+  readonly access_scope: 'offline_local'
+}
+
+function migrationInventoryFields(proof: MigrationExportInventoryProof): {
+  inventory_digest: never
+  source_generation: never
+  schema_version: number
+  required_max_records: number
+  required_max_bytes: number
+} {
+  return {
+    inventory_digest: proof.inventoryDigest as never,
+    source_generation: proof.sourceGeneration as never,
+    schema_version: proof.schemaVersion,
+    required_max_records: proof.requiredMaxRecords,
+    required_max_bytes: proof.requiredMaxBytes,
+  }
+}
+
+interface ReadyProfileIdentity {
+  readonly profileId: string
+  readonly bindingGeneration: number
+}
+function readyProfileFields(identity: HostIdentity, profile: ReadyProfileIdentity): {
+  state: 'ready'
+  profile_id: never
+  profile_selector: string
+} {
+  return {
+    state: 'ready', profile_id: profile.profileId as never,
+    profile_selector: mintProfileSelector(identity, profile.profileId, profile.bindingGeneration),
+  }
+}
+
+function localReadyProfileFields(
+  identity: HostIdentity, profile: ReadyProfileIdentity, persistenceGeneration: number,
+): ReturnType<typeof readyProfileFields> & { persistence_generation: number } {
+  return { ...readyProfileFields(identity, profile), persistence_generation: persistenceGeneration }
+}
+
+interface OpenedProfileLease {
+  readonly profileId: string
+  readonly viewLeaseId: string
+  readonly viewActivationHandle: string
+  readonly leaseGeneration: number
+  readonly expiresAt: number
+  readonly runtimeGeneration: number
+}
+
+interface ProfileUnlockInput {
+  readonly keyHandle: string
+  readonly unlockMaterial: string
+  readonly signal?: AbortSignal
+}
+
+interface AccountBindingInput {
+  readonly authorityEnvironmentId: string
+  readonly accountBindingHandle: string
+  readonly authorityBindingVersion: number
+}
+
+interface ModelClaimRecoveryInput extends AccountBindingInput, ProfileUnlockInput {
+  readonly issuer: string
+  readonly subject: string
+  readonly accountAccessToken: string
+  readonly candidateId: string
+}
+function openProfileWireFields(opened: OpenedProfileLease): {
+  profile_id: never
+  view_lease_id: never
+  view_activation_handle: never
+  lease_generation: number
+  expires_at: number
+  runtime_generation: number
+} {
+  return {
+    profile_id: opened.profileId as never, view_lease_id: opened.viewLeaseId as never,
+    view_activation_handle: opened.viewActivationHandle as never,
+    lease_generation: opened.leaseGeneration, expires_at: opened.expiresAt,
+    runtime_generation: opened.runtimeGeneration,
+  }
+}
+
+function openProfileResult(result: {
+  readonly profile_id: string
+  readonly view_lease_id: string
+  readonly view_activation_handle: string
+  readonly lease_generation: number
+  readonly expires_at: number
+  readonly runtime_generation: number
+}): ProfileOpenResult {
+  return {
+    profileId: result.profile_id as never, viewLeaseId: result.view_lease_id as never,
+    viewActivationHandle: result.view_activation_handle as never,
+    leaseGeneration: result.lease_generation, expiresAt: result.expires_at,
+    runtimeGeneration: result.runtime_generation,
+  }
+}
+
+function readyProfileResult(result: { readonly profile_id: string; readonly profile_selector: string }): {
+  readonly profileId: string
+  readonly profileSelector: string
+} {
+  return { profileId: result.profile_id, profileSelector: result.profile_selector }
+}
+
+function localReadyProfileResult(result: {
+  readonly profile_id: string
+  readonly profile_selector: string
+  readonly persistence_generation: number
+}): { readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number } {
+  return { ...readyProfileResult(result), persistenceGeneration: result.persistence_generation }
+}
+
+function profileUnlockFields(params: {
+  readonly profile_key_handle: string
+  readonly profile_unlock_material: string
+}, ownerId: string): {
+  keyHandle: string
+  unlockMaterial: string
+  ownerId: string
+} {
+  return {
+    keyHandle: params.profile_key_handle,
+    unlockMaterial: params.profile_unlock_material,
+    ownerId,
+  }
+}
+
+function accountBindingFields(params: {
+  readonly authority_environment_id: string
+  readonly account_binding_handle: string
+  readonly authority_binding_version: number
+}): {
+  authorityEnvironmentId: string
+  accountBindingHandle: string
+  authorityBindingVersion: number
+} {
+  return {
+    authorityEnvironmentId: params.authority_environment_id,
+    accountBindingHandle: params.account_binding_handle,
+    authorityBindingVersion: params.authority_binding_version,
+  }
+}
+
 function mintProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
   const payload: ProfileSelectorPayload = {
     version: 1, installation_id: identity.installationId, profile_id: profileId, binding_generation: bindingGeneration,
     runtime_generation: identity.runtimeGeneration, schema_generation: identity.schemaGeneration,
   }
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const signature = sign(null, Buffer.from(`dsh-profile-selector/v1\0${encoded}`), privateKeyObject(identity.installationPrivateKey))
-    .toString('base64url')
-  return `${encoded}.${signature}`
+  return mintSignedSelector(identity, 'dsh-profile-selector/v1', payload)
 }
 
 function verifyProfileSelector(identity: HostIdentity, selector: string): ProfileSelectorPayload {
-  const [encoded, signature, extra] = selector.split('.')
-  if (!encoded || !signature || extra !== undefined || !verify(
-    null, Buffer.from(`dsh-profile-selector/v1\0${encoded}`), publicKeyObject(identity.installationPublicKey),
-    Buffer.from(signature, 'base64url'),
-  )) throw new HostAuthorityError('unauthorized')
-  let payload: unknown
-  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as unknown } catch {
-    throw new HostAuthorityError('unauthorized')
-  }
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new HostAuthorityError('unauthorized')
-  const value = payload as Partial<ProfileSelectorPayload>
+  const value = verifySignedSelector(identity, selector, 'dsh-profile-selector/v1') as Partial<ProfileSelectorPayload>
   if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation'
     || value.version !== 1 || value.installation_id !== identity.installationId
     || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? 0) < 1
@@ -281,6 +842,48 @@ function verifyProfileSelector(identity: HostIdentity, selector: string): Profil
     throw new HostAuthorityError('stale')
   }
   return value as ProfileSelectorPayload
+}
+
+function mintOfflineProfileSelector(identity: HostIdentity, profileId: string, bindingGeneration: number): string {
+  const payload: OfflineProfileSelectorPayload = {
+    version: 1, installation_id: identity.installationId, profile_id: profileId, binding_generation: bindingGeneration,
+    runtime_generation: identity.runtimeGeneration, schema_generation: identity.schemaGeneration,
+    access_scope: 'offline_local',
+  }
+  return mintSignedSelector(identity, 'dsh-profile-offline-selector/v1', payload)
+}
+
+function verifyOfflineProfileSelector(identity: HostIdentity, selector: string): OfflineProfileSelectorPayload {
+  const value = verifySignedSelector(
+    identity, selector, 'dsh-profile-offline-selector/v1',
+  ) as Partial<OfflineProfileSelectorPayload>
+  if (Object.keys(value).join(',') !== 'version,installation_id,profile_id,binding_generation,runtime_generation,schema_generation,access_scope'
+    || value.version !== 1 || value.installation_id !== identity.installationId
+    || typeof value.profile_id !== 'string' || !Number.isSafeInteger(value.binding_generation) || (value.binding_generation ?? -1) < 0
+    || value.runtime_generation !== identity.runtimeGeneration || value.schema_generation !== identity.schemaGeneration
+    || value.access_scope !== 'offline_local') throw new HostAuthorityError('stale')
+  return value as OfflineProfileSelectorPayload
+}
+
+function mintSignedSelector(identity: HostIdentity, domain: string, payload: object): string {
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const signature = sign(null, Buffer.from(`${domain}\0${encoded}`), privateKeyObject(identity.installationPrivateKey))
+    .toString('base64url')
+  return `${encoded}.${signature}`
+}
+
+function verifySignedSelector(identity: HostIdentity, selector: string, domain: string): Record<string, unknown> {
+  const [encoded, signature, extra] = selector.split('.')
+  if (!encoded || !signature || extra !== undefined || !verify(
+    null, Buffer.from(`${domain}\0${encoded}`), publicKeyObject(identity.installationPublicKey),
+    Buffer.from(signature, 'base64url'),
+  )) throw new HostAuthorityError('unauthorized')
+  let payload: unknown
+  try { payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as unknown } catch {
+    throw new HostAuthorityError('unauthorized')
+  }
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) throw new HostAuthorityError('unauthorized')
+  return payload as Record<string, unknown>
 }
 
 function safeError(
@@ -292,9 +895,16 @@ function safeError(
     type: 'error',
     request_id: request.request_id,
     method: request.method as HostControlCapability,
-    error: { code, retryable: code === 'busy' || code === 'unavailable', correlation_id: randomUUID() as never },
+    error: {
+      code,
+      retryable: ['busy', 'unavailable', 'recovery_in_progress', 'recovery_worker_failed', 'recovery_timeout_unknown'].includes(code),
+      correlation_id: randomUUID() as never,
+    },
   }
 }
+
+/** Executor validation errors that are final answers about the requested extension, not transient faults. */
+const EXTENSION_REFUSALS = new Set(['plugin_already_installed', 'plugin_entry_conflict', 'bundled_plugin_unavailable'])
 
 function authorityCode(error: unknown): HostControlErrorCode {
   if (!(error instanceof HostAuthorityError)) return 'internal_error'
@@ -313,6 +923,25 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'conflict':
     case 'busy':
     case 'upgrade_required':
+    case 'script_approval_required':
+    case 'extension_refused':
+    case 'profile_not_found':
+    case 'profile_ambiguous':
+    case 'profile_integrity_failed':
+    case 'runtime_incompatible':
+    case 'recovery_proof_mismatch':
+    case 'recovery_preflight_stale':
+    case 'recovery_in_progress':
+    case 'recovery_worker_failed':
+    case 'recovery_timeout_unknown':
+    case 'scope_mismatch':
+    case 'selector_stale':
+    case 'lease_conflict':
+    case 'identity_mismatch':
+    case 'installation_mismatch':
+    case 'material_invalid':
+    case 'legacy_verifier_unsupported':
+    case 'schema_unsupported':
       return code
     default:
       return 'unavailable'
@@ -344,7 +973,14 @@ function migrationImportCode(error: unknown): HostControlErrorCode {
   return 'internal_error'
 }
 
-class FrameChannel {
+/** Internal request/response transport shared by socket and native Worker carriers. */
+export interface HostClientFrameTransport {
+  call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame>
+  isConnected(): boolean
+  close(): void
+}
+
+class FrameChannel implements HostClientFrameTransport {
   private buffer = Buffer.alloc(0)
   private readonly pending = new Map<string, { resolve(frame: HostControlFrame): void; reject(error: Error): void }>()
   private failed: Error | undefined
@@ -360,6 +996,8 @@ class FrameChannel {
 
   /** Whether the authenticated transport is still usable by its owner. */
   isConnected(): boolean { return this.failed === undefined && !this.socket.destroyed }
+
+  close(): void { this.socket.destroy() }
 
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
@@ -414,105 +1052,48 @@ class FrameChannel {
   }
 }
 
-/** Post-inspection expiry, process-generation, and single-use JTI authority. */
-export class HostRequestAuthorizer {
-  private readonly consumed = new Map<HostControlJti, number>()
-  constructor(private readonly state: HandshakeState, private readonly now: () => number) {}
+/** Shared post-attestation authority used identically by Unix and Windows carriers. */
+export class HostControlAuthority {
+  private readonly bootNonce = randomBytes(32).toString('base64url') as HostControlNonce
+  private readonly deliveryUploads = new CollaborationDeliveryUploads()
+  private readonly packageUploads = new SkillHubPackageUploads()
+  private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
+  private readonly clockWitnesses = new SkillHubClockWitnesses()
+  private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
+  constructor(private readonly options: HostControlAuthorityOptions) {}
 
-  /**
-   * Consume one request authorization tuple exactly once.
-   * @param params - process-bound request identity, expiry, and JTI.
-   */
-  authorize(params: HostAuthorizedParams): void {
-    const current = this.now()
-    for (const [jti, expiry] of this.consumed) if (expiry <= current) this.consumed.delete(jti)
-    if (params.client_instance_id !== this.state.clientInstanceId || params.host_instance_id !== this.state.hostInstanceId
-      || params.process_nonce !== this.state.processNonce) throw new HostAuthorityError('stale')
-    if (params.issued_at >= params.expires_at || params.issued_at > current + 5_000 || params.issued_at < current - 30_000
-      || params.expires_at <= current || params.expires_at - params.issued_at > 30_000) {
-      throw new HostAuthorityError('stale')
-    }
-    if (this.consumed.has(params.jti)) throw new HostAuthorityError('replayed')
-    this.consumed.set(params.jti, params.expires_at)
-  }
-}
-
-/** Running owner-only UDS server. */
-export class UnixHostServer {
-  private server: Server | undefined
-  private socketIdentity?: { dev: number; ino: number }
-  private readonly connections = new Set<Socket>()
-  constructor(private readonly options: UnixHostServerOptions) {}
-
-  /** Bind the UDS path after refusing link/regular-file substitution. */
-  async start(): Promise<void> {
-    if (this.server) throw new HostAuthorityError('conflict')
-    this.options.ownership.assertOwner()
-    try {
-      const stat = lstatSync(this.options.socketPath)
-      if (!stat.isSocket() || stat.isSymbolicLink() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
-      this.options.ownership.assertOwner()
-      unlinkSync(this.options.socketPath)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
-    const server = createServer((socket) => { void this.accept(socket) })
-    this.server = server
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject)
-      server.listen(this.options.socketPath, () => {
-        server.off('error', reject)
-        resolve()
-      })
-    })
-    chmodSync(this.options.socketPath, 0o600)
-    const stat = lstatSync(this.options.socketPath)
-    this.socketIdentity = { dev: stat.dev, ino: stat.ino }
-  }
-
-  /** Close connections and remove only the socket inode this server created. */
-  async close(): Promise<void> {
-    const server = this.server
-    this.server = undefined
-    for (const socket of this.connections) socket.destroy()
-    if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error)
-          else resolve()
-        })
+  private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
+    const selector = verifyProfileSelector(this.options.identity, profileSelector)
+    const profileId = selector.profile_id, generation = String(selector.binding_generation)
+    const hostKeyId = createHash('sha256').update(Buffer.from(
+      this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+    const authorize = () => {
+      signal.throwIfAborted()
+      this.options.host.authorizeMigrationProfileSelector({
+        profileId: profileId as never, bindingGeneration: selector.binding_generation, ownerId,
       })
     }
-    try {
-      const stat = lstatSync(this.options.socketPath)
-      if (this.socketIdentity && stat.isSocket()
-        && stat.dev === this.socketIdentity.dev && stat.ino === this.socketIdentity.ino) {
-        unlinkSync(this.options.socketPath)
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    }
+    return { profileId, generation, hostKeyId, authorize }
   }
 
-  private async accept(socket: Socket): Promise<void> {
-    const ownerId = randomUUID()
-    const lifetime = new AbortController()
-    this.connections.add(socket)
-    socket.once('close', () => {
-      lifetime.abort()
-      this.connections.delete(socket)
-      this.options.host.revokeOwner(ownerId)
-    })
-    socket.pause()
-    try {
-      const peer = await this.options.attestPeer(socket)
-      if (peer.uid !== this.options.expectedUid || !validSha256(peer.executableSignatureDigest)
-        || !this.options.allowedDesktopExecutableDigests.has(peer.executableSignatureDigest)) {
-        throw new HostAuthorityError('unauthorized')
-      }
-    } catch { socket.destroy(); return }
-    let inspected = false
-    let authorizer: HostRequestAuthorizer | undefined
+  private skillHubClockGrant(params: {
+    profile_selector: string
+    profile_id: string
+    binding_generation: string
+    host_key_id: string
+  }, ownerId: string, signal: AbortSignal) {
+    const { profileId, generation, hostKeyId, authorize } =
+      this.skillHubPackageGrant(params.profile_selector, ownerId, signal)
+    authorize()
+    if (params.profile_id !== profileId || params.binding_generation !== generation
+      || params.host_key_id !== hostKeyId) throw new HostAuthorityError('unavailable')
+    return { scope: JSON.stringify([profileId, generation, hostKeyId]), authorize }
+  }
+
+  /** Open one connection-owned control session after the carrier has authenticated its peer. */
+  openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
+    const clock = this.options.now ?? Date.now
+    const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -520,6 +1101,28 @@ export class UnixHostServer {
       readonly service: MigrationExportService
       readonly exportIds: Set<string>
     }>()
+    const claimConfirmations = new Map<string, {
+      readonly profileId: PersonProfileId
+      readonly viewLeaseId: string
+      readonly leaseGeneration: number
+      readonly runtimeGeneration: number
+      readonly candidateId: string
+      readonly sourceDigest: string
+      readonly operationId: string
+      readonly expiresAt: number
+    }>()
+    const remoteUiStreams = new Map<string, {
+      readonly cursor: RemoteUiStreamCursor
+      readonly profileId: string
+      readonly viewLeaseId: string
+      readonly leaseGeneration: number
+      readonly runtimeGeneration: number
+    }>()
+    signal.addEventListener('abort', () => {
+      packageTransferSnapshot.clear()
+      for (const entry of remoteUiStreams.values()) void entry.cursor.close()
+      remoteUiStreams.clear()
+    }, { once: true })
     const migrationExportEnabled = this.options.createMigrationExport !== undefined
     const migrationExportFor = async (
       selector: string,
@@ -562,25 +1165,142 @@ export class UnixHostServer {
       if (!service) throw new HostAuthorityError('unauthorized')
       return { service, selectorHash: migrationProfileSelectorHash(selector) }
     }
-    const channel = new FrameChannel(socket, async (frame) => {
-      if (frame.type !== 'request') { socket.destroy(); return }
-      if (!inspected) {
-        if (frame.method !== 'host.inspect') { socket.destroy(); return }
-        const response = this.inspect(frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled)
-        inspected = true
-        authorizer = new HostRequestAuthorizer({
-          clientInstanceId: frame.params.client_instance_id,
-          hostInstanceId: response.result.host_instance_id,
-          processNonce: response.result.process_nonce,
-        }, this.options.now ?? Date.now)
-        channel.send(response)
-        return
-      }
-      if (frame.method === 'host.inspect') { socket.destroy(); return }
-      if (!authorizer) { socket.destroy(); return }
-      try {
-        authorizer.authorize(frame.params)
-        if (frame.method === 'migration.existing_source.inventory') {
+    const session = new HostControlServerSession({
+      ownerId,
+      now: clock,
+      signal,
+      diagnostics: this.options.diagnostics,
+      inspect: frame => this.inspect(
+        frame, migrationExportEnabled, migrationImportEnabled, legacyMigrationEnabled,
+        this.options.host.supportsOfflineAccountRecovery(),
+      ),
+      dispatchAuthorized: async (frame, context, respond) => {
+        const channel = { send: respond }
+        const accountClaimView = (viewLeaseId: string, leaseGeneration: number, runtimeGeneration: number) => {
+          context.signal.throwIfAborted()
+          return this.options.host.authorizeAccountModelClaimView({
+            viewLeaseId: viewLeaseId as never, leaseGeneration, runtimeGeneration, ownerId,
+          })
+        }
+        if (frame.method === 'profile.model_claim_confirm') {
+          const inspectSource = this.options.inspectModelClaimSource
+          if (!inspectSource || !this.options.modelClaimTransaction) throw new HostAuthorityError('upgrade_required')
+          const authority = () => accountClaimView(frame.params.view_lease_id,
+            frame.params.lease_generation, frame.params.runtime_generation)
+          const profileId = authority()
+          const inventory = await inspectSource(context.signal)
+          if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          if (inventory.candidates.length > 128) throw new HostAuthorityError('unavailable')
+          if (inventory.sourceDigest !== frame.params.source_digest
+            || !inventory.candidates.some(candidate => candidate.id === frame.params.candidate_id
+              && candidate.credential === 'present')) throw new HostAuthorityError('conflict')
+          const now = clock()
+          for (const [id, existing] of claimConfirmations) {
+            if (existing.expiresAt <= now) claimConfirmations.delete(id)
+          }
+          if (claimConfirmations.size >= 32) throw new HostAuthorityError('busy')
+          const confirmation = randomBytes(32).toString('base64url')
+          const operationId = randomUUID()
+          const expiresAt = now + 60_000
+          claimConfirmations.set(confirmation, {
+            profileId, viewLeaseId: frame.params.view_lease_id,
+            leaseGeneration: frame.params.lease_generation, runtimeGeneration: frame.params.runtime_generation,
+            candidateId: frame.params.candidate_id, sourceDigest: inventory.sourceDigest, operationId, expiresAt,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { confirmation, operation_id: operationId, expires_at: expiresAt } })
+        } else if (frame.method === 'profile.model_claim_apply') {
+          const transaction = this.options.modelClaimTransaction
+          if (!transaction) throw new HostAuthorityError('upgrade_required')
+          const confirmed = claimConfirmations.get(frame.params.confirmation)
+          if (!confirmed) throw new HostAuthorityError('stale')
+          claimConfirmations.delete(frame.params.confirmation)
+          if (confirmed.expiresAt <= clock()) throw new HostAuthorityError('stale')
+          const authority = () => {
+            context.signal.throwIfAborted()
+            const profileId = accountClaimView(confirmed.viewLeaseId,
+              confirmed.leaseGeneration, confirmed.runtimeGeneration)
+            if (profileId !== confirmed.profileId) throw new HostAuthorityError('profile_mismatch')
+            return profileId
+          }
+          authority()
+          const outcome = await transaction.claim({ candidateId: confirmed.candidateId,
+            operationId: confirmed.operationId, expectedSourceDigest: confirmed.sourceDigest,
+            authorizeAccountProfile: authority, signal: context.signal })
+          if (outcome.state !== 'committed') throw new HostAuthorityError('unavailable')
+          this.options.host.revokeProfile(confirmed.profileId)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
+        } else if (frame.method === 'profile.model_claim_recovery_inventory'
+          || frame.method === 'profile.model_claim_recovery_status' || frame.method === 'profile.model_claim_restore'
+          || frame.method === 'profile.model_claim_retry') {
+          const service = this.options.modelClaimRecovery
+          if (!service) throw new HostAuthorityError('upgrade_required')
+          const proof = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeAccountModelClaimRecovery({
+              issuer: frame.params.account_issuer, subject: frame.params.account_subject,
+              accountAccessToken: frame.params.account_access_token,
+              authorityEnvironmentId: frame.params.authority_environment_id,
+              accountBindingHandle: frame.params.account_binding_handle,
+              authorityBindingVersion: frame.params.authority_binding_version,
+              keyHandle: frame.params.profile_key_handle,
+              unlockMaterial: frame.params.profile_unlock_material,
+            })
+          }
+          if (frame.method === 'profile.model_claim_recovery_inventory') {
+            const receipts = service.pendingReceipts({ authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { receipts: receipts.map(receipt => ({
+                candidate_id: receipt.candidateId, operation_id: receipt.operationId,
+                source_digest: receipt.sourceDigest as never, state: receipt.status,
+              })) } })
+          } else if (frame.method === 'profile.model_claim_recovery_status') {
+            const receipt = service.status({ candidateId: frame.params.candidate_id, authorizeAccountProfile: proof })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: receipt ? { state: receipt.status, candidate_id: receipt.candidateId,
+                operation_id: receipt.operationId, source_digest: receipt.sourceDigest as never }
+                : { state: 'unclaimed' } })
+          } else if (frame.method === 'profile.model_claim_restore') {
+            const profileId = proof()
+            const outcome = await service.restore({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'restored') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'restored', cleanup_pending: outcome.cleanupPending } })
+          } else {
+            const retry = this.options.modelClaimTransaction?.retry
+            if (!retry) throw new HostAuthorityError('upgrade_required')
+            const profileId = proof()
+            const outcome = await retry({ candidateId: frame.params.candidate_id,
+              operationId: frame.params.operation_id, expectedSourceDigest: frame.params.source_digest,
+              authorizeAccountProfile: proof, signal: context.signal })
+            if (outcome.state !== 'committed') throw new HostAuthorityError('unavailable')
+            this.options.host.revokeProfile(profileId)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { state: 'committed', cleanup_pending: outcome.cleanupPending } })
+          }
+        } else if (frame.method === 'profile.model_claim_inventory') {
+          const inspectSource = this.options.inspectModelClaimSource
+          if (!inspectSource) throw new HostAuthorityError('upgrade_required')
+          const authority = () => accountClaimView(frame.params.view_lease_id,
+            frame.params.lease_generation, frame.params.runtime_generation)
+          authority()
+          const inventory = await inspectSource(context.signal)
+          authority()
+          if (inventory.candidates.length > 128) throw new HostAuthorityError('unavailable')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
+            source_digest: inventory.sourceDigest as never,
+            candidates: inventory.candidates.map(candidate => ({
+              id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+              credential: candidate.credential, shared_credential: candidate.sharedCredential,
+            })),
+            unsupported_settings: inventory.unsupportedSettings,
+            unassigned_credential_references: inventory.unassignedCredentialReferences,
+            unassigned_credential_records: inventory.unassignedCredentialRecords,
+          } })
+        } else if (frame.method === 'migration.existing_source.inventory') {
           try {
             const decoded = verifyProfileSelector(this.options.identity, frame.params.target_profile_selector)
             const profileId = this.options.host.authorizeMigrationProfileSelector({
@@ -590,7 +1310,7 @@ export class UnixHostServer {
             })
             const service = await this.options.createLegacyMigrationExport?.(ownerId, profileId)
             if (!service) throw new HostAuthorityError('unavailable')
-            const proof = await service.inventory(lifetime.signal)
+            const proof = await service.inventory(context.signal)
             const authority = randomBytes(32).toString('base64url')
             const expiresAt = (this.options.now ?? Date.now)() + 60_000
             legacyAuthorities.set(authority, { profileId, expiresAt, service, exportIds: new Set() })
@@ -598,11 +1318,7 @@ export class UnixHostServer {
               source_inventory_authority: authority as never,
               source_installation_id: this.options.identity.installationId as never,
               expires_at: expiresAt,
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
+              ...migrationInventoryFields(proof),
             } })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.inventory') {
@@ -610,14 +1326,9 @@ export class UnixHostServer {
             const migrationExport = await migrationExportFor(
               frame.params.source_profile_selector, frame.params.source_inventory_authority,
             )
-            const proof = await migrationExport.inventory(lifetime.signal)
-            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: {
-              inventory_digest: proof.inventoryDigest as never,
-              source_generation: proof.sourceGeneration as never,
-              schema_version: proof.schemaVersion,
-              required_max_records: proof.requiredMaxRecords,
-              required_max_bytes: proof.requiredMaxBytes,
-            } })
+            const proof = await migrationExport.inventory(context.signal)
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: migrationInventoryFields(proof) })
           } catch (error) { channel.send(safeError(migrationCode(error), frame)) }
         } else if (frame.method === 'migration.export_snapshot.begin') {
           try {
@@ -628,7 +1339,7 @@ export class UnixHostServer {
               expectedInventoryDigest: frame.params.expected_inventory_digest,
               maxRecords: frame.params.max_records,
               maxBytes: frame.params.max_bytes,
-            }, lifetime.signal)
+            }, context.signal)
             if (frame.params.source_inventory_authority !== undefined) {
               legacyAuthorities.get(frame.params.source_inventory_authority)?.exportIds.add(receipt.exportId)
             }
@@ -726,42 +1437,138 @@ export class UnixHostServer {
               import_id: stage.importId as never, stage_version: stage.version, aborted: true,
             } })
           } catch (error) { channel.send(safeError(migrationImportCode(error), frame)) }
-        } else if (frame.method === 'profile.ensure') {
-          if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
-          const profile = await this.options.host.ensureAccountProfile({
-            accountAccessToken: frame.params.account_access_token,
-            issuer: frame.params.account_issuer, subject: frame.params.account_subject,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
-            keyHandle: frame.params.profile_key_handle,
-            unlockMaterial: frame.params.profile_unlock_material,
+        } else if (frame.method === 'profile.recovery_materials.describe'
+          || frame.method === 'profile.recovery_materials.validate') {
+          context.signal.throwIfAborted()
+          const readGeneration = this.options.recoveryMaterialsPersistenceGeneration
+          if (!readGeneration) throw new HostAuthorityError('upgrade_required')
+          const materials = new HostRecoveryMaterials(this.options.identity,
+            input => this.options.host.verifyRecoveryMaterials(input), readGeneration)
+          if (frame.method === 'profile.recovery_materials.describe') {
+            const result = await materials.describe(frame.params, context.signal)
+            context.signal.throwIfAborted()
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          } else {
+            const result = await materials.validate(frame.params, context.signal)
+            context.signal.throwIfAborted()
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          }
+        } else if (frame.method === 'profile.recovery_inspect') {
+          const inspected = await this.options.host.inspectOfflineAccountProfiles({
+            keyHandles: frame.params.profile_key_handles,
+            expectedRuntimeGeneration: frame.params.expected_runtime_generation,
+            expectedSchemaGeneration: frame.params.expected_schema_generation,
             ownerId,
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+              candidates: inspected.candidates.map(candidate => ({
+                state: candidate.state, candidate_id: candidate.candidateId as never,
+                profile_kind: candidate.profileKind, binding_count: candidate.bindingCount,
+                persistence_generation: candidate.persistenceGeneration, session_count: candidate.sessionCount,
+                plugin_count: candidate.pluginCount, compatibility: candidate.compatibility,
+                preflight_digest: candidate.preflightDigest as never,
+                ...(candidate.reasonCode === undefined ? {} : { reason_code: candidate.reasonCode }),
+              })),
             },
           })
-        } else if (frame.method === 'profile.restore') {
-          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
-          const profile = await this.options.host.restoreProfile({
-            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation,
-            authorityEnvironmentId: frame.params.authority_environment_id,
-            accountBindingHandle: frame.params.account_binding_handle,
-            authorityBindingVersion: frame.params.authority_binding_version,
+        } else if (frame.method === 'profile.recover_offline_account') {
+          const recovered = await this.options.host.recoverOfflineAccountProfile({
+            candidateId: frame.params.candidate_id as never,
+            preflightDigest: frame.params.preflight_digest,
             keyHandle: frame.params.profile_key_handle,
             unlockMaterial: frame.params.profile_unlock_material,
+            operationId: frame.params.recovery_operation_id,
             ownerId,
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: {
-              state: 'ready', profile_id: profile.profileId as never,
-              profile_selector: mintProfileSelector(this.options.identity, profile.profileId, profile.bindingGeneration),
+              state: 'offline_ready',
+              profile_selector: mintOfflineProfileSelector(
+                this.options.identity, recovered.profileId, recovered.bindingGeneration,
+              ),
+              access_scope: 'offline_local', persistence_generation: recovered.persistenceGeneration,
+              runtime_generation: recovered.runtimeGeneration,
             },
+          })
+        } else if (frame.method === 'profile.open_offline_account') {
+          const selector = verifyOfflineProfileSelector(this.options.identity, frame.params.profile_selector)
+          const opened = await this.options.host.openOfflineAccountProfile({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...openProfileWireFields(opened), access_scope: 'offline_local' },
+          })
+        } else if (frame.method === 'profile.recovery_status') {
+          const status = this.options.host.getOfflineAccountRecoveryStatus({
+            operationId: frame.params.recovery_operation_id, ownerId,
+          })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: status.state === 'failed'
+              ? { state: 'failed', reason_code: status.reasonCode }
+              : { state: status.state },
+          })
+        } else if (frame.method === 'profile.ensure' || frame.method === 'profile.restore') {
+          let profile: ReadyProfileIdentity
+          if (frame.method === 'profile.ensure') {
+            if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
+            profile = await this.options.host.ensureAccountProfile({
+              ...(frame.params.authority_binding_scope === undefined
+                ? {} : { authorityBindingScope: frame.params.authority_binding_scope }),
+              accountAccessToken: frame.params.account_access_token,
+              issuer: frame.params.account_issuer,
+              subject: frame.params.account_subject,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+            })
+          } else {
+            const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+            profile = await this.options.host.restoreProfile({
+              profileId: selector.profile_id as never,
+              bindingGeneration: selector.binding_generation,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+            })
+          }
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: readyProfileFields(this.options.identity, profile),
+          })
+        } else if (frame.method === 'profile.bootstrap_local' || frame.method === 'profile.restore_local') {
+          let profile: ReadyProfileIdentity
+          if (frame.method === 'profile.bootstrap_local') {
+            profile = await hostStepRejection(
+              () => this.options.host.bootstrapLocalProfile(profileUnlockFields(frame.params, ownerId)),
+              'bootstrap_local_rejected',
+            )
+          } else {
+            const selector = await hostStepRejection(
+              () => verifyProfileSelector(this.options.identity, frame.params.profile_selector),
+              'restore_selector_invalid',
+            )
+            profile = await hostStepRejection(
+              () => this.options.host.restoreLocalProfile({
+                profileId: selector.profile_id as never,
+                bindingGeneration: selector.binding_generation,
+                ...profileUnlockFields(frame.params, ownerId),
+              }),
+              'restore_profile_rejected',
+            )
+          }
+          const persistenceGeneration = await hostStepRejection(
+            () => this.options.profilePersistenceGeneration(profile.profileId),
+            'local_persistence_unavailable',
+          )
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: await hostStepRejection(
+              () => localReadyProfileFields(this.options.identity, profile, persistenceGeneration),
+              'local_profile_result_invalid',
+            ),
           })
         } else if (frame.method === 'profile.status') {
           const status = this.options.host.getProfileStatus({
@@ -779,6 +1586,211 @@ export class UnixHostServer {
               ? { state: 'ready', profile_id: status.profileId as never, persistence_generation: persistenceGeneration as number }
               : { state: status.state },
           })
+        } else if (frame.method === 'profile.skillhub_binding') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profileId = this.options.host.authorizeMigrationProfileSelector({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          const payload = {
+            version: 1 as const,
+            actorUserId: frame.params.actor_user_id,
+            computerId: frame.params.computer_id,
+            installationId: this.options.identity.installationId,
+            profileId,
+            bindingGeneration: String(selector.binding_generation),
+            challengeId: frame.params.challenge_id,
+          }
+          const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_PROFILE_BINDING_DOMAIN + encodeSkillHubProfileBindingPayload(payload),
+          ))
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...payload, signature },
+          })
+        } else if (frame.method === 'profile.skillhub_bot_message_actor') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const profileId = this.options.host.authorizeMigrationProfileSelector({
+            profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+          })
+          const issuedAt = (this.options.now ?? Date.now)()
+          const hostKeyId = createHash('sha256').update(Buffer.from(
+            this.options.identity.installationPublicKey, 'base64url')).digest('hex')
+          const claims: SkillHubBotMessageActorClaims = {
+            schema_version: SKILLHUB_BOT_MESSAGE_ACTOR_SCHEMA,
+            issuer: 'slark-dsh-host', audience: SKILLHUB_BOT_MESSAGE_ACTOR_AUDIENCE,
+            purpose: SKILLHUB_BOT_MESSAGE_ACTOR_PURPOSE, token_id: randomUUID(),
+            ...frame.params.input,
+            host_installation_id: this.options.identity.installationId,
+            host_profile_id: profileId, host_binding_generation: selector.binding_generation,
+            host_key_id: hostKeyId,
+            source_principal: { kind: 'human', id: frame.params.input.actor_user_id },
+            issued_at: issuedAt, expires_at: issuedAt + 30_000,
+          }
+          const protectedHeader = Buffer.from(JSON.stringify({
+            alg: 'EdDSA', typ: SKILLHUB_BOT_MESSAGE_ACTOR_JWS_TYPE, version: 3, kid: hostKeyId,
+          })).toString('base64url')
+          const payload = Buffer.from(encodeSkillHubBotMessageActorClaims(claims)).toString('base64url')
+          const signingInput = `${protectedHeader}.${payload}`
+          const signature = signAuthorityPayload(this.options.identity, Buffer.from(signingInput))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { compact_jws: `${signingInput}.${signature}` } })
+        } else if (frame.method === 'profile.skillhub_package_chunk') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize: assertGrant } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const authorize = () => {
+            assertGrant()
+            if (frame.params.plan.profileId !== profileId || frame.params.plan.bindingGeneration !== generation
+              || frame.params.plan.hostKeyId !== hostKeyId) throw new HostAuthorityError('profile_mismatch')
+          }
+          const result = await this.packageUploads.accept({
+            ownerId, bindingKey: JSON.stringify([ownerId, profileId, generation, hostKeyId]),
+            plan: frame.params.plan, totalBytes: frame.params.total_bytes,
+            offset: frame.params.offset, bytes: Buffer.from(frame.params.chunk_base64url, 'base64url'),
+            signal: context.signal, authorize,
+            capture: () => ({ assertCurrent: authorize, prepare: async (plan, archive) => {
+              const store = await createStore(profileId, generation, hostKeyId)
+              authorize()
+              await store.prepare(plan, archive)
+            } }),
+          })
+          context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { next_offset: result.nextOffset, prepared: result.prepared } })
+        } else if (frame.method === 'profile.skillhub_package') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          authorize()
+          if (frame.params.action === 'activate' && frame.params.binding_generation !== generation)
+            throw new HostAuthorityError('profile_mismatch')
+          const store = await createStore(profileId, generation, hostKeyId)
+          authorize()
+          let receipt
+          try {
+            receipt = frame.params.action === 'activate'
+              ? await store.activate(frame.params.operation_id, generation, frame.params.expected_revision, authorize)
+              : await store.current(frame.params.package_id)
+          } catch { throw new HostAuthorityError('unavailable') }
+          authorize()
+          const signed = receipt && (() => {
+            const unsigned = { version: 1 as const, installationId: this.options.identity.installationId,
+              challengeId: frame.params.challenge_id,
+              ...receipt }
+            const signature = signAuthorityPayload(this.options.identity, Buffer.from(
+              SKILLHUB_PACKAGE_RECEIPT_DOMAIN + encodeSkillHubPackageReceiptPayload(unsigned)))
+            return { ...unsigned, signature }
+          })()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: signed || null } })
+        } else if (frame.method === 'profile.skillhub_package_snapshot') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsigned } = frame.params.receipt
+          if (unsigned.installationId !== this.options.identity.installationId
+            || unsigned.profileId !== profileId || unsigned.hostKeyId !== hostKeyId
+            || unsigned.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsigned)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsigned
+          authorize()
+          let read
+          try {
+            read = await this.packageSnapshotReads.read({ ownerId,
+              bindingKey: JSON.stringify([profileId, generation, hostKeyId, unsigned.operationId,
+                unsigned.manifestSha256, frame.params.target]),
+              offset: frame.params.offset, signal: context.signal, authorize,
+              capture: async () => {
+                const store = await createStore(profileId, generation, hostKeyId)
+                authorize()
+                const snapshot = await packageTransferSnapshot.get(
+                  JSON.stringify([profileId, generation, hostKeyId, fixedReceipt]),
+                  () => store.snapshotFixed(fixedReceipt), frame.params.target.kind === 'manifest')
+                return frame.params.target.kind === 'manifest'
+                  ? Buffer.from(JSON.stringify(['slark-skillhub-manifest-v1', snapshot.files.map(file =>
+                    [file.path, file.mode, file.size, file.sha256])]))
+                  : snapshot.readFile(frame.params.target.path)
+              } })
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { operation_id: unsigned.operationId,
+              manifest_sha256: unsigned.manifestSha256 as HostControlSha256,
+              target: frame.params.target, offset: frame.params.offset, total_bytes: read.totalBytes,
+              chunk_base64url: read.chunk.toString('base64url'), complete: read.complete } })
+        } else if (frame.method === 'profile.skillhub_clock_witness') {
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
+          const result = this.clockWitnesses.apply(scope, frame.params.anchor_id, frame.params.command)
+          authorize()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { anchor_id: frame.params.anchor_id, ...result } })
+        } else if (frame.method === 'profile.skillhub_clock_v2') {
+          const { scope, authorize } = this.skillHubClockGrant(frame.params, ownerId, context.signal)
+          const command = frame.params.command
+          const result: ProfileSkillHubClockV2Result['result'] = command.kind === 'epoch'
+            ? { kind: 'epoch', epoch: this.clockWitnessTickets.currentEpoch() as HostControlNonce }
+            : command.kind === 'issue'
+              ? (() => { const issued = this.clockWitnessTickets.issue(scope, command.purpose,
+                command.active_asset_anchor_id ?? undefined)
+              return { kind: 'issued' as const, anchor_id: issued.anchorId as HostSkillHubClockAnchorId,
+                epoch: issued.epoch as HostControlNonce, ticket: issued.ticket as HostControlNonce } })()
+              : { kind: 'witness', anchor_id: command.anchor_id, epoch: command.epoch,
+                ...this.clockWitnessTickets.apply(scope, command.anchor_id, command.epoch,
+                  command.command, command.ticket ?? undefined) }
+          authorize()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result })
+        } else if (frame.method === 'profile.skillhub_execution_receipt') {
+          const createStore = this.options.createSkillHubPackageStore
+          if (!createStore) throw new HostAuthorityError('upgrade_required')
+          const { profileId, generation, hostKeyId, authorize } =
+            this.skillHubPackageGrant(frame.params.profile_selector, ownerId, context.signal)
+          const { signature, ...unsignedPackage } = frame.params.package_receipt
+          if (unsignedPackage.installationId !== this.options.identity.installationId
+            || unsignedPackage.profileId !== profileId || unsignedPackage.hostKeyId !== hostKeyId
+            || unsignedPackage.bindingGeneration !== generation
+            || frame.params.execution.profileId !== profileId
+            || frame.params.execution.bindingGeneration !== generation
+            || !verify(null, Buffer.from(SKILLHUB_PACKAGE_RECEIPT_DOMAIN
+              + encodeSkillHubPackageReceiptPayload(unsignedPackage)),
+            publicKeyObject(this.options.identity.installationPublicKey), Buffer.from(signature, 'base64url')))
+            throw new HostAuthorityError('unavailable')
+          const { version: _version, installationId: _installationId, challengeId: _challengeId,
+            ...fixedReceipt } = unsignedPackage
+          authorize()
+          try {
+            const store = await createStore(profileId, generation, hostKeyId)
+            authorize()
+            await store.snapshotFixed(fixedReceipt)
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            throw new HostAuthorityError('unavailable')
+          }
+          authorize(); context.signal.throwIfAborted()
+          const unsignedExecution = {
+            schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+            receiptId: randomUUID(), ...frame.params.execution,
+            hostInstallationId: this.options.identity.installationId, hostKeyId,
+            packageOperationId: unsignedPackage.operationId, packageId: unsignedPackage.packageId,
+            versionId: unsignedPackage.versionId, archiveSha256: unsignedPackage.archiveSha256,
+            manifestSha256: unsignedPackage.manifestSha256,
+            publicKey: this.options.identity.installationPublicKey,
+          }
+          const executionSignature = signAuthorityPayload(this.options.identity, Buffer.from(
+            SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+              + encodeSkillHubExecutionReceiptPayload(unsignedExecution)))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { receipt: { ...unsignedExecution, signature: executionSignature } } })
         } else if (frame.method === 'profile.open') {
           const opened = await this.options.host.openProfile({
             authorityEnvironmentId: frame.params.authority_environment_id,
@@ -787,15 +1799,870 @@ export class UnixHostServer {
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: 'profile.open',
+            result: openProfileWireFields(opened),
+          })
+        } else if (frame.method === 'profile.open_local') {
+          const selector = verifyProfileSelector(this.options.identity, frame.params.profile_selector)
+          const opened = await this.options.host.openLocalProfile({ profileId: selector.profile_id as never, ownerId })
+          channel.send({
+            version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: openProfileWireFields(opened),
+          })
+        } else if (frame.method === 'profile.extensions') {
+          const extension = this.options.extensions
+          if (!extension) throw new HostAuthorityError('upgrade_required')
+          const authority = () => {
+            if (signal.aborted) throw new HostAuthorityError('stale')
+            return this.options.host.authorizeExtensionView({ viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation, runtimeGeneration: frame.params.runtime_generation, ownerId })
+          }
+          const profileId = authority()
+          const command = frame.params.command
+          if ('kind' in command && !extension.kinds.includes(command.kind)) throw new HostAuthorityError('upgrade_required')
+          let result: HostExtensionResponse
+          try {
+            if (command.action === 'inventory') {
+              const entries = await extension.inventory(profileId, command.kind, signal)
+              authority()
+              result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
+            } else if (command.action === 'prepare') {
+              const plan = await extension.operations.prepare(authority, command.kind, command.payload)
+              result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind,
+                digest: plan.digest as never, expires_at: plan.expiresAt,
+                ...(plan.scriptApproval ? {
+                  scripts: plan.scriptApproval.scripts, script_digest: plan.scriptApproval.digest as never,
+                } : {}) }
+            } else {
+              const receipt = command.action === 'commit'
+                ? extension.operations.commit(authority, command.plan_id, command.operation_id, signal, command.script_digest)
+                : command.action === 'cancel'
+                  ? extension.operations.cancel(authority, command.operation_id)
+                  : extension.operations.status(authority, command.operation_id)
+              result = { state: 'receipt', operation_id: receipt.operationId as never, outcome: receipt.state,
+                cancellation_requested: receipt.cancellationRequested, created_at: receipt.createdAt, updated_at: receipt.updatedAt,
+                ...(receipt.reason === undefined ? {} : { reason: receipt.reason }),
+                ...(receipt.skillSource === undefined ? {} : { skill_source: receipt.skillSource }),
+                ...(receipt.canRestore && receipt.skillRemoval ? { skill_restore: receipt.skillRemoval.entryId } : {}),
+                ...(receipt.canRestore && receipt.mcpRecovery ? { mcp_restore: true as const } : {}),
+                ...(receipt.canRestore && receipt.pluginToggleRecovery ? { plugin_restore: receipt.pluginToggleRecovery.packageName } : {}),
+                ...(receipt.canComplete && receipt.pluginPackage ? { plugin_complete: { action: receipt.pluginPackage.action,
+                  package_name: receipt.pluginPackage.packageName,
+                  ...(receipt.pluginPackage.spec ? { spec: receipt.pluginPackage.spec } : {}) } } : {}),
+                ...(receipt.restoredBy ? { restored_by: receipt.restoredBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode !== 'complete' ? { restores_operation: receipt.restores as never } : {}),
+                ...(receipt.completedBy ? { completed_by: receipt.completedBy as never } : {}),
+                ...(receipt.restores && receipt.recoveryMode === 'complete' ? { completes_operation: receipt.restores as never } : {}) }
+            }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            const code = error instanceof Error ? error.message : ''
+            if (code === 'expired') throw new HostAuthorityError('stale')
+            if (code === 'busy' || code === 'idempotency_conflict' || code === 'unauthorized'
+              || code === 'upgrade_required' || code === 'script_approval_required') {
+              throw new HostAuthorityError(code)
+            }
+            // Keep definite refusals distinguishable from transport faults for callers that record them.
+            if (EXTENSION_REFUSALS.has(code)) throw new HostAuthorityError('extension_refused')
+            throw new HostAuthorityError('invalid_input')
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.remote_ui_stream') {
+          const command = frame.params.command
+          const revokeCursor = async () => {
+            const entry = remoteUiStreams.get(command.stream_id)
+            if (entry && entry.viewLeaseId === frame.params.view_lease_id
+              && entry.leaseGeneration === frame.params.lease_generation
+              && entry.runtimeGeneration === frame.params.runtime_generation) {
+              remoteUiStreams.delete(command.stream_id)
+              await entry.cursor.close()
+            }
+          }
+          const authority = () => {
+            context.signal.throwIfAborted()
+            try {
+              return this.options.host.authorizeExtensionView({
+                viewLeaseId: frame.params.view_lease_id as never,
+                leaseGeneration: frame.params.lease_generation,
+                runtimeGeneration: frame.params.runtime_generation, ownerId,
+              })
+            } catch (error) { void revokeCursor(); throw error }
+          }
+          const profileId = authority()
+          let result: ProfileRemoteUiStreamResult['result']
+          if (command.action === 'open') {
+            if ((command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks && !this.options.remoteUiItemChunksSupported)
+              throw new HostAuthorityError('upgrade_required')
+            const execute = this.options.remoteUiStream
+            if (!execute) throw new HostAuthorityError('upgrade_required')
+            if (remoteUiStreams.has(command.stream_id) || remoteUiStreams.size >= 8) {
+              throw new HostAuthorityError('conflict')
+            }
+            const cursor = await RemoteUiStreamCursor.open(
+              cursorSignal => (command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks === true
+                ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
+                : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
+            try {
+              if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+              remoteUiStreams.set(command.stream_id, { cursor, profileId,
+                viewLeaseId: frame.params.view_lease_id,
+                leaseGeneration: frame.params.lease_generation,
+                runtimeGeneration: frame.params.runtime_generation })
+              result = { type: 'opened' }
+            } catch (error) { await cursor.close(); throw error }
+          } else {
+            const entry = remoteUiStreams.get(command.stream_id)
+            if (!entry || entry.profileId !== profileId || entry.viewLeaseId !== frame.params.view_lease_id
+              || entry.leaseGeneration !== frame.params.lease_generation
+              || entry.runtimeGeneration !== frame.params.runtime_generation) throw new HostAuthorityError('stale')
+            if (command.action === 'close') {
+              remoteUiStreams.delete(command.stream_id)
+              await entry.cursor.close()
+              result = { type: 'closed' }
+            } else {
+              result = entry.cursor.poll()
+              if (result.type === 'end' || result.type === 'error') {
+                remoteUiStreams.delete(command.stream_id)
+                await entry.cursor.close()
+              }
+            }
+          }
+          if (authority() !== profileId) {
+            await revokeCursor()
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result })
+        } else if (frame.method === 'profile.remote_session' || frame.method === 'profile.remote_ui_read') {
+          const authority = () => {
+            context.signal.throwIfAborted()
+            return this.options.host.authorizeExtensionView({
+              viewLeaseId: frame.params.view_lease_id as never,
+              leaseGeneration: frame.params.lease_generation,
+              runtimeGeneration: frame.params.runtime_generation,
+              ownerId,
+            })
+          }
+          const profileId = authority()
+          let value: HostRemoteSessionJson
+          if (frame.method === 'profile.remote_session') {
+            const execute = this.options.remoteSession
+            const command = frame.params.command
+            const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
+            if (!execute || (botChat && !this.options.remoteBotChatSupported)) throw new HostAuthorityError('upgrade_required')
+            value = await execute(profileId, command, context.signal)
+            if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
+              parseHostBotChatReceipt(value, command.request)
+          } else {
+            const execute = this.options.remoteUiRead
+            if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
+              || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
+              throw new HostAuthorityError('upgrade_required')
+            }
+            value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
+            if (frame.params.endpoint === 'bot/chat')
+              parseHostBotChat(value, parseHostBotChatRequest(frame.params.payload.args))
+          }
+          if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { value } }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame(response)))
+        } else if (frame.method === 'profile.workspace_authority') {
+          const inspect = this.options.inspectWorkspaceModelSelection
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const target = { workspace_id: c.workspace_id, session_id: c.session_id }
+          const result = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostWorkspaceAuthorityAssertion = {
+            schema_version: 1,
+            challenge: c,
+            ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostWorkspaceAuthorityPayload(unsigned))
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
+        } else if (frame.method === 'profile.collaboration_archive_state') {
+          const inspect = this.options.inspectCollaborationArchiveState
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const observed = await inspect(profileId, {
+            workspace_id: c.workspace_id, session_id: c.session_id, archive_token: c.archive_token,
+            environment_id: c.environment_id, account_issuer: c.account_issuer,
+            account_subject: c.account_subject,
+          }, context.signal)
+          if (authorize() !== profileId || observed.archive_phase !== c.archive_phase) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostCollaborationArchiveStateAssertion = {
+            schema_version: 1, challenge: c, ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostCollaborationArchiveStatePayload(unsigned))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.group_input_fence') {
+          const install = this.options.installGroupInputFence
+          if (!install) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const installed = await install(profileId, c, context.signal)
+          if (authorize() !== profileId || installed.workspace_id !== c.workspace_id
+            || installed.session_id !== c.session_id || installed.group_id !== c.group_id
+            || installed.group_version !== c.group_version) throw new HostAuthorityError('profile_mismatch')
+          const identity = this.options.identity
+          const unsigned: HostGroupInputFenceAssertion = {
+            schema_version: 1, challenge: c, ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostGroupInputFencePayload(unsigned))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.collaboration_archive_intent') {
+          const inspect = this.options.inspectCollaborationArchiveIntent
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const target = frame.params.target
+          const authorize = archiveProfileReadAuthorizer(this.options.host, frame.params, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const result = parseHostCollaborationArchiveIntentValue(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
+        } else if (frame.method === 'profile.collaboration_archive_transition') {
+          const transition = this.options.transitionCollaborationArchive
+          if (!transition) throw new HostAuthorityError('upgrade_required')
+          const target = frame.params.target
+          const authorize = archiveProfileReadAuthorizer(this.options.host, frame.params, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const result = parseHostCollaborationArchiveTransitionResult(
+            await transition(profileId, target, context.signal))
+          if (authorize() !== profileId || (target.action === 'stage'
+            ? result.archive_phase === 'released'
+            : result.archive_phase !== ({ prepared: 'prepared', archive: 'archived',
+              restore: 'restored', finish_release: 'released' } as const)[target.action])) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
+        } else if (frame.method === 'profile.collaboration_delivery') {
+          const capture = this.options.collaborationDeliveryReceiver
+          if (!capture) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const assertAuthorized = () => { if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch') }
+          const result = await this.deliveryUploads.accept({ ownerId, signal: context.signal,
+            bindingKey: JSON.stringify([profileId, account]), chunk: frame.params.command,
+            authorize: assertAuthorized, capture: () => capture(profileId) })
+          assertAuthorized()
+          if (result.kind === 'staged') {
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+          } else {
+            const identity = this.options.identity
+            const unsigned = parseHostCollaborationDeliveryReceipt({ schema_version: 1,
+              authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+              authority_binding_version: account.authorityBindingVersion,
+              account_issuer: account.issuer, account_subject: account.subject,
+              installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+              host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, commit: result.commit, signature: 'A'.repeat(86) })
+            const signature = sign(null, encodeHostCollaborationDeliveryReceiptPayload(unsigned), privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: { kind: 'committed', receipt: { ...unsigned, signature } } })
+          }
+        } else if (frame.method === 'profile.root_journal') {
+          const execute = this.options.rootJournal
+          if (!execute) throw new HostAuthorityError('upgrade_required')
+          const account = { authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle, authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId, issuer: frame.params.account_issuer, subject: frame.params.account_subject }
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize(), command = frame.params.command
+          const result = matchHostRootJournalMetadata(await execute(profileId, command, context.signal), command)
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.collaboration_analysis') {
+          const execute = this.options.collaborationAnalysis
+          if (!execute) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const identity = this.options.identity
+          const binding = createHash('sha256').update(JSON.stringify(['dsh-analysis-binding-v1', identity.installationId,
+            identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, account])).digest('hex')
+          const command = frame.params.command
+          if (command.action === 'root_feedback' && command.operation && typeof command.operation === 'object'
+            && 'action' in command.operation && command.operation.action === 'continuation_read' && !this.options.rootContinuationSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'root_feedback' && !this.options.rootFeedbackSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'root_execution_journal' && !this.options.rootExecutionSupported) throw new HostAuthorityError('upgrade_required')
+          if ((command.action === 'prepare_root_attempt' || command.action === 'read_root_attempt' || command.action === 'dispatch_root_attempt')
+            && (!this.options.rootPlanningSupported || !this.options.inspectRootPlanningAttempt)) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'resume_root' && !this.options.rootLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'resume_source' && !this.options.sourceLiveResumeSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'read_source_output' && !this.options.sourceAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'read_root_diagnostic' && !this.options.rootAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'read_root_output' && !this.options.rootAnalysisRecoverySupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'reconcile_root' && !this.options.rootPendingLookupSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'recover_root' && !this.options.rootLookupSupported) throw new HostAuthorityError('upgrade_required')
+          if (command.action === 'prepare_root' && !this.options.rootAnalysisSupported) throw new HostAuthorityError('upgrade_required')
+          if ((command.action === 'capture_root' || command.action === 'start_captured_root' || command.action === 'release_captured_root')
+            && !this.options.rootCaptureSupported) throw new HostAuthorityError('upgrade_required')
+          const { ownerId: _connectionOwner,...resumeAccount }=account
+          const resumeBinding=createHash('sha256').update(JSON.stringify(['dsh-root-live-resume-v1',identity.installationId,
+            identity.installationPublicKey,identity.hostInstanceId,identity.processNonce,profileId,resumeAccount])).digest('hex')
+          const sourceResumeBinding = createHash('sha256').update(JSON.stringify(['dsh-source-live-resume-v1', identity.installationId,
+            identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, resumeAccount])).digest('hex')
+          const payload = (command.action === 'read_root_diagnostic' || command.action === 'read_source_output' || command.action === 'read_root_output' || command.action === 'read_root_attempt' || command.action === 'prepare_root_attempt') ? { ...command, target: { ...command.target }, binding_key: binding }
+            : { ...command, binding_key: binding, ...((command.action==='prepare_root' || command.action==='resume_root') &&
+              this.options.rootLiveResumeSupported ? { resume_binding_key:resumeBinding } : {}),
+            ...((command.action === 'prepare' || command.action === 'resume_source') && this.options.sourceLiveResumeSupported
+              ? { resume_binding_key: sourceResumeBinding } : {}) }
+          const value = await execute(profileId, payload, context.signal)
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const signOutput = (dispatch: unknown, outputDigest: string) => {
+            const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version: 1,
+              authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+              authority_binding_version: account.authorityBindingVersion, account_issuer: account.issuer, account_subject: account.subject,
+              installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+              host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, dispatch,
+              output_digest: outputDigest, signature: 'A'.repeat(86) })
+            const signature = sign(null, Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(unsigned)),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+            return { ...unsigned, signature }
+          }
+          let result: HostCollaborationAnalysisResult
+          if (command.action === 'root_feedback') {
+            let record: unknown = value
+            if (value && typeof value === 'object' && 'kind' in value && (value.kind === 'consumer' || value.kind === 'continuation') && 'commit' in value && value.commit !== null) {
+              const op = command.operation
+              if (!op || typeof op !== 'object' || Array.isArray(op) || !('target' in op) || !('delivery_id' in op)) throw Error('consumption_binding_invalid')
+              const target = op.target
+              const continuation = value.kind === 'continuation'
+              const commit = continuation && typeof value.commit === 'object' && 'consumption' in value.commit ? value.commit.consumption : value.commit
+              if (!target || typeof target !== 'object' || Array.isArray(target) || !commit || typeof commit !== 'object' || Array.isArray(commit)
+                || !('namespace_id' in commit) || commit.namespace_id !== Object.getOwnPropertyDescriptor(target, 'namespace_id')?.value || !('delivery_id' in commit) || commit.delivery_id !== op.delivery_id
+                || !('source_locator' in commit) || !commit.source_locator || typeof commit.source_locator !== 'object' || Array.isArray(commit.source_locator)
+                || ['workspace_id', 'session_id', 'source_message_id', 'source_revision'].some(k => Object.getOwnPropertyDescriptor(commit.source_locator, k)?.value !== Object.getOwnPropertyDescriptor(target, k)?.value))
+                throw Error('consumption_binding_invalid')
+              const unsigned = (continuation ? parseHostCollaborationContinuationReceipt : parseHostCollaborationConsumptionReceipt)({
+                schema_version: 1,
+                authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+                authority_binding_version: account.authorityBindingVersion,
+                account_issuer: account.issuer, account_subject: account.subject,
+                installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+                host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, commit: value.commit, signature: 'A'.repeat(86) })
+              const bytes = continuation
+                ? encodeHostCollaborationContinuationReceiptPayload(parseHostCollaborationContinuationReceipt(unsigned))
+                : encodeHostCollaborationConsumptionReceiptPayload(parseHostCollaborationConsumptionReceipt(unsigned))
+              const signature = sign(null, bytes, privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+              record = { ...value, receipt: { ...unsigned, signature } }
+            }
+            result = parseHostCollaborationAnalysisResult({ kind: 'root_feedback', record })
+          }
+          else if (command.action === 'root_execution_journal') result = parseHostCollaborationAnalysisResult({ kind: 'root_execution_journal', record: value })
+          else if (command.action === 'read_root_attempt') result = { kind: 'root_attempt_evidence', evidence: matchHostRootPlanningEvidence(value, command.target) }
+          else if (command.action === 'prepare_root_attempt') result = { kind: 'root_attempt_prepared',
+            preparation: matchHostRootPlanningAttemptTarget(value, command.target) }
+          else if (command.action === 'read_source_output') {
+            const evidence = matchHostSourceAnalysisOutput(value, command.target)
+            result = { kind: 'source_output', evidence: evidence.state === 'saved'
+              ? parseHostSourceAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
+              : evidence }
+          }
+          else if (command.action === 'read_root_diagnostic') {
+            result = { kind: 'root_diagnostic', evidence: matchHostRootAnalysisDiagnostic(value, command.target) }
+          }
+          else if (command.action === 'read_root_output') {
+            const evidence = matchHostRootAnalysisOutput(value, command.target)
+            result = { kind: 'root_output', evidence: evidence.state === 'saved'
+              ? parseHostRootAnalysisOutput({ ...evidence, analysis_receipt: signOutput(evidence.dispatch, evidence.output_digest) })
+              : evidence }
+          }
+          else if (command.action === 'capture_root') {
+            result = parseHostCollaborationAnalysisResult({ kind: 'root_captured', capture: value })
+            /* v8 ignore next -- The strict result parser retains the explicit root_captured discriminant above. */
+            if (result.kind !== 'root_captured') throw new HostAuthorityError('unavailable')
+            const capture = result.capture
+            let inputText: string | undefined
+            try { inputText = encodeHostRootTextInput(command.input.source) }
+            catch (error) {
+              /* v8 ignore next -- The command already contains bounded RemoteSessionJson; only the strict six-key guard can reject here. */
+              if (!(error instanceof Error) || error.message !== 'invalid_root_text_context') throw error
+              // An extended ingress cannot receive the strict text-input receipt.
+            }
+            if (inputText !== undefined && capture && typeof capture === 'object' && !Array.isArray(capture)
+              && 'kind' in capture && capture.kind === 'captured' && 'root' in capture) {
+              const root = parseHostRootSubmissionDescriptor(capture.root)
+              const unsigned = parseHostRootTextContextReceipt({ schema_version: 1, context_kind: 'text-root-input-v1',
+                authority_environment_id: account.authorityEnvironmentId, account_binding_handle: account.accountBindingHandle,
+                authority_binding_version: account.authorityBindingVersion,
+                account_issuer: account.issuer, account_subject: account.subject,
+                installation_id: identity.installationId, installation_public_key: identity.installationPublicKey,
+                host_instance_id: identity.hostInstanceId, process_nonce: identity.processNonce, root: {
+                  namespace_id: root.namespace_id, root_task_id: root.root_task_id, root_trace_id: root.root_trace_id,
+                  command_id: root.command_id, source_digest: root.source_descriptor.snapshot_digest,
+                  payload_digest: root.payload_digest,
+                }, source_input_digest: createHash('sha256').update(inputText).digest('hex'), signature: 'A'.repeat(86) })
+              const signature = sign(null, Buffer.from(encodeHostRootTextContextPayload(unsigned)),
+                privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+              result = { ...result, context_receipt: { ...unsigned, signature } }
+            }
+          }
+          else if (command.action === 'release_captured_root') result = parseHostCollaborationAnalysisResult({ kind: 'root_capture_released', root: value })
+          else if (command.action === 'start_captured_root' || command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') result = parseHostCollaborationAnalysisResult({ kind: 'root_prepared', preparation: value })
+          else if (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') result = parseHostCollaborationAnalysisResult({ kind: 'prepared', preparation: value })
+          else if (command.action === 'capture_reply') result = parseHostCollaborationAnalysisResult({ kind: 'reply_source', capture: value })
+          else {
+            if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).join(',') !== 'jsonText' || !('jsonText' in value) || typeof value.jsonText !== 'string')
+              throw new HostAuthorityError('unavailable')
+            if (command.action === 'dispatch_root_attempt') {
+              result = parseHostCollaborationAnalysisResult({ kind: 'output', json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url') })
+            } else {
+            // The private worker returns only after its output journal commits; failed writes never reach signing.
+              const analysis_receipt = signOutput(command.grant, createHash('sha256').update(value.jsonText, 'utf8').digest('hex'))
+              result = parseHostCollaborationAnalysisResult({ kind: 'output',
+                json_base64url: Buffer.from(value.jsonText, 'utf8').toString('base64url'), analysis_receipt })
+            }
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.reference_capture') {
+          const capture = this.options.captureCollaborationReferenceSelection, inspect = this.options.inspectCollaborationSource
+          if (!capture || !inspect) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const profileId = authorize(), selection = frame.params.selection
+          const target = parseHostCollaborationSourceTarget({ workspace_id: selection.source.workspace_id,
+            session_id: selection.source.session_id, source_message_id: selection.source.source_message_id,
+            source_revision: selection.source.revision })
+          const before = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId || Object.entries(target).some(([key, value]) => before[key as keyof typeof before] !== value))
+            throw new HostAuthorityError('profile_mismatch')
+          const result = parseHostCollaborationReferenceCapture(await capture(profileId, selection, context.signal))
+          if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before))
+            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.reference_content') {
+          const read = this.options.readCollaborationReferenceContent, inspect = this.options.inspectCollaborationSource
+          if (!read || !inspect) throw new HostAuthorityError('upgrade_required')
+          const authorize = collaborationReadAuthorizer(this.options.host, commandReadAccount(frame.params, ownerId),
+            frame.params.expires_at, context.signal, clock)
+          const profileId = authorize(), query = parseHostCollaborationReferenceContentTarget(Object.fromEntries(
+            ['workspace_id', 'session_id', 'source_message_id', 'source_revision', 'reference_request_digest', 'offset']
+              .map(key => [key, frame.params[key as keyof typeof frame.params]])))
+          const { offset: _offset, reference_request_digest: _digest, ...target } = query
+          const before = parseHostCollaborationSourceDescriptor(await inspect(profileId, target, context.signal))
+          if (authorize() !== profileId || Object.entries(target).some(([key, value]) => before[key as keyof typeof before] !== value))
+            throw new HostAuthorityError('profile_mismatch')
+          const result = parseHostCollaborationReferenceContentChunk(await read(profileId, query, context.signal))
+          if (authorize() !== profileId || JSON.stringify(result.descriptor) !== JSON.stringify(before)
+            || result.reference_request_digest !== query.reference_request_digest || result.offset !== query.offset)
+            throw new HostAuthorityError('profile_mismatch')
+          await recheckReferenceSource(inspect, authorize, profileId, target, before, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
+        } else if (frame.method === 'profile.source_snapshot') {
+          const read = this.options.readCollaborationSourceSnapshot
+          if (!read) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+            issuer: frame.params.account_issuer,
+            subject: frame.params.account_subject,
+          }
+          const authorize = collaborationReadAuthorizer(
+            this.options.host,
+            account,
+            frame.params.expires_at,
+            context.signal,
+            clock,
+          )
+          const profileId = authorize(),
+            target = parseHostCollaborationSourceTarget(
+              Object.fromEntries(
+                ['workspace_id', 'session_id', 'source_message_id', 'source_revision'].map(key => [
+                  key,
+                  frame.params[key as keyof typeof frame.params],
+                ]),
+              ),
+            )
+          const source = parseHostCollaborationSourceSnapshot(await read(profileId, target, context.signal)),
+            d = source.descriptor
+          if (
+            authorize() !== profileId ||
+            d.workspace_id !== target.workspace_id ||
+            d.session_id !== target.session_id ||
+            d.source_message_id !== target.source_message_id ||
+            d.source_revision !== target.source_revision
+          )
+            throw new HostAuthorityError('profile_mismatch')
+          const bytes = Buffer.from(source.snapshot_json, 'utf8'),
+            offset = frame.params.offset
+          if (offset >= bytes.byteLength) throw new HostAuthorityError('invalid_input')
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
             result: {
-              profile_id: opened.profileId as never,
-              view_lease_id: opened.viewLeaseId as never,
-              view_activation_handle: opened.viewActivationHandle as never,
-              lease_generation: opened.leaseGeneration,
-              expires_at: opened.expiresAt,
-              runtime_generation: opened.runtimeGeneration,
+              descriptor: d,
+              offset,
+              total_bytes: bytes.byteLength,
+              chunk_base64url: bytes.subarray(offset, offset + 32768).toString('base64url'),
             },
           })
+        } else if (frame.method === 'profile.root_planning_attempt_authority') {
+          const inspect = this.options.inspectRootPlanningAttempt
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const challenge = frame.params.challenge, root = challenge.root_challenge, c = root.source_challenge
+          const account = challengeReadAccount(frame.params, c, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const target = { ...sourceChallengeTarget(c), namespace_id: root.namespace_id, command_id: root.command_id }
+          const peer = this.options.identity
+          const binding = createHash('sha256').update(JSON.stringify(['dsh-analysis-binding-v1', peer.installationId,
+            peer.installationPublicKey, peer.hostInstanceId, peer.processNonce, profileId, account])).digest('hex')
+          matchHostRootPlanningAttemptDescriptor(
+            await inspect(profileId, target, challenge.attempt_request_id, binding, context.signal), challenge)
+          if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+          const identity = this.options.identity
+          const unsigned: HostRootPlanningAttemptAuthorityAssertion = {
+            schema_version: 1,
+            challenge,
+            ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostRootPlanningAttemptAuthorityPayload(unsigned))
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
+        } else if (frame.method === 'profile.root_authority') {
+          const inspect = this.options.inspectCollaborationRoot
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const root = frame.params.challenge, c = root.source_challenge
+          const account = challengeReadAccount(frame.params, c, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, c.expires_at, context.signal, clock)
+          const profileId = authorize()
+          const target = { ...sourceChallengeTarget(c), namespace_id: root.namespace_id, command_id: root.command_id }
+          const descriptor = parseHostRootSubmissionDescriptor(await inspect(profileId, target, context.signal))
+          const result = descriptor.source_descriptor
+          if (descriptor.namespace_id !== root.namespace_id || descriptor.command_id !== root.command_id
+            || descriptor.root_task_id !== root.root_task_id || descriptor.root_trace_id !== root.root_trace_id
+            || descriptor.payload_digest !== root.payload_digest || authorize() !== profileId
+            || !matchesSourceChallenge(result, c)) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostRootAuthorityAssertion = {
+            schema_version: 1,
+            challenge: root,
+            ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostRootAuthorityPayload(unsigned))
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
+        } else if (frame.method === 'profile.source_authority') {
+          const inspect = this.options.inspectCollaborationSource
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const target = sourceChallengeTarget(c)
+          const result = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || !matchesSourceChallenge(result, c)) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          const identity = this.options.identity
+          const unsigned: HostSourceAuthorityAssertion = {
+            schema_version: 1,
+            challenge: c,
+            ...assertionIdentityFields(identity),
+            signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = signAuthorityPayload(identity, encodeHostSourceAuthorityPayload(unsigned))
+          channel.send({
+            version: 1,
+            type: 'result',
+            request_id: frame.request_id,
+            method: frame.method,
+            result: { ...unsigned, signature },
+          })
+        } else if (frame.method === 'profile.reference_authority') {
+          const inspect = this.options.inspectCollaborationSource, readGrant = this.options.readCollaborationReferenceGrant
+          if (!inspect || !readGrant) throw new HostAuthorityError('upgrade_required')
+          const c = frame.params.challenge
+          const authorize = challengeReadAuthorizer(this.options.host, frame.params, c, ownerId, context.signal, clock)
+          const profileId = authorize()
+          const target = sourceChallengeTarget(c)
+          const source = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || source.workspace_id !== target.workspace_id || source.session_id !== target.session_id
+            || source.source_message_id !== target.source_message_id || source.source_revision !== target.source_revision
+            || source.snapshot_digest !== c.snapshot_digest) throw new HostAuthorityError('profile_mismatch')
+          const grant = await readGrant(profileId, target, c.reference_request_digest, context.signal)
+          if (authorize() !== profileId || grant.workspace_id !== target.workspace_id || grant.session_id !== target.session_id
+            || grant.source_message_id !== target.source_message_id || grant.source_revision !== target.source_revision
+            || grant.snapshot_digest !== c.snapshot_digest || grant.reference_request_digest !== c.reference_request_digest)
+            throw new HostAuthorityError('profile_mismatch')
+          const current = await inspect(profileId, target, context.signal)
+          if (authorize() !== profileId || current.workspace_id !== target.workspace_id || current.session_id !== target.session_id
+            || current.source_message_id !== target.source_message_id || current.source_revision !== target.source_revision
+            || current.snapshot_digest !== c.snapshot_digest) throw new HostAuthorityError('profile_mismatch')
+          const unsigned: HostReferenceAuthorityAssertion = { schema_version: 1, challenge: c,
+            ...assertionIdentityFields(this.options.identity), signature: 'A'.repeat(86) as HostControlSignature }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...unsigned,
+              signature: signAuthorityPayload(this.options.identity, encodeHostReferenceAuthorityPayload(unsigned)) } })
+        } else if (frame.method === 'profile.collaboration_registration') {
+          const challenge = frame.params.challenge
+          context.signal.throwIfAborted()
+          const now = clock()
+          if (challenge.expires_at <= now || challenge.expires_at - now > 300_000) {
+            throw new HostAuthorityError('stale')
+          }
+          this.options.host.authorizeCollaborationRegistration({
+            authorityEnvironmentId: challenge.environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId, issuer: challenge.account_issuer, subject: challenge.account_subject,
+          })
+          const identity = this.options.identity
+          const unsigned: HostCollaborationRegistrationAssertion = {
+            schema_version: 2, challenge, ...assertionIdentityFields(identity), signature: 'A'.repeat(86) as HostControlSignature,
+          }
+          const signature = sign(null, encodeHostCollaborationRegistrationSignaturePayload(unsigned),
+            privateKeyObject(identity.installationPrivateKey)).toString('base64url') as HostControlSignature
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+            result: { ...unsigned, signature } })
+        } else if (frame.method === 'profile.bot_identity') {
+          const resolve = this.options.resolveBotIdentity
+          if (!resolve) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const identity = parseHostBotIdentity(await resolveAccountBotIdentity(
+            this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.bot_roster') {
+          const list = this.options.listBotRoster
+          if (!list) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const page = parseHostBotRosterPage(await listAccountBotRoster(
+            this.options.host, { listBotRoster: list }, account,
+            frame.params.after_bot_id, frame.params.limit, context.signal))
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { page } })
+        } else if (frame.method === 'profile.native_room') {
+          const prepare = this.options.prepareNativeRoom
+          if (!prepare) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const binding = await prepareAccountNativeRoom(this.options.host,
+            { prepareNativeRoom: prepare }, account, frame.params.room_id, context.signal)
+          const identity = this.options.identity
+          const unsigned: HostNativeRoomAssertion | null = binding === null ? null : {
+            schema_version: 1, binding,
+            ...nativeRoomAccountAssertionFields(frame.params, identity,
+              (this.options.now ?? Date.now)()),
+            signature: 'A'.repeat(86),
+          }
+          const assertion = unsigned === null ? null : { ...unsigned,
+            signature: sign(null, encodeHostNativeRoomAssertionPayload(unsigned),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url') }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { binding: assertion } })
+        } else if (frame.method === 'profile.native_room_operation') {
+          if (frame.params.command.operation === 'agent-result-chunk')
+            throw new HostAuthorityError('unauthorized')
+          const operate = this.options.operateNativeRoom
+          if (!operate) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const reply = await operateAccountNativeRoom(this.options.host,
+            { operateNativeRoom: operate }, account, frame.params.command, context.signal)
+          const identity = this.options.identity
+          const unsigned: HostNativeRoomTurnAssertion | null = reply.state === 'turns' &&
+            frame.params.command.operation === 'turns' ? {
+              schema_version: 1, after_seq: frame.params.command.after_seq, selection: reply,
+              ...nativeRoomAccountAssertionFields(frame.params, identity,
+                (this.options.now ?? Date.now)()),
+              signature: 'A'.repeat(86),
+            } : null
+          const turnAssertion = unsigned === null ? null : { ...unsigned,
+            signature: sign(null, encodeHostNativeRoomTurnAssertionPayload(unsigned),
+              privateKeyObject(identity.installationPrivateKey)).toString('base64url') }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: turnAssertion ?
+              { reply, turn_assertion: turnAssertion } : { reply } })
+        } else if (frame.method === 'profile.native_agent_result') {
+          const operate = this.options.operateNativeRoom
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            new URL(candidate.issuer).origin === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const reply = await deliverAccountNativeAgentResultChunk({
+            host: this.options.host, workers: { operateNativeRoom: operate }, account,
+            installationId: this.options.identity.installationId,
+            computerId: frame.params.computer_id,
+            slarkAudience: frame.params.slark_audience,
+            workspaceId: frame.params.workspace_id, sessionId: frame.params.session_id,
+            keyring, ticket: frame.params.ticket, command: frame.params.command,
+            signal: context.signal,
+          })
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { reply } })
+        } else if (frame.method === 'profile.bot_group_stop' ||
+          frame.method === 'profile.bot_group_deliver' ||
+          frame.method === 'profile.bot_group_result_page' || frame.method === 'profile.bot_group_result_ack') {
+          const operate = this.options.operateBotGroup
+          const keyring = this.options.trustedBotGroupKeyrings?.find(candidate =>
+            candidate.environmentId === frame.params.authority_environment_id &&
+            candidate.issuer === frame.params.slark_audience)
+          if (!operate || !keyring) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          if (frame.method === 'profile.bot_group_stop') {
+            const reply = await stopAccountBotGroupDelivery({
+              host: this.options.host, workers: { operateBotGroup: operate }, account,
+              installationId: this.options.identity.installationId,
+              computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
+              keyring, ticket: frame.params.ticket, command: frame.params.command,
+              messageSeq: frame.params.message_seq, payloadDigest: frame.params.payload_digest,
+              signal: context.signal,
+            })
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+              method: frame.method, result: { reply } })
+          } else {
+            const groupInput = {
+              host: this.options.host, workers: { operateBotGroup: operate }, account,
+              installationId: this.options.identity.installationId,
+              computerId: frame.params.computer_id, slarkAudience: frame.params.slark_audience,
+              keyring, ticket: frame.params.ticket, command: frame.params.command,
+              signal: context.signal,
+            }
+            if (frame.method === 'profile.bot_group_deliver') {
+              const reply = await deliverAccountBotGroup(groupInput)
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply } })
+            } else if (frame.method === 'profile.bot_group_result_page') {
+              // Earlier results for this Bot cycle may still be awaiting acknowledgement.
+              // Scan a bounded page window; only the original delivery's result may cross this boundary.
+              let after = frame.params.after
+              let reply: HostBotGroupResponse = { state: 'ok', results: [], next: after }
+              // A result page always carries the validated Slark owner from its result ticket.
+              let slarkOwnerUserId = ''
+              for (let scan = 0; scan < 1000; scan++) {
+                const page = await readAccountBotGroupResultPage({ ...groupInput, after })
+                slarkOwnerUserId = page.ownerUserId
+                if (page.reply.state !== 'ok' || page.reply.results.length === 0) {
+                  reply = page.reply.state === 'ok' ?
+                    { state: 'ok', results: [], next: frame.params.after } : page.reply
+                  break
+                }
+                // The worker parser bounds an `ok` page to one valid result, and
+                // the empty page returned above; this entry is present here.
+                const result = page.reply.results[0] as (typeof page.reply.results)[number]
+                if (result.deliveryId === frame.params.command.deliveryId) {
+                  reply = { state: 'ok', results: [result], next: result.seq }
+                  break
+                }
+                after = result.seq
+                if (scan === 999) throw new HostAuthorityError('unavailable')
+              }
+              const item = reply.state === 'ok' ? reply.results[0] : undefined
+              let proof: HostBotGroupResultProof | null = null
+              if (item) {
+                const unsigned = {
+                  schema_version: 1 as const,
+                  authority_environment_id: account.authorityEnvironmentId,
+                  account_binding_handle: account.accountBindingHandle,
+                  authority_binding_version: account.authorityBindingVersion,
+                  account_issuer: account.issuer, account_subject: account.subject,
+                  owner_user_id: slarkOwnerUserId, computer_id: frame.params.computer_id,
+                  slark_audience: frame.params.slark_audience,
+                  installation_id: this.options.identity.installationId,
+                  installation_public_key: this.options.identity.installationPublicKey,
+                  host_instance_id: this.options.identity.hostInstanceId,
+                  process_nonce: this.options.identity.processNonce,
+                  result: item, issued_at: clock(),
+                }
+                proof = { ...unsigned, signature: sign(null,
+                  encodeHostBotGroupResultProofPayload(unsigned),
+                  privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') }
+              }
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply, proof } })
+            } else {
+              const reply = await acknowledgeAccountBotGroupResult({ ...groupInput,
+                resultId: frame.params.result_id })
+              channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+                method: frame.method, result: { reply } })
+            }
+          }
+        } else if (frame.method === 'profile.workspace_model_selection') {
+          const inspect = this.options.inspectWorkspaceModelSelection
+          if (!inspect) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+          }
+          context.signal.throwIfAborted()
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          const target = { workspace_id: frame.params.workspace_id, session_id: frame.params.session_id }
+          const result = await inspect(profileId, target, context.signal)
+          context.signal.throwIfAborted()
+          if (this.options.host.authorizeAccountModelText(account) !== profileId
+            || result.workspace_id !== target.workspace_id || result.session_id !== target.session_id) {
+            throw new HostAuthorityError('profile_mismatch')
+          }
+          channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+            request_id: frame.request_id, method: frame.method, result })))
+        } else if (frame.method === 'profile.model_text') {
+          const generate = this.options.generateModelText
+          if (!generate) throw new HostAuthorityError('upgrade_required')
+          const account = {
+            authorityEnvironmentId: frame.params.authority_environment_id,
+            accountBindingHandle: frame.params.account_binding_handle,
+            authorityBindingVersion: frame.params.authority_binding_version,
+            ownerId,
+          }
+          const profileId = this.options.host.authorizeAccountModelText(account)
+          let result: { readonly state: 'complete'; readonly provider: string; readonly model: string; readonly text: string }
+            | { readonly state: 'rejected'; readonly code: DesktopModelWorkerError['code'] }
+          try {
+            const answer = await generate(profileId, frame.params.text, context.signal)
+            context.signal.throwIfAborted()
+            this.options.host.authorizeAccountModelText(account)
+            result = { state: 'complete', ...answer }
+          } catch (error) {
+            if (error instanceof HostAuthorityError) throw error
+            result = { state: 'rejected', code: error instanceof DesktopModelWorkerError
+              ? error.code : context.signal.aborted ? 'cancelled' : 'provider_failed' }
+          }
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: 'profile.model_text', result })
         } else if (frame.method === 'profile.view_activate') {
           const activated = await this.options.host.activateView({
             profileId: frame.params.profile_id as never,
@@ -823,9 +2690,11 @@ export class UnixHostServer {
           })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: 'profile.lease_close', result: { closed: true } })
         }
-      } catch (error) { channel.send(safeError(authorityCode(error), frame)) }
+      },
+      errorResponse: (frame, error) => safeError(authorityCode(error), frame),
+      revokeOwner: (connectionOwnerId) => { this.options.host.revokeOwner(connectionOwnerId) },
     })
-    socket.resume()
+    return session
   }
 
   private inspect(
@@ -833,6 +2702,7 @@ export class UnixHostServer {
     migrationExport: boolean,
     migrationImport: boolean,
     legacyMigration: boolean,
+    offlineAccountRecovery: boolean,
   ): HostInspectResult {
     if (!request.params.supported_versions.includes(1)) throw new HostAuthorityError('unavailable')
     const identity = this.options.identity
@@ -849,8 +2719,72 @@ export class UnixHostServer {
         runtime_generation: identity.runtimeGeneration,
         schema_generation: identity.schemaGeneration,
         process_nonce: identity.processNonce as HostControlNonce,
+        boot_nonce: this.bootNonce,
         capabilities: [
           ...capabilities,
+          ...(this.options.createSkillHubPackageStore
+            ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
+              'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
+          'profile.collaboration_registration',
+          ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
+          ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
+          ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
+          ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
+          ...(this.options.operateNativeRoom && this.options.trustedBotGroupKeyrings?.length
+            ? ['profile.native_agent_result'] : []),
+          ...(this.options.operateBotGroup && this.options.trustedBotGroupKeyrings?.length
+            ? ['profile.bot_group_deliver', 'profile.bot_group_result_page',
+              'profile.bot_group_result_ack', 'profile.bot_group_stop'] : []),
+          ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.rootJournal ? ['profile.root_journal'] : []),
+          ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
+          ...(this.options.inspectRootPlanningAttempt ? ['profile.root_planning_attempt_authority'] : []),
+          ...(this.options.inspectCollaborationSource ? ['profile.source_authority'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.readCollaborationReferenceGrant ? ['profile.reference_authority'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.captureCollaborationReferenceSelection ? ['profile.reference_capture'] : []),
+          ...(this.options.inspectCollaborationSource && this.options.readCollaborationReferenceContent ? ['profile.reference_content'] : []),
+          ...(this.options.readCollaborationSourceSnapshot ? ['profile.source_snapshot'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootLookupSupported ? ['profile.root_lookup'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootLiveResumeSupported ? ['profile.root_live_resume'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported ? ['profile.root_feedback'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported && this.options.rootContinuationSupported ? ['profile.root_continuation'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootExecutionSupported ? ['profile.root_execution_journal'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootPlanningSupported && this.options.inspectRootPlanningAttempt
+            ? ['profile.root_planning_attempt', 'profile.root_planning_attempt_recovery'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootPendingLookupSupported ? ['profile.root_pending_lookup'] : []),
+          ...(this.options.collaborationAnalysis && this.options.sourceAnalysisRecoverySupported ? ['profile.source_analysis_recovery'] : []),
+          ...(this.options.collaborationAnalysis && this.options.sourceLiveResumeSupported ? ['profile.source_live_resume'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootAnalysisRecoverySupported ? ['profile.root_analysis_recovery', 'profile.root_analysis_diagnostic'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootAnalysisSupported ? ['profile.root_analysis'] : []),
+          ...(this.options.collaborationAnalysis && this.options.rootCaptureSupported ? ['profile.root_capture'] : []),
+          ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
+          ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
+          ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
+          ...(this.options.inspectCollaborationArchiveState ? ['profile.collaboration_archive_state'] : []),
+          ...(this.options.installGroupInputFence ? ['profile.group_input_fence'] : []),
+          ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
+          ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
+          ...(this.options.remoteSession ? ['profile.remote_session',
+            'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
+            'profile.remote_session.control_lease'] : []),
+          ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotChatSupported ? ['profile.remote_ui_read.bot_chat'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
+          ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
+            'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
+            ...(this.options.remoteUiItemChunksSupported ? ['profile.remote_ui_stream.item_chunks'] : [])] : []),
+          ...(this.options.inspectModelClaimSource ? ['profile.model_claim_inventory'] : []),
+          ...(this.options.inspectModelClaimSource && this.options.modelClaimTransaction
+            ? ['profile.model_claim_confirm', 'profile.model_claim_apply'] : []),
+          ...(this.options.modelClaimRecovery ? ['profile.model_claim_recovery_inventory',
+            'profile.model_claim_recovery_status', 'profile.model_claim_restore'] : []),
+          ...(this.options.modelClaimRecovery && this.options.modelClaimTransaction?.retry && this.options.inspectModelClaimSource
+            ? ['profile.model_claim_retry'] : []),
+          ...(this.options.extensions ? ['profile.extensions'] : []),
+          ...(offlineAccountRecovery ? recoveryCapabilities : []),
+          ...(this.options.recoveryMaterialsPersistenceGeneration
+            ? ['profile.recovery_materials.describe', 'profile.recovery_materials.validate'] : []),
           ...(migrationExport ? [
             'migration.export_snapshot.inventory', 'migration.export_snapshot.begin', 'migration.export_snapshot.read',
           ] : []),
@@ -874,14 +2808,168 @@ export class UnixHostServer {
   }
 }
 
+/** Running owner-only UDS server. */
+export class UnixHostServer {
+  private server: Server | undefined
+  private socketIdentity?: { dev: number; ino: number }
+  private readonly connections = new Set<Socket>()
+  private readonly authority: HostControlAuthority
+  constructor(private readonly options: UnixHostServerOptions) {
+    this.authority = new HostControlAuthority(options)
+  }
+
+  /** Bind the UDS path after refusing link/regular-file substitution. */
+  async start(): Promise<void> {
+    if (this.server) throw new HostAuthorityError('conflict')
+    this.options.ownership.assertOwner()
+    try {
+      const stat = lstatSync(this.options.socketPath)
+      if (!stat.isSocket() || stat.uid !== this.options.expectedUid) throw new HostAuthorityError('conflict')
+      this.options.ownership.assertOwner()
+      unlinkSync(this.options.socketPath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    const server = createServer((socket) => { void this.accept(socket) })
+    delete this.socketIdentity
+    this.server = server
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject)
+        server.listen(this.options.socketPath, () => {
+          server.off('error', reject)
+          resolve()
+        })
+      })
+      chmodSync(this.options.socketPath, 0o600)
+      const stat = lstatSync(this.options.socketPath)
+      this.socketIdentity = { dev: stat.dev, ino: stat.ino }
+    } catch (error) {
+      this.server = undefined
+      /* v8 ignore next 1 -- reaching cleanup requires a filesystem race after the listener has bound successfully. */
+      if (server.listening) await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
+      throw error
+    }
+  }
+
+  /** Close connections and remove only the socket inode this server created. */
+  async close(): Promise<void> {
+    const server = this.server
+    this.server = undefined
+    for (const socket of this.connections) socket.destroy()
+    await this.options.extensions?.operations.dispose()
+    if (server) {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error)
+          else resolve()
+        })
+      })
+    }
+    try {
+      const stat = lstatSync(this.options.socketPath)
+      if (this.socketIdentity && stat.isSocket()
+        && stat.dev === this.socketIdentity.dev && stat.ino === this.socketIdentity.ino) {
+        unlinkSync(this.options.socketPath)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+
+  private async accept(socket: Socket): Promise<void> {
+    const ownerId = randomUUID()
+    const transportLifetime = new AbortController()
+    this.connections.add(socket)
+    socket.once('close', () => {
+      transportLifetime.abort()
+      this.connections.delete(socket)
+    })
+    socket.pause()
+    try {
+      const peer = await this.options.attestPeer(socket)
+      if (peer.uid !== this.options.expectedUid || !validSha256(peer.executableSignatureDigest)
+        || !this.options.allowedDesktopExecutableDigests.has(peer.executableSignatureDigest)) {
+        throw new HostAuthorityError('unauthorized')
+      }
+    } catch { socket.destroy(); return }
+    const session = this.authority.openSession(ownerId, transportLifetime.signal)
+    const channel = new FrameChannel(socket, async (frame) => {
+      channel.send(await session.handleRequest(frame))
+    })
+    socket.resume()
+  }
+
+}
+
+interface HandshakeState {
+  readonly clientInstanceId: HostControlClientInstanceId
+  readonly hostInstanceId: HostInstanceId
+  readonly processNonce: HostControlNonce
+}
+
+/** Validate a Bot delivery before Main sends it to the Host. */
+function botGroupClientDelivery(input: { readonly computerId: string
+  readonly slarkAudience: string
+  readonly ticket: string
+  readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }> }) {
+  return parseHostBotGroupDeliveryInput({ computer_id: input.computerId,
+    slark_audience: input.slarkAudience, ticket: input.ticket, command: input.command })
+}
+
+function botGroupClientStop(input: { readonly computerId: string
+  readonly slarkAudience: string
+  readonly ticket: string
+  readonly messageSeq: number
+  readonly payloadDigest: string
+  readonly command: Extract<HostBotGroupCommand, { operation: 'stop_delivery' }> }) {
+  return parseHostBotGroupStopInput({ computer_id: input.computerId,
+    slark_audience: input.slarkAudience, ticket: input.ticket,
+    message_seq: input.messageSeq, payload_digest: input.payloadDigest,
+    command: input.command })
+}
+
 /** Connected Main-only SDK matching Slark's `DshPersonalHostAdapter`. */
 export class UnixHostClient {
+  /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
+  readonly remoteBotChatSupported = true
+  /** This SDK can encode the existing Bot identity/current-chat read. */
+  readonly remoteUiBotChatSupported = true
+  /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
+  readonly remoteUiAssetGzipSupported = true
+  /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
+  readonly remoteUiItemChunksSupported = true
+
   private constructor(
-    private readonly channel: FrameChannel,
+    private readonly channel: HostClientFrameTransport,
     private readonly state: HandshakeState,
     private readonly now: () => number,
     readonly inspection: HostInspectResult['result'],
   ) {}
+
+  private matchesNativeRoomAssertionAuthority(
+    assertion: Pick<HostNativeRoomAssertion,
+      'authority_environment_id' | 'account_binding_handle' | 'authority_binding_version' |
+      'account_issuer' | 'account_subject' | 'installation_id' | 'installation_public_key' |
+      'host_instance_id' | 'process_nonce' | 'issued_at'>,
+    input: {
+      readonly authorityEnvironmentId: string
+      readonly accountBindingHandle: string
+      readonly authorityBindingVersion: number
+      readonly issuer: string
+      readonly subject: string
+    },
+  ): boolean {
+    return assertion.authority_environment_id === input.authorityEnvironmentId &&
+      assertion.account_binding_handle === input.accountBindingHandle &&
+      assertion.authority_binding_version === input.authorityBindingVersion &&
+      assertion.account_issuer === input.issuer && assertion.account_subject === input.subject &&
+      assertion.installation_id === this.inspection.installation_id &&
+      assertion.installation_public_key === this.inspection.installation_public_key &&
+      assertion.host_instance_id === this.inspection.host_instance_id &&
+      assertion.process_nonce === this.inspection.process_nonce &&
+      assertion.issued_at <= this.now() + 5000 && assertion.issued_at >= this.now() - 60_000
+  }
 
   /**
    * Connect, attest the Host process, and verify its signed fresh challenge.
@@ -891,21 +2979,104 @@ export class UnixHostClient {
    */
   static async connect(options: UnixHostClientOptions, signal?: AbortSignal): Promise<UnixHostClient> {
     const socket = createConnection(options.socketPath)
-    await new Promise<void>((resolve, reject) => {
+    await UnixHostClient.waitForConnection(socket, signal)
+    try {
+      const peer = await options.attestPeer(socket)
+      if (peer.uid !== options.expectedUid || peer.executableSignatureDigest !== options.trustedExecutableSignatureDigest) {
+        throw new HostAuthorityError('unavailable')
+      }
+      return await UnixHostClient.authenticate(socket, options, signal)
+    } catch (error) {
+      socket.destroy()
+      throw error
+    }
+  }
+
+  /**
+   * Connect a protected Windows named pipe after its derived path was checked by the caller.
+   * The Host's installation key signs a fresh challenge; the server separately attests the
+   * connected Desktop daemon before it accepts any request.
+   * @param options - Registration trust anchors and the already checked pipe path.
+   * @param signal - Optional cancellation for connection and authentication.
+   * @param connectSocket - Pipe connector; the client takes ownership of its socket.
+   * @returns Authenticated client; authentication failure destroys the socket and rejects.
+   */
+  static async connectNamedPipe(
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer'>,
+    signal?: AbortSignal,
+    connectSocket: (path: string) => Socket = createConnection,
+  ): Promise<UnixHostClient> {
+    const socket = connectSocket(options.socketPath)
+    await UnixHostClient.waitForConnection(socket, signal)
+    try {
+      return await UnixHostClient.authenticate(socket, options, signal)
+    } catch (error) {
+      socket.destroy()
+      throw error
+    }
+  }
+
+  /**
+   * Authenticate an already peer-attested non-socket carrier.
+   * @internal
+   * @param options - Installation trust anchors used to verify the signed challenge.
+   * @param transport - Attested carrier whose lifetime is transferred to the client.
+   * @param signal - Optional authentication cancellation.
+   * @returns Authenticated client; failure closes the transferred carrier and rejects.
+   */
+  static async connectAuthenticatedTransport(
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer' | 'socketPath'>,
+    transport: HostClientFrameTransport,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
+    try {
+      return await UnixHostClient.authenticateTransport(transport, options, signal)
+    } catch (error) {
+      transport.close()
+      throw error
+    }
+  }
+
+  private static waitForConnection(socket: Socket, signal?: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
       const abort = (): void => {
+        socket.removeListener('connect', connected)
+        socket.removeListener('error', failed)
         socket.destroy()
         reject(errorReason(signal?.reason))
       }
+      const connected = (): void => {
+        signal?.removeEventListener('abort', abort)
+        socket.removeListener('error', failed)
+        resolve()
+      }
+      const failed = (error: Error): void => {
+        signal?.removeEventListener('abort', abort)
+        socket.removeListener('connect', connected)
+        socket.destroy()
+        reject(error)
+      }
       if (signal?.aborted) { abort(); return }
-      socket.once('connect', () => { signal?.removeEventListener('abort', abort); resolve() })
-      socket.once('error', reject)
+      socket.once('connect', connected)
+      socket.once('error', failed)
       signal?.addEventListener('abort', abort, { once: true })
     })
-    const peer = await options.attestPeer(socket)
-    if (peer.uid !== options.expectedUid || peer.executableSignatureDigest !== options.trustedExecutableSignatureDigest) {
-      socket.destroy(); throw new HostAuthorityError('unavailable')
-    }
+  }
+
+  private static async authenticate(
+    socket: Socket,
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer'>,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
     const channel = new FrameChannel(socket)
+    return await UnixHostClient.authenticateTransport(channel, options, signal)
+  }
+
+  private static async authenticateTransport(
+    channel: HostClientFrameTransport,
+    options: Omit<UnixHostClientOptions, 'expectedUid' | 'attestPeer' | 'socketPath'>,
+    signal?: AbortSignal,
+  ): Promise<UnixHostClient> {
     const clientInstanceId = randomUUID() as HostControlClientInstanceId
     const request: HostInspectRequest = {
       version: 1,
@@ -916,19 +3087,22 @@ export class UnixHostClient {
     }
     const frame = await channel.call(request, signal)
     if (frame.type !== 'result' || frame.method !== 'host.inspect') {
-      socket.destroy()
+      channel.close()
       throw new HostAuthorityError('unavailable')
     }
     if (frame.result.installation_id !== options.trustedInstallationId
       || frame.result.installation_public_key !== options.trustedInstallationPublicKey
-      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest
-      || !verify(
-        null,
-        encodeHostInspectSignaturePayload(request, frame),
-        publicKeyObject(options.trustedInstallationPublicKey),
-        Buffer.from(frame.result.challenge_signature, 'base64url'),
-      )) {
-      socket.destroy(); throw new HostAuthorityError('unavailable')
+      || frame.result.executable_signature_digest !== options.trustedExecutableSignatureDigest) {
+      channel.close(); throw new HostAuthorityError('unavailable')
+    }
+    const trustedPublicKey = publicKeyObject(options.trustedInstallationPublicKey)
+    if (!verify(
+      null,
+      encodeHostInspectSignaturePayload(request, frame),
+      trustedPublicKey,
+      Buffer.from(frame.result.challenge_signature, 'base64url'),
+    )) {
+      channel.close(); throw new HostAuthorityError('unavailable')
     }
     return new UnixHostClient(channel, {
       clientInstanceId,
@@ -937,7 +3111,10 @@ export class UnixHostClient {
     }, options.now ?? Date.now, frame.result)
   }
 
-  /** Report only local transport liveness; authority is still rechecked by every operation. */
+  /**
+   * Report only local transport liveness; authority is still rechecked by every operation.
+   * @returns Whether the local channel remains connected, not whether a Profile is authorized.
+   */
   isConnected(): boolean { return this.channel.isConnected() }
 
   /**
@@ -945,10 +3122,7 @@ export class UnixHostClient {
    * @param input - opaque binding plus optional cancellation.
    * @returns Profile availability without secrets.
    */
-  async getProfileStatus(input: {
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
+  async getProfileStatus(input: AccountBindingInput & {
     readonly signal?: AbortSignal
   }): Promise<{ state: 'ready' | 'unbound' | 'locked'; profileId?: string; persistenceGeneration?: number }> {
     const request: ProfileStatusRequest = {
@@ -956,11 +3130,7 @@ export class UnixHostClient {
       type: 'request',
       request_id: requestId(),
       method: 'profile.status',
-      params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-      },
+      params: this.accountBindingParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.status') throw new HostAuthorityError('unavailable')
@@ -971,16 +3141,189 @@ export class UnixHostClient {
   }
 
   /**
+   * Inspect Main-vault handles for recoverable offline Account Profiles.
+   * Runtime and schema expectations are pinned to the attested Host inspection.
+   * @param input - bounded opaque key handles and optional cancellation.
+   * @returns anonymous preflight candidates without Profile ids or handles.
+   */
+  async inspectOfflineAccountProfiles(input: {
+    readonly profileKeyHandles: readonly string[]
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly candidates: readonly {
+    readonly state: 'recoverable' | 'compatibility_blocked'
+    readonly candidateId: string
+    readonly profileKind: 'account'
+    readonly bindingCount: number
+    readonly persistenceGeneration: number
+    readonly sessionCount: number
+    readonly pluginCount: number
+    readonly compatibility: 'current' | 'legacy_runtime_required' | 'read_only_export_only'
+    readonly preflightDigest: string
+    readonly reasonCode?: string
+  }[] }> {
+    if (!this.inspection.capabilities.includes('profile.recovery_inspect' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoveryInspectRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_inspect',
+      params: {
+        ...this.auth(), profile_key_handles: input.profileKeyHandles,
+        expected_runtime_generation: this.inspection.runtime_generation,
+        expected_schema_generation: this.inspection.schema_generation,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { candidates: frame.result.candidates.map(candidate => ({
+      state: candidate.state, candidateId: candidate.candidate_id, profileKind: candidate.profile_kind,
+      bindingCount: candidate.binding_count, persistenceGeneration: candidate.persistence_generation,
+      sessionCount: candidate.session_count, pluginCount: candidate.plugin_count,
+      compatibility: candidate.compatibility, preflightDigest: candidate.preflight_digest,
+      ...(candidate.reason_code === undefined ? {} : { reasonCode: candidate.reason_code }),
+    })) }
+  }
+
+  /**
+   * Describe existing historical materials through this authenticated Host connection.
+   * @param input - Main-only selected identity, vault proof and fresh challenge.
+   * @param signal - Optional caller cancellation.
+   * @returns Signed historical descriptor; it grants no Account or worker access.
+   */
+  async describeRecoveryMaterials(
+    input: RecoveryDescribeInput, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult['result']> {
+    signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.recovery_materials.describe' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const business = parseRecoveryDescribeInput(input)
+    const request: ProfileRecoveryMaterialsDescribeRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.describe',
+      params: { ...this.auth(), ...business },
+    }
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
+    signal?.throwIfAborted()
+    return frame.result
+  }
+
+  /**
+   * Freshly validate imported materials against the original Host registry without mutation.
+   * Main must also check trusted selected identity, operation ownership and its monotonic RTT deadline.
+   * @param input - Historical descriptor, material proof and a new operation challenge.
+   * @param signal - Optional caller cancellation.
+   * @returns Current ownership observation; missing capability requires a Host upgrade.
+   */
+  async validateRecoveryMaterials(input: RecoveryValidateInput, signal?: AbortSignal): Promise<RecoveryValidation> {
+    signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.recovery_materials.validate' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const business = parseRecoveryValidateInput(input)
+    const request: ProfileRecoveryMaterialsValidateRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_materials.validate',
+      params: { ...this.auth(), ...business },
+    }
+    const frame = await this.callRecoveryMaterials(request, business.challenge, signal)
+    signal?.throwIfAborted()
+    return frame.result
+  }
+
+  /**
+   * Confirm one inspected Account Profile and acquire an offline-only selector.
+   * @param input - candidate proof, idempotency id, and ephemeral Main-vault material.
+   * @returns offline selector and generation facts after worker readiness.
+   */
+  async recoverOfflineAccountProfile(input: {
+    readonly profileKeyHandle: string
+    readonly profileUnlockMaterial: string
+    readonly recoveryOperationId: string
+    readonly candidateId: string
+    readonly preflightDigest: string
+    readonly signal?: AbortSignal
+  }): Promise<{
+    readonly state: 'offline_ready'
+    readonly profileSelector: string
+    readonly accessScope: 'offline_local'
+    readonly persistenceGeneration: number
+    readonly runtimeGeneration: number
+  }> {
+    if (!this.inspection.capabilities.includes('profile.recover_offline_account' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoverOfflineAccountRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recover_offline_account',
+      params: {
+        ...this.auth(), profile_key_handle: input.profileKeyHandle,
+        profile_unlock_material: input.profileUnlockMaterial,
+        recovery_operation_id: input.recoveryOperationId as never,
+        candidate_id: input.candidateId as never, preflight_digest: input.preflightDigest as never,
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      state: frame.result.state, profileSelector: frame.result.profile_selector,
+      accessScope: frame.result.access_scope, persistenceGeneration: frame.result.persistence_generation,
+      runtimeGeneration: frame.result.runtime_generation,
+    }
+  }
+
+  /**
+   * Query one recovery operation without starting another worker.
+   * @param input - operation id and optional cancellation.
+   * @returns stable process-local recovery state.
+   */
+  async getOfflineAccountRecoveryStatus(input: {
+    readonly recoveryOperationId: string
+    readonly signal?: AbortSignal
+  }): Promise<
+    | { readonly state: 'recovering' | 'offline_ready' | 'unknown' }
+    | { readonly state: 'failed'; readonly reasonCode: 'recovery_worker_failed' }
+  > {
+    if (!this.inspection.capabilities.includes('profile.recovery_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRecoveryStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_status',
+      params: { ...this.auth(), recovery_operation_id: input.recoveryOperationId as never },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.state === 'failed'
+      ? { state: 'failed', reasonCode: frame.result.reason_code }
+      : { state: frame.result.state }
+  }
+
+  /**
+   * Open one recovered Account Profile through an offline-domain selector.
+   * @param input - offline selector and optional cancellation.
+   * @returns offline-scoped generation-fenced view lease.
+   */
+  async openOfflineAccountProfile(input: {
+    readonly profileSelector: string
+    readonly signal?: AbortSignal
+  }): Promise<OfflineProfileOpenResult> {
+    if (!this.inspection.capabilities.includes('profile.open_offline_account' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileOpenOfflineAccountRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.open_offline_account',
+      params: { ...this.auth(), profile_selector: input.profileSelector },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { ...openProfileResult(frame.result), accessScope: frame.result.access_scope }
+  }
+
+  /**
    * Ensure one account Profile using Main-only identity and secure-store handles.
    * @param input - Account token and identity, binding, Keychain handle, and optional cancellation.
    * @returns ready opaque Profile id.
    */
-  async ensureAccountProfile(input: {
+  async ensureAccountProfile(input: AccountBindingInput & {
+    readonly authorityBindingScope?: string
     readonly issuer: string
     readonly subject: string
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
     readonly accountAccessToken: string
     readonly keyHandle: string
     readonly unlockMaterial: string
@@ -989,20 +3332,21 @@ export class UnixHostClient {
     if (!this.inspection.capabilities.includes('profile.ensure_account_token' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
+    if (input.authorityBindingScope !== undefined
+      && !this.inspection.capabilities.includes('profile.ensure_binding_scope' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.accountBindingParams(input),
         account_access_token: input.accountAccessToken,
         account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
+        ...(input.authorityBindingScope === undefined ? {} : { authority_binding_scope: input.authorityBindingScope as never }),
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return this.callReadyProfile(request, input.signal)
   }
 
   /**
@@ -1010,11 +3354,8 @@ export class UnixHostClient {
    * @param input - selector, key handle, unlock material, and cancellation signal.
    * @returns restored Profile id and refreshed selector.
    */
-  async restoreProfile(input: {
+  async restoreProfile(input: AccountBindingInput & {
     readonly profileSelector: string
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly signal?: AbortSignal
@@ -1022,16 +3363,50 @@ export class UnixHostClient {
     const request: ProfileRestoreRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.restore',
       params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
+        ...this.accountBindingParams(input),
         profile_selector: input.profileSelector, profile_key_handle: input.keyHandle,
         profile_unlock_material: input.unlockMaterial,
       },
     }
-    const frame = await this.call(request, input.signal)
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return { profileId: frame.result.profile_id, profileSelector: frame.result.profile_selector }
+    return this.callReadyProfile(request, input.signal)
+  }
+
+  /**
+   * Bootstrap one account-independent local Profile using only Main-vault material.
+   * @param input - Opaque vault handle, unlock material, and optional connection cancellation.
+   * @returns Profile selector and persistence generation; rejects absent Host capability before sending.
+   */
+  async bootstrapLocalProfile(input: ProfileUnlockInput): Promise<{
+    readonly profileId: string
+    readonly profileSelector: string
+    readonly persistenceGeneration: number
+  }> {
+    if (!this.inspection.capabilities.includes('profile.bootstrap_local' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileBootstrapLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bootstrap_local',
+      params: this.profileUnlockParams(input),
+    }
+    return this.callLocalReadyProfile(request, input.signal)
+  }
+
+  /**
+   * Restore one local-only Profile selected by its Host-signed selector.
+   * @param input - Signed selector, matching vault proof, and optional connection cancellation.
+   * @returns Restored Profile selector and persistence generation; Host rejection is propagated.
+   */
+  async restoreLocalProfile(input: ProfileUnlockInput & {
+    readonly profileSelector: string
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
+    const request: ProfileRestoreLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.restore_local',
+      params: {
+        ...this.auth(), profile_selector: input.profileSelector,
+        profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
+      },
+    }
+    return this.callLocalReadyProfile(request, input.signal)
   }
 
   /**
@@ -1039,10 +3414,7 @@ export class UnixHostClient {
    * @param input - opaque binding plus optional cancellation.
    * @returns generation-fenced Profile lease.
    */
-  async openProfile(input: {
-    readonly authorityEnvironmentId: string
-    readonly accountBindingHandle: string
-    readonly authorityBindingVersion: number
+  async openProfile(input: AccountBindingInput & {
     readonly signal?: AbortSignal
   }): Promise<ProfileOpenResult> {
     const request: ProfileOpenRequest = {
@@ -1050,22 +3422,333 @@ export class UnixHostClient {
       type: 'request',
       request_id: requestId(),
       method: 'profile.open',
-      params: {
-        ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
-        account_binding_handle: input.accountBindingHandle as never,
-        authority_binding_version: input.authorityBindingVersion,
-      },
+      params: this.accountBindingParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== 'profile.open') throw new HostAuthorityError('unavailable')
-    return {
-      profileId: frame.result.profile_id as never,
-      viewLeaseId: frame.result.view_lease_id as never,
-      viewActivationHandle: frame.result.view_activation_handle as never,
-      leaseGeneration: frame.result.lease_generation,
-      expiresAt: frame.result.expires_at,
-      runtimeGeneration: frame.result.runtime_generation,
+    return openProfileResult(frame.result)
+  }
+
+  /**
+   * Open one previously unlocked local-only Profile through its signed selector.
+   * @param input - Signed selector and optional cancellation, which revokes this connection's leases.
+   * @returns Generation-fenced view lease; rejects if this connection has not unlocked the Profile.
+   */
+  async openLocalProfile(input: { readonly profileSelector: string; readonly signal?: AbortSignal }): Promise<ProfileOpenResult> {
+    const request: ProfileOpenLocalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.open_local',
+      params: { ...this.auth(), profile_selector: input.profileSelector },
     }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return openProfileResult(frame.result)
+  }
+
+  /**
+   * Sign one Slark challenge after the current connection's Profile grant is rechecked.
+   * @param input - Host selector and exact Slark actor, Computer, and challenge coordinates.
+   * @returns Installation-signed local Profile identity; Slark authenticates the remote coordinates separately.
+   */
+  async signSkillHubProfileBinding(input: {
+    readonly profileSelector: string
+    readonly actorUserId: string
+    readonly computerId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubBindingResult['result']> {
+    const request: ProfileSkillHubBindingRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_binding',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        actor_user_id: input.actorUserId, computer_id: input.computerId, challenge_id: input.challengeId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Sign one exact private Bot message actor with the current Host installation/Profile grant.
+   * @param input - Current Profile selector and Server-resolved actor fields.
+   * @returns Compact JWS and independently parsed claims after local signature verification.
+   */
+  async signSkillHubBotMessageActor(input: {
+    readonly profileSelector: string
+    readonly actor: SkillHubBotMessageActorInput
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly compactJws: string; readonly claims: SkillHubBotMessageActorClaims }> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_bot_message_actor' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubBotMessageActorRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_bot_message_actor',
+      params: { ...this.auth(), profile_selector: input.profileSelector, input: input.actor },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const compactJws = frame.result.compact_jws
+    const segments = compactJws.split('.')
+    if (segments.length !== 3) throw new HostAuthorityError('unavailable')
+    let header
+    let claims
+    try {
+      for (const segment of segments) {
+        if (Buffer.from(segment, 'base64url').toString('base64url') !== segment)
+          throw new Error('noncanonical JWS segment')
+      }
+      header = parseSkillHubBotMessageActorProtectedHeader(JSON.parse(
+        Buffer.from(segments[0] as string, 'base64url').toString('utf8'),
+      ))
+      claims = parseSkillHubBotMessageActorClaims(JSON.parse(
+        Buffer.from(segments[1] as string, 'base64url').toString('utf8'),
+      ))
+    } catch { throw new HostAuthorityError('unavailable') }
+    const hostKeyId = createHash('sha256').update(Buffer.from(
+      this.inspection.installation_public_key, 'base64url')).digest('hex')
+    if (header.kid !== hostKeyId || claims.host_key_id !== hostKeyId
+      || claims.host_installation_id !== this.inspection.installation_id
+      || claims.issuer !== 'slark-dsh-host'
+      || !matchesSkillHubBotMessageActorInput(claims, input.actor)
+      || !verify(null, Buffer.from(`${segments[0]}.${segments[1]}`),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(segments[2] as string, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return { compactJws, claims }
+  }
+
+  /** Send one complete fixed ZIP through bounded Host frames without activating it.
+   * @param input - current Profile selector, fixed package plan, archive, and cancellation.
+   * @returns when the Host has verified and prepared all package files.
+   */
+  async prepareSkillHubPackage(input: {
+    readonly profileSelector: string
+    readonly plan: ProfileSkillHubPackageChunkRequest['params']['plan']
+    readonly archive: Buffer
+    readonly signal?: AbortSignal
+  }): Promise<void> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_chunk' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const archive = Buffer.from(input.archive)
+    if (!archive.length || archive.length > 110 * 1024 * 1024
+      || createHash('sha256').update(archive).digest('hex') !== input.plan.archiveSha256)
+      throw new HostAuthorityError('unavailable')
+    let offset = 0
+    while (offset < archive.length) {
+      const bytes = archive.subarray(offset, Math.min(offset + 32768, archive.length))
+      const request: ProfileSkillHubPackageChunkRequest = {
+        version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_chunk',
+        params: { ...this.auth(), profile_selector: input.profileSelector, plan: input.plan,
+          total_bytes: archive.length, offset, chunk_base64url: bytes.toString('base64url') },
+      }
+      const frame = await this.call(request, input.signal)
+      if (frame.type !== 'result' || frame.method !== request.method
+        || frame.result.next_offset !== offset + bytes.length
+        || frame.result.prepared !== (offset + bytes.length === archive.length))
+        throw new HostAuthorityError('unavailable')
+      offset = frame.result.next_offset
+    }
+  }
+
+  private async skillHubPackageCommand(params: ProfileSkillHubPackageRequest['params'],
+    signal?: AbortSignal): Promise<HostSkillHubPackageSignedReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package', params,
+    }
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (frame.result.receipt && frame.result.receipt.challengeId !== params.challenge_id))
+      throw new HostAuthorityError('unavailable')
+    return frame.result.receipt
+  }
+
+  /** Atomically activate a prepared package under the current Profile grant.
+   * @param input - Authorized selector, fixed CAS coordinates, caller challenge and cancellation.
+   * @returns Host-signed storage activation receipt; it does not attest runtime loading.
+   */
+  async activateSkillHubPackage(input: { readonly profileSelector: string
+    readonly operationId: string
+    readonly bindingGeneration: string
+    readonly expectedRevision: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'activate', operation_id: input.operationId,
+      binding_generation: input.bindingGeneration, expected_revision: input.expectedRevision }, input.signal)
+    if (!receipt || receipt.operationId !== input.operationId
+      || receipt.bindingGeneration !== input.bindingGeneration)
+      throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read the current signed Host activation fact from this authorized Profile.
+   * @param input - Authorized selector, package identity, caller challenge and cancellation.
+   * @returns A fresh signed receipt, or null when the package has no active version.
+   */
+  async currentSkillHubPackage(input: { readonly profileSelector: string
+    readonly packageId: string
+    readonly challengeId: string
+    readonly signal?: AbortSignal }): Promise<HostSkillHubPackageSignedReceipt | null> {
+    const receipt = await this.skillHubPackageCommand({ ...this.auth(),
+      profile_selector: input.profileSelector, challenge_id: input.challengeId,
+      action: 'current', package_id: input.packageId }, input.signal)
+    if (receipt && receipt.packageId !== input.packageId) throw new HostAuthorityError('unavailable')
+    return receipt
+  }
+
+  /** Read one bounded immutable package object chunk under the current Profile grant.
+   * @param input - Signed activation receipt, exact object target, byte offset, and cancellation.
+   * @returns Exact-operation bytes and continuity fields checked against the request.
+   */
+  async readSkillHubPackageSnapshotChunk(input: {
+    readonly profileSelector: string
+    readonly receipt: HostSkillHubPackageSignedReceipt
+    readonly target: HostSkillHubPackageSnapshotTarget
+    readonly offset: number
+    readonly signal?: AbortSignal
+  }): Promise<Readonly<{
+    operationId: string
+    manifestSha256: string
+    target: HostSkillHubPackageSnapshotTarget
+    offset: number
+    totalBytes: number
+    bytes: Buffer
+    complete: boolean
+  }>> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_package_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubPackageSnapshotRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_package_snapshot',
+      params: { ...this.auth(), profile_selector: input.profileSelector, receipt: input.receipt,
+        target: input.target, offset: input.offset },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = frame.result
+    if (result.operation_id !== input.receipt.operationId
+      || result.manifest_sha256 !== input.receipt.manifestSha256
+      || JSON.stringify(result.target) !== JSON.stringify(input.target)
+      || result.offset !== input.offset) throw new HostAuthorityError('unavailable')
+    return { operationId: result.operation_id, manifestSha256: result.manifest_sha256,
+      target: result.target, offset: result.offset, totalBytes: result.total_bytes,
+      bytes: Buffer.from(result.chunk_base64url, 'base64url'), complete: result.complete }
+  }
+
+  /** Read or advance an independent witness through the current Profile grant.
+   * @param input - Exact Profile/key/generation, anchor, command and cancellation.
+   * @returns Current witness value and a checked compare-and-set verdict.
+   */
+  async skillHubClockWitness(input: {
+    readonly profileSelector: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly hostKeyId: string
+    readonly anchorId: string
+    readonly command: HostSkillHubClockWitnessCommand
+    readonly signal?: AbortSignal
+  }): Promise<{
+    anchorId: string
+    value: HostSkillHubClockWitnessValue | null
+    applied: boolean | null
+  }> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_clock_witness' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const selected = structuredClone({ ...input, signal: undefined })
+    const request: ProfileSkillHubClockWitnessRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_clock_witness',
+      params: { ...this.auth(), profile_selector: selected.profileSelector,
+        profile_id: selected.profileId as HostProfileId,
+        binding_generation: selected.bindingGeneration, host_key_id: selected.hostKeyId as HostControlSha256,
+        anchor_id: selected.anchorId as HostSkillHubClockAnchorId,
+        command: selected.command },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || frame.result.anchor_id !== selected.anchorId
+      || (selected.command.kind === 'read' ? frame.result.applied !== null
+        : typeof frame.result.applied !== 'boolean'
+          || (frame.result.applied && (frame.result.value?.revision !== selected.command.next.revision
+            || frame.result.value.digest !== selected.command.next.digest))))
+      throw new HostAuthorityError('unavailable')
+    return { anchorId: frame.result.anchor_id, value: frame.result.value, applied: frame.result.applied }
+  }
+
+  /** Use Host-issued clock anchors and epoch-bound one-time initialization tickets.
+   * @param input - Current Profile grant, V2 command and optional cancellation.
+   * @returns Current epoch, issued anchor or checked witness verdict.
+   */
+  async skillHubClockV2(input: {
+    readonly profileSelector: string
+    readonly profileId: string
+    readonly bindingGeneration: string
+    readonly hostKeyId: string
+    readonly command: HostSkillHubClockV2Command
+    readonly signal?: AbortSignal
+  }): Promise<ProfileSkillHubClockV2Result['result']> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_clock_v2' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const selected = structuredClone(input.command)
+    const request: ProfileSkillHubClockV2Request = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_clock_v2',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        profile_id: input.profileId as HostProfileId,
+        binding_generation: input.bindingGeneration, host_key_id: input.hostKeyId as HostControlSha256,
+        command: selected },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method
+      || (selected.kind === 'epoch' && frame.result.kind !== 'epoch')
+      || (selected.kind === 'issue' && frame.result.kind !== 'issued')
+      || (selected.kind === 'witness' && (frame.result.kind !== 'witness'
+        || frame.result.anchor_id !== selected.anchor_id || frame.result.epoch !== selected.epoch
+        || (selected.command.kind === 'read' ? frame.result.applied !== null
+          : typeof frame.result.applied !== 'boolean'
+            || (frame.result.applied && (frame.result.value?.revision !== selected.command.next.revision
+              || frame.result.value.digest !== selected.command.next.digest))))))
+      throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /** Sign a completed sandbox report through the current Profile grant.
+   * @param input - Fixed Host package receipt, exact daemon report, selector, and cancellation.
+   * @returns Installation-signed execution receipt after package and Profile revalidation.
+   */
+  async signSkillHubExecutionReceipt(input: {
+    readonly profileSelector: string
+    readonly packageReceipt: HostSkillHubPackageSignedReceipt
+    readonly execution: HostSkillHubExecutionReport
+    readonly signal?: AbortSignal
+  }): Promise<HostSkillHubExecutionReceipt> {
+    if (!this.inspection.capabilities.includes('profile.skillhub_execution_receipt' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request: ProfileSkillHubExecutionReceiptRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.skillhub_execution_receipt',
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        package_receipt: input.packageReceipt, execution: input.execution },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const receipt = frame.result.receipt
+    const { signature, ...unsigned } = receipt
+    const expected = {
+      schema: 'slark-dsh-profile-execution-receipt/v1' as const,
+      receiptId: receipt.receiptId, ...input.execution,
+      hostInstallationId: input.packageReceipt.installationId,
+      hostKeyId: input.packageReceipt.hostKeyId,
+      packageOperationId: input.packageReceipt.operationId,
+      packageId: input.packageReceipt.packageId, versionId: input.packageReceipt.versionId,
+      archiveSha256: input.packageReceipt.archiveSha256,
+      manifestSha256: input.packageReceipt.manifestSha256,
+      publicKey: this.inspection.installation_public_key,
+    }
+    if (encodeSkillHubExecutionReceiptPayload(unsigned)
+      !== encodeSkillHubExecutionReceiptPayload(expected)
+      || !verify(null, Buffer.from(SKILLHUB_EXECUTION_RECEIPT_DOMAIN
+        + encodeSkillHubExecutionReceiptPayload(unsigned)),
+      publicKeyObject(this.inspection.installation_public_key), Buffer.from(signature, 'base64url')))
+      throw new HostAuthorityError('unavailable')
+    return receipt
   }
 
   /**
@@ -1102,6 +3785,1423 @@ export class UnixHostClient {
       expiresAt: frame.result.expires_at,
       bootstrapCookie: frame.result.bootstrap_cookie,
     }
+  }
+
+  /**
+   * Invoke the current Account Profile's default model using a token-verified connection grant.
+   * @param input - current Account binding, bounded text, and optional cancellation signal.
+   * @returns bounded text with model identity, or a classified failure.
+   */
+  async generateModelText(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly text: string
+    readonly signal?: AbortSignal
+  }): Promise<ProfileModelTextResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.model_text' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelTextRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_text',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        text: input.text },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Inspect a Session choice through this connection's verified Account binding.
+   * @param input - Main-held Account binding, registry identities and cancellation.
+   * @returns Minimum effective choice; no Source proof or prepared configuration. Old Hosts reject before reading.
+   */
+  async inspectWorkspaceModelSelection(input: HostWorkspaceModelSelectionTarget & {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly signal?: AbortSignal
+  }): Promise<HostWorkspaceModelSelection> {
+    if (!this.inspection.capabilities.includes('profile.workspace_model_selection' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileWorkspaceModelSelectionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.workspace_model_selection',
+      params: { ...this.auth(), authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never,
+        authority_binding_version: input.authorityBindingVersion,
+        workspace_id: input.workspace_id, session_id: input.session_id },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Prove registry membership through this connection's Account-authorized Profile.
+   * @param input - Main-held binding, server nonce/target and cancellation.
+   * @returns Installation-verified membership assertion; no journal or prepared-model authorization.
+   */
+  async attestWorkspaceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostWorkspaceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostWorkspaceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostWorkspaceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.workspace_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileWorkspaceAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.workspace_authority',
+      params: {
+        ...this.challengeRequestParams(input, challenge),
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostWorkspaceAuthorityAssertion(frame.result)
+    if (
+      !this.matchesChallengeIdentity(result, challenge) ||
+      challenge.expires_at <= this.now() ||
+      challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostWorkspaceAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Verify a signature over the exact durable archive phase read by the Native Host.
+   * @param input - Current Account binding and server challenge.
+   * @returns Installation-verified phase assertion.
+   */
+  async attestCollaborationArchiveState(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostCollaborationArchiveStateChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveStateAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostCollaborationArchiveStateChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_state' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveStateRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_state',
+      params: { ...this.challengeRequestParams(input, challenge) },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationArchiveStateAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
+      || !verify(null, encodeHostCollaborationArchiveStatePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Install the exact local group fence, then verify the Host installation signature.
+   * @param input - Bound Account grant, server challenge and optional cancellation.
+   * @returns Installation-signed proof of the durable local fence.
+   */
+  async attestGroupInputFence(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostGroupInputFenceChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostGroupInputFenceAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostGroupInputFenceChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.group_input_fence' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileGroupInputFenceRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.group_input_fence',
+      params: { ...this.challengeRequestParams(input, challenge) },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostGroupInputFenceAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || challenge.expires_at <= this.now() || challenge.expires_at - this.now() > 300_000
+      || !verify(null, encodeHostGroupInputFencePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /** Mutate the selected worker's durable token; an uncertain response requires same-token reconciliation.
+   * @param input - Current Account binding and exact token action.
+   * @returns Validated durable worker phase.
+   */
+  async transitionCollaborationArchive(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly target: HostCollaborationArchiveTransitionTarget
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveTransitionResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_transition' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostCollaborationArchiveTransitionTarget(input.target)
+    if (target.environment_id !== input.authorityEnvironmentId ||
+      target.account_issuer !== input.issuer || target.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveTransitionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_transition',
+      params: { ...this.collaborationAccountRequestParams(input), target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationArchiveTransitionResult(frame.result)
+    if (target.action === 'stage' ? result.archive_phase === 'released'
+      : result.archive_phase !== ({ prepared: 'prepared', archive: 'archived',
+        restore: 'restored', finish_release: 'released' } as const)[target.action])
+      throw new HostAuthorityError('unavailable')
+    return result
+  }
+
+  /** Recover one original token after Main/Daemon restarts.
+   * @param input - Current Account binding and exact Session.
+   * @returns Persisted token and phase or explicit absence.
+   */
+  async inspectCollaborationArchiveIntent(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly target: HostCollaborationArchiveIntentTarget
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationArchiveIntentValue> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.collaboration_archive_intent' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostCollaborationArchiveIntentTarget(input.target)
+    if (target.environment_id !== input.authorityEnvironmentId ||
+      target.account_issuer !== input.issuer || target.account_subject !== input.subject)
+      throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationArchiveIntentRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_archive_intent',
+      params: { ...this.collaborationAccountRequestParams(input), target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return parseHostCollaborationArchiveIntentValue(frame.result)
+  }
+
+  /**
+   * Obtain an installation signature only after the authorized worker confirms its persisted Source digest.
+   * @param input - Verified Account binding and server challenge; no caller root, Source or model metadata.
+   * @returns Exact root assertion after current installation/process, expiry and signature checks.
+   */
+  async attestRootAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostRootAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostRootAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostRootAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.root_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.source_challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileRootAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.root_authority',
+      params: {
+        ...this.challengeRequestParams(input, challenge),
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostRootAuthorityAssertion(frame.result)
+    if (
+      !this.matchesChallengeIdentity(result, challenge) ||
+      challenge.source_challenge.expires_at <= this.now() ||
+      challenge.source_challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostRootAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
+   * Obtain an installation signature only after the private owner confirms its current unused planning attempt.
+   * @param input - Verified Account binding and server challenge; no caller root, Source or model metadata.
+   * @returns Exact planning-attempt assertion after current installation/process, expiry and signature checks.
+   */
+  async attestRootPlanningAttemptAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostRootPlanningAttemptAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostRootPlanningAttemptAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostRootPlanningAttemptAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.root_planning_attempt_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.root_challenge.source_challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileRootPlanningAttemptAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.root_planning_attempt_authority',
+      params: {
+        ...this.challengeRequestParams(input, challenge),
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostRootPlanningAttemptAuthorityAssertion(frame.result)
+    if (
+      !this.matchesChallengeIdentity(result, challenge) ||
+      challenge.root_challenge.source_challenge.expires_at <= this.now() ||
+      challenge.root_challenge.source_challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostRootPlanningAttemptAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
+   * Obtain an installation signature only after the authorized worker confirms its persisted Source digest.
+   * @param input - Verified Account binding and server challenge; no caller Source or model metadata.
+   * @returns Exact Source assertion after current installation/process, expiry and signature checks.
+   */
+  async attestSourceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostSourceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostSourceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostSourceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.source_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileSourceAuthorityRequest = {
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method: 'profile.source_authority',
+      params: {
+        ...this.challengeRequestParams(input, challenge),
+      },
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostSourceAuthorityAssertion(frame.result)
+    if (
+      !this.matchesChallengeIdentity(result, challenge) ||
+      challenge.expires_at <= this.now() ||
+      challenge.expires_at - this.now() > 300_000 ||
+      !verify(
+        null,
+        encodeHostSourceAuthorityPayload(result),
+        publicKeyObject(this.inspection.installation_public_key),
+        Buffer.from(result.signature, 'base64url'),
+      )
+    ) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
+   * Read or acknowledge an existing root under this connection's current Account and Host peer.
+   * @param input - Current Account binding and exact original-root read/accept command.
+   * @returns Matched durable metadata; revoked, replaced or cancelled operations reject.
+   */
+  async rootJournal(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly command: HostRootJournalCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostRootJournalMetadata> {
+    const active = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(35000)])
+    active.throwIfAborted()
+    const command = parseHostRootJournalCommand(input.command)
+    if (!this.inspection.capabilities.includes('profile.root_journal' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    const request: ProfileRootJournalRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.root_journal', params: {
+        ...this.collaborationAccountRequestParams(input), command,
+      } }
+    const frame = await this.callCurrentPeer(request, active)
+    return matchHostRootJournalMetadata(frame.result, command)
+  }
+
+  /** Prepare or dispatch analysis using the current Account and Host peer.
+   * @param input - Verified Account coordinates and bounded command.
+   * @returns Preparation or original saved output.
+   */
+  async collaborationAnalysis(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly command: HostCollaborationAnalysisCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationAnalysisResult> {
+    const active = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(35000)])
+    active.throwIfAborted()
+    const command = parseHostCollaborationAnalysisCommand(input.command)
+    if (!this.inspection.capabilities.includes('profile.collaboration_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if ((command.action === 'prepare_root_attempt' || command.action === 'read_root_attempt' || command.action === 'dispatch_root_attempt')
+      && !this.inspection.capabilities.includes('profile.root_planning_attempt' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'root_feedback' && command.operation && typeof command.operation === 'object' && 'action' in command.operation
+      && command.operation.action === 'continuation_read' && !this.inspection.capabilities.includes('profile.root_continuation' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'root_feedback' && !this.inspection.capabilities.includes('profile.root_feedback' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'root_execution_journal' && !this.inspection.capabilities.includes('profile.root_execution_journal' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_root_attempt' && !this.inspection.capabilities.includes('profile.root_planning_attempt_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'resume_root' && !this.inspection.capabilities.includes('profile.root_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_source_output' && !this.inspection.capabilities.includes('profile.source_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'resume_source' && !this.inspection.capabilities.includes('profile.source_live_resume' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_root_diagnostic' && !this.inspection.capabilities.includes('profile.root_analysis_diagnostic' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'read_root_output' && !this.inspection.capabilities.includes('profile.root_analysis_recovery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'reconcile_root' && !this.inspection.capabilities.includes('profile.root_pending_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'recover_root' && !this.inspection.capabilities.includes('profile.root_lookup' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'prepare_root' && !this.inspection.capabilities.includes('profile.root_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if ((command.action === 'capture_root' || command.action === 'start_captured_root' || command.action === 'release_captured_root')
+      && !this.inspection.capabilities.includes('profile.root_capture' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    const request: ProfileCollaborationAnalysisRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_analysis', params: {
+        ...this.collaborationAccountRequestParams(input, 30_000), command,
+      } }
+    const frame = await this.callCurrentPeer(request, active)
+    const result = parseHostCollaborationAnalysisResult(frame.result)
+    if (command.action === 'capture_root' || command.action === 'start_captured_root' || command.action === 'release_captured_root') {
+      const row = result.kind === 'root_captured' ? result.capture : result.kind === 'root_prepared' ? result.preparation : undefined
+      const root = result.kind === 'root_capture_released' ? result.root : row && typeof row === 'object' && !Array.isArray(row)
+        && 'root' in row ? parseHostRootSubmissionDescriptor(row.root) : undefined
+      const source = command.input.source
+      if (!root || !source || typeof source !== 'object' || Array.isArray(source) || root.namespace_id !== command.input.namespace_id
+        || (['workspace_id', 'session_id', 'source_message_id', 'source_revision'] as const).some(key =>
+          root.source_descriptor[key] !== Object.getOwnPropertyDescriptor(source, key)?.value)
+        || (command.action === 'start_captured_root' && (!row || typeof row !== 'object' || !('kind' in row) || row.kind !== 'prepared')))
+        throw new HostAuthorityError('unavailable')
+      if (result.kind === 'root_captured' && result.context_receipt) {
+        const receipt = result.context_receipt
+        if (receipt.authority_environment_id !== input.authorityEnvironmentId
+          || receipt.account_binding_handle !== input.accountBindingHandle
+          || receipt.authority_binding_version !== input.authorityBindingVersion
+          || receipt.account_issuer !== input.issuer || receipt.account_subject !== input.subject
+          || receipt.installation_id !== this.inspection.installation_id
+          || receipt.installation_public_key !== this.inspection.installation_public_key
+          || receipt.host_instance_id !== this.inspection.host_instance_id || receipt.process_nonce !== this.inspection.process_nonce
+          || receipt.source_input_digest !== createHash('sha256').update(encodeHostRootTextInput(source)).digest('hex')
+          || !verify(null, Buffer.from(encodeHostRootTextContextPayload(receipt)), publicKeyObject(this.inspection.installation_public_key),
+            Buffer.from(receipt.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
+      }
+    }
+    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
+      Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
+    if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
+    if ((command.action === 'recover_root' || command.action === 'reconcile_root') && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'recovered')) throw new HostAuthorityError('unavailable')
+    if (result.kind !== expected) throw new HostAuthorityError('unavailable')
+    if (result.kind === 'root_attempt_evidence' && command.action === 'read_root_attempt') matchHostRootPlanningEvidence(result.evidence, command.target)
+    if (result.kind === 'root_attempt_prepared' && command.action === 'prepare_root_attempt')
+      matchHostRootPlanningAttemptTarget(result.preparation, command.target)
+    if (result.kind === 'root_diagnostic' && command.action === 'read_root_diagnostic') matchHostRootAnalysisDiagnostic(result.evidence, command.target)
+    if (result.kind === 'root_output' && command.action === 'read_root_output') matchHostRootAnalysisOutput(result.evidence,command.target)
+    if (result.kind === 'source_output' && command.action === 'read_source_output') matchHostSourceAnalysisOutput(result.evidence, command.target)
+    const saved = (result.kind === 'source_output' || result.kind === 'root_output') && result.evidence.state === 'saved'
+      ? result.evidence : undefined
+    if (saved && !saved.analysis_receipt) throw new HostAuthorityError('unauthorized')
+    const dispatch = saved?.dispatch ?? (command.action === 'dispatch' ? command.grant : undefined)
+    const receipt = saved?.analysis_receipt ?? (result.kind === 'output' ? result.analysis_receipt : undefined)
+    const encodedOutput = saved?.json_base64url ?? (result.kind === 'output' ? result.json_base64url : '')
+    if (receipt) {
+      const expected=parseHostCollaborationAnalysisReceipt({ ...receipt,
+        authority_environment_id:input.authorityEnvironmentId,account_binding_handle:input.accountBindingHandle,
+        authority_binding_version:input.authorityBindingVersion,account_issuer:input.issuer,account_subject:input.subject,
+        installation_id:this.inspection.installation_id,installation_public_key:this.inspection.installation_public_key,
+        host_instance_id:this.inspection.host_instance_id,process_nonce:this.inspection.process_nonce,dispatch })
+      if (encodeHostCollaborationAnalysisReceiptPayload(receipt)!==encodeHostCollaborationAnalysisReceiptPayload(expected)
+        || createHash('sha256').update(Buffer.from(encodedOutput,'base64url')).digest('hex')!==receipt.output_digest
+        || !verify(null,Buffer.from(encodeHostCollaborationAnalysisReceiptPayload(receipt)),publicKeyObject(receipt.installation_public_key),Buffer.from(receipt.signature,'base64url'))) throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
+   * Deliver the complete terminal reply to the original Profile through bounded private upload fragments.
+   * @param input - Main-held Account binding and validated readable cloud projection, never renderer overrides.
+   * @returns Installation-verified durable commit; changed Account, peer, content or connection rejects.
+   */
+  async receiveCollaborationDelivery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly capsule: HostCollaborationDeliveryCapsule
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationDeliveryReceipt> {
+    const active = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(35_000)])
+    active.throwIfAborted()
+    const capsule = parseHostCollaborationDeliveryCapsule(input.capsule), bytes = Buffer.from(JSON.stringify(capsule), 'utf8')
+    if (!this.inspection.capabilities.includes('profile.collaboration_delivery' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    const peer = [this.inspection.installation_id, this.inspection.installation_public_key,
+      this.inspection.host_instance_id, this.inspection.process_nonce]
+    const assertPeer = () => {
+      active.throwIfAborted()
+      if (!this.isConnected() || JSON.stringify(peer) !== JSON.stringify([
+        this.inspection.installation_id, this.inspection.installation_public_key,
+        this.inspection.host_instance_id, this.inspection.process_nonce,
+      ])) throw new HostAuthorityError('stale')
+    }
+    const account = { authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.issuer, account_subject: input.subject }
+    const upload_id = randomUUID(), payload_digest = createHash('sha256').update(bytes).digest('hex')
+    for (let offset = 0; offset < bytes.length; offset += 16384) {
+      assertPeer()
+      const part = bytes.subarray(offset, offset + 16384)
+      const request: ProfileCollaborationDeliveryRequest = { version: 1, type: 'request', request_id: requestId(),
+        method: 'profile.collaboration_delivery', params: { ...this.auth(), ...account,
+          command: { upload_id, offset, total_bytes: bytes.length, payload_digest, chunk_base64url: part.toString('base64url') } } }
+      const frame = await this.call(request, active)
+      assertPeer()
+      if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      const result = parseHostCollaborationDeliveryResult(frame.result)
+      if (offset + part.length < bytes.length) {
+        if (result.kind !== 'staged' || result.upload_id !== upload_id || result.next_offset !== offset + part.length) throw new HostAuthorityError('stale')
+        continue
+      }
+      if (result.kind !== 'committed') throw new HostAuthorityError('unavailable')
+      const receipt = result.receipt
+      if (Object.entries(account).some(([key, value]) => receipt[key as keyof HostCollaborationDeliveryReceipt] !== value)
+        || JSON.stringify(peer) !== JSON.stringify([receipt.installation_id, receipt.installation_public_key,
+          receipt.host_instance_id, receipt.process_nonce])
+        || !matchesHostCollaborationDeliveryCommit(capsule, receipt.commit)
+        || !verify(null, encodeHostCollaborationDeliveryReceiptPayload(receipt), publicKeyObject(receipt.installation_public_key), Buffer.from(receipt.signature, 'base64url')))
+        throw new HostAuthorityError('stale')
+      return receipt
+    }
+    throw new HostAuthorityError('unavailable')
+  }
+
+  /**
+   * Capture an independently authorized reference selection in this Account's current Profile.
+   * @param input - Main-held binding and explicit selection; no caller bytes or computed metadata.
+   * @returns bounded computed metadata, not a sharing grant; the coordinator validates the full request.
+   */
+  async captureCollaborationReferenceSelection(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly accountIssuer: string
+    readonly accountSubject: string
+    readonly selection: HostCollaborationReferenceSelection
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationReferenceCapture> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(18_000)])
+    signal.throwIfAborted()
+    const selection = parseHostCollaborationReferenceSelection(input.selection)
+    if (!this.inspection.capabilities.includes('profile.reference_capture' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = JSON.stringify(this.inspection)
+    const request: ProfileReferenceCaptureRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.reference_capture', params: { ...this.auth(),
+        authority_environment_id: input.authorityEnvironmentId as never,
+        account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+        account_issuer: input.accountIssuer, account_subject: input.accountSubject, selection } }
+    const frame = await this.call(request, signal)
+    signal.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected()
+      || JSON.stringify(this.inspection) !== peer) throw new HostAuthorityError('stale')
+    const result = parseHostCollaborationReferenceCapture(frame.result), s = selection.source, d = result.descriptor
+    if (d.workspace_id !== s.workspace_id || d.session_id !== s.session_id
+      || d.source_message_id !== s.source_message_id || d.source_revision !== s.revision)
+      throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /**
+   * Assemble only the selected reference bytes under the current Account and installed peer.
+   * @param input - Committed Source/request identities and independently validated expected content digest and length.
+   * @returns Exact bytes after every chunk's metadata and the complete SHA-256 match; grants no cloud or task access.
+   */
+  async readCollaborationReferenceContent(input: HostCollaborationReferenceGrant & {
+    readonly contentDigest: HostControlSha256
+    readonly byteLength: number
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly accountIssuer: string
+    readonly accountSubject: string
+    readonly signal?: AbortSignal
+  }): Promise<Uint8Array> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(18_000)])
+    signal.throwIfAborted()
+    const grant = parseHostCollaborationReferenceGrant({ workspace_id: input.workspace_id, session_id: input.session_id,
+      source_message_id: input.source_message_id, source_revision: input.source_revision, snapshot_digest: input.snapshot_digest,
+      reference_request_digest: input.reference_request_digest })
+    const byteLength = input.byteLength, contentDigest = input.contentDigest
+    if (!Number.isSafeInteger(byteLength) || byteLength < 0 || byteLength > 1024 * 1024
+      || !/^[a-f0-9]{64}$/u.test(contentDigest)) throw new HostAuthorityError('invalid_input')
+    if (!this.inspection.capabilities.includes('profile.reference_content' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = JSON.stringify(this.inspection), parts: Buffer[] = []
+    const { reference_request_digest, ...descriptor } = grant
+    const account = { authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.accountIssuer, account_subject: input.accountSubject }
+    let offset = 0
+    do {
+      const request: ProfileReferenceContentRequest = { version: 1, type: 'request', request_id: requestId(),
+        method: 'profile.reference_content', params: { ...this.auth(), ...account,
+          offset, workspace_id: grant.workspace_id, session_id: grant.session_id,
+          source_message_id: grant.source_message_id, source_revision: grant.source_revision, reference_request_digest } }
+      const frame = await this.call(request, signal)
+      signal.throwIfAborted()
+      if (frame.type !== 'result' || frame.method !== request.method || !this.isConnected()
+        || JSON.stringify(this.inspection) !== peer) throw new HostAuthorityError('stale')
+      const chunk = parseHostCollaborationReferenceContentChunk(frame.result)
+      if (JSON.stringify(chunk.descriptor) !== JSON.stringify(descriptor) || chunk.reference_request_digest !== reference_request_digest
+        || chunk.content_digest !== contentDigest || chunk.total_bytes !== byteLength || chunk.offset !== offset)
+        throw new HostAuthorityError('profile_mismatch')
+      const bytes = Buffer.from(chunk.chunk_base64url, 'base64url')
+      parts.push(bytes); offset += bytes.byteLength
+    } while (offset < byteLength)
+    const bytes = Buffer.concat(parts)
+    if (createHash('sha256').update(bytes).digest('hex') !== contentDigest) throw new HostAuthorityError('profile_mismatch')
+    return Uint8Array.from(bytes)
+  }
+
+  /**
+   * Read original journal content through bounded chunks under this verified Account and current peer.
+   * @param input - Main-held binding and Source coordinates; no content or model overrides.
+   * @returns Original JSON capsule after consistent descriptor, length, coordinates, UTF-8 and connection checks.
+   */
+  async readCollaborationSourceSnapshot(
+    input: HostCollaborationSourceTarget & {
+      readonly authorityEnvironmentId: string
+      readonly accountBindingHandle: string
+      readonly authorityBindingVersion: number
+      readonly accountIssuer: string
+      readonly accountSubject: string
+      readonly signal?: AbortSignal
+    },
+  ): Promise<HostCollaborationSourceSnapshot> {
+    const signal = AbortSignal.any([...(input.signal ? [input.signal] : []), AbortSignal.timeout(15_000)])
+    signal.throwIfAborted()
+    const target = parseHostCollaborationSourceTarget({
+      workspace_id: input.workspace_id,
+      session_id: input.session_id,
+      source_message_id: input.source_message_id,
+      source_revision: input.source_revision,
+    })
+    const account = {
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.accountIssuer,
+      account_subject: input.accountSubject,
+    }
+    if (!this.inspection.capabilities.includes('profile.source_snapshot' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = [
+      this.inspection.installation_id,
+      this.inspection.installation_public_key,
+      this.inspection.host_instance_id,
+      this.inspection.process_nonce,
+    ]
+    const parts: Buffer[] = []
+    let offset = 0,
+      total: number | undefined,
+      descriptor: HostCollaborationSourceDescriptor | undefined
+    do {
+      signal.throwIfAborted()
+      const request: ProfileSourceSnapshotRequest = {
+        version: 1,
+        type: 'request',
+        request_id: requestId(),
+        method: 'profile.source_snapshot',
+        params: { ...this.auth(), ...account, offset, ...target },
+      }
+      const frame = await this.call(request, signal)
+      signal.throwIfAborted()
+      if (
+        frame.type !== 'result' ||
+        frame.method !== request.method ||
+        !this.isConnected() ||
+        JSON.stringify(peer) !==
+          JSON.stringify([
+            this.inspection.installation_id,
+            this.inspection.installation_public_key,
+            this.inspection.host_instance_id,
+            this.inspection.process_nonce,
+          ])
+      )
+        throw new HostAuthorityError('unavailable')
+      const chunk = parseHostCollaborationSourceSnapshotChunk(frame.result),
+        d = chunk.descriptor
+      if (
+        chunk.offset !== offset ||
+        (total !== undefined && chunk.total_bytes !== total) ||
+        (descriptor !== undefined && JSON.stringify(d) !== JSON.stringify(descriptor)) ||
+        d.workspace_id !== target.workspace_id ||
+        d.session_id !== target.session_id ||
+        d.source_message_id !== target.source_message_id ||
+        d.source_revision !== target.source_revision
+      )
+        throw new HostAuthorityError('profile_mismatch')
+      total = chunk.total_bytes
+      descriptor = d
+      const part = Buffer.from(chunk.chunk_base64url, 'base64url')
+      parts.push(part)
+      offset += part.byteLength
+    } while (offset < total)
+    return parseHostCollaborationSourceSnapshot({
+      descriptor,
+      snapshot_json: new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(parts, offset)),
+    })
+  }
+
+  /**
+   * Resolve one exact Bot through the current Account Profile without a view lease.
+   * @param input - Verified Account binding, Bot ID and cancellation.
+   * @returns Public Bot identity or absence; no chat content.
+   */
+  async resolveBotIdentity(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly botId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostBotIdentity | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_identity' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotIdentityTarget({ bot_id: input.botId })
+    const request: ProfileBotIdentityRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const identity = parseHostBotIdentity(frame.result.identity)
+    if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
+    return identity
+  }
+
+  /**
+   * Read one public roster page from this connection's current Account Profile.
+   * @param input - Current authority binding and bounded roster cursor.
+   * @returns Validated public identities, or absence when the Profile has no roster.
+   */
+  async listBotRoster(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly afterBotId: string
+    readonly limit: number
+    readonly signal?: AbortSignal
+  }): Promise<HostBotRosterPage | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_roster' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotRosterTarget({ after_bot_id: input.afterBotId, limit: input.limit })
+    const request: ProfileBotRosterRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_roster',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.bot_roster')
+      throw new HostAuthorityError('unavailable')
+    const page = parseHostBotRosterPage(frame.result.page)
+    if (page && (page.bots.length > target.limit || page.bots.some(bot => bot.bot_id <= target.after_bot_id)))
+      throw new HostAuthorityError('profile_mismatch')
+    return page
+  }
+
+  /**
+   * Prepare one native room's bridge Source in the current Account Profile.
+   * @param input - Current Account binding and existing room ID.
+   * @returns Separate bridge Source or absence.
+   */
+  async prepareNativeRoom(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly roomId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostNativeRoomAssertion | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_room' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostNativeRoomTarget({ room_id: input.roomId })
+    const request: ProfileNativeRoomRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.native_room',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.native_room')
+      throw new HostAuthorityError('unavailable')
+    const assertion = frame.result.binding === null ? null : parseHostNativeRoomAssertion(frame.result.binding)
+    if (assertion) {
+      if (assertion.binding.room_id !== target.room_id ||
+        !this.matchesNativeRoomAssertionAuthority(assertion, input) ||
+        !verify(null, encodeHostNativeRoomAssertionPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
+    }
+    return assertion
+  }
+
+  /** Operate a native room under the same live Account and Host peer.
+   * @param input Current Account binding and exact room command.
+   * @returns Reply validated against the original command.
+   */
+  async operateNativeRoom(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly command: HostNativeRoomCommand
+    readonly signal?: AbortSignal
+  }): Promise<Exclude<HostNativeRoomReply, { state: 'turns' }> |
+    (Extract<HostNativeRoomReply, { state: 'turns' }> &
+      { readonly assertion: HostNativeRoomTurnAssertion })> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_room_operation' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const command = parseHostNativeRoomCommand(input.command)
+    if (command.operation === 'agent-result-chunk') throw new HostAuthorityError('unauthorized')
+    const request: ProfileNativeRoomOperationRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.native_room_operation',
+      params: { ...this.collaborationAccountRequestParams(input), command },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.native_room_operation')
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostNativeRoomReply(frame.result.reply)
+    if (!matchesHostNativeRoomReply(reply, command)) throw new HostAuthorityError('profile_mismatch')
+    if (reply.state === 'turns') {
+      const assertion = parseHostNativeRoomTurnAssertion(
+        Reflect.get(frame.result, 'turn_assertion'))
+      if (command.operation !== 'turns' || assertion.after_seq !== command.after_seq ||
+        JSON.stringify(assertion.selection) !== JSON.stringify(reply) ||
+        !this.matchesNativeRoomAssertionAuthority(assertion, input) ||
+        !verify(null, encodeHostNativeRoomTurnAssertionPayload(assertion),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(assertion.signature, 'base64url'))) throw new HostAuthorityError('profile_mismatch')
+      return { ...reply, assertion }
+    }
+    return reply
+  }
+
+  /**
+   * Submit one Slark-signed native Agent result chunk through the dedicated Host gate.
+   * @param input - current Account binding, exact room coordinates, ticket, and chunk.
+   * @returns the matched Profile receipt after Host authorization.
+   */
+  async deliverNativeAgentResultChunk(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly workspaceId: string
+    readonly sessionId: string
+    readonly ticket: string
+    readonly command: Extract<HostNativeRoomCommand, { operation: 'agent-result-chunk' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostNativeRoomReply> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_agent_result' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostNativeAgentResultInput({ computer_id: input.computerId,
+      slark_audience: input.slarkAudience, workspace_id: input.workspaceId,
+      session_id: input.sessionId, ticket: input.ticket, command: input.command })
+    const request: ProfileNativeAgentResultRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.native_agent_result',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== 'profile.native_agent_result')
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostNativeRoomReply(frame.result.reply)
+    if (!matchesHostNativeRoomReply(reply, target.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /** Send one Slark-authorized Bot group message to this Host's current Account worker. */
+  private async callBotGroupResponse(request: ProfileBotGroupDeliverRequest |
+  ProfileBotGroupResultAckRequest | ProfileBotGroupStopRequest,
+  signal?: AbortSignal): Promise<HostBotGroupResponse> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    return parseHostBotGroupResponse(frame.result.reply)
+  }
+
+  /**
+   * Send a Slark-authorized Bot group message to the current Account worker.
+   * @param input - Account binding, live delivery ticket and exact command.
+   * @returns Worker delivery reply.
+   */
+  async deliverBotGroup(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_deliver' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupDeliverRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_deliver',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, delivery.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /**
+   * Send one Slark-authorized, idempotent stop request for an exact Bot delivery.
+   * @param input - Account binding, signed stop ticket and immutable delivery coordinates.
+   * @returns The bounded worker stop receipt.
+   */
+  async stopBotGroupDelivery(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly messageSeq: number
+    readonly payloadDigest: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'stop_delivery' }>
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_stop' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const stop = botGroupClientStop(input)
+    const request: ProfileBotGroupStopRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_stop',
+      params: { ...this.collaborationAccountRequestParams(input), ...stop },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, stop.command))
+      throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /**
+   * Read one durable Bot result under a fresh, live Slark delivery claim.
+   * @param input - Account binding, ticket and result cursor.
+   * @returns Validated worker reply and signed result proof.
+   */
+  async readBotGroupResultPage(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly after: number
+    readonly signal?: AbortSignal
+  }): Promise<{ reply: HostBotGroupResponse; proof: HostBotGroupResultProof | null }> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_result_page' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (!Number.isSafeInteger(input.after) || input.after < 0)
+      throw new HostAuthorityError('invalid_input')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupResultPageRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_result_page',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery, after: input.after },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method)
+      throw new HostAuthorityError('unavailable')
+    const reply = parseHostBotGroupResponse(frame.result.reply)
+    const proof = frame.result.proof
+    const query: HostBotGroupCommand = { operation: 'result_page',
+      groupId: delivery.command.groupId, botId: delivery.command.botId,
+      memberCycle: delivery.command.memberCycle, after: input.after, limit: 1 }
+    if (!matchesHostBotGroupResponse(reply, query))
+      throw new HostAuthorityError('profile_mismatch')
+    if ((reply.state === 'ok' && reply.results.length === 1) !== Boolean(proof) ||
+        (reply.state === 'ok' && proof && JSON.stringify(reply.results[0]) !== JSON.stringify(proof.result)))
+      throw new HostAuthorityError('profile_mismatch')
+    if (proof) {
+      const { signature, ...unsigned } = proof
+      if (proof.authority_environment_id !== input.authorityEnvironmentId ||
+          proof.account_binding_handle !== input.accountBindingHandle ||
+          proof.authority_binding_version !== input.authorityBindingVersion ||
+          proof.account_issuer !== input.issuer || proof.account_subject !== input.subject ||
+          proof.computer_id !== input.computerId || proof.slark_audience !== input.slarkAudience ||
+          proof.installation_id !== this.inspection.installation_id ||
+          proof.installation_public_key !== this.inspection.installation_public_key ||
+          proof.host_instance_id !== this.inspection.host_instance_id ||
+          proof.process_nonce !== this.inspection.process_nonce ||
+          proof.result.groupId !== delivery.command.groupId ||
+          proof.result.deliveryId !== delivery.command.deliveryId ||
+          proof.result.botId !== delivery.command.botId ||
+          proof.result.memberCycle !== delivery.command.memberCycle ||
+          proof.issued_at > this.now() + 5000 || proof.issued_at < this.now() - 60_000 ||
+          !verify(null, encodeHostBotGroupResultProofPayload(unsigned),
+            publicKeyObject(proof.installation_public_key), Buffer.from(signature, 'base64url')))
+        throw new HostAuthorityError('profile_mismatch')
+    }
+    return { reply, proof }
+  }
+
+  /**
+   * Release one durable Bot result after Slark records its exact receipt.
+   * @param input - Account binding, ticket and acknowledged result ID.
+   * @returns Worker acknowledgment reply.
+   */
+  async acknowledgeBotGroupResult(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly computerId: string
+    readonly slarkAudience: string
+    readonly ticket: string
+    readonly command: Extract<HostBotGroupCommand, { operation: 'deliver' }>
+    readonly resultId: string
+    readonly signal?: AbortSignal
+  }): Promise<HostBotGroupResponse> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_group_result_ack' as HostControlCapability) ||
+        input.resultId !== `${input.command.deliveryId}:final`)
+      throw new HostAuthorityError('invalid_input')
+    const delivery = botGroupClientDelivery(input)
+    const request: ProfileBotGroupResultAckRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_group_result_ack',
+      params: { ...this.collaborationAccountRequestParams(input), ...delivery,
+        result_id: input.resultId },
+    }
+    const reply = await this.callBotGroupResponse(request, input.signal)
+    if (!matchesHostBotGroupResponse(reply, { operation: 'ack_result',
+      groupId: input.command.groupId, botId: input.command.botId,
+      memberCycle: input.command.memberCycle, deliveryId: input.command.deliveryId,
+      resultId: input.resultId })) throw new HostAuthorityError('profile_mismatch')
+    return reply
+  }
+
+  /**
+   * Request and verify a registration signature without changing the visible Profile lease.
+   * @param input - Main-held Account binding, server challenge and cancellation.
+   * @returns Frozen assertion verified against the inspected installation and process; no server enrollment.
+   */
+  async attestCollaborationRegistration(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostCollaborationRegistrationChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostCollaborationRegistrationAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostCollaborationRegistrationChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.collaboration_registration' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileCollaborationRegistrationRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.collaboration_registration',
+      params: this.challengeRequestParams(input, challenge),
+    }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostCollaborationRegistrationAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge)
+      || result.challenge.expires_at <= this.now()
+      || !verify(null, encodeHostCollaborationRegistrationSignaturePayload(result),
+        publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url'))) {
+      throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
+  /**
+   * Execute a negotiated extension command using a Main-held lease; no target paths cross the socket.
+   * @param input - lease, runtime generation, bounded command and optional cancellation.
+   * @returns a prepared plan, sanitized inventory or durable receipt; old Hosts reject before mutation.
+   */
+  async extensions(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostExtensionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostExtensionResponse> {
+    if (!this.inspection.capabilities.includes('profile.extensions' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileExtensionsRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.extensions', params: {
+        ...this.leaseCommandParams(input),
+      },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== 'profile.extensions') throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  /**
+   * Execute one bounded mobile session command through the lease-selected Profile.
+   * @param input - live view lease, closed command union, and optional cancellation.
+   * @returns bounded JSON produced by the Profile worker executor.
+   */
+  async remoteSession(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: HostRemoteSessionCommand
+    readonly signal?: AbortSignal
+  }): Promise<HostRemoteSessionJson> {
+    if ((input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_chat' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteSessionRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_session', params: {
+        ...this.leaseCommandParams(input),
+      },
+    }
+    const value = await this.remoteProfileValue(request, input.signal)
+    if (input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
+      parseHostBotChatReceipt(value, input.command.request)
+    return value
+  }
+
+  /**
+   * Execute one bounded read through the lease-selected Profile worker.
+   * @param input - Live view lease, exact read endpoint, arguments, and cancellation.
+   * @returns A JSON projection small enough for the control frame.
+   */
+  async remoteUiRead(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly endpoint: ProfileRemoteUiReadRequest['params']['endpoint']
+    readonly payload: ProfileRemoteUiReadRequest['params']['payload']
+    readonly signal?: AbortSignal
+  }): Promise<HostRemoteSessionJson> {
+    if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)
+      || (input.endpoint === 'bot/chat'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_chat' as HostControlCapability))
+      || (input.endpoint === 'asset/read-gzip-chunk'
+        && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileRemoteUiReadRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_read', params: {
+        ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+        runtime_generation: input.runtimeGeneration, endpoint: input.endpoint, payload: input.payload,
+      },
+    }
+    return this.remoteProfileValue(request, input.signal)
+  }
+
+  /**
+   * Control a connection-owned native Session-follow cursor using short, lease-checked RPCs.
+   * @param input - Live view lease, exact stream command, and optional cancellation.
+   * @returns One bounded chunk, idle state, or terminal state without worker details.
+   */
+  async remoteUiStream(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: ProfileRemoteUiStreamRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileRemoteUiStreamResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.remote_ui_stream' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const params: ProfileRemoteUiStreamRequest['params'] = {
+      ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+      runtime_generation: input.runtimeGeneration, command: input.command,
+    }
+    const request: ProfileRemoteUiStreamRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.remote_ui_stream', params,
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
+  private async remoteProfileValue(
+    request: ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest, signal?: AbortSignal,
+  ): Promise<HostRemoteSessionJson> {
+    const frame = await this.call(request, signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.value
+  }
+
+  /**
+   * Inspect redacted legacy model candidates using a token-verified Account view.
+   * @param input - Main-held view lease and optional cancellation.
+   * @returns source digest and candidate metadata without credentials or paths.
+   */
+  async modelClaimInventory(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly signal?: AbortSignal
+  }): Promise<LegacyModelClaimInventory> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_inventory',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return {
+      sourceDigest: frame.result.source_digest,
+      candidates: frame.result.candidates.map(candidate => ({
+        id: candidate.id, provider: candidate.provider, kind: candidate.kind,
+        credential: candidate.credential, sharedCredential: candidate.shared_credential,
+      })),
+      unsupportedSettings: frame.result.unsupported_settings,
+      unassignedCredentialReferences: frame.result.unassigned_credential_references,
+      unassignedCredentialRecords: frame.result.unassigned_credential_records,
+    }
+  }
+
+  /**
+   * Confirm one candidate against the current source and Account view for at most one minute.
+   * @param input - Account view, selected candidate and displayed source digest.
+   * @returns One-use confirmation and operation id; no credential data.
+   */
+  async confirmModelClaim(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly candidateId: string
+    readonly sourceDigest: string
+    readonly signal?: AbortSignal
+  }): Promise<{ confirmation: string; operationId: string; expiresAt: number }> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_confirm' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimConfirmRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_confirm',
+      params: { ...this.auth(), view_lease_id: input.viewLeaseId as never,
+        lease_generation: input.leaseGeneration, runtime_generation: input.runtimeGeneration,
+        candidate_id: input.candidateId, source_digest: input.sourceDigest as HostControlSha256 },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { confirmation: frame.result.confirmation, operationId: frame.result.operation_id,
+      expiresAt: frame.result.expires_at }
+  }
+
+  /**
+   * Consume a one-use confirmation on this Host connection and commit its provider.
+   * @param input - Confirmation returned by confirmModelClaim and optional cancellation.
+   * @returns Redacted claim outcome.
+   */
+  async applyModelClaim(input: { readonly confirmation: string; readonly signal?: AbortSignal }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_apply' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimApplyRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_apply',
+      params: { ...this.auth(), confirmation: input.confirmation },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  /**
+   * Read only this Account's durable claim receipt without starting a pending worker.
+   * @param input - Fresh Account token, current binding, vault proof and candidate id.
+   * @returns Secret-free receipt, or null when this Account has no active claim.
+   */
+  async modelClaimRecoveryStatus(input: ModelClaimRecoveryInput): Promise<LegacyClaimReceipt | null> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_status' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryStatusRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_status',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.state === 'unclaimed' ? null : {
+      candidateId: frame.result.candidate_id, operationId: frame.result.operation_id,
+      sourceDigest: frame.result.source_digest, status: frame.result.state,
+    }
+  }
+
+  /**
+   * Discover same-Account unfinished claims without requiring a running Profile worker.
+   * @param input - Current Account token, binding, and matching Main-vault proof.
+   * @returns Bounded receipts without credentials or source paths.
+   */
+  async modelClaimRecoveryInventory(input: Omit<ModelClaimRecoveryInput, 'candidateId'>): Promise<readonly LegacyClaimReceipt[]> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_recovery_inventory' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRecoveryInventoryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_recovery_inventory',
+      params: this.modelClaimRecoveryParams(input),
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result.receipts.map(receipt => ({
+      candidateId: receipt.candidate_id, operationId: receipt.operation_id,
+      sourceDigest: receipt.source_digest, status: receipt.state,
+    }))
+  }
+
+  /**
+   * Restore an interrupted claim from its durable preimage after rechecking Account ownership.
+   * @param input - Recovery proof and exact operation id returned by status.
+   * @returns Redacted restored outcome.
+   */
+  async restoreModelClaim(input: ModelClaimRecoveryInput & { readonly operationId: string }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_restore' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRestoreRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_restore',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  /**
+   * Resume an already reserved claim after rechecking its same-Account recovery proof.
+   * @param input - Recovery proof and exact operation and source digest from status.
+   * @returns Redacted committed outcome.
+   */
+  async retryModelClaim(input: ModelClaimRecoveryInput & {
+    readonly operationId: string
+    readonly sourceDigest: string
+  }): Promise<LegacyClaimOutcome> {
+    if (!this.inspection.capabilities.includes('profile.model_claim_retry' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileModelClaimRetryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.model_claim_retry',
+      params: { ...this.modelClaimRecoveryParams(input), candidate_id: input.candidateId,
+        operation_id: input.operationId,
+        source_digest: input.sourceDigest as HostControlSha256 },
+    }
+    const frame = await this.call(request, input.signal)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return { state: frame.result.state, cleanupPending: frame.result.cleanup_pending }
+  }
+
+  private modelClaimRecoveryParams(input: Omit<ModelClaimRecoveryInput, 'candidateId'>):
+  ProfileModelClaimRecoveryInventoryRequest['params'] {
+    return { ...this.auth(), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle,
+      authority_binding_version: input.authorityBindingVersion,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial }
   }
 
   /**
@@ -1354,10 +5454,7 @@ export class UnixHostClient {
   }): Promise<{ readonly stageVersion: number; readonly semanticDigest: string }> {
     const request: MigrationImportVerifyRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.verify',
-      params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
-      },
+      params: this.migrationImportCasParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
@@ -1402,10 +5499,7 @@ export class UnixHostClient {
   }): Promise<{ readonly stageVersion: number }> {
     const request: MigrationImportAbortRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'migration.import_snapshot.abort',
-      params: {
-        ...this.auth(), import_id: input.importId as never, expected_stage_version: input.expectedStageVersion,
-        target_profile_selector: input.targetProfileSelector,
-      },
+      params: this.migrationImportCasParams(input),
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
@@ -1413,9 +5507,159 @@ export class UnixHostClient {
   }
 
   /** Close the local connection; Host revokes every lease it minted. */
-  close(): void { this.channel.socket.destroy() }
+  close(): void { this.channel.close() }
 
-  private auth(): Pick<
+  private async callReadyProfile(
+    request: ProfileEnsureRequest | ProfileRestoreRequest, signal?: AbortSignal,
+  ): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    return this.call(request, signal).then((frame) => {
+      if (frame.type !== 'result' || (frame.method !== 'profile.ensure' && frame.method !== 'profile.restore')
+        || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      return readyProfileResult(frame.result)
+    })
+  }
+
+  private callLocalReadyProfile(
+    request: ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest, signal?: AbortSignal,
+  ): Promise<{ readonly profileId: string; readonly profileSelector: string; readonly persistenceGeneration: number }> {
+    return this.call(request, signal).then((frame) => {
+      if (frame.type !== 'result' || (frame.method !== 'profile.bootstrap_local' && frame.method !== 'profile.restore_local')
+        || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+      return localReadyProfileResult(frame.result)
+    })
+  }
+
+  private profileUnlockParams(input: ProfileUnlockInput): ProfileBootstrapLocalRequest['params'] {
+    return { ...this.auth(), profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial }
+  }
+
+  private migrationImportCasParams(input: {
+    readonly importId: string
+    readonly expectedStageVersion: number
+    readonly targetProfileSelector: string
+  }): MigrationImportVerifyRequest['params'] {
+    return {
+      ...this.auth(),
+      import_id: input.importId as never,
+      expected_stage_version: input.expectedStageVersion,
+      target_profile_selector: input.targetProfileSelector,
+    }
+  }
+
+  private accountBindingParams(input: AccountBindingInput): ProfileStatusRequest['params'] {
+    return {
+      ...this.auth(),
+      authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+    }
+  }
+
+  private leaseCommandParams<T>(input: {
+    readonly viewLeaseId: string
+    readonly leaseGeneration: number
+    readonly runtimeGeneration: number
+    readonly command: T
+  }) {
+    return {
+      ...this.auth(), view_lease_id: input.viewLeaseId as never, lease_generation: input.leaseGeneration,
+      runtime_generation: input.runtimeGeneration, command: input.command,
+    }
+  }
+
+  /**
+   * Attest a committed Profile transfer grant through the currently verified Account and installed Host.
+   * @param input - Current Account binding, immutable reference nonce and optional cancellation.
+   * @returns Verified installation assertion; missing capability, changed ownership or invalid signatures refuse.
+   */
+  async attestReferenceAuthority(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly challenge: HostReferenceAuthorityChallenge
+    readonly signal?: AbortSignal
+  }): Promise<HostReferenceAuthorityAssertion> {
+    const signal = input.signal
+    signal?.throwIfAborted()
+    const challenge = parseHostReferenceAuthorityChallenge(input.challenge)
+    if (!this.inspection.capabilities.includes('profile.reference_authority' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    if (challenge.environment_id !== input.authorityEnvironmentId) throw new HostAuthorityError('profile_mismatch')
+    const request: ProfileReferenceAuthorityRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.reference_authority', params: this.challengeRequestParams(input, challenge) }
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostReferenceAuthorityAssertion(frame.result)
+    if (!this.matchesChallengeIdentity(result, challenge) || challenge.expires_at <= this.now()
+      || challenge.expires_at - this.now() > 300_000 || !verify(null, encodeHostReferenceAuthorityPayload(result),
+      publicKeyObject(this.inspection.installation_public_key), Buffer.from(result.signature, 'base64url')))
+      throw new HostAuthorityError('unauthorized')
+    return result
+  }
+
+  private async callCurrentPeer(
+    request: ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest,
+    signal: AbortSignal,
+  ): Promise<Extract<HostControlFrame, { type: 'result' }>> {
+    const peer = this.currentPeerFingerprint()
+    const frame = await this.call(request, signal)
+    signal.throwIfAborted()
+    this.requireCurrentPeer(peer)
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame
+  }
+
+  private requireCurrentPeer(peer: string): void {
+    if (!this.isConnected() || peer !== this.currentPeerFingerprint()) throw new HostAuthorityError('unavailable')
+  }
+
+  private currentPeerFingerprint(): string {
+    return JSON.stringify([this.inspection.installation_id, this.inspection.installation_public_key,
+      this.inspection.host_instance_id, this.inspection.process_nonce])
+  }
+
+  private collaborationAccountRequestParams(input: {
+    authorityEnvironmentId: string
+    accountBindingHandle: string
+    authorityBindingVersion: number
+    issuer: string
+    subject: string
+  }, lifetimeMs = 15_000) {
+    return { ...this.auth(lifetimeMs), authority_environment_id: input.authorityEnvironmentId as never,
+      account_binding_handle: input.accountBindingHandle as never, authority_binding_version: input.authorityBindingVersion,
+      account_issuer: input.issuer, account_subject: input.subject }
+  }
+
+  private challengeRequestParams<Challenge extends
+    HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge
+      | HostCollaborationArchiveStateChallenge>(
+    input: { readonly accountBindingHandle: string; readonly authorityBindingVersion: number },
+    challenge: Challenge,
+  ) {
+    return {
+      ...this.auth(),
+      account_binding_handle: input.accountBindingHandle as never,
+      authority_binding_version: input.authorityBindingVersion,
+      challenge,
+    }
+  }
+
+  private matchesChallengeIdentity(
+    result: HostWorkspaceAuthorityAssertion | HostSourceAuthorityAssertion | HostCollaborationRegistrationAssertion
+      | HostRootAuthorityAssertion | HostRootPlanningAttemptAuthorityAssertion | HostCollaborationArchiveStateAssertion,
+    challenge: HostWorkspaceAuthorityChallenge | HostSourceAuthorityChallenge | HostCollaborationRegistrationChallenge
+      | HostRootAuthorityChallenge | HostRootPlanningAttemptAuthorityChallenge | HostCollaborationArchiveStateChallenge,
+  ): boolean {
+    return this.isConnected() && JSON.stringify(result.challenge) === JSON.stringify(challenge)
+      && result.installation_id === this.inspection.installation_id
+      && result.installation_public_key === this.inspection.installation_public_key
+      && result.host_instance_id === this.inspection.host_instance_id
+      && result.process_nonce === this.inspection.process_nonce
+  }
+
+  private auth(lifetimeMs = 15_000): Pick<
     ProfileStatusRequest['params'],
     'client_instance_id' | 'host_instance_id' | 'process_nonce' | 'jti' | 'issued_at' | 'expires_at'
   > {
@@ -1426,13 +5670,76 @@ export class UnixHostClient {
       process_nonce: this.state.processNonce,
       jti: randomUUID() as HostControlJti,
       issued_at: issuedAt,
-      expires_at: issuedAt + 15_000,
+      expires_at: issuedAt + lifetimeMs,
     }
   }
 
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult>
+  private callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsValidateRequest, challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsValidateResult>
+  private async callRecoveryMaterials(
+    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest,
+    challenge: HostControlNonce, signal?: AbortSignal,
+  ): Promise<ProfileRecoveryMaterialsDescribeResult | ProfileRecoveryMaterialsValidateResult> {
+    const frame = await this.call(request, signal)
+    signal?.throwIfAborted()
+    if (frame.type !== 'result') throw new HostAuthorityError('unavailable')
+    if (frame.method === 'profile.recovery_materials.describe') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.descriptor.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    if (frame.method === 'profile.recovery_materials.validate') {
+      if (request.method !== frame.method) throw new HostAuthorityError('unavailable')
+      if (frame.result.challenge !== challenge) throw new HostAuthorityError('stale')
+      return frame
+    }
+    throw new HostAuthorityError('unavailable')
+  }
+
   private async call(
-    request: ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
-      | ProfileOpenRequest | ProfileViewActivateRequest | ProfileLeaseCloseRequest
+    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
+      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+      | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
+      | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
+      | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
+      | ProfileModelClaimRecoveryInventoryRequest
+      | ProfileModelClaimRetryRequest
+      | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
+      | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
+      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
+      | ProfileSkillHubBotMessageActorRequest
+      | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
+      | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
+      | ProfileSkillHubClockWitnessRequest
+      | ProfileSkillHubClockV2Request
+      | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
+      | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
+      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
+      | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
+      | ProfileBotGroupDeliverRequest
+      | ProfileBotGroupResultPageRequest
+      | ProfileBotGroupResultAckRequest
+      | ProfileBotGroupStopRequest
+  | ProfileWorkspaceAuthorityRequest
+  | ProfileCollaborationArchiveStateRequest
+  | ProfileGroupInputFenceRequest
+  | ProfileCollaborationArchiveIntentRequest
+  | ProfileCollaborationArchiveTransitionRequest
+  | ProfileSourceAuthorityRequest
+  | ProfileReferenceAuthorityRequest
+  | ProfileReferenceCaptureRequest
+  | ProfileReferenceContentRequest
+  | ProfileRootJournalRequest
+  | ProfileRootPlanningAttemptAuthorityRequest
+  | ProfileRootAuthorityRequest
+      | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
+      | ProfileCollaborationDeliveryRequest
+      | ProfileModelTextRequest | ProfileLeaseCloseRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

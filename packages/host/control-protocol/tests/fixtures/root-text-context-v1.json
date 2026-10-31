@@ -1,0 +1,26 @@
+{
+  "receipt": {
+    "schema_version": 1,
+    "context_kind": "text-root-input-v1",
+    "authority_environment_id": "10000000-0000-4000-8000-000000000002",
+    "account_binding_handle": "binding",
+    "authority_binding_version": 1,
+    "account_issuer": "https://accounts.example.com",
+    "account_subject": "10000000-0000-4000-8000-000000000003",
+    "installation_id": "10000000-0000-4000-8000-000000000004",
+    "installation_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "host_instance_id": "10000000-0000-4000-8000-000000000005",
+    "process_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "root": {
+      "namespace_id": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "root_task_id": "10000000-0000-4000-8000-000000000006",
+      "root_trace_id": "11111111111111111111111111111111",
+      "command_id": "10000000-0000-4000-8000-000000000007",
+      "source_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "payload_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "source_input_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "payload_sha256": "63f37a6bde6bfbeb5110626ce99cbbf95aad23c6c7534b48fc07856fd499c7ee"
+}

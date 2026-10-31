@@ -2,10 +2,14 @@
 import { constants } from 'node:fs'
 import { lstat, open, readFile, readdir, realpath } from 'node:fs/promises'
 import { join, relative, resolve, sep } from 'node:path'
-import { SessionId, SessionLogOffset, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session/types'
+import { SessionId, type SessionHeader } from '@deepseek-ai/dsh-session/types'
 import type { SessionInspection, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
-import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
-import { createSessionFormatCatalogWithChildren } from '@deepseek-ai/dsh-session-format-catalog'
+import { SessionPersistenceRevision, SessionFormatUnsupportedError } from '@deepseek-ai/dsh-session-persistence'
+import { createSessionFormatCatalogWithChildren, historicalSessionFormatCatalog, sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
+import { historicalChildCatalogSource } from '@deepseek-ai/dsh-session-format-v3-to-v4'
+import type { SessionFormatArtifact, SessionFormatHeader, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
+import { parseGenerationLogFilename, scanLog } from './format.ts'
+import { LEASE_FILENAME } from './lease-filename.ts'
 import { createZstdFrameDecoder, scanZstdFrames } from './zstd.ts'
 import {
   migrationSourceInventoryDigest,
@@ -15,60 +19,23 @@ import {
 
 const MAX_LOG_BYTES = 256 * 1024 * 1024
 
-/**
- * Decode one plaintext session log through the shared format catalog so
- * historical versions (v0-v3) migrate to the current logical shape. The
- * persistence scanner refuses foreign versions by design; the owner-side
- * migration reader must read them.
- * @param plaintext - complete decompressed log bytes (header line first).
- * @returns Current-shaped header, events, inherited prefix and committed bytes.
- */
-function decodeHistoricalArtifact(plaintext: Buffer): {
-  readonly header: SessionHeader
-  readonly events: readonly SessionEvent[]
-  readonly inheritedEventCount: number
-  readonly committedBytes: number
-} {
-  const headerEnd = plaintext.indexOf(0x0A)
-  if (headerEnd === -1) throw new Error('migration_export_source_corrupt')
-  let headerValue: unknown
-  try {
-    headerValue = JSON.parse(plaintext.subarray(0, headerEnd).toString('utf8'))
-  } catch {
-    throw new Error('migration_export_source_corrupt')
-  }
-  const restore = createSessionFormatCatalogWithChildren([]).createRestore(headerValue, {
-    recovery: 'strict',
-    validation: 'transformed',
-  })
-  let offset = headerEnd + 1
-  while (offset < plaintext.byteLength) {
-    const next = plaintext.indexOf(0x0A, offset)
-    if (next === -1) break
-    let row: unknown
-    try {
-      row = JSON.parse(plaintext.subarray(offset, next + 1).toString('utf8'))
-    } catch {
-      throw new Error('migration_export_source_corrupt')
-    }
-    restore.decodeRow(row)
-    offset = next + 1
-  }
-  const artifact = restore.finish()
-  return {
-    header: artifact.header as unknown as SessionHeader,
-    events: artifact.events as unknown as readonly SessionEvent[],
-    inheritedEventCount: artifact.inheritedEventCount,
-    committedBytes: offset,
-  }
-}
-
 type Stored = Readonly<{
   path: string
   header: SessionHeader
   inspection: SessionInspection
   revision: ReturnType<typeof SessionPersistenceRevision>
 }>
+type HistoricalStored = Readonly<{
+  path: string
+  header: SessionFormatHeader
+  artifact: SessionFormatArtifact
+  plaintext: Buffer
+  revision: ReturnType<typeof SessionPersistenceRevision>
+}>
+
+function physicalRevision(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint }) {
+  return SessionPersistenceRevision([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(':'))
+}
 
 /** Schema owners decode their own documents; this adapter assembles the mandatory migration set. */
 export class SchemaAwareMigrationOwnerStateSource {
@@ -134,7 +101,7 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
 
   async inspect(id: ReturnType<typeof SessionId>, signal?: AbortSignal): Promise<SessionInspection> {
     const rows = (await this.scan(signal)).filter(row => row.header.id === id)
-    if (rows.length !== 1) throw new Error(rows.length === 0 ? 'migration_source_not_found' : 'migration_source_duplicate')
+    if (rows.length !== 1) throw new Error('migration_source_not_found')
     return structuredClone(rows[0]?.inspection as SessionInspection)
   }
 
@@ -143,14 +110,13 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     signal?: AbortSignal,
   ): Promise<ReturnType<typeof SessionPersistenceRevision> | undefined> {
     const rows = (await this.scan(signal)).filter(row => row.header.id === id)
-    if (rows.length > 1) throw new Error('migration_source_duplicate')
     return rows[0]?.revision
   }
 
   private async scan(signal?: AbortSignal): Promise<Stored[]> {
     signal?.throwIfAborted()
     const root = await this.checkedDirectory(this.root)
-    const rows: Stored[] = []
+    const pending: (Stored | HistoricalStored)[] = []
     for (const project of await readdir(root, { withFileTypes: true })) {
       signal?.throwIfAborted()
       if (project.name === 'owner-state.json' && project.isFile() && !project.isSymbolicLink()) continue
@@ -160,29 +126,64 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         signal?.throwIfAborted()
         if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_export_source_unsafe')
         const sessionPath = await this.checkedDirectory(join(projectPath, session.name))
-        const names = (await readdir(sessionPath)).sort()
-        if (names.length === 0 && session.name === 'preset-user-default') continue
-        const ordinary = JSON.stringify(names) === JSON.stringify(['session.jsonl'])
-        const legacyZstd = JSON.stringify(names) === JSON.stringify(['session.jsonl.zstd'])
-        const imported = JSON.stringify(names) === JSON.stringify(['migration-records.json', 'session.jsonl'])
-        if (!ordinary && !legacyZstd && !imported) {
+        const directoryNames = (await readdir(sessionPath)).sort()
+        if (directoryNames.length === 0 && session.name === 'preset-user-default') continue
+        const names = directoryNames.filter(name => name !== LEASE_FILENAME)
+        const ordinaryGenerations = names.flatMap((name) => {
+          const version = parseGenerationLogFilename(name, 'none')
+          return version === undefined ? [] : [{ name, version }]
+        })
+        const compressedGenerations = names.flatMap((name) => {
+          const version = parseGenerationLogFilename(name, 'zstd')
+          return version === undefined ? [] : [{ name, version }]
+        })
+        const metadata = names.filter(name => name === 'migration-records.json')
+        if (ordinaryGenerations.length + compressedGenerations.length + metadata.length !== names.length
+          || ordinaryGenerations.length + compressedGenerations.length < 1
+          || (ordinaryGenerations.length > 0 && compressedGenerations.length > 0)) {
           throw new Error('migration_export_source_unsafe')
         }
-        if (imported) await this.checkedRegularFile(join(sessionPath, 'migration-records.json'))
-        rows.push(await this.readLog(
-          join(sessionPath, legacyZstd ? 'session.jsonl.zstd' : 'session.jsonl'), legacyZstd, signal,
-        ))
+        for (const name of names) await this.checkedRegularFile(join(sessionPath, name))
+        if (directoryNames.includes(LEASE_FILENAME)) await this.checkedLeaseFile(join(sessionPath, LEASE_FILENAME))
+        const generations = ordinaryGenerations.length > 0 ? ordinaryGenerations : compressedGenerations
+        const selected = generations.sort((left, right) => right.version - left.version)[0]
+        /* v8 ignore next -- validation established a nonempty locally built array, with no async boundary before selection. */
+        if (!selected) throw new Error('migration_export_source_unsafe')
+        pending.push(await this.readLog(join(sessionPath, selected.name), compressedGenerations.length > 0,
+          selected.version, signal))
       }
     }
     const ids = new Set<string>()
-    for (const row of rows) {
+    for (const row of pending) {
       if (ids.has(row.header.id)) throw new Error('migration_source_duplicate')
       ids.add(row.header.id)
+    }
+    const childrenByParent = new Map<string, SessionFormatJsonObject[]>()
+    for (const candidate of pending) {
+      const parent = candidate.header.parentSession
+      if (!parent) continue
+      const child = 'artifact' in candidate
+        ? historicalChildCatalogSource(candidate.artifact)
+        : { childId: candidate.header.id, childCreatedAt: candidate.header.createdAt,
+          descriptorCount: 0, descriptor: null }
+      const children = childrenByParent.get(parent) ?? []
+      children.push(child)
+      childrenByParent.set(parent, children)
+    }
+    const rows: Stored[] = pending.map((row) => {
+      if (!('artifact' in row)) return row
+      const decoded = scanLog(this.upgradeForeignLog(row.plaintext, childrenByParent.get(row.header.id) ?? []))
+      return { path: row.path, header: decoded.meta,
+        inspection: { meta: decoded.meta, inheritedEventCount: decoded.inheritedEventCount, events: decoded.events },
+        revision: row.revision }
+    })
+    for (const row of pending) {
+      if (physicalRevision(await lstat(row.path, { bigint: true })) !== row.revision) throw new Error('migration_source_changed')
     }
     return rows.sort((left, right) => left.header.id.localeCompare(right.header.id, 'en'))
   }
 
-  private async readLog(path: string, zstd: boolean, signal?: AbortSignal): Promise<Stored> {
+  private async readLog(path: string, zstd: boolean, generationVersion: number, signal?: AbortSignal): Promise<Stored | HistoricalStored> {
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const before = await handle.stat({ bigint: true })
@@ -216,19 +217,70 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
         } finally { decoder.close() }
         plaintext = Buffer.concat(decodedFrames, decodedBytes)
       }
-      const decoded = decodeHistoricalArtifact(plaintext)
-      if (decoded.committedBytes !== plaintext.byteLength) {
+      const newline = plaintext.indexOf(0x0A)
+      let physicalHeader: { version?: unknown } | null
+      try {
+        physicalHeader = JSON.parse(plaintext.subarray(0, newline < 0 ? plaintext.length : newline).toString('utf8')) as { version?: unknown } | null
+      } catch {
         throw new Error('migration_export_source_corrupt')
       }
-      const revision = SessionPersistenceRevision([
-        before.dev, before.ino, before.size, before.mtimeNs, before.ctimeNs,
-      ].join(':'))
+      if (physicalHeader?.version !== generationVersion) throw new Error('migration_export_source_corrupt')
+      let decoded: ReturnType<typeof scanLog>
+      try {
+        decoded = scanLog(plaintext)
+        if (decoded.committedBytes !== plaintext.byteLength) {
+          throw new Error('migration_export_source_corrupt')
+        }
+      } catch (error) {
+        // Decision B (recommended default, owner-vetoable): a released foreign log
+        // (v0/v1 physical, upstream-identical to the fork 0.1.2-era store) is read
+        // through the build-static adjacent chain. Scope-bearing fork stores are
+        // NOT upstream v0 and fail in the v0 codec's exact-keys check — that path
+        // stays blocked pending decision A (P5 durable-scope routing, REQ-0019).
+        if (!(error instanceof SessionFormatUnsupportedError)) throw error
+        const artifact = this.restoreForeignLog(plaintext)
+        return { path, header: artifact.header, artifact, plaintext, revision: physicalRevision(before) }
+      }
+      const revision = physicalRevision(before)
       return {
-        path, header: decoded.header, inspection: { meta: decoded.header, events: [...decoded.events], inheritedEventCount: SessionLogOffset(decoded.inheritedEventCount) }, revision,
+        path, header: decoded.meta,
+        inspection: { meta: decoded.meta, inheritedEventCount: decoded.inheritedEventCount, events: decoded.events },
+        revision,
       }
     } finally {
       await handle.close()
     }
+  }
+
+  /** Translate a released foreign physical log to the current format buffer. */
+  private restoreForeignLog(plaintext: Buffer): SessionFormatArtifact {
+    const text = plaintext.toString('utf8')
+    const lines = text.split('\n').filter(line => line.length !== 0)
+    const firstLine = lines[0] as string
+    const headerValue = JSON.parse(firstLine) as unknown
+    const rowValues = lines.slice(1).map(line => JSON.parse(line) as unknown)
+    const restore = historicalSessionFormatCatalog.createRestore(headerValue, {
+      recovery: 'recoverable',
+      validation: 'current',
+    })
+    for (const rowValue of rowValues) restore.decodeRow(rowValue)
+    return restore.finish()
+  }
+
+  /** Convert only after the complete source inventory supplies child relationships. */
+  private upgradeForeignLog(plaintext: Buffer, children: readonly SessionFormatJsonObject[]): Buffer {
+    const lines = plaintext.toString('utf8').split('\n').filter(line => line.length !== 0)
+    const restore = createSessionFormatCatalogWithChildren(children).createRestore(JSON.parse(lines[0] as string), {
+      recovery: 'recoverable', validation: 'current',
+    })
+    for (const line of lines.slice(1)) restore.decodeRow(JSON.parse(line))
+    const current = restore.finish()
+    const header = JSON.stringify(
+      sessionFormatCatalog.encodeCurrentHeader(current.header, current.inheritedEventCount),
+    )
+    const rows = current.events.map(event => JSON.stringify(sessionFormatCatalog.encodeCurrentEvent(event)))
+    if (rows.length === 0) return Buffer.from(`${header}\n`, 'utf8')
+    return Buffer.from(`${header}\n${rows.join('\n')}\n`, 'utf8')
   }
 
   private async checkedDirectory(path: string): Promise<string> {
@@ -248,5 +300,13 @@ export class FileJsonlMigrationExportSource implements MigrationExportSource {
     const metadata = await lstat(path)
     if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
       || metadata.nlink !== 1 || (metadata.mode & 0o077) !== 0) throw new Error('migration_export_source_unsafe')
+  }
+
+  private async checkedLeaseFile(path: string): Promise<void> {
+    const metadata = await lstat(path)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== this.expectedUid
+      || metadata.nlink !== 1 || metadata.size !== 0 || (metadata.mode & 0o022) !== 0) {
+      throw new Error('migration_export_source_unsafe')
+    }
   }
 }

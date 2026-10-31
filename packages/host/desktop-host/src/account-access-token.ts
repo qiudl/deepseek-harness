@@ -1,6 +1,10 @@
 import { createPublicKey, verify, type JsonWebKey, type KeyObject } from 'node:crypto'
 
-const CANONICAL_ISSUER = 'https://accounts.dsh.colorbuyai.com'
+const ACCOUNT_ISSUERS = [
+  'https://accounts.dsh.colorbuyai.com',
+  'https://accounts.staging.dsh.colorbuyai.com',
+] as const
+type DshAccountIssuer = (typeof ACCOUNT_ISSUERS)[number]
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const KID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const SEGMENT = /^[A-Za-z0-9_-]+$/u
@@ -18,13 +22,13 @@ interface PublicP256Jwk extends JsonWebKey {
 /** Public DSH Account signing keys pinned by the embedding release. */
 export interface DshAccountAccessKeyring {
   readonly version: 2
-  readonly issuer: typeof CANONICAL_ISSUER
+  readonly issuer: DshAccountIssuer
   readonly keys: readonly { readonly kid: string; readonly publicJwk: PublicP256Jwk }[]
 }
 
 /** Verified Account facts carried by one short-lived Host audience credential. */
 export interface DshAccountAccessIdentity {
-  readonly issuer: typeof CANONICAL_ISSUER
+  readonly issuer: DshAccountIssuer
   readonly subject: string
   readonly sessionId: string
   readonly accountGeneration: number
@@ -90,7 +94,7 @@ export function parseDshAccountAccessKeyring(raw: string): DshAccountAccessKeyri
     if (typeof raw !== 'string' || Buffer.byteLength(raw, 'utf8') < 1
       || Buffer.byteLength(raw, 'utf8') > 16 * 1024) fail()
     const parsed = exactRecord(JSON.parse(raw) as unknown, ['version', 'issuer', 'keys'])
-    if (parsed.version !== 2 || parsed.issuer !== CANONICAL_ISSUER
+    if (parsed.version !== 2 || !ACCOUNT_ISSUERS.includes(parsed.issuer as DshAccountIssuer)
       || !Array.isArray(parsed.keys) || parsed.keys.length < 1 || parsed.keys.length > 4) fail()
     const seen = new Set<string>()
     const keys = parsed.keys.map((value) => {
@@ -99,7 +103,11 @@ export function parseDshAccountAccessKeyring(raw: string): DshAccountAccessKeyri
       seen.add(entry.kid)
       return { kid: entry.kid, publicJwk: parsePublicJwk(entry.publicJwk) }
     })
-    return Object.freeze({ version: 2, issuer: CANONICAL_ISSUER, keys: Object.freeze(keys) })
+    return Object.freeze({
+      version: 2,
+      issuer: parsed.issuer as DshAccountIssuer,
+      keys: Object.freeze(keys),
+    })
   } catch (error) {
     if (error instanceof DshAccountAccessTokenError) {
       throw new Error('DSH Account keyring is invalid', { cause: error })
@@ -111,6 +119,7 @@ export function parseDshAccountAccessKeyring(raw: string): DshAccountAccessKeyri
 /** Offline verifier for the ten-minute `dsh-host` access credential. */
 export class DshAccountAccessTokenVerifier {
   private readonly keys: ReadonlyMap<string, KeyObject>
+  private readonly issuer: DshAccountIssuer
   private readonly now: () => number
 
   /**
@@ -123,6 +132,7 @@ export class DshAccountAccessTokenVerifier {
     this.keys = new Map(keyring.keys.map(entry => [entry.kid, createPublicKey({
       key: entry.publicJwk, format: 'jwk',
     })]))
+    this.issuer = keyring.issuer
     this.now = options.now ?? Date.now
   }
 
@@ -150,7 +160,7 @@ export class DshAccountAccessTokenVerifier {
       const notBefore = positiveInteger(claims.nbf)
       const expiresAt = positiveInteger(claims.exp)
       const now = Math.floor(this.now() / 1_000)
-      if (claims.iss !== CANONICAL_ISSUER || claims.aud !== 'dsh-host'
+      if (claims.iss !== this.issuer || claims.aud !== 'dsh-host'
         || claims.typ !== 'dsh-access+jwt' || notBefore !== issuedAt
         || issuedAt > now + CLOCK_SKEW_SECONDS || notBefore > now + CLOCK_SKEW_SECONDS
         || expiresAt <= issuedAt || expiresAt <= now - CLOCK_SKEW_SECONDS
@@ -164,7 +174,7 @@ export class DshAccountAccessTokenVerifier {
           key, dsaEncoding: 'ieee-p1363',
         }, signature)) fail()
       return Object.freeze({
-        issuer: CANONICAL_ISSUER,
+        issuer: this.issuer,
         subject: claims.sub,
         sessionId: claims.sid,
         accountGeneration: positiveInteger(claims.ag),

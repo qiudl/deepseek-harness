@@ -1,4 +1,4 @@
-/** Machine-local authority for one Desktop-managed DSH Host. @module @deepseek-ai/dsh-desktop-host */
+/** Machine-local authority for one Slark-managed DSH Host. @module @deepseek-ai/dsh-slark-desktop-host */
 
 export { HostAuthorityError } from './types.ts'
 export type * from './types.ts'
@@ -25,5 +25,8 @@ export { FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 export { ApprovalAuthority } from './approval.ts'
 export { ContextLeaseAuthority } from './context-lease.ts'
 export { DesktopHost } from './desktop-host.ts'
-export { HostRequestAuthorizer, UnixHostClient, UnixHostServer, discoverUnixHost } from './unix-transport.ts'
+export { HostRequestAuthorizer } from './host-control-session.ts'
+export { UnixHostClient, UnixHostServer, discoverUnixHost } from './unix-transport.ts'
 export type { MigrationExportService, UnixHostClientOptions, UnixHostDiscovery, UnixHostServerOptions, UnixPeerAttestor, UnixPeerEvidence } from './unix-transport.ts'
+export { createSkillHubPackageInstallationStore } from './skillhub-package-install.ts'
+export type { SkillHubPackagePlan, SkillHubPackageReceipt } from './skillhub-package-install.ts'

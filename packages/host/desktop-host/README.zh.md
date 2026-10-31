@@ -9,9 +9,7 @@ kind: "package-bundle"
 
 ## 概述
 
-本包提供 Desktop Main 使用的本机 DSH Host 权威。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；产品组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。
-
-`discoverUnixHost` 返回 `running`、`stopped` 或 `unknown`。只有注册表信任的 endpoint 确认没有监听进程时才返回 `stopped`；UID、安装密钥、可执行文件签名、challenge、帧或 socket 类型验证失败一律返回 `unknown`。
+本机 DSH Host 服务于 Desktop Main。它让 issuer-qualified Person Profile 独立于 Slark 环境，串行化同一会话命令，围栏审批与环境上下文租约，监管相互隔离的 Profile worker，并提供 owner-only 的已认证 Unix socket。Host 控制组件不拥有 HTTP listener；其组合会启动既有 `dsh web` worker，由 Host 自行兑换一次性启动 URL，并且只向可信 Main 返回已校验的 loopback origin 与 HttpOnly Cookie 名称／值。启动 token 和文件系统路径都不会进入 Renderer。启动认证重定向必须精确为 `/` 或 `./`；其他目标会在使用 Cookie 之前被拒绝。
 
 ## 目录
 
@@ -24,22 +22,167 @@ kind: "package-bundle"
 <a id="desktop-adapter"></a>
 ## Desktop adapter
 
-`UnixHostClient` 提供 Profile ensure／restore／status／open／view activation／close 与 owner-only 迁移操作。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接仍保持授权。
+远程 UI 启动读取只在返回的注入表中将 worker 的文档相对路径 `plugins/` 投影为 Host 根路由 `/plugins/`。worker 本机 Web 文档仍使用相对路径；远程资源读取仍要求当前启动表列出的精确 URL 和有效视图租约。
 
-连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
+固定摘要的原生辅助模块只在验证精确原生模块路径和字节后创建默认加载器。导入该辅助模块不会解析原生包。私有 `windows-startup.js` 组合会把同一发布固定值传给父线程的 SID、注册、监听器和取消适配器，并把它放入严格解码的 Worker 启动数据。文件 Worker 会独立重新校验并加载这个精确原生模块，供取消、管道 I/O、生命周期和对端认证使用。两条生产路径都不会搜索 Koffi 包；嵌入方仍须验证发布元数据，并在整个使用期间保护已安装文件。
+
+经过验证的 Windows 启动产物从内存加载，并打包包含归档解码器在内的非 Node 静态依赖；它不能相对于 data URL 解析其他包。
+
+Windows 目录安全证据将 SDDL 的通用权限、标准权限和文件专用权限保留为无符号位掩码。未知标记和超过 32 位的掩码会使检查失败。解析通用权限不会授予私有存储访问权：私有文件仍要求精确的、受保护的三主体文件完全控制 DACL。
+
+启动产物向可信嵌入代码提供 `loadWindowsLegacySourceProbe`。装配通过与本地凭据存储相同的发布版本固定原生模块解析当前进程 SID，不检查旧数据文件系统，并且只返回只读探测函数。不支持的平台、缺失摘要固定值、原生身份解析失败或缺少目录检查器都会使加载失败。嵌入方必须在后续探测调用期间持续保护原生模块，并提供操作系统选定的用户主目录。
+
+Windows 原生目录检查器读取已有路径的属性与安全证据，不创建目录或修复权限。路径不存在、访问被拒绝、共享冲突和检查失败均抛出错误。该证据不授权迁移，也不证明读取句柄关闭后的祖先路径安全性；完整旧数据盘点仍是独立工作。
+
+旧主目录元数据探测区分观察到的 `.dsh` 末级目录缺失、目录存在和无法确认。它先检查祖先路径，拒绝重定向路径及非当前用户拥有的用户主目录，不读取目录内容，并将已有空目录视为存在。只有原生末级打开操作的文件不存在错误才产生“观察到不存在”；任何结果都不授权迁移或创建替代 Profile。仍须完成源枚举、schema 检查和稳定目录树验证。
+
+`discoverUnixHost` 返回 `running`、`stopped` 或 `unknown`。只有注册表信任的 endpoint 确认没有监听进程时才返回 `stopped`；UID、安装密钥、可执行文件签名、challenge、帧或 socket 类型验证失败一律返回 `unknown`。
+
+Windows 本地 Profile 存储接收嵌入方加密的信封，大小不超过 16 KiB。它复用原生 SID/DACL 与重解析点检查，替换文件前要求已验证的文件租约，并在同步回调结束（包括失败）后释放租约。文件不存在时返回 null；权限与完整性错误不授权创建新身份。原生装配要求一个路径规范、只有单个硬链接的 Koffi 原生模块，以及经过独立发布验证的 SHA-256；绝不搜索其他包或路径。加密、环境根选择，以及加载和使用期间防止原生模块被替换，均由嵌入方负责。仅校验摘要不能证明 Windows 安装目录 ACL 或发布者签名；仍需原生安装验证。
+
+Windows 客户端使用私有文件 Worker，在发送 Host 帧前证明已连接的管道服务端身份。Bun Main 的取消适配器由本包通过已验证的客户端产物提供；调用方传入发布版本固定的 Worker 和发布者信任锚。只有确认 Worker 退出后，才能关闭其移交的线程句柄。Host 将并发管道连接路由到独立的 slot 线程；每个 slot 通过单连接适配器复用 router 的帧序号与停止结算逻辑。Windows 分发仍须通过签名 Carrier 和原生安装验证。
+
+Windows Host 启动按 Windows 文件 URL 规则转换规范的绝对 Worker 路径，保留安装目录中的 Unicode、空格、百分号和井号字符。
+
+Windows Host 启动通过共享的 Host control authority 处理已验证的管道会话。获得 Account 授权后，`profile.collaboration_registration` 使用安装密钥返回与已检查的 Host 进程绑定的签名断言；客户端验证签名后才接受断言。
+
+客户端取消逻辑会接管启动取消后才移交的线程句柄。取消重试预算耗尽时，父线程继续持有该句柄，直到 Worker 后续正常或异常退出，确认可以关闭；预算耗尽不代表已经停止。
+
+`UnixHostClient` 提供 Profile 的账号 ensure／restore／status／open、本地 bootstrap／restore／open、view activation／close 与 owner-only 迁移操作。本地操作不接收账号身份、token、binding 或 environment assertion；Host selector 与 Keychain material 可在后续 authenticated connection 上恢复本地专用 Profile。同一 authenticated owner 再次打开相同 Profile 时，Host 会原子延长现有短时 view lease 并签发新的单次 activation handle，使活跃 Desktop 无需替换 renderer 即可续期授权。`profile.ensure_account_token` capability 标识 Host 接受带 token 的 `profile.ensure` 载荷；当该 capability 缺失时，任一 peer 都会在 mutation 前报告 `upgrade_required`。`profile.ensure` 要求携带面向 `dsh-host` audience 的短时规范 DSH Account token；Host 离线校验该 token，并在任何 Profile registry mutation 前要求其 issuer 与 subject 和请求账号一致。每个操作都接受 `AbortSignal`。中止会销毁已认证连接，Host 会撤销该连接拥有的全部 view lease 和 Profile 解锁引用；另一个已独立证明同一 Profile 的 staging 或 production 连接，在任一连接重新打开该 Profile 后仍保有自己的 view lease；租约过期、连接断开和 Profile 撤销仍会使相应租约失效。
+
+连接以 `host.inspect` 开始：Desktop 提供新鲜 challenge，并校验安装 Ed25519 签名、可信安装 id 与公钥、peer UID、可执行文件签名摘要、Host process nonce、每进程 boot nonce 和 runtime generation。后续帧重复 client、Host 与 process 身份，并携带最长 30 秒、只能使用一次的 JTI。
 
 <a id="profile-and-execution-authority"></a>
 ## Profile 与执行权威
 
-Profile registry 只保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC、opaque Profile id、按环境划分的当前 binding handle／version，以及 opaque Keychain handle。同一个人的 staging 与 production binding 解析到同一 Profile；更高的服务端签名 binding version 只原子替换对应环境的旧 handle，并使旧签名 selector 失效。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料，只持久化域隔离 verifier；常量时间校验成功后才授权当前已认证连接。
+`profile.skillhub_binding` 为 Slark SkillHub 单独签署 Host 本地 Profile 事实。当前连接必须拥有该 Profile 授权，签名选择器也必须符合当前绑定代次。证明包含 broker 提供的 Slark 用户与 Computer 坐标；只有 Slark 能认证这些远端坐标并消费一次性挑战。该方法不写入 Profile、Session 或凭据数据。
+
+Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_package_chunk` 片段。它根据固定包和完整清单摘要校验 ZIP，再写入私有准备快照。准备不会改变资产安装 revision。单独的 `profile.skillhub_package` 调用检查该授权和预期 revision 后才原子激活；当前回读返回 Host 签名回执。完整回执可在当前指针前移后重新打开同一不可变 operation，并再次检查全部身份字段和文件。该回执只证明存储激活，不证明运行时加载或 Slark 侧安装授权。
+
+`profile.skillhub_package_snapshot` 通过有界只读控制帧公开固定重开能力。客户端指定 manifest 或一个安全相对文件，并按精确偏移推进；每帧最多 32 KiB。偏移零会验证完整不可变 operation，并为该认证连接捕获一个对象。同一连接读取同一 operation 的后续文件时复用该校验；每次文件读取仍校验计划、清单、路径和目标文件摘要。再次请求 manifest 会刷新完整校验，回读当前回执也会校验全部文件。后续每帧都重新校验回执与有效 Profile 授权，只接受下一偏移或相同分片重试，并在中止或空闲后释放保留字节。客户端在接收字节前拒绝被修改的 operation、manifest、目标或偏移字段。
+
+`profile.skillhub_execution_receipt` 在签署完成的 daemon 报告前，重新检查同一当前 Profile 授权、激活签名和不可变包文件。Host 与包坐标由本地派生；客户端在返回回执前拒绝任何字段变化或无效签名。Host 证明的是已认证 Main 报告与固定包身份，Slark 仍负责核对 effect、Work 权限、Computer 授权和已准备沙箱。
+
+`profile.skillhub_clock_witness` 按当前 Profile、绑定代次和安装密钥独立保存 checkpoint revision。已授权连接可以读取锚或在精确匹配旧值后将 revision 加一，不能替换已有锚或降低 revision。断线不删除当前 Host authority 生命周期内的见证；重启丢失见证后，旧离线资格必须先在线恢复才能运行。固定 4,096 个锚的容量满后拒绝新锚，不驱逐旧记录。该见证只证明 checkpoint 连续性；Slark 仍须验证签名资格、可信时间、当前资产权限和 effect 所有权。
+
+独立的 `profile.skillhub_clock_v2` capability 由 Host 按资产或 Work 用途签发带一次性票据的锚，并提供当前 epoch。签发请求须提供 `active_asset_anchor_id`：资产签发时为 null，Work 签发时为当前选中资产锚的 UUID。V2 已初始化锚达到 4,096 个后，下一次签发轮换 epoch，使旧 V2 锚失效；若原始 Work 许可窗口仍可能有效，则先拒绝签发，等待最长 30 秒的保留期结束。Work 触发轮换时，Host 只在新代次保留选中的资产见证，供调用方在登记 Work 前在线刷新资产权限。`profile.skillhub_clock_witness` 使用独立记录，并继续在满额时拒绝新锚。
+
+`profile.ensure_binding_scope` 允许可信 broker 传入根据已验证环境与 Slark 登录身份计算的 SHA-256 scope。绑定版本只在同一 scope 内单调递增；另一有效登录可共享同一 Account Profile，而不继承其版本。registry v4 持久化 scope，并拒绝重复 scope 或 handle。读取器接受已发布 v2/v3 记录，加载时不重写；登记带 scope 的绑定时写入 v4。同环境已有带 scope 的绑定后，旧绑定须独立验证并关联 scope 才能离线恢复。旧 broker 可续用已经关联 scope 的 handle，但不能在该环境新增无 scope 的绑定。同一 scope 换绑会使旧 handle 失效。Account 令牌、Profile 解锁和服务器协作鉴权仍须通过；scope 不转移设备所有权。旧 registry 读取器拒绝 v4，因此回退须使用兼容读取器，或在确认不会丢失后续绑定变更后恢复升级前的 registry 快照。
+
+`profile.workspace_model_selection` 从当前连接已验证令牌的 Account 绑定解出 Profile，并在读取后重新校验。监管器丢弃已销毁或替换 worker 的响应。macOS 和 Windows 启动组合安装读取器；旧 Host 不发布此能力。独立随机 worker 令牌授权私有 HTTP 入口，完整响应在流式读取时有上限。请求拒绝重定向，只使用已核验的监听端。15 秒期限覆盖请求和完整响应读取；读取结束后再次检查取消状态，才接纳结果。结果不授权 Source 登记、规划或任务执行。
+
+`profile.workspace_authority` 使用同一授权读取器签发安装级归属证明，不打开视图、不追加 Session 事件、不发送模型请求。客户端核验准确挑战、当前安装/进程、有效期和签名。未安装读取器时不发布此能力。服务器的 nonce、消费及 Source 校验仍须独立完成，见[协议](../control-protocol/README.zh.md#challenge-authentication)。
+
+`profile.group_input_fence` 接受绑定一个准备中 Slark 群和原 Session 的账号授权挑战。选定 Profile worker 通过 Workspace Registry 持久关闭旧 Session 输入；只有保存的群 ID 和版本完全匹配，Host 才在独立的群栅栏签名域签发证明。监管器拒绝已替换 worker 的回包；已提交的栅栏继续保持封闭，回包不确定时须对账。此方法不激活 Slark 群；Slark 须核验并消费签名挑战后，才执行激活转移。
+
+`profile.collaboration_archive_transition` 核验当前账号绑定，将一个精确 token 动作转交选定的 Profile worker，并在返回前再次核验账号授权。worker supervisor 拒绝已替换代际的响应；在拒绝前本地写入仍可能已提交。因此调用方保留原 token，并在回包不确定时对账持久阶段。只有启动组合提供 worker 阶段转移函数时才声明此能力。
+
+`profile.collaboration_archive_intent` 使用同一账号授权及当前 worker 代际，按 Session 找回未完成归档的 token。Host 在 worker 读取前后核验账号授权，并拒绝已替换 worker 的结果；只有 Registry 确认工作区成员关系后，无意图结果才有效。
+
+`profile.collaboration_registration` 使用当前连接已验证的 Account grant 和安装私钥，将服务器挑战与当前 Host 进程一起签名。客户端按已核验的安装身份验证签名，检查全部挑战/进程字段及有效期，返回冻结证明。Unix 与 Windows 共用这套 authority/client 方法。它不启动 worker、不打开视图租约、不修改 Profile/Session 数据。Slark 私有 Host broker 持有独立连接并负责取消；服务器挑战持久层、公钥登记及操作对账不属于该方法。
+
+`profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
+
+`profile.native_room` 通过当前 Account Profile worker 为已有 DS Bot 房间准备独立的桥接 Source。请求由 worker 私有 token 保护。Host 校验准确的房间和 Source 字段，拒绝已替换的 worker，重新检查 Account 授权，并用安装密钥签署房间与 Source 映射。客户端校验签名及当前 Account/Host 身份；超时的写入可能已经提交，调用方须以相同房间 ID 重试核对。
+
+`profile.native_room_operation` 向当前 worker 转发有界的房间命令。Host 在调用前后检查当前连接的 Account 授权、worker 代际及命令与响应的准确范围。`messages` 和 `turns` 每页最多返回三条。写入响应丢失时，调用方须以同一房间和成员周期对账。对于 `turns`，Host 在完成这些检查后签署所选页面，Unix 客户端验证签名及当前 Host 身份后才返回。
+
+私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
+
+补读到结果时，Host 用安装密钥签署准确的正文、Bot 与成员身份、投递 ID，以及当前 Account 与安装身份。客户端会用已检验的 Host 对端公钥复核；Slark 在记录 Bot 群消息前还须按当前注册 Host 再次验签。
+
+Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Account 绑定与安装身份推导的 Host registry、准确的 Bot 成员周期及消息摘要，以及 60 秒有效期。registry 使用签名凭据中的 Slark 用户 ID；随机生成的 Unix 连接 owner ID 只用作本地授权键。确认辅助函数随后向受信任的 Slark HTTPS 来源实时核验成员资格和精确投递；响应限制为 4 KiB，并拒绝重定向或不匹配的回执。`profile.bot_group_deliver` 在调用当前 worker 前使用这两项检查。Host 用已确认结果凭据中的 Slark 用户 ID 签署结果证明。
+
+如果 worker 的派送响应丢失，Host 会先按同一投递 ID 读取持久回执，再报告结果。回执缺失或不可用时保留原始失败；对账期间不会再次提交派送。
+
+内部 Bot 派送函数只选择当前 Account Profile，在向 worker 发送单条投递前完成实时确认，并在返回前复查 Account 和 worker 身份。若 worker 已写入后结果被拒绝，该投递仍属不确定状态，必须使用原 delivery ID 对账。
+
+在 macOS 上，签名嵌入应用在 Host 启动时传入只含公钥的 `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS`。Host 校验并固定公钥环后才公布 `profile.bot_group_deliver`；缺失或格式无效的投影不能授权派送。请求仅携带凭据和命令，不能替换验签公钥。
+
+仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
+
+Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
+
+远程 Session 执行是可选的 Host 依赖。安装执行器后，Host 才会广告 `profile.remote_session`，并只通过有效且绑定 owner 的 view lease 接受控制协议定义的封闭命令联合。Host 从该 lease 解出 Profile，转发连接取消，在异步执行完成后重新校验同一 lease，并让有界结果通过规范 wire codec 后才返回。没有执行器的 Host 不发布 capability，客户端会在发送命令前返回 `upgrade_required`。该执行缝不暴露浏览器 cookie、启动 token、Profile 路径或通用 HTTP 代理。
+
+远程 Web DSH 读取使用 `profile.remote_ui_read`，在调用 worker 前后校验同一绑定 owner 的租约。macOS 和 Windows Host 启动入口安装精确端点的 worker 执行器，worker 私有 Bearer token 始终留在 Host 内。对于 `asset/read`，Host 校验当前启动注入表，只用私有 cookie 读取其中列出的同源 `/plugins/` 脚本，要求 JavaScript 响应，将完整资源限制在 8 MiB，并从同一 Profile worker 本机至多缓存四份资源的缓存返回 24 KiB 分块。取消读取只停止该调用的等待；共享下载限制为 40 秒，其他已授权读取仍可使用下载结果。同一 URL 的并发读取共享下载；最近最少读取的条目会被移除，下载失败的条目会被清除，以便后续重试。超过 64 KiB 的结果会被控制帧拒绝。这只是有界读取通道，不是流或通用 Web API 隧道。
+
+`profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对每份缓存的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。 消费方还必须检查本机客户端 SDK 标志 `remoteUiAssetGzipSupported`，不能只依据 Host 签名能力；旧客户端编码器保留原始读取。
+
+Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `$events` NDJSON 路由。私有路由在活跃期间每 30 秒发送一个单键保活帧；发生背压时跳过写入，取消或完成时停止。读取端丢弃这些帧，不转发为原生事件。它接受有界事件项和明确的结束帧，调用方释放时取消 HTTP 读取，并拒绝格式错误的保活帧、失败或不完整的流。Host 只通过 `profile.remote_ui_stream` 暴露这个读取端：每次短暂的打开、轮询或关闭请求都校验绑定 owner 的租约；每条连接最多保留八个游标；每个游标最多缓存一个 512 KiB 事件，并以 16 KiB 分块返回，空闲时不阻塞控制通道。租约撤销后的下一次请求或连接断开会取消读取。worker 令牌和通用 Gateway 流都不会通过控制通道。 源头历史分片同时要求 `profile.remote_ui_stream.item_chunks` 能力和本机 SDK 标志 `remoteUiItemChunksSupported`。只有显式携带 `item_chunks: true` 的 Session-follow 打开操作，才启用 worker 的私有 `itemChunks: true` 请求。worker 在读取端和游标限制之前，对最多 8 MiB 的完整事件压缩并分片，保留原生历史与分页。未协商请求保留 512 KiB 事件上限，分片仍遵守现有控制帧与游标限制。
+
+账号 provisioning 在 worker 准备失败时保留精确的原注册表记录，包括 issuer 或 subject 替换的情况。期间没有其他注册表写入时，回退恢复原快照及其已发布 schema；POSIX 存储保留原文件字节。该 Profile 出现并发变更时，回退被阻止并返回 `stale`；其他 Profile 的变更会保留。缺少 worker 提供方时，在登记前拒绝操作。这些规则只影响注册表元数据，既不授权云端身份迁移，也不移动或删除 Profile 内容。
+
+恢复不含可选绑定字段的记录后再添加账号绑定时，Host 按注册表的规范字段顺序写入，使更新后的记录在 Host 重启后仍可读取。
+
+Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain handle 与域隔离 unlock verifier。账号 Profile 还保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC，以及按环境划分的当前 binding handle／version；同一个人的 staging 与 production binding 解析到同一账号 Profile。本地专用 Profile 使用设备密钥随机 index，永远不会获得账号 binding。更高的服务端签名 binding version 只原子替换对应环境的旧账号 handle，并使旧签名 selector 失效。替换 Account issuer 时，只有请求携带同一环境 binding handle、严格递增的 version、相同 Keychain handle、匹配的 unlock material，以及替代身份的有效 token，Host 才会保留原 Profile。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料；常量时间校验成功后只授权当前已认证连接。
 
 `profile.ensure` 返回绑定 installation、Profile、binding generation、runtime generation 与 schema generation 的 Host 签名 opaque selector。`profile.restore` 接受该 selector、精确 Keychain handle 与新鲜 Main-vault material。跨 installation 复制、binding 轮换后重放、猜测 handle／material，或证明连接断开，都会 fail closed。
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。
 
+并发的 macOS peer 校验仅在应用可执行文件的身份和字节相同时，共享正在进行的代码签名验证。验证完成或失败后立即移除共享记录；每条连接仍独立检查内核 peer，并在验证前后检查可执行文件。独立可执行文件的快照验证方式不变。
+
+
+离线 Account 恢复接受通过内置运行时、摘要验证的 Profile 兼容闭包，或与嵌入方目录归档一致的复制包声明的插件。仅当 `node_modules` 和 `.bundled-plugins` 均不存在时，空依赖清单才允许没有锁文件；预检记录文件缺失状态，不创建文件。复制包必须使用精确的内容寻址清单来源，名称与版本匹配，嵌入方和 Profile 归档均通过验证，且文件清单完全一致，包括内置依赖。文件缺失、多出、被修改、存在链接或权限不安全时拒绝恢复。归档检查上限为压缩后 32 MiB、展开后 128 MiB 和 8,192 个条目。检查不写入文件，并在 worker 启动前重新验证复制包。其他平铺依赖树仍仅支持只读导出；仅凭可读文件或锁文件不能确定兼容性。
+
 命令写入按 Profile 与 Session 串行，不同 Session 可并发。fsync 日志在执行前记录 `started`，随后记录 committed outcome；两者之间崩溃恢复为 `unknown`，绝不推断成功。审批决策同时比较 payload hash、decision version、window generation 与过期时间。环境上下文只附着到 Session lease，不形成 Profile 全局状态。
 
+扩展操作所有者生成短期有效、绑定 Profile 的计划，并在执行器产生副作用前持久化仅含元数据的回执。`DesktopHost.authorizeExtensionView` 根据有效的窗口租约和可写 Profile 授权解析目标；调用方必须在每次修改前重新验证授权。同一 Profile 的写入串行执行，重复确认不能创建另一项操作；取消在执行器结束前仅表示请求。未完成回执恢复为 `unknown`，阻止该 Profile 的后续写入，绝不自动重放。执行器必须等待其子进程和写入停止后才结束；扩展操作完成资源释放前，必须继续持有 Host 进程锁。
+
+MCP 执行器复用 [hub-upstream](hub-upstream/UPSTREAM.json) 中固定版本的 Desktop Hub 解析器和 AST 合并逻辑，保留其他配置行、注释与环境变量引用。它仅原子写入 Host 解析出的 Profile 的 `profiles/web/cordis.patch.yml`，随后重启该 worker，并检查经过认证的 `pluginInventory/list` 响应。安装行启用 `failOnStartupError`，使激活成功包含首次连接和工具发现成功。重载失败时，仅在操作仍持有授权且文件修订值未变的情况下恢复旧内容或原先的文件缺失状态。修订值区分配置文件缺失与空文件。只有恢复后的 worker 确认原 MCP 条目且失败操作引入的条目已消失，才确认失败；恢复不确定则保持未知。worker 启动、确保运行和释放按 Profile 串行，包括尚未结束的启动操作。
+
+MCP 删除只接受针对一个现有本地 MCP 行的 `{ "action": "remove", "id": "mcp-name" }`。它复用 Hub 的 AST 删除方法，只有被删行对应的 `include:` 条目从重启后的 worker 中消失，才记录成功。配置了删除能力时，MCP 清单声明 `mcp_remove: true`；缺少该标记时，调用方必须禁用删除。 MCP 更新接受 `{ "action": "update", "id": "mcp-name", "mcpServers": { "name": {} } }`，其中必须填写该现有名称的完整替换配置。它复用 Hub 行更新、相同的重启确认与失败补偿，入口由 `mcp_update` 标记控制。显式 SSE 或未知传输类型在 Hub 转换前被拒绝。
+
+内部 [Skill 执行器](src/profile-skill-executor.ts) 复用 Hub 固定版本的 Markdown 生成逻辑，在 Host 解析出的 Profile 下创建一个新的 `skills/<name>/SKILL.md`。它拒绝已有同名技能、不安全文件系统条目和并发发布，使用私有权限并同步到磁盘。调用方的运行时生效确认必须返回所选预设作用域内、不按调用权限过滤的技能定义。执行器将其 Profile 路径、来源、名称、描述、路由提示、正文和调用标记与发布的 Markdown 比较；空确认不能代表成功。启动组合在同一 Profile 队列中注册两种安装器。技能发布后重启 worker，使用 Host 持有的 Cookie 读取 `skills/inspectProfile`；接口挂载默认预设的 standing scope，不启动 Session，也不传项目 cwd。确认仅证明默认预设可见性，不代表所有自定义预设或项目都可见。部分发布后的核对仍不属于此组件。
+
+技能调用开关复用 Hub 的 AST 更新方法，生成的辅助函数移除了文件系统副作用。Host 只接受现有本地条目 ID、字面字符串 `model`/`user` 选项及布尔值；原子替换 Markdown，保留其他元数据和资源，并在重启后核验默认预设。生效确认失败时，仅在修订和授权仍有效的情况下恢复原字节并核验恢复结果。清单只返回从文件读取的 `model_invocable` 和 `user_invocable` 标记，不含指令正文；这些标记描述本地配置，不代表所有预设均可见。Desktop 根据 `skill_invocation` 能力启用开关。
+
+Markdown 文件导入接受 `{ name, markdown }`，保留原始字节、元数据和调用标记。声明名称必须与有效 frontmatter 一致；确认前检查描述、正文、调用字段类型和载荷大小。完整 JSON 计划不超过 32,768 个 UTF-8 字节，正文不超过 24,576 字节。拒绝已有同名技能。`skill_files` 声明此新文件导入能力，不允许 ZIP 上传，也不读取调用方提供的本地路径。
+
+[资源包安装器](src/skill-archive.ts) 接受 Main 下载预览后提供的公开 GitHub codeload URL、所选子目录和 SHA-256 摘要。它再次下载但不跟随重定向，写文件前校验摘要。它保留原始 Markdown、资源字节和脚本的所有者执行权限，安装时不执行脚本；全部资源参与修订检查及生效确认后的核验。压缩包上限为 50 MiB、512 个条目、单文件 10 MiB、总展开大小 100 MiB；路径穿越、链接、大小写冲突、不明确的技能根目录和名称不匹配均被拒绝。只有配置了该执行能力时，技能清单才声明 `skill_archives: true`。不支持 ClawHub、本地资源包上传或任意下载主机。
+
+内部[插件命令执行器](src/plugin-command.ts) 复用 Hub 固定版本的参数构造器，显式指定 Node、CLI 和 pnpm 路径。它提供私有命令入口、所选 Profile 主目录，以及用于共享包缓存的操作系统用户主目录，不转发环境变量中的凭据。它禁用生命周期脚本，消费输出但不记录内容，并在取消、租约撤销或两分钟超时后终止进程组。CLI 退出不等于激活成功；启动流程在提供打包 pnpm 路径时注册组合包执行器；生命周期脚本保持禁用，尚不开放构建批准。
+
+内部[插件执行器](src/profile-plugin-executor.ts) 将不可变来源与包名绑定到所选 Profile，拒绝替换已声明的包，并对主目录和 Profile 的清单、锁文件、构建策略、仓库配置及补丁计算指纹。只有 Host 提供的组合包加载确认完成且安装后版本指纹未变化，才记录成功。部分安装和激活失败保留为结果未知，不自动回滚或重放包管理器文件。启动流程重启所选 worker，并通过其经过认证的插件清单检查发生变化的已启用根条目。空贡献、被覆盖、被移除、分组或条件条目无法建立此加载确认，会保留结果未知回执。
+
+可选启动字段 `pnpmEntrypointPath` 通过 `DSH_HOST_PNPM_ENTRYPOINT` 接收打包后的命令路径。启动流程校验此文件，并仅在字段存在时注册插件操作；旧版集成继续提供 MCP 和 Skill 操作。Host 只向 Slark Web Profile Worker 传递同一已校验路径作为 `DSH_PROFILE_PNPM_ENTRYPOINT`，使页面内插件管理器通过打包 Node 调用打包 pnpm，无需继承外部 `PATH`。
+
+可选启动字段 `bundledPluginsRoot` 通过 `DSH_HOST_BUNDLED_PLUGINS_ROOT` 接收嵌入应用提供的目录，其中包含 `catalog.v1.json` 与插件安装包。清单使用精确结构，固定每个安装包的名称、版本、SHA-256、来源提交及其插入的根条目 ID；嵌入文件须归 Host 用户或 root 所有，且不得对同组或其他用户可写。清单缺失或损坏时只停用 `bundled:<名称>@<版本>` 来源，不会阻止启动。[内置来源](src/bundled-plugins.ts) 与其他插件来源一样经过确认、回执和加载确认。校验会拒绝清单中不存在的版本，以及条目 ID 已出现在 Profile 当前组合结果中的安装包。安装时重新计算摘要，并以不覆盖的方式复制到按内容寻址的 `profiles/web/.bundled-plugins/<sha256>.tgz`。随后以离线优先、不运行生命周期脚本的方式安装这个 Profile 内的相对路径文件，因此依赖记录为 `file:.bundled-plugins/<sha256>.tgz`，在 Profile 迁移和应用替换后仍然有效。
+
+可选[真实 worker 探测](tests/plugin-worker-live.spec.ts) 要求 CLI、Client 包和 Web 资源已构建。设置 `HOST_PLUGIN_LIVE_WORKER=1` 和 `SLARK_PLUGIN_ACCEPTANCE_ROOT` 后，[插件集成测试](tests/plugin-command-integration.spec.ts) 还通过 Unix socket 驱动真实 Slark broker、本地接口、桌面安装协调器和回执日志，从本地回环仓库安装插件，重启正式 Web worker，并验证其认证清单与更新的 worker 代次。测试替代了目录预检、确认和操作系统进程身份校验，不证明原生批准点击或签名应用。
+
+Windows 回执存储复用现有私有文件接口，原子替换有容量上限的记录集合。每次读取均核验 SID 所有权、受保护的 DACL、链接数量与重解析点证据；损坏或超限数据会拒绝访问，不会变成空历史。共享操作管理器将中断记录转为待核实，不会重放。嵌入应用提供正数 `maximumExtensionReceiptBytes` 后，Windows 启动端启用 MCP；省略该字段时扩展不可用。启用后支持 MCP 清单、安装、更新、移除及显式恢复，并在销毁 worker 和释放 Host 锁之前等待操作停止。
+
+MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个执行器。Windows 启动产物内联 YAML 的 ESM 版本，使校验后的字节可从 data URL 加载，无需查找依赖包或使用依赖文件路径的 CommonJS 加载器。Windows 存储校验 Profile 私有目录及文件证据，独占创建操作备份，并在恢复时区分配置文件不存在与空文件。删除操作在同一个独占原生句柄上比较预期内容并校验 SID/DACL，最后检查授权后设置句柄删除状态，不重新按路径打开文件执行删除。启用 MCP 时，Host 在启动 Profile 前创建缺失的私有 web 目录及初始配置；重启会保留 MCP 字节上限内的自定义配置。权限异常或继承权限的现存路径会被拒绝，不自动修复；这些现存 Profile 的迁移仍需单独处理。
+
 <a id="model-experience"></a>
+## 运行时不变量
+
+`profile.collaboration_delivery` 在首个分块捕获当前授权 Account worker，并在每个分块及持久写入后重新核验 worker 和 Account。Host 跨连接最多保留四个上传和 4 MiB，30 秒后使上传过期，并在取消中的写入结束前保留资源额度。它仅签署与原 Profile 持久提交匹配的描述符；重连后的重试恢复 Profile 的首次提交。客户端核验签名、Account、进程、完整不可变正文摘要和分块偏移。Unix 与 Windows 启动仅在安装私有接收器后发布此 capability；云端确认仍是独立操作。
+
+不发布运行时不变量伴随插件：文件与消息提交点验证自身状态，租约与崩溃行为由集成测试覆盖。
+
+Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 句柄生成并保留独立的 `DSH_PROFILE_REFERENCE_TOKEN`。选择 JSON 和返回元数据各不超过 32 KiB，请求 15 秒后超时，拒绝已停止 worker、重定向与取消。句柄返回不含内容字节的不可信 JSON。父 Host 必须先将计算元数据与已授权选择比对，才能传递；该句柄不确认分享意图，也不新增 Host 控制协议命令。
+
+`profile.source_authority` 从当前连接已验证的 Account 解析 Profile，经监管器与独立随机 worker 令牌读取持久 Source 描述符。macOS 和 Windows 启动组合安装该读取器。读取器缺失时不发布能力；worker 替换、坐标或摘要不符、挑战过期及 Account 授权变化都会拒绝签名。客户端核验精确挑战、固定的安装/进程及 Source 签名。此操作不捕获消息或准备模型；云端消费和聊天分发仍须单独接入。
+
+`profile.reference_authority` 仅在持久 Source 读取器与 `readCollaborationReferenceGrant` 同时安装时发布。Host 要求当前令牌验证的 Account，将独立 Profile 授权与请求的 Source 和完整引用预登记摘要比对，再于签名前重新读取 Source。撤权、过期、取消或 Profile/Source 观察变化均拒绝签名。客户端核验精确挑战和固定安装进程的签名；Source 签名不能替代引用授权。
+
+`profile.reference_capture` 解析当前 Account 的 Profile，在调用独立令牌保护的 worker 捕获前读取其 Source。捕获后和返回元数据前再次核验 Account、Profile 与完整 Source 摘要。客户端将操作限制为 18 秒并固定已检查的 peer；监管器代际替换、销毁、过期、取消或归属丢失均不返回成功结果。macOS 与 Windows 共用的启动读取器安装此操作。Main 仍须独立确认分享意图并校验计算请求，再进行单独的引用签名或传递。
+
+`profile.reference_content` 使用当前 Account Profile 及独立的 Reference worker 能力。每个分块重新核验实际选中内容、Account 归属、worker 世代和已提交 Source。客户端固定原始 Account 及捕获的描述符、请求和内容元数据，检查每个偏移与长度，并在 18 秒操作时限内核验完整 SHA-256 后返回精确字节；支持空内容。云端传递和接收任务访问仍须独立授权。
+
+`profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
+
+### 远端工作区目录
+
+远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。
+
+Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate`。macOS 组合使用已有代次检查；持久化数据缺失或不安全时拒绝，不执行初始化，也不启动 worker。异步读取结束后，在签名或返回观察结果前再次核对连接及注册表身份/代次。Windows 组合未安装此读取器，因此省略两项能力；客户端在发送材料证明前拒绝不支持的 Host。
+
+这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
+
 ## 模型体验
 
 无，因为本包没有面向模型的注册。
@@ -51,16 +194,119 @@ macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启�
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与延后工作
 
+当前启动组合把引用授权读取转发给原始且仍有效的 Profile worker。授权要求独立提交的选择，并重新核验消息或附件字节。自然语言选择的生产者和云端内容上传尚未接通；嵌入方必须先补齐这些消费端，才能启用引用传递。
+
+- **扩展支持由执行器决定** — `profile.extensions` 通过有效窗口租约接受清单、准备、提交、状态和取消请求。插件执行要求配置随包 pnpm 产物。Windows 启动组合支持显式启用的 MCP，Windows 插件及 Skill 执行器仍不可用。嵌入应用必须启用并固定此组合的版本，用户才能获得该能力。技能清单使用 `transport: markdown` 和有长度限制、由文件名生成的标识。安装或恢复配置导致 worker 重启后，Desktop 必须重新打开同一 Profile 视图。打包运行时固定版本、完整 Profile 迁移保留、杀进程恢复和未知回执核对，仍需在发布前单独完成端到端验证。
+
 - **解锁材料仍由嵌入应用拥有**——Slark Main 必须把随机 32 字节 Profile material 保存在 macOS Keychain／safeStorage 中，并且只通过已认证 Main-to-Host 链路提供；它绝不能进入 Renderer、argv、environment、日志或 registration 文件。
 - **Account access 与 session 绑定**——Slark Main 必须从 DSH Account 获取 `dsh-host` token，并且只通过已认证 Main-to-Host 链路提供。Host 不持久化或记录该凭据；token 过期后，Slark Main 必须刷新 Account session，`profile.ensure` 才能成功。
 - **旧数据迁移在完整闭环前 fail closed**——只有 active Profile 的完整 owner-only bundle（session、settings、credential、workspace 与 Profile 配置）可被 stage 时，Host 才发布 export 能力。digest-only 或 session-only transfer 不会被宣称为安全迁移。
+- **旧主目录的设置和凭据没有账号归属**——固定 OS 用户 `.dsh` 主目录的导出只迁移会话和工作区，全部设置与凭据都留在原路径，其中也包括权限、引导状态、模型路由与默认模型。来源摘要会检测盘点到传输之间的变更。在显式账号认领实现之前，新 Person Profile 无法使用这些值；已经激活的 Profile 数据另行处理兼容性。
+- **旧数据认领盘点仍是 Host 内部的脱敏能力**——Host 可对同一份已校验来源盘点 DeepSeek、已配置的 pi-ai 路由及 DeepSeek 网页搜索。结果只包含候选标识、凭据是否存在、共享引用状态、来源摘要，以及无法映射的设置和凭据记录数量；不返回密钥值或引用名。盘点本身不授予认领权限，也不修改来源或目标；仍需实现已认证的认领事务。
+- **旧数据认领存储与启动拦截留在 Host 内部**——状态机校验不含密钥的预留、提交和已验证恢复事件。Unix 用户私有及 Windows SID 私有适配器会先原子替换有大小上限的全局快照，再发布状态变化；替换结果不确定时，重载前拒绝后续写入。每个 Profile 另有私有的未决标记，两套启动装配只检查该 Profile 的标记，再决定是否启动 worker，因此全局账本损坏不会让无关 DSH Profile 停摆。macOS 认领事务在目标凭据写入及核验前后设置、清除该标记。
+- **旧数据认领的恢复快照只保存在目标 Profile 内**——按操作保存的 Unix 用户私有或 Windows SID 私有文件记录两份原文档，以及两份预期结果的摘要。重复操作不能替换原快照；只有当前文档仍与原内容或预期结果一致时才允许还原。快照包含凭据，绝不通过 Desktop IPC 传输。认领事务在写入任一文档前持久保存快照，并在核验终态后删除。
+- **提供方转换仍是 Host 内部能力**——经校验的旧来源读取器只向 Host 代码返回绑定来源的私有文档；转换函数只把用户确认的 DeepSeek、pi-ai 或网页搜索路由写入目标文档对。它生成绑定 Profile 和操作的独立凭据引用，保留已有个人路由，把网页搜索的明文密钥从设置中移走，且不导入其他提供方、授权记录或旧默认模型。DeepSeek 和 pi-ai 路由如果包含内嵌密钥字段或自定义请求头，则要求用户手工配置，不把这些值复制到设置中。macOS 认领事务在确认后调用该转换函数。
+- **目标文档写入仍是 Host 内部能力**——写入器根据已校验的来源文档把单个提供方投影到当前可变设置与凭据文件，修改前记录两份原文档，支持任一文件写入后重试，并核验最终文档对。恢复时拒绝覆盖后续个人编辑。macOS 定位当前已物化的代际；Windows 定位 SID 私有的 `owner-state` 文件。macOS 认领事务停止 worker、隔离该 Profile、校验来源摘要、预留账本归属，再调用写入器。
+- **认领协调仍是 Host 内部能力**——协调器按 Profile 串行认领，停止 worker、保存原文档、预留提供方唯一归属、标记 Profile 未决、写入并核验两份实时文档、提交账本、清除标记、重启 worker，最后比较并删除含密钥的快照。已提交操作的重试根据目标摘要核验，无需重读旧来源；中断的恢复也能继续清除标记。macOS 控制接口在 Account 视图授权下调用该协调器。
+- **账号认领授权独立于普通视图访问**——Host 只能凭有效的 Main 持有租约，为通过 `profile.ensure` 验证过 Account 令牌的同一连接解析 Account Profile 认领目标。仅靠本机保管库恢复、离线恢复、本地 Profile、连接撤销和过期租约都不能授权认领。盘点、确认和 macOS 事务每次生效都使用该检查；未决认领的恢复使用独立的同账号证明。
+- **旧模型盘点只读**——声明旧来源已静止的 macOS Host 会发布 `profile.model_claim_inventory`、`profile.model_claim_confirm`、`profile.model_claim_apply` 和 `profile.model_claim_retry`。盘点只返回脱敏候选元数据。确认重验 Account 租约、来源摘要和凭据是否存在，再签发只在当前连接有效、60 秒内只能使用一次的授权。写入在认领事务前消费该授权。重试要求新鲜的同账号证明，以及账本中已预留的准确候选项、操作号和来源摘要。Windows 在原生来源盘点完成前不发布这些能力。
+- **认领恢复盘点可在视图失败时使用**——macOS Host 校验当前 Account 令牌、绑定和保管库证明后，只列出账本中未完成的预留以及 Profile 标记尚未清除的操作。它返回有界的脱敏回执，不读取旧凭据，也不启动 Profile worker。已提交或已恢复但标记未清除的操作，可通过现有重试或恢复接口完成。
 
 <a id="dev-note"></a>
 ### 开发备注
+
+协议权威测试在所有平台使用实例独立的 JSON 注册表钩子。POSIX 与 Windows 存储套件负责文件系统权限检查。内置归档存储测试依赖 POSIX UID 和权限位；Windows 私有文件、命名管道、ACL 与原生 PowerShell 套件仍为必需检查。
 
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 
 参见[单 Host 控制协议 Agent Note](../../../.agents/notes/implemented/architecture/2026-09-02-single-host-control-protocol.zh.md)。
 
+REQ-20260911-0004 的原生存储证据仅来自 Windows 11 x64 管理员环境中的独立合成信封探针：创建、读取、重新打开、竞争租约拒绝、替换，以及超限写入后保留原数据均通过。SID 解码使用 LPWSTR 输出 slot；文件创建使用带类型的安全属性指针；重复加载使用匿名结构。此探针尚未验证标准用户安装、加密、签名载体集成或完整 Desktop 启动。
+
 </details>
+
+经确认的 Markdown 替换通过独立的 `skill_replace` 能力接受 `{ action: "replace", id, markdown }`。精确的 flat/bundle ID 和 frontmatter 名称必须匹配已有自有条目。更新复用调用开关的原子发布机制，保留目录资源；生效确认失败时，仅在修订和授权仍有效的情况下恢复。成功要求默认预设中的新定义匹配；仅恢复字节而未确认运行时恢复，不能报告已明确失败。
+
+经确认的技能删除通过 `skill_remove` 能力接受 `{ action: "remove", id }`。Host 将精确的自有文件或目录移至 Profile 内的私有暂存位置，重新加载默认预设后才清理暂存资源。观察结果仍指向原路径时不能确认删除。成功回执持久记录有界的 `skillSource`：`absent` 或观察到的接替来源，不宣称所有同名技能都消失。观察失败时，仅在修订、授权和暂存字节仍有效的情况下恢复完整条目并核验恢复。冲突时保留暂存条目和未知回执供核对，不覆盖其他作者的新内容。
+
+内部[插件包启停规划器](src/plugin-toggle-plan.ts) 使用 app-boot 配置组合控制独立插入的根条目，拒绝共享配置修改、分组或条件贡献、缺失插件包及后续覆盖冲突。插件执行器仅在配置了规划及生效确认时接受经确认的 `{ action: "toggle", packageName, enabled }`。它原子发布 Profile 补丁，保留标签值和注释；确认失败且修订与授权仍有效时恢复原补丁。启动组合重启 worker；停用确认要求精确模块处于 `enabled: false` 且没有 fiber。包依赖仍保留安装。Desktop 使用显式 plugin_toggle 能力与逐条目的配置状态开放经系统确认的启停按钮。
+
+插件清单通过可选 `plugin_state` 返回 `enabled`、`disabled`、`mixed` 或 `unsupported`，描述组合后的配置，不代表当前 fiber 健康。启用与停用两个方向都必须可以独立规划，才开放条目操作；旧版和不支持的条目保持按钮禁用。真实 CLI/worker/Slark 夹具安装一次并停用、再启用，通过三次新 worker 代际验证回执查询及清单状态变化。Electron 夹具另以注入 provider 验证 renderer/preload/dispatcher 行为。
+
+经确认的插件更新使用 `{ action: "update", packageName, spec }` 和现有精确来源 add 命令。仅允许由依赖管理、可独立且全部启用的插件包更新，避免停用、混合或不支持的组合意外增加启用功能。Main 通过 Hub 预检锁定所选来源，并要求包名匹配已有条目。CLI 必须发布请求版本，新 worker 确认贡献后才成功；依赖部分变更保留未知回执，不假装已经回滚。
+
+插件安装预检从不可变的 npm 精确版本清单或 GitHub 精确提交清单读取信息，不写入所选 Profile。它只返回已识别的生命周期脚本名称及精确命令，并用 SHA-256 摘要绑定来源和精确包版本。脚本清单为空、Desktop 未提交摘要或摘要改变时，生命周期脚本继续禁用。匹配的二次确认只把已审阅的 `package@version` 持久加入 `allowBuilds`，再以固定 add 命令执行且不附加 `--ignore-scripts`；其他构建包仍默认拒绝。清单身份漂移、重定向、元数据超限或策略冲突均在包管理器产生副作用前关闭失败。
+
+经确认的卸载使用 `{ action: "remove", packageName }`，仅接受由依赖管理的独立插件包，并调用固定 CLI 的 remove 命令。pnpm 11.7 的 remove 要使用 `--config.ignore-scripts=true`，会拒绝 add 可用的 `--ignore-scripts` 写法。确认依赖及插件包登记已移除后，Host 清理原贡献 ID 对应的独立 `{ id, disabled }` 覆盖，保留其他配置，再要求对应运行时 ID 全部消失。模板内置包不可卸载。卸载、修复以及未经批准的安装或更新路径继续禁用生命周期脚本。
+
+技能列表将自有本地条目与当前 worker 经认证的 `skills/profileCatalog` 快照合并，读取不重启 worker。读取期间本地修订变化、快照不完整、胜出名称重复或合计超过 128 条时拒绝读取。条目仅公开有界来源类别，以及 `effective`、`shadowed` 或 `not_visible` 状态；被覆盖的本地条目标出生效来源。外部胜出条目使用不透明的 `catalog-` ID，在 Desktop 中只读。提供方路径保留在 Host 内部。列表范围是自有本地定义和默认预设胜出条目，不包含所有外部落选候选项或项目专属预设。
+
+技能删除在移动条目前将检查点持久写入私有操作回执。检查点把精确的 flat/bundle ID、原内容摘要、变更前及预期变更后本地修订、删除或恢复核验阶段绑定到原操作和 Profile。暂存名称由操作 UUID 推导；已有暂存条目绝不替换。初始检查点存储失败时不移动文件。进程崩溃可能让最后持久阶段落后于文件系统，因此检查点仅是后续核对证据，不能据此直接宣称成功或自动恢复。普通协议回执不返回这些 Host 内部字段。
+
+经确认的技能恢复使用普通 Skill 准备载荷 `{ action: "restore-removal", operationId }`，引用同一 Profile 中结果未知的删除回执。Host 核验原检查点、精确备份摘要、目标占用及变更前/删除后修订；计划同时绑定检查点摘要。恢复在文件变更前持久保存独立 UUID 和指向原回执的 `restores` 关联。执行时移回已核验备份，或对已经移回且字节相同的文件重新核验，随后确认默认预设实际定义。关联恢复回执成功后，原删除及相关中断恢复尝试不再阻塞后续操作，但历史结果不改写。无关未知操作仍阻塞。旧回执缺少检查点或存在冲突时不能猜测恢复。本能力仅限 Skill 删除，不恢复其他 Skill 编辑或插件包管理器副作用。
+
+
+MCP 操作先以排他创建方式持久保存私有备份，再记录检查点并发布配置。检查点包含变更前后修订、原文件存在状态、新增条目 ID 和单调推进的阶段，不包含配置正文。备份最大为 1 MiB 加一个存在标记字节，归 Host 用户所有，权限为 0600，且只有一个硬链接。备份随操作证据保留；本接口不提供自动保留清理。
+
+带恢复证据的未知 MCP 回执声明 `mcp_restore: true`。普通 MCP 准备载荷 `{ action: "restore-config", operationId }` 将新确认绑定到原检查点与当前组合修订。恢复仅接受记录的变更后修订，或已经恢复且完全一致的变更前修订；保留原文件缺失状态，并核验原运行时条目与新增条目的消失。备份缺失、被修改、存在链接、权限公开或配置并发修改时拒绝恢复。关联的成功回执解除相关未知操作的写入阻塞，不改写历史结果。MCP 恢复仅还原配置，不覆盖子进程或远程服务的副作用。
+
+插件启停变更持久保存原操作持有的私有配置备份及检查点，绑定包名、备份摘要、变更前后依赖状态修订和阶段。未知启停回执通过 `plugin_restore` 返回包名。插件准备载荷 `{ action: "restore-toggle", operationId }` 创建新的确认恢复操作。Host 仅接受记录的变更前后状态，核验替换原配置后精确得到变更前修订，并从已安装组合包重建原启用和停用条目的运行时预期。清单、锁文件、策略文件或覆盖配置变化时拒绝恢复；备份缺失、被修改或权限公开时也拒绝。恢复保留原文件缺失状态，不调用包管理器，并确认原 worker 状态。历史结果保持不变，通过成功恢复回执关联。备份随证据保留。本操作仅恢复启停配置，安装、更新和卸载的部分变更仍保持未知。
+
+插件包操作在调用命令执行器前持久保存不可变的安装、更新或卸载意图。证据包含精确请求来源、原依赖引用摘要、无关清单/策略/覆盖配置状态摘要、原移除条目 ID 和单调推进的阶段。操作类型和阶段字段必须为字符串；数组和对象不会被强制转换，而是直接拒绝。回执不保存原依赖引用或配置正文。私有回执读写均限制为 64 KiB，以容纳有界的组合包移除 ID。带证据的原未知回执可声明 `plugin_complete`，通过独立确认的 `{ action: "complete-package", operationId }` 计划继续执行。计划绑定包含锁文件的当前修订及原意图摘要，不接受客户端替换来源。
+
+POSIX Host 对内置 ds-bot 0.2.16 的更新会保留共享 Web 配置，并在修改文件前为已安装的插件文件创建快照。回执将历史包身份和归档摘要绑定到原依赖，并记录私有插件快照及迁移前后配置备份的摘要。更新失败时尝试恢复归档、插件快照和原配置，然后确认运行时；恢复未完成或中断时状态保持未知，需要单独确认后继续。配置或备份内容发生变化时拒绝恢复。
+
+继续执行保留无关依赖声明、组合包顺序、策略文件及覆盖配置，仅接受目标缺失、目标匹配原依赖摘要或目标匹配精确请求引用。无关变更使准备失败，命令结束后还会再次核验。命令中断可能合法改变依赖解析，因此部分锁文件变更不纳入无关状态摘要；确认和提交仍绑定完整当前锁文件修订。安装和更新使用原固定来源重新执行 add，并禁用生命周期脚本。卸载时若依赖仍存在则重新执行 remove；依赖已缺失时，用固定 CLI 命令 `plugin --profile web install --no-frozen-lockfile --ignore-scripts` 按当前清单修复依赖树，随后 Host 仅清理原目标的残留组合包登记和独立启停覆盖。必须通过运行时确认和最终修订稳定性核验。再次中断仍保持未知，需要再次显式确认。
+
+成功继续执行使用 `completes_operation` 和 `completed_by`，与恢复关联字段区分。原操作及相关中断继续操作保留未知历史结果，仅由关联的成功回执解除这一组操作的写入阻塞。继续执行要求有效的 Profile 授权租约和完整意图证据。不猜测缺少意图的旧记录，也不保证修复无法建立租约的 Profile、损坏清单、不可用包来源或插件外部副作用。
+
+Web worker 工厂另生成随机 `DSH_PROFILE_ANALYSIS_TOKEN`，禁止调用方环境覆盖，并将其保留在视图租约之外。仅供父 Host 使用的 `collaborationAnalysis` 句柄向私有 worker 发送有界 prepare/dispatch JSON，拒绝已停止的 worker 和重定向，并校验完整有界 UTF-8 响应。父 Host 必须派生原 Account/Host 归属摘要并保持权限有效；句柄本身不授予云端资格，也不安装聊天入口。
+
+Web worker 工厂另生成并保留 `DSH_PROFILE_DELIVERY_TOKEN`，供仅父 Host 可用的 `receiveCollaborationDelivery` 句柄使用。完整投递 JSON 上限为 1 MiB；所属 Profile 校验其结构，返回最多 8 KiB 的不可信本地提交 JSON，不回传答案。已停止的 worker、重定向、取消和非法响应均拒绝。该能力保留在视图租约之外。父 Host 必须认证账户命名空间与可读云端投影；该私有 HTTP 句柄不授予签名云端确认，也不提供控制协议上传。大回复需要在现有控制帧上限内进行已认证的分块传输。
+
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。分析请求使用协议已有的30秒权限有效期上限，覆盖有界模型执行；其他控制请求仍为15秒。返回输出前重新检查有效期和当前 Account/Profile 权限。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。worker 保存输出后，Host 签署原始 JSON 摘要、派发 grant 及当前 Account/安装/进程身份。保存失败或权限变化不会返回签名结果。取消关闭原操作；签名将已保存输出绑定到原派发及当前 Account 和 Host，不建立任务语义或 Agent 执行权限。
+
+相同的当前 Account/Profile 校验覆盖 `capture_reply` 与 `prepare_clarification`。补充捕获、完整输入准备和派发全过程保留 Host 派生的归属摘要；客户端核验各操作对应的不可执行描述或准备结果类别。客户端仅在派发时接纳输出，并将其签名凭据与该派发核对。这两项操作不改变视图租约，不授予云端权限，也不受理任务。
+
+Unix Host control 方法 `profile.collaboration_analysis` 在准备/派发前后检查当前连接已通过 token 验证的 Account 身份和 Profile。Host 从该连接、Account、Profile 和安装/进程身份派生准备归属摘要，调用方不能指定。supervisor 拒绝被替换 worker 世代的响应。原始输出使用有界 base64url，让32 KiB JSON 保持在已有64 KiB控制帧限制内。取消关闭原操作；该方法不校验任务，也不受理 Agent 执行。
+
+
+`attestRootAuthority` 仅在对端声明能力时请求 `profile.root_authority`。授权服务解析当前已验证的 Account Profile，通过 worker 监管器读取原始根描述符，比对所有根、来源、命令和摘要字段，并在签名前再次检查 Account grant。客户端核验精确挑战、当前安装/进程、有效期及专用根签名。两种启动组合均安装读取器；worker 替换、根缺失、坐标不符、授权撤销或取消都会拒绝签名。worker 根元数据使用私有 Source 读取令牌，不进入浏览器 view lease。这只证明根绑定已持久提交，不提交根、不授予执行权限，也不确认云端受理。
+
+根日志操作保留认证后的 Account 绑定与 Host 身份，在访问 worker 前后检查授权，并丢弃已替换 worker 的回复。worker 通过私有分析/写入 token 访问 `/internal/desktop-root-journal`，Source 只读 token 不能确认受理。回执响应丢失后仍须对账，即使原回执可能已经保存。
+
+支持根分析的 worker 显式公布 `profile.root_analysis`。根准备使用当前 Account 授权的 Profile，并与派发保留同一 Host 绑定；客户端在发送新命令前拒绝旧端。Unix 和 Windows 启动接入同一种根分析 worker owner。旧 Source 分析保持独立，根准备不会回退到旧流程。
+
+`sourceAnalysisRecoverySupported` 单独声明 `profile.source_analysis_recovery`。`read_source_output` 使用私有分析令牌，只访问当前 Account 所属 Profile，读取后重新检查权限。Host 验证原 Source、已消费派发记录及保存输出摘要，再按当前 Account 和安装/进程身份签名。客户端拒绝未签名的已保存响应，并核验精确字节及当前 Host。worker 使用专用有界输出读取器，让解码后 32 KiB 的 JSON 在 base64 编码后仍可完整传递；通用 JSON 字符串限制不变。输出缺失不授予调用，过期的已保存派发记录不授予当前云端权限。
+
+`sourceLiveResumeSupported` 独立声明 `profile.source_live_resume`。Host 为普通 Source 的 prepare 与 resume 派生稳定的 Account/Profile/安装/进程摘要，派发权仍绑定当前连接。访问 worker 前后均检查授权与能力。交接成功保留原 attempt 和期限，并使旧连接失去派发权；不支持的 worker 在访问前拒绝。
+
+仅支持先捕获、后准备规划输入的 worker 才公布 `profile.root_capture`。Host 和客户端均要求该能力才能捕获、延后规划或释放调用；操作保留当前 Account/Profile 授权，并拒绝 Root 或 Source 响应坐标变化。私有文本捕获成功后，Host 对完整入口元数据签名，客户端验证原入口摘要、当前 Account/Native 身份与签名。[Control Protocol](../control-protocol/README.zh.md) 定义字段与限制。Unix 与 Windows 启动安装相同的 worker 操作。[Web App](../../bundle/web-app/README.zh.md) 定义捕获保留、受理、超时和销毁行为。
+
+读取已保存输出要求独立的 `profile.root_analysis_recovery` 能力。访问 worker 前后均检查当前 Account/Profile 授权，并使用私有分析 token。Host 按当前 Account 和安装/进程身份签署匹配的原派发记录及保存输出摘要。客户端必须取得该回执，并核验原始字节和当前 Host 身份。旧 worker 拒绝该命令；保存的派发元数据不会触发第二次模型调用。
+
+`rootLookupSupported` 独立于准备能力公布 `profile.root_lookup`。`recover_root` 复用当前 Account/Profile 校验及私有 worker token，但只接受 recovered 元数据；旧端在查询前拒绝。
+
+`rootPendingLookupSupported` 独立公布 `profile.root_pending_lookup`，用于 `reconcile_root`；只有通过当前 Account/Profile 授权的 recovered 元数据可返回。
+
+`rootLiveResumeSupported` 为当前 worker 公布 `profile.root_live_resume`。Parent 根据 Account 授权版本、Profile 与 Host 进程派生续接身份，仅排除 socket owner。当前 Account/Profile 校验通过后，worker 交接才替换派发 owner；worker 重启后无法借此重建可执行调用。
+
+`attestRootPlanningAttemptAuthority` 要求对端单独声明能力。授权服务仅在安装 `inspectRootPlanningAttempt` 时声明此能力。私有读取器必须核验当前 Profile 归属、存活的模型准备及已持久化且当前未使用的尝试；记录缺失、被替代、已派发、过期或写入状态不确定时拒绝。授权服务只传入原 Source/root 查询坐标与尝试 ID，比对返回的全部输入、模型、前驱和根字段，并在读取后重新检查 Account 授权。客户端验证精确挑战、当前对端、有效期及专用签名。证明不授予模型派发或任务执行权限。
+
+两种启动组合都通过 worker 监管器与 analysis-token HTTP 客户端安装新尝试读取器。签名观察与准备使用相同的父 Host 推导 Account/Profile/Host/连接摘要；其他连接不能为该存活准备签名或派发。监管器在 worker 替换、销毁或取消后拒绝返回结果。准备和派发要求独立的 `profile.root_planning_attempt` 能力，签名观察还要求专用读取器。这些操作不创建云端替换事务，也不授予任务执行权限。
+
+`profile.root_planning_attempt_recovery` 开放只读的 `read_root_attempt` 命令。客户端在发送前检查能力；Host 解析当前令牌验证过的 Account Profile，并在私有 worker 读取前后检查授权。响应绑定所查询的原根和 Source，包括派发过期后的记录，但仅作为事实证据。
+
+单独声明的 `profile.root_execution_journal` 能力仅通过当前已认证 Account Profile 转发有界的具体执行日志操作。Host 派生连接绑定，并在 worker 响应后重新校验归属。客户端和授权端均拒绝缺少该能力的请求。worker 使用私有 analysis token；日志读写不派发模型、不授予新的执行权限，也不确认 Session 已消费结果。
+
+只有配置私有 Profile 接收器时才宣告 `profile.root_feedback`。客户端和授权端均检查该能力，并在每次有界反馈响应后重新校验 Account 归属。父进程仍负责当前云端结果访问权和显式消费意图；传输成功不等同于带签名的云端消费确认。
+
+对于 `root_feedback` 返回的持久消费证据，Host 在签发独立消费回执前核对原 namespace、delivery 和 Source 坐标。签名使用当前 Account、installation 与进程元数据，并在 worker 回复后再次检查当前 Profile 权限。回执不包含答案文本，也不授予新的续跑权限。
+
+macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查和规划 attempt 检查；各权限协议继续使用独立的签名载荷。
+
+客户端和 Host 独立检查 `profile.root_continuation` 能力后才接受 `continuation_read`。原 Profile 返回已提交的观察后，Host 校验其中嵌套消费的 namespace、投递和 Source 坐标，并使用当前 Account 与安装/进程绑定签署独立观察域。回复前撤销 Account 权限会阻止签名。
+
+声明 `profile.remote_ui_stream.session_list` 能力时，完整 Session 列表快照使用现有远程 UI 游标。游标在 512 KiB 单项上限内保留所有列表投影；旧版 Host 继续直接读取。

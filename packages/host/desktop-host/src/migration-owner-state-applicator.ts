@@ -11,7 +11,8 @@ async function syncDirectory(path: string): Promise<void> {
   try { await handle.sync() } finally { await handle.close() }
 }
 
-function object(value: unknown): Record<string, unknown> {
+/** Require one decoded migration owner-state object. */
+export function migrationOwnerStateObject(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('migration_owner_state_invalid')
   }
@@ -55,9 +56,9 @@ export class MigrationOwnerStateApplicator {
     const parent = join(root, 'migration-owner-state')
     await this.ensureDirectory(parent)
     const target = join(parent, String(generation))
-    const settings = object(state.documents.find(document => document.kind === 'settings')?.value)
-    const credentials = object(state.documents.find(document => document.kind === 'credentials')?.value)
-    const workspace = object(state.documents.find(document => document.kind === 'workspace')?.value)
+    const settings = migrationOwnerStateObject(state.documents.find(document => document.kind === 'settings')?.value)
+    const credentials = migrationOwnerStateObject(state.documents.find(document => document.kind === 'credentials')?.value)
+    const workspace = migrationOwnerStateObject(state.documents.find(document => document.kind === 'workspace')?.value)
     if (workspace.storage === undefined && Array.isArray(workspace.grants) && workspace.grants.length > 0) {
       throw new Error('migration_owner_state_workspace_incomplete')
     }
@@ -66,8 +67,8 @@ export class MigrationOwnerStateApplicator {
       global: { initialized: false, workspaceIds: [], archivedSessionIds: [] },
       tables: { workspaces: {} },
     }
-    const storageRoot = object(storage)
-    const unit = object(storageRoot.unit)
+    const storageRoot = migrationOwnerStateObject(storage)
+    const unit = migrationOwnerStateObject(storageRoot.unit)
     if (unit.name !== 'workspace' || unit.version !== 2) throw new Error('migration_owner_state_invalid')
     const mutableFiles = {
       'settings.yaml': `${JSON.stringify(settings)}\n`,
@@ -101,6 +102,30 @@ export class MigrationOwnerStateApplicator {
     } finally {
       if (!published) await rm(temporary, { recursive: true, force: true })
     }
+    return this.result(target, generation)
+  }
+
+  /**
+   * Validate one already-materialized owner-state generation without creating
+   * directories or replacing mutable settings and credential documents.
+   * @param dshHome - existing owner-private Profile root.
+   * @param generation - active persistence generation that must already exist.
+   * @returns the exact provider-owned paths consumed by an existing-only worker.
+   */
+  async inspectExisting(dshHome: string, generation: number): Promise<AppliedMigrationOwnerState> {
+    if (!Number.isSafeInteger(generation) || generation < 1) throw new Error('migration_owner_state_generation_invalid')
+    const root = resolve(dshHome)
+    await this.checkedDirectory(root)
+    const parent = join(root, 'migration-owner-state')
+    await this.checkedDirectory(parent)
+    const target = join(parent, String(generation))
+    if (!await this.matches(target, {
+      'settings.yaml': '',
+      '.credentials.yaml': '',
+      'profile.json': '',
+      'storages/workspace.json': '',
+      '.migration-seed.sha256': '',
+    })) throw new Error('migration_owner_state_missing')
     return this.result(target, generation)
   }
 

@@ -6,13 +6,16 @@ import { HostAuthorityError } from './types.ts'
 
 interface ProfileRegistryOptions {
   readonly root: string
+  readonly snapshotPath?: string
   readonly deviceIndexKey: Uint8Array
   readonly clock: HostClock
   readonly keyHandleUnlocked?: (keyHandle: string) => boolean
-  readonly persistSnapshot?: (path: string, root: string, snapshot: RegistryFile) => void
+  readonly prepareRoot?: (root: string) => void
+  readonly loadSnapshot?: (path: string) => unknown
+  readonly persistSnapshot?: (path: string, root: string, snapshot: unknown) => void
 }
 
-interface RegistryFile { readonly version: 3; readonly profiles: readonly PersonProfileRecord[] }
+interface RegistryFile { readonly version: 3 | 4; readonly profiles: readonly PersonProfileRecord[] }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const SHA256 = /^[0-9a-f]{64}$/
 
@@ -39,7 +42,7 @@ function handle(value: string): string {
   return value
 }
 
-function parseProfile(value: unknown, legacyBindings: boolean): PersonProfileRecord {
+function parseProfile(value: unknown, legacyBindings: boolean, scopedBindings: boolean): PersonProfileRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
   const record = value as Record<string, unknown>
   if (record.kind !== 'account' && record.kind !== 'local-anonymous') throw new HostAuthorityError('unavailable')
@@ -61,22 +64,27 @@ function parseProfile(value: unknown, legacyBindings: boolean): PersonProfileRec
     throw new HostAuthorityError('unavailable')
   }
   const accountBindings = record.accountBindings
-  if (record.kind === 'local-anonymous' && accountBindings !== undefined) throw new HostAuthorityError('unavailable')
   if (accountBindings !== undefined && !Array.isArray(accountBindings)) throw new HostAuthorityError('unavailable')
   const parsedBindings = (accountBindings ?? []).map((value: unknown) => {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HostAuthorityError('unavailable')
     const binding = value as Record<string, unknown>
     if (!exact(binding, legacyBindings
       ? ['authorityEnvironmentId', 'handle']
-      : ['authorityEnvironmentId', 'handle', 'authorityBindingVersion'])
+      : ['authorityEnvironmentId', 'handle', 'authorityBindingVersion',
+        ...(scopedBindings && Object.hasOwn(binding, 'authorityBindingScope') ? ['authorityBindingScope'] : [])])
       || typeof binding.authorityEnvironmentId !== 'string' || !UUID.test(binding.authorityEnvironmentId)
       || typeof binding.handle !== 'string'
       || (!legacyBindings && (!Number.isSafeInteger(binding.authorityBindingVersion)
-        || (binding.authorityBindingVersion as number) < 1))) throw new HostAuthorityError('unavailable')
+        || (binding.authorityBindingVersion as number) < 1))
+      || (Object.hasOwn(binding, 'authorityBindingScope')
+        && (typeof binding.authorityBindingScope !== 'string' || !SHA256.test(binding.authorityBindingScope)))) {
+      throw new HostAuthorityError('unavailable')
+    }
     return {
       authorityEnvironmentId: binding.authorityEnvironmentId,
       handle: handle(binding.handle),
       authorityBindingVersion: legacyBindings ? 1 : binding.authorityBindingVersion as number,
+      ...(binding.authorityBindingScope === undefined ? {} : { authorityBindingScope: binding.authorityBindingScope as string }),
     }
   })
   return {
@@ -119,15 +127,19 @@ function unlockMaterial(value: string): Buffer {
 export class ProfileRegistry {
   private readonly path: string
   private profiles: PersonProfileRecord[]
+  private snapshot?: { readonly value: unknown; readonly contents: string }
 
   constructor(private readonly options: ProfileRegistryOptions) {
     if (options.deviceIndexKey.byteLength !== 32) throw new HostAuthorityError('invalid_input')
-    mkdirSync(options.root, { recursive: true, mode: 0o700 })
-    const root = lstatSync(options.root)
-    if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== (process.getuid?.() ?? root.uid) || (root.mode & 0o077) !== 0) {
-      throw new HostAuthorityError('unavailable')
+    if (options.prepareRoot) options.prepareRoot(options.root)
+    else {
+      mkdirSync(options.root, { recursive: true, mode: 0o700 })
+      const root = lstatSync(options.root)
+      if (!root.isDirectory() || root.isSymbolicLink() || root.uid !== (process.getuid?.() ?? root.uid) || (root.mode & 0o077) !== 0) {
+        throw new HostAuthorityError('unavailable')
+      }
     }
-    this.path = join(options.root, 'profiles.json')
+    this.path = options.snapshotPath ?? join(options.root, 'profiles.json')
     this.profiles = this.load()
   }
 
@@ -142,32 +154,119 @@ export class ProfileRegistry {
       readonly authorityEnvironmentId?: string
       readonly accountBindingHandle?: string
       readonly authorityBindingVersion?: number
+      readonly authorityBindingScope?: string
       readonly unlockMaterial: string
     },
   ): Promise<PersonProfileRecord> {
-    await Promise.resolve()
+    return await Promise.resolve(this.registerAccountRecord(input))
+  }
+
+  /**
+   * Register an account and restore its exact prior row if worker preparation fails.
+   * @param input - Account identity, binding authority, and local unlock material.
+   * @param prepare - Worker readiness operation; must reject when readiness fails.
+   * @returns The prepared Profile; rejects stale rather than undoing a concurrent registry change.
+   */
+  async provisionAccount(
+    input: Parameters<ProfileRegistry['registerAccount']>[0],
+    prepare: (profile: PersonProfileRecord) => Promise<void>,
+  ): Promise<PersonProfileRecord> {
+    // Capture and mutate without yielding: the prior owner may have a different identity index.
+    const before = this.profiles
+    const beforeSnapshot = this.snapshot
+    const profile = this.registerAccountRecord(input)
+    const preparedSnapshot = this.snapshot
+    const previous = before.find(candidate => candidate.profileId === profile.profileId)
+    try {
+      await prepare(profile)
+    } catch (error) {
+      if (this.profiles.find(candidate => candidate.profileId === profile.profileId) !== profile) {
+        throw new HostAuthorityError('stale')
+      }
+      if (previous !== profile) {
+        if (beforeSnapshot && this.snapshot === preparedSnapshot) {
+          this.persist(beforeSnapshot.value, beforeSnapshot.contents)
+          this.snapshot = beforeSnapshot
+          this.profiles = before
+        } else if (previous) this.rollbackUpdate(profile, previous)
+        else this.rollbackRegistration(profile.profileId)
+      }
+      throw error
+    }
+    return profile
+  }
+
+  private registerAccountRecord(input: Parameters<ProfileRegistry['registerAccount']>[0]): PersonProfileRecord {
     const index = personIndex(this.options.deviceIndexKey, input)
     const material = unlockMaterial(input.unlockMaterial)
     const existing = this.profiles.find(profile => profile.personIndex === index)
+    if (input.authorityBindingScope !== undefined
+      && (!SHA256.test(input.authorityBindingScope) || input.accountBindingHandle === undefined)) {
+      throw new HostAuthorityError('invalid_input')
+    }
     if ((input.authorityEnvironmentId === undefined) !== (input.accountBindingHandle === undefined)
       || (input.accountBindingHandle === undefined) !== (input.authorityBindingVersion === undefined)) {
       throw new HostAuthorityError('invalid_input')
     }
+    const knownScope = existing?.accountBindings?.find(candidate =>
+      candidate.authorityEnvironmentId === input.authorityEnvironmentId
+        && candidate.handle === input.accountBindingHandle)?.authorityBindingScope
+    const scope = input.authorityBindingScope ?? knownScope
     const binding = input.accountBindingHandle === undefined ? undefined : {
       authorityEnvironmentId: input.authorityEnvironmentId as string,
       handle: handle(input.accountBindingHandle),
       authorityBindingVersion: input.authorityBindingVersion as number,
+      ...(scope === undefined ? {} : { authorityBindingScope: scope }),
     }
     if (binding !== undefined && (!UUID.test(binding.authorityEnvironmentId)
       || !Number.isSafeInteger(binding.authorityBindingVersion) || binding.authorityBindingVersion < 1)) {
       throw new HostAuthorityError('invalid_input')
     }
-    const bindingOwner = binding === undefined ? undefined : this.profiles.find(profile =>
-      profile.accountBindings?.some(candidate => candidate.authorityEnvironmentId === binding.authorityEnvironmentId
-        && candidate.handle === binding.handle),
-    )
-    if (bindingOwner !== undefined && bindingOwner.personIndex !== index) {
-      throw new HostAuthorityError('profile_mismatch')
+    let owner: { profile: PersonProfileRecord; bindings: NonNullable<PersonProfileRecord['accountBindings']> } | undefined
+    if (binding !== undefined) {
+      for (const profile of this.profiles) {
+        const bindings = profile.accountBindings
+        if (bindings?.some(candidate => candidate.authorityEnvironmentId === binding.authorityEnvironmentId
+          && candidate.handle === binding.handle)) {
+          owner = { profile, bindings }
+          break
+        }
+      }
+    }
+    if (binding !== undefined && owner !== undefined && owner.profile.personIndex !== index) {
+      const bindingOwner = owner.profile
+      if (existing !== undefined || bindingOwner.kind !== 'account'
+        || bindingOwner.keyHandle !== handle(input.keyHandle)) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      const current = bindingOwner.accountBindings?.find(candidate =>
+        candidate.authorityEnvironmentId === binding.authorityEnvironmentId
+          && candidate.handle === binding.handle)
+      // A scoped binding cannot migrate another login's Account identity.
+      if (current?.authorityBindingScope !== binding.authorityBindingScope) throw new HostAuthorityError('profile_mismatch')
+      if (binding.authorityBindingScope !== undefined && owner.bindings.length > 1) {
+        throw new HostAuthorityError('profile_mismatch')
+      }
+      if (current === undefined || binding.authorityBindingVersion <= current.authorityBindingVersion) {
+        throw new HostAuthorityError('stale')
+      }
+      const verifier = this.unlockVerifier(bindingOwner.profileId, bindingOwner.keyHandle, material)
+      if (bindingOwner.unlockVerifier === null
+        || !timingSafeEqual(Buffer.from(bindingOwner.unlockVerifier, 'hex'), Buffer.from(verifier, 'hex'))) {
+        throw new HostAuthorityError('unauthorized')
+      }
+      const migrated = {
+        ...bindingOwner,
+        personIndex: index,
+        accountBindings: [...owner.bindings.filter(candidate =>
+          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId
+            || candidate.authorityBindingScope !== binding.authorityBindingScope), binding],
+        bindingGeneration: bindingOwner.bindingGeneration + 1,
+      }
+      const next = this.profiles.map(profile => profile.profileId === bindingOwner.profileId ? migrated : profile)
+      this.save(next)
+      this.profiles = next
+      return migrated
     }
     if (existing) {
       if (existing.kind !== 'account') throw new HostAuthorityError('profile_mismatch')
@@ -187,8 +286,20 @@ export class ProfileRegistry {
         this.save(next); this.profiles = next
         return currentProfile
       }
-      const current = currentProfile.accountBindings?.find(candidate =>
-        candidate.authorityEnvironmentId === binding.authorityEnvironmentId)
+      const environmentBindings = currentProfile.accountBindings?.filter(candidate =>
+        candidate.authorityEnvironmentId === binding.authorityEnvironmentId) ?? []
+      if (binding.authorityBindingScope === undefined
+        && environmentBindings.some(candidate => candidate.authorityBindingScope !== undefined)) {
+        throw new HostAuthorityError('upgrade_required')
+      }
+      const sameHandle = environmentBindings.find(candidate => candidate.handle === binding.handle)
+      if (sameHandle?.authorityBindingScope !== undefined
+        && sameHandle.authorityBindingScope !== binding.authorityBindingScope) throw new HostAuthorityError('conflict')
+      if (sameHandle !== undefined && binding.authorityBindingVersion < sameHandle.authorityBindingVersion) {
+        throw new HostAuthorityError('stale')
+      }
+      const current = environmentBindings.find(candidate =>
+        candidate.authorityBindingScope === binding.authorityBindingScope)
       if (current !== undefined) {
         if (binding.authorityBindingVersion < current.authorityBindingVersion) throw new HostAuthorityError('stale')
         if (binding.authorityBindingVersion === current.authorityBindingVersion) {
@@ -200,10 +311,17 @@ export class ProfileRegistry {
         }
       }
       const updated = {
-        ...currentProfile,
+        profileId: currentProfile.profileId,
+        kind: currentProfile.kind,
+        personIndex: currentProfile.personIndex,
+        keyHandle: currentProfile.keyHandle,
+        unlockVerifier: currentProfile.unlockVerifier,
         accountBindings: [...currentProfile.accountBindings?.filter(candidate =>
-          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId) ?? [], binding],
+          candidate.authorityEnvironmentId !== binding.authorityEnvironmentId
+            || (candidate.authorityBindingScope !== binding.authorityBindingScope
+              && candidate.handle !== binding.handle)) ?? [], binding],
         bindingGeneration: currentProfile.bindingGeneration + 1,
+        createdAt: currentProfile.createdAt,
       }
       const next = this.profiles.map(profile => profile.profileId === existing.profileId ? updated : profile)
       this.save(next)
@@ -229,19 +347,36 @@ export class ProfileRegistry {
   }
 
   /**
-   * Create a Profile that can never be merged into an account Profile.
-   * @param input - opaque Keychain handle for the local Profile key.
-   * @returns the new durable local-anonymous Profile.
+   * Create or resolve one key-unlocked Profile that can never be merged into an account Profile.
+   * @param input - opaque Keychain handle and Main-only unlock material for the local Profile key.
+   * @returns the durable local-anonymous Profile.
    */
-  async createLocalAnonymous(input: { readonly keyHandle: string }): Promise<PersonProfileRecord> {
+  async createLocalAnonymous(input: {
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+  }): Promise<PersonProfileRecord> {
     await Promise.resolve()
+    const keyHandle = handle(input.keyHandle)
+    const material = unlockMaterial(input.unlockMaterial)
+    const existing = this.profiles.find(profile =>
+      profile.kind === 'local-anonymous' && profile.keyHandle === keyHandle,
+    )
+    if (existing) {
+      if (existing.unlockVerifier === null) throw new HostAuthorityError('unauthorized')
+      const verifier = this.unlockVerifier(existing.profileId, keyHandle, material)
+      if (!timingSafeEqual(Buffer.from(existing.unlockVerifier, 'hex'), Buffer.from(verifier, 'hex'))) {
+        throw new HostAuthorityError('unauthorized')
+      }
+      return existing
+    }
+    const profileId = randomUUID() as PersonProfileId
     const profile: PersonProfileRecord = {
-      profileId: randomUUID() as PersonProfileId,
+      profileId,
       kind: 'local-anonymous',
       personIndex: createHmac('sha256', this.options.deviceIndexKey).update(`dsh-local-anonymous/v1\0${randomUUID()}`).digest('hex'),
-      keyHandle: handle(input.keyHandle),
-      unlockVerifier: null,
-      bindingGeneration: 0,
+      keyHandle,
+      unlockVerifier: this.unlockVerifier(profileId, keyHandle, material),
+      bindingGeneration: 1,
       createdAt: this.options.clock.now(),
     }
     const next = [...this.profiles, profile]
@@ -275,6 +410,33 @@ export class ProfileRegistry {
   }
 
   /**
+   * Match a token-verified Account to a stored Profile without exposing the device index key.
+   * @param profile - Stored Profile selected by the current opaque binding.
+   * @param identity - Account identity decoded from a verified access token.
+   * @returns Whether the stored Profile belongs to that Account.
+   */
+  matchesAccountIdentity(profile: PersonProfileRecord, identity: AccountIdentity): boolean {
+    return profile.kind === 'account' && profile.personIndex === personIndex(this.options.deviceIndexKey, identity)
+  }
+
+  /**
+   * Resolve exactly one account Profile from an opaque Main-vault key handle.
+   * @param keyHandle - Keychain handle already selected by trusted Desktop Main.
+   * @returns the unique account Profile; missing and ambiguous handles fail closed.
+   */
+  resolveUniqueAccountByKeyHandle(keyHandle: string): PersonProfileRecord & {
+    readonly accountBindings: NonNullable<PersonProfileRecord['accountBindings']>
+  } {
+    const normalized = handle(keyHandle)
+    const matches = this.profiles.filter(profile => profile.kind === 'account' && profile.keyHandle === normalized)
+    if (matches.length === 0) throw new HostAuthorityError('profile_not_found')
+    if (matches.length !== 1) throw new HostAuthorityError('profile_ambiguous')
+    return matches[0] as PersonProfileRecord & {
+      readonly accountBindings: NonNullable<PersonProfileRecord['accountBindings']>
+    }
+  }
+
+  /**
    * Resolve the secure local binding selected by Desktop Main.
    * @param authorityEnvironmentId - globally stable authority environment UUID.
    * @param accountBindingHandle - opaque binding minted outside Renderer.
@@ -293,7 +455,9 @@ export class ProfileRegistry {
     const binding = handle(accountBindingHandle)
     return this.profiles.find(profile => profile.kind === 'account' && profile.accountBindings?.some(candidate =>
       candidate.authorityEnvironmentId === authorityEnvironmentId && candidate.handle === binding
-      && candidate.authorityBindingVersion === authorityBindingVersion)) ?? null
+      && candidate.authorityBindingVersion === authorityBindingVersion
+      && (candidate.authorityBindingScope !== undefined || !profile.accountBindings?.some(other =>
+        other.authorityEnvironmentId === authorityEnvironmentId && other.authorityBindingScope !== undefined)))) ?? null
   }
 
   /**
@@ -368,6 +532,18 @@ export class ProfileRegistry {
   }
 
   private load(): PersonProfileRecord[] {
+    if (this.options.loadSnapshot) {
+      try {
+        const parsed = this.options.loadSnapshot(this.path)
+        if (parsed === undefined) return []
+        const profiles = this.parseSnapshot(parsed)
+        this.snapshot = { value: parsed, contents: `${JSON.stringify(parsed)}\n` }
+        return profiles
+      } catch (error) {
+        if (error instanceof HostAuthorityError) throw error
+        throw new HostAuthorityError('unavailable')
+      }
+    }
     let fd: number
     try { fd = openSync(this.path, constants.O_RDONLY | constants.O_NOFOLLOW) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
@@ -376,32 +552,10 @@ export class ProfileRegistry {
     try {
       const stat = fstatSync(fd)
       if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== (process.getuid?.() ?? stat.uid) || (stat.mode & 0o077) !== 0) throw new HostAuthorityError('unavailable')
-      const parsed: unknown = JSON.parse(readFileSync(fd, 'utf8'))
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
-      const registry = parsed as Record<string, unknown>
-      if (!exact(registry, ['version', 'profiles'])
-        || (registry.version !== 2 && registry.version !== 3) || !Array.isArray(registry.profiles)) {
-        throw new HostAuthorityError('unavailable')
-      }
-      const legacyBindings = registry.version === 2
-      const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings))
-      const profileIds = new Set<string>()
-      const indexes = new Set<string>()
-      const bindings = new Set<string>()
-      const environments = new Set<string>()
-      for (const profile of profiles) {
-        if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)
-          || profile.accountBindings?.some(binding => bindings.has(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-            || environments.has(`${profile.profileId}\0${binding.authorityEnvironmentId}`))) {
-          throw new HostAuthorityError('unavailable')
-        }
-        profileIds.add(profile.profileId); indexes.add(profile.personIndex)
-        for (const binding of profile.accountBindings ?? []) {
-          bindings.add(`${binding.authorityEnvironmentId}\0${binding.handle}`)
-          environments.add(`${profile.profileId}\0${binding.authorityEnvironmentId}`)
-        }
-      }
-      if (legacyBindings) this.save(profiles)
+      const contents = readFileSync(fd, 'utf8')
+      const parsed: unknown = JSON.parse(contents)
+      const profiles = this.parseSnapshot(parsed)
+      this.snapshot = { value: parsed, contents }
       return profiles
     } catch (error) {
       if (error instanceof HostAuthorityError) throw error
@@ -409,13 +563,50 @@ export class ProfileRegistry {
     } finally { closeSync(fd) }
   }
 
+  private parseSnapshot(parsed: unknown): PersonProfileRecord[] {
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HostAuthorityError('unavailable')
+    const registry = parsed as Record<string, unknown>
+    if (!exact(registry, ['version', 'profiles'])
+      || (registry.version !== 2 && registry.version !== 3 && registry.version !== 4) || !Array.isArray(registry.profiles)) {
+      throw new HostAuthorityError('unavailable')
+    }
+    const legacyBindings = registry.version === 2
+    const profiles = registry.profiles.map(profile => parseProfile(profile, legacyBindings, registry.version === 4))
+    const profileIds = new Set<string>()
+    const indexes = new Set<string>()
+    const bindings = new Set<string>()
+    const environments = new Set<string>()
+    for (const profile of profiles) {
+      if (profileIds.has(profile.profileId) || indexes.has(profile.personIndex)) {
+        throw new HostAuthorityError('unavailable')
+      }
+      profileIds.add(profile.profileId); indexes.add(profile.personIndex)
+      for (const binding of profile.accountBindings ?? []) {
+        const bindingKey = `${binding.authorityEnvironmentId}\0${binding.handle}`
+        const scopeKey = `${profile.profileId}\0${binding.authorityEnvironmentId}\0${binding.authorityBindingScope ?? ''}`
+        if (bindings.has(bindingKey) || environments.has(scopeKey)) throw new HostAuthorityError('unavailable')
+        bindings.add(bindingKey)
+        environments.add(scopeKey)
+      }
+    }
+    return profiles
+  }
+
   private save(profiles: readonly PersonProfileRecord[]): void {
-    const snapshot = { version: 3 as const, profiles }
+    const version = profiles.some(profile => profile.accountBindings?.some(binding =>
+      binding.authorityBindingScope !== undefined)) ? 4 as const : 3 as const
+    const snapshot = { version, profiles }
+    const contents = `${JSON.stringify(snapshot satisfies RegistryFile)}\n`
+    this.persist(snapshot, contents)
+    this.snapshot = { value: snapshot, contents }
+  }
+
+  private persist(snapshot: unknown, contents: string): void {
     if (this.options.persistSnapshot) { this.options.persistSnapshot(this.path, this.options.root, snapshot); return }
     const temporary = join(this.options.root, `.profiles-${randomUUID()}.tmp`)
     const fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
     try {
-      writeSync(fd, `${JSON.stringify(snapshot satisfies RegistryFile)}\n`)
+      writeSync(fd, contents)
       fsyncSync(fd)
     } finally { closeSync(fd) }
     renameSync(temporary, this.path)
