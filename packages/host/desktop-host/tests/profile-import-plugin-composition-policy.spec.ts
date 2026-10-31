@@ -43,6 +43,10 @@ vi.mock('@deepseek-ai/dsh-app-boot', () => ({
 }))
 
 import { inspectProfileImportPluginComposition } from '../src/profile-import-plugin-composition.ts'
+import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
+import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
+import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
+import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 type Input = Parameters<typeof inspectProfileImportPluginComposition>[0]
 const inspect = (input: Input) => {
   state.composeCalls = 0
@@ -82,10 +86,30 @@ async function fixture() {
   const nextManifest = JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } })
   await writeFile(join(baselineRoot, 'package.json'), JSON.stringify({ dependencies: {} }), { mode: 0o600 })
   await writeFile(join(installationRoot, 'package.json'), nextManifest, { mode: 0o600 })
-  const input = { installAnchor: anchor, uid: process.getuid?.() ?? 0,
-    target: { profileRoot: root }, manifestPlan: { nextManifest },
-    plan: { plugins: [{ name: 'fixture-plugin', entryIds: ['fixture-entry'] }] },
-    operationId: randomUUID() } as Input
+  const uid = process.getuid?.() ?? 0
+  const catalogRoot = join(root, 'catalog')
+  await mkdir(catalogRoot, { mode: 0o700 })
+  await writeFile(join(catalogRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1,
+    plugins: [{ name: 'fixture-plugin', version: '1.0.0', file: 'fixture-plugin.tgz',
+      sha256: 'a'.repeat(64), repository: 'https://example.com/fixture-plugin',
+      sourceSha: 'b'.repeat(40), entryIds: ['fixture-entry'] }] }), { mode: 0o600 })
+  const input: Input = { installAnchor: anchor, uid,
+    source: { profileId: randomUUID(), profileRoot: join(root, 'source'),
+      target: new FileOwnerJsonlMigrationGenerationTarget(join(root, 'source'), uid) },
+    target: { profileId: randomUUID(), profileRoot: root,
+      target: new FileOwnerJsonlMigrationGenerationTarget(root, uid) },
+    fence: new ProfileImportWorkerFence({ read: () => undefined, replace: () => {} }),
+    journal: new FileProfileImportOperationJournal(join(root, 'journal'), uid),
+    catalog: BundledPluginCatalog.load(catalogRoot, uid),
+    composedEntryIds: () => new Set<string>(), assertQuiescent: async () => {},
+    manifestPlan: { nextManifest, sourcePlanDigest: 'a'.repeat(64),
+      currentManifestDigest: 'b'.repeat(64), nextManifestDigest: 'c'.repeat(64),
+      addedBundleNames: ['fixture-plugin'] },
+    plan: { previewDigest: 'a'.repeat(64), sourceSnapshotDigest: 'b'.repeat(64),
+      targetSnapshotDigest: 'c'.repeat(64), targetPluginStateDigest: 'd'.repeat(64),
+      composedEntryDigest: 'e'.repeat(64),
+      plugins: [{ name: 'fixture-plugin', version: '1.0.0', archiveDigest: 'a'.repeat(64),
+        entryIds: ['fixture-entry'] }] }, operationId: randomUUID() }
   return { input, root, baselineRoot, installationRoot, pluginRoot }
 }
 
@@ -97,10 +121,11 @@ it.skipIf(process.platform === 'win32')('accepts an isolated additive compositio
 })
 
 it('rejects Windows before touching an installation', async () => {
+  const value = await fixture()
   const original = Object.getOwnPropertyDescriptor(process, 'platform')!
   Object.defineProperty(process, 'platform', { ...original, value: 'win32' })
   try {
-    await expect(inspect({ installAnchor: 'unused' } as Input))
+    await expect(inspect({ ...value.input, installAnchor: 'unused' }))
       .rejects.toThrow('profile_import_plugin_isolated_platform_unsupported')
   } finally { Object.defineProperty(process, 'platform', original) }
 })

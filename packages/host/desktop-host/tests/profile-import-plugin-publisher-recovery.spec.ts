@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import type { ProfileImportPluginPublisherInput } from '../src/profile-import-plugin-publisher.ts'
+import { FileProfileImportPluginPublishJournal } from '../src/profile-import-plugin-publish-journal.ts'
+import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
+import { acquireSingleHostLock } from '../src/single-instance.ts'
 
 const inspect = vi.hoisted(() => vi.fn())
 vi.mock('../src/profile-import-plugin-publish-journal.ts', async (importOriginal) => {
@@ -15,14 +18,19 @@ import { publishProfileImportPluginLayer, rollbackProfileImportPluginLayer } fro
 
 async function fixture() {
   const profileRoot = await mkdtemp(join(tmpdir(), 'dsh-plugin-publisher-recovery-'))
-  onTestFinished(() => rm(profileRoot, { recursive: true, force: true }))
-  const input = { profileRoot, operationId: randomUUID(), sourceProfileId: randomUUID(),
-    targetProfileId: randomUUID(), uid: process.getuid?.() ?? 0,
-    hostLock: { assertOwner: () => {} }, fence: { assertOwnedPair: () => {} },
-    journal: { advance: async (record: { phase: string }, phase: string) => ({ ...record, phase }) },
+  const uid = process.getuid?.() ?? 0
+  const hostLock = await acquireSingleHostLock({ root: join(profileRoot, 'host-lock'), pid: process.pid,
+    uid, processNonce: randomUUID() })
+  onTestFinished(async () => { await hostLock.release(); await rm(profileRoot, { recursive: true, force: true }) })
+  const fence = new ProfileImportWorkerFence({ read: () => undefined, replace: () => {} })
+  vi.spyOn(fence, 'assertOwnedPair').mockImplementation(() => {})
+  const journal = new FileProfileImportPluginPublishJournal(join(profileRoot, 'journal'), uid)
+  vi.spyOn(journal, 'advance').mockImplementation(async (record, phase) => ({ ...record, phase }))
+  const input: ProfileImportPluginPublisherInput = { profileRoot, operationId: randomUUID(), sourceProfileId: randomUUID(),
+    targetProfileId: randomUUID(), uid, hostLock, fence, journal,
     assertAuthority: async () => {}, assertQuiescent: async () => {},
     assertPreparedCandidate: async () => {}, assertSessionPointerOld: async () => {} }
-  return input as ProfileImportPluginPublisherInput
+  return input
 }
 
 it('keeps the Profile fenced when publication recovery changes unexpectedly', async () => {

@@ -106,10 +106,8 @@ afterEach(async () => {
 describe('migration export source filesystem faults', () => {
   it('maps every corrupt source format to a safe import inventory error', async () => {
     const fixture = await sourceFixture()
-    const source = fixture.source as Omit<typeof fixture.source, 'scan'> & {
-      scan(signal?: AbortSignal, maxRows?: number): Promise<unknown>
-    }
-    const scan = vi.spyOn(source, 'scan')
+    const scan = vi.fn()
+    Object.defineProperty(fixture.source, 'scan', { configurable: true, value: scan })
     for (const message of ['migration_export_source_unsafe', 'migration_source_duplicate',
       'corrupt session log: invalid record', 'corrupt Zstandard session log: invalid frame',
       'empty or header-less session log']) {
@@ -127,10 +125,10 @@ describe('migration export source filesystem faults', () => {
 
   it('rejects the first row past a bounded source scan without allocating thousands of fixtures', async () => {
     const fixture = await sourceFixture()
-    const source = fixture.source as Omit<typeof fixture.source, 'scan'> & {
-      scan(signal?: AbortSignal, maxRows?: number): Promise<unknown>
-    }
-    await expect(source.scan(undefined, 0)).rejects.toThrow('migration_source_too_large')
+    const scan = Reflect.get(FileJsonlMigrationExportSource.prototype, 'scan') as
+      (this: InstanceType<typeof FileJsonlMigrationExportSource>, signal?: AbortSignal,
+        maxRows?: number) => Promise<unknown>
+    await expect(scan.call(fixture.source, undefined, 0)).rejects.toThrow('migration_source_too_large')
   })
 
   it('rejects a pathname replaced after the stable handle read', async () => {

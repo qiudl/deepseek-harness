@@ -28,6 +28,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 import { planSelectedProfileImportPlugins } from '../src/profile-import-plugin-plan.ts'
+import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
+import { ProfileImportWorkerFence } from '../src/profile-import-worker-fence.ts'
+import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 type Input = Parameters<typeof planSelectedProfileImportPlugins>[0]
 
 async function fixture() {
@@ -45,18 +48,27 @@ async function fixture() {
   await mkdir(targetWeb, { recursive: true, mode: 0o700 })
   const sourceManifest = join(sourceWeb, 'package.json')
   const targetManifest = join(targetWeb, 'package.json')
-  await writeFile(sourceManifest, JSON.stringify({ dependencies: { 'fixture-plugin': '1.0.0' } }),
+  await writeFile(sourceManifest, JSON.stringify({ dependencies: { 'fixture-plugin': bundledDependencySpec('a'.repeat(64)) } }),
     { mode: 0o600 })
   await writeFile(targetManifest, JSON.stringify({ dependencies: {} }), { mode: 0o600 })
-  const input = { source: { profileId: randomUUID(), profileRoot: sourceRoot, target: {} },
-    target: { profileId: randomUUID(), profileRoot: targetRoot, target: {} },
-    uid: process.getuid?.() ?? 0, operationId: randomUUID(),
-    fence: { assertOwnedPair: () => {} },
-    catalog: { getForDependency: () => ({ name: 'fixture-plugin', version: '1.0.0',
-      sha256: 'a'.repeat(64), entryIds: ['fixture-entry'] }) },
-    expectedPreviewDigest: 'p', selectedPluginNames: ['fixture-plugin'],
-    composedEntryIds: () => new Set<string>(), assertQuiescent: async () => {} }
-  return { input: input as Input, sourceManifest, targetManifest }
+  const uid = process.getuid?.() ?? 0
+  const catalogRoot = join(root, 'catalog')
+  await mkdir(catalogRoot, { mode: 0o700 })
+  await writeFile(join(catalogRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1,
+    plugins: [{ name: 'fixture-plugin', version: '1.0.0', file: 'fixture-plugin.tgz',
+      sha256: 'a'.repeat(64), repository: 'https://example.com/fixture-plugin',
+      sourceSha: 'b'.repeat(40), entryIds: ['fixture-entry'] }] }), { mode: 0o600 })
+  const fence = new ProfileImportWorkerFence({ read: () => undefined, replace: () => {} })
+  vi.spyOn(fence, 'assertOwnedPair').mockImplementation(() => {})
+  const input: Input = { source: { profileId: randomUUID(), profileRoot: sourceRoot,
+    target: new FileOwnerJsonlMigrationGenerationTarget(sourceRoot, uid) },
+  target: { profileId: randomUUID(), profileRoot: targetRoot,
+    target: new FileOwnerJsonlMigrationGenerationTarget(targetRoot, uid) },
+  uid, operationId: randomUUID(), fence,
+  catalog: BundledPluginCatalog.load(catalogRoot, uid),
+  expectedPreviewDigest: 'p', selectedPluginNames: ['fixture-plugin'],
+  composedEntryIds: () => new Set<string>(), assertQuiescent: async () => {} }
+  return { input, sourceManifest, targetManifest }
 }
 
 it.skipIf(process.platform === 'win32')('rejects missing, malformed, and policy-bearing plugin manifests', async () => {
