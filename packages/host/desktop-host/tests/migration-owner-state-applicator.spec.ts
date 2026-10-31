@@ -47,6 +47,11 @@ describe('migration owner-state generation applicator', () => {
     const storageBefore = await readFile(join(paths.storageRoot, 'workspace.json'))
     const persistenceRoot = join(source, 'sessions')
     await mkdir(persistenceRoot, { mode: 0o700 })
+    await mkdir(join(persistenceRoot, 'project', 'session'), { recursive: true, mode: 0o700 })
+    const sourceLog = join(persistenceRoot, 'project', 'session', 'session.v4.jsonl')
+    await writeFile(sourceLog, 'original history', { mode: 0o600 })
+    await writeFile(join(persistenceRoot, 'owner-state.json'), 'private original state', { mode: 0o600 })
+    await writeFile(join(persistenceRoot, 'project', 'session', 'session.lock'), '', { mode: 0o600 })
     const ownership = await acquireSingleHostLock({ root: join(stagingParent, 'lock'), pid: process.pid, uid,
       processNonce: 'restricted-fixture-lock' })
     onTestFinished(() => ownership.release())
@@ -56,7 +61,15 @@ describe('migration owner-state generation applicator', () => {
       inspectPersistence: inspectFixture(persistenceRoot, 'none'),
       ownership, assertCurrent: () => { checks += 1 }, signal: new AbortController().signal })
     expect(checks).toBeGreaterThanOrEqual(2)
-    expect(await readFile(join(staged.root, 'cordis.patch.yml'), 'utf8')).toContain(persistenceRoot)
+    const patch = await readFile(join(staged.root, 'cordis.patch.yml'), 'utf8')
+    expect(patch).not.toContain(persistenceRoot)
+    expect(patch).toContain(join(staged.root, 'sessions'))
+    const copiedLog = join(staged.root, 'sessions', 'project', 'session', 'session.v4.jsonl')
+    expect(await readFile(copiedLog, 'utf8')).toBe('original history')
+    await writeFile(copiedLog, 'worker changed its snapshot')
+    expect(await readFile(sourceLog, 'utf8')).toBe('original history')
+    await expect(access(join(staged.root, 'sessions', 'owner-state.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(access(join(staged.root, 'sessions', 'project', 'session', 'session.lock'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(await readFile(join(staged.root, 'profiles/web/package.json'), 'utf8')).not.toContain('fixture-plugin')
     expect(await readFile(staged.ownerPaths.settingsPath, 'utf8')).not.toContain('workspace-write')
     expect(await readFile(staged.ownerPaths.credentialsPath, 'utf8')).not.toContain('sk-private')
@@ -106,6 +119,23 @@ describe('migration owner-state generation applicator', () => {
     await expect(access(paths.settingsPath)).resolves.toBeUndefined()
     await ownership.release()
     await expect(stageRestrictedProfile(input)).rejects.toMatchObject({ code: 'stale' })
+  })
+
+  it('refuses links in the persistence copy before starting a reader', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    await symlink(paths.credentialsPath, join(persistenceRoot, 'unexpected-link'))
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-link-fixture' })
+    onTestFinished(() => ownership.release())
+    await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
+      ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
+      inspectPersistence: inspectFixture(persistenceRoot), ownership, assertCurrent: () => {},
+      signal: new AbortController().signal })).rejects.toMatchObject({ code: 'profile_integrity_failed' })
+    expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
   })
 
   it('does not delete a staged Profile after losing its Host lock', async () => {

@@ -1,8 +1,9 @@
-import { lstat, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { initProfile, PROFILE_TEMPLATES } from '@deepseek-ai/dsh-app-boot'
 import type { RestrictedPersistenceInspection } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { LEASE_FILENAME } from '@deepseek-ai/dsh-session-persistence-jsonl/src/lease-filename.ts'
 import { existingProfilePatch } from './offline-profile-recovery.ts'
 import { MaterializedMigrationOwnerStateSource } from './materialized-migration-owner-state-source.ts'
 import { MigrationOwnerStateApplicator, type AppliedMigrationOwnerState } from './migration-owner-state-applicator.ts'
@@ -13,6 +14,18 @@ import { HostAuthorityError } from './types.ts'
 function within(root: string, path: string): boolean {
   const part = relative(root, path)
   return part === '' || (part !== '..' && !part.startsWith(`..${sep}`) && !isAbsolute(part))
+}
+
+/** Ensure a copied tree contains only private regular files and directories, never links. */
+async function assertPrivateCopy(path: string, expectedUid: number): Promise<void> {
+  const stat = await lstat(path)
+  if (stat.isSymbolicLink() || stat.uid !== expectedUid || (!stat.isDirectory() && !stat.isFile())
+    || (stat.isFile() && ((stat.mode & 0o077) !== 0 || stat.nlink !== 1))) {
+    throw new HostAuthorityError('profile_integrity_failed')
+  }
+  if (stat.isDirectory()) {
+    for (const entry of await readdir(path)) await assertPrivateCopy(join(path, entry), expectedUid)
+  }
 }
 
 /**
@@ -102,7 +115,22 @@ export async function stageRestrictedProfile(input: {
   try {
     initProfile(join(root, 'profiles', 'web'), PROFILE_TEMPLATES.web!.bundles)
     const ownerPaths = await new MigrationOwnerStateApplicator(input.expectedUid).apply(root, input.ownerPaths.generation, ownerState)
-    await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root, input.persistence, ownerPaths), { mode: 0o600, flag: 'wx' })
+    const snapshotRoot = join(root, 'sessions')
+    await cp(persistence.root, snapshotRoot, { recursive: true, dereference: false, force: false, errorOnExist: true,
+      filter: async path => {
+        input.signal.throwIfAborted()
+        const part = relative(persistence.root, path)
+        if (part === 'owner-state.json' || part.split(sep).at(-1) === LEASE_FILENAME) return false
+        const stat = await lstat(path)
+        if (stat.isSymbolicLink() || stat.uid !== input.expectedUid || (!stat.isDirectory() && !stat.isFile())
+          || (stat.isFile() && ((stat.mode & 0o077) !== 0 || stat.nlink !== 1))) {
+          throw new HostAuthorityError('profile_integrity_failed')
+        }
+        return true
+      } })
+    await assertPrivateCopy(snapshotRoot, input.expectedUid)
+    await writeFile(join(root, 'cordis.patch.yml'), existingProfilePatch(root,
+      { root: snapshotRoot, compression: input.persistence.compression }, ownerPaths), { mode: 0o600, flag: 'wx' })
     await verify()
     return { root, ownerPaths, verify, dispose }
   } catch (error) {
