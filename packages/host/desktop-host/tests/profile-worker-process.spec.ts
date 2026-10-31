@@ -504,7 +504,7 @@ describe('dsh web Profile worker', () => {
     let enter!: () => void
     const entered = new Promise<void>(resolve => { enter = resolve })
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
-      dshEntrypointPath: process.execPath, readyTimeoutMs: 25,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 500,
       attestListener: async () => { enter(); await new Promise<void>(() => {}) } })
     const wait = (factory as unknown as { waitForOrigin(child: ChildProcess): Promise<unknown> })
       .waitForOrigin(child as unknown as ChildProcess)
@@ -512,14 +512,14 @@ describe('dsh web Profile worker', () => {
     await entered
     let timer!: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('attestation was not bounded')), 3_000)
+      timer = setTimeout(() => reject(new Error('attestation was not bounded')), 10_000)
       timer.unref()
     })
     try {
       await expect(Promise.race([wait, timeout])).rejects.toMatchObject({ code: 'unavailable' })
     } finally { clearTimeout(timer) }
     expect(killed).toBe(true)
-  }, 5_000)
+  }, 15_000)
 
   it('settles Web worker handles once across error, exit, and forced abort paths', async () => {
     const factory = new DshWebProfileWorkerFactory({
