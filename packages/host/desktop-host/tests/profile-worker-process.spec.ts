@@ -11,10 +11,27 @@ import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/
 import { ProfileWorkerExitUnconfirmedError, type ProfileWorkerHandle } from '../src/types.ts'
 import { RESTRICTED_WORKER_PARENT_MONITOR } from '../src/restricted-worker-parent-monitor.ts'
 
-function privateMethod(target: object, name: string) {
+interface FixtureMethods {
+  readyHandle: (child: ControlledChild) => Promise<ProfileWorkerHandle>
+  waitForOrigin: (child: EventEmitter, signal?: AbortSignal) => Promise<{
+    origin: string
+    bootstrapCookie: { name: string; value: string }
+  }>
+  handle: (child: EventEmitter, origin: string, cookie: { name: string; value: string },
+    generation: number, modelToken?: string) => ProfileWorkerHandle
+  remoteSession: (origin: string, token: string, command: unknown, signal: AbortSignal,
+    stopped: () => boolean) => Promise<unknown>
+  remoteUiRead: (origin: string, token: string, endpoint: string, payload: unknown,
+    signal: AbortSignal, stopped: () => boolean) => Promise<unknown>
+  remoteUiAssetRead: (origin: string, cookie: { name: string; value: string }, token: string,
+    endpoint: string, payload: unknown, signal: AbortSignal, stopped: () => boolean,
+    cache: object) => Promise<unknown>
+}
+
+function privateMethod<K extends keyof FixtureMethods>(target: object, name: K): FixtureMethods[K] {
   const method: unknown = Reflect.get(target, name)
   if (typeof method !== 'function') throw new Error(`missing fixture method ${name}`)
-  return method.bind(target)
+  return method.bind(target) as FixtureMethods[K]
 }
 
 function fixture(source: string): string {
@@ -97,7 +114,7 @@ describe('profile worker child process', () => {
       await exited.catch(() => {})
       rmSync(root, { recursive: true, force: true })
     })
-    const [message] = await once(child, 'message', { signal: AbortSignal.timeout(10_000) })
+    const message: unknown = (await once(child, 'message', { signal: AbortSignal.timeout(10_000) }))[0]
     expect(message).toBe('ready')
     child.disconnect()
     await expect(exited).resolves.toEqual([70, null])
@@ -115,22 +132,22 @@ describe('profile worker child process', () => {
       child.once('message',()=>process.send(child.pid)); setInterval(()=>{},1000)`
     const parent = spawn(process.execPath, ['-e', parentProgram], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
     const parentExited = once(parent, 'exit', { signal: AbortSignal.timeout(10_000) })
-    let workerPid: number | undefined
+    const worker = { pid: undefined as number | undefined }
     onTestFinished(async () => {
       if (parent.exitCode === null && parent.signalCode === null) parent.kill('SIGKILL')
       await parentExited.catch(() => {})
-      if (workerPid !== undefined && !existsSync(marker)) {
-        try { process.kill(workerPid, 'SIGKILL') } catch { /* already exited */ }
+      if (worker.pid !== undefined && !existsSync(marker)) {
+        try { process.kill(worker.pid, 'SIGKILL') } catch { /* already exited */ }
       }
-      if (workerPid !== undefined) await waitForProcessExit(workerPid)
+      if (worker.pid !== undefined) await waitForProcessExit(worker.pid)
       rmSync(root, { recursive: true, force: true })
     })
-    const [pid] = await once(parent, 'message', { signal: AbortSignal.timeout(10_000) })
-    expect(typeof pid).toBe('number')
-    workerPid = pid as number
+    const pid: unknown = (await once(parent, 'message', { signal: AbortSignal.timeout(10_000) }))[0]
+    if (typeof pid !== 'number') throw new Error('worker did not send a PID')
+    worker.pid = pid
     parent.kill('SIGKILL')
     await parentExited
-    await waitForProcessExit(workerPid)
+    await waitForProcessExit(worker.pid)
     expect(existsSync(marker)).toBe(true)
   })
 
@@ -262,7 +279,7 @@ describe('profile worker child process', () => {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
     onTestFinished(async () => {
       server.closeAllConnections()
-      await new Promise<void>(resolve => server.close(() => resolve()))
+      await new Promise<void>(resolve => server.close(() => { resolve() }))
     })
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('Expected a loopback listener')
@@ -539,9 +556,11 @@ describe('dsh web Profile worker', () => {
 
   it('waits for the failed startup child to close before reporting failure', async () => {
     let killed!: () => void
-    const killObserved = new Promise<void>(resolve => { killed = resolve })
+    const killObserved = new Promise<void>((resolve) => { killed = resolve })
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
-      pid: number; exitCode: number | null; signalCode: string | null
+      pid: number
+      exitCode: number | null
+      signalCode: string | null
     }
     child.pid = 12345
     child.exitCode = null
@@ -562,7 +581,9 @@ describe('dsh web Profile worker', () => {
 
   it('preserves an attestation failure after stopping the startup child', async () => {
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
-      pid: number; exitCode: number | null; signalCode: string | null
+      pid: number
+      exitCode: number | null
+      signalCode: string | null
     }
     child.pid = 12345
     child.exitCode = null
@@ -578,7 +599,9 @@ describe('dsh web Profile worker', () => {
 
   it('bounds a stalled listener attestation and waits for its worker to exit', async () => {
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
-      pid: number; exitCode: number | null; signalCode: string | null
+      pid: number
+      exitCode: number | null
+      signalCode: string | null
     }
     child.pid = 12345
     child.exitCode = null
@@ -586,7 +609,7 @@ describe('dsh web Profile worker', () => {
     let killed = false
     child.kill = () => { killed = true; child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
     const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
       dshEntrypointPath: process.execPath, readyTimeoutMs: 500,
       attestListener: async () => { enter(); await new Promise<void>(() => {}) } })
@@ -595,7 +618,7 @@ describe('dsh web Profile worker', () => {
     await entered
     let timer!: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('attestation was not bounded')), 10_000)
+      timer = setTimeout(() => { reject(new Error('attestation was not bounded')) }, 10_000)
       timer.unref()
     })
     try {
@@ -606,7 +629,9 @@ describe('dsh web Profile worker', () => {
 
   it('cancels worker startup when its owning connection closes', async () => {
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
-      pid: number; exitCode: number | null; signalCode: string | null
+      pid: number
+      exitCode: number | null
+      signalCode: string | null
     }
     child.pid = 12345
     child.exitCode = null
@@ -621,7 +646,7 @@ describe('dsh web Profile worker', () => {
     controller.abort()
     let timer!: ReturnType<typeof setTimeout>
     const timeout = new Promise<never>((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('startup cancellation was ignored')), 3_000)
+      timer = setTimeout(() => { reject(new Error('startup cancellation was ignored')) }, 3_000)
       timer.unref()
     })
     try {
@@ -632,7 +657,9 @@ describe('dsh web Profile worker', () => {
 
   it('reports an unconfirmed worker exit when the startup child cannot be killed', async () => {
     const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
-      pid: number; exitCode: number | null; signalCode: string | null
+      pid: number
+      exitCode: number | null
+      signalCode: string | null
     }
     child.pid = 12345
     child.exitCode = null
@@ -692,7 +719,7 @@ describe('dsh web Profile worker', () => {
     await new Promise(resolve => setImmediate(resolve))
 
     const unkillable = controlledWebChild()
-    unkillable.kill = signal => {
+    unkillable.kill = (signal) => {
       if (signal === 'SIGKILL') throw new Error('kill failed')
       return true
     }

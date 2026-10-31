@@ -84,7 +84,8 @@ import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plug
 
 const uid = process.getuid?.() ?? 0
 function testFence(root: string, ownership: SingleHostLock) {
-  return { fence: new RestrictedProfileFence(root, uid, ownership), acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), assertAllWritersQuiescent: () => {},
+  return { fence: new RestrictedProfileFence(root, uid, ownership),
+    acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), assertAllWritersQuiescent: () => {},
     withAllWritersExcluded: async <T>(operationOrProfile: (() => Promise<T>) | string,
       operationOrSignal?: (() => Promise<T>) | AbortSignal, _signal?: AbortSignal) =>
       (typeof operationOrProfile === 'function' ? operationOrProfile : operationOrSignal as () => Promise<T>)() }
@@ -111,7 +112,7 @@ function extensionBarrier() {
   const records = new Map<string, ExtensionReceipt>()
   return new ProfileExtensionOperations({
     read: id => records.get(id),
-    write: receipt => { records.set(receipt.operationId, receipt) },
+    write: (receipt) => { records.set(receipt.operationId, receipt) },
     list: id => [...records.values()].filter(receipt => receipt.profileId === id),
   }, { revision: async () => 'fixture', execute: async () => ({ state: 'succeeded' }) }, { now: () => 1_000 })
 }
@@ -629,8 +630,9 @@ describe('offline Profile existing-only inspector', () => {
     const spec = { profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] }
     onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
     let enter!: () => void, release!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
@@ -638,7 +640,7 @@ describe('offline Profile existing-only inspector', () => {
       createWorker: async () => ({ closeNotifications() {}, abort() { events.push('isolated-stop') }, done: Promise.resolve() }),
     }, async () => {
       enter()
-      await new Promise<void>(resolve => { release = resolve })
+      await new Promise<void>((resolve) => { release = resolve })
       throw new Error('operation failed')
     })
     const failed = expect(isolated).rejects.toThrow('operation failed')
@@ -663,7 +665,8 @@ describe('offline Profile existing-only inspector', () => {
     const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
-      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership),
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership),
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
       onCleanupFailure: () => {}, createWorker,
     }, async () => {})).rejects.toMatchObject({ code: 'conflict' })
@@ -677,7 +680,8 @@ describe('offline Profile existing-only inspector', () => {
       processNonce: 'restricted-failed-stop-fixture' })
     const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
-    await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
@@ -697,13 +701,14 @@ describe('offline Profile existing-only inspector', () => {
       processNonce: 'restricted-abort-fixture' })
     const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     let release!: () => void
-    const stalled = new Promise<void>(resolve => { release = resolve })
+    const stalled = new Promise<void>((resolve) => { release = resolve })
     onTestFinished(async () => { release(); await regular.disposeAll(); await ownership.release() })
     const controller = new AbortController()
     const stopped = vi.fn()
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
@@ -725,7 +730,8 @@ describe('offline Profile existing-only inspector', () => {
     const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
     const controller = new AbortController()
-    await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
@@ -746,8 +752,9 @@ describe('offline Profile existing-only inspector', () => {
     onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
     const controller = new AbortController()
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
@@ -755,7 +762,7 @@ describe('offline Profile existing-only inspector', () => {
         enter()
         expect(signal?.aborted).toBe(false)
         return await new Promise<never>((_resolve, reject) => {
-          signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+          signal!.addEventListener('abort', () => { reject(signal!.reason as Error) }, { once: true })
         })
       },
     }, async () => {})
@@ -775,7 +782,8 @@ describe('offline Profile existing-only inspector', () => {
     const extensions = extensionBarrier()
     const authority = () => profileId
     const plan = await extensions.prepare(authority, 'plugin', '{}')
-    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
@@ -830,7 +838,7 @@ describe('offline Profile existing-only inspector', () => {
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
       ownership, fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
       assertAllWritersQuiescent: () => {}, signal: new AbortController().signal, onCleanupFailure: () => {},
-      withAllWritersExcluded: async operation => {
+      withAllWritersExcluded: async (operation) => {
         await operation()
         expect(fence.pending(profileId)).toBeDefined()
         throw releaseFailure
@@ -855,7 +863,7 @@ describe('offline Profile existing-only inspector', () => {
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
       ownership, fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
       assertAllWritersQuiescent: () => {}, signal: new AbortController().signal, onCleanupFailure: () => {},
-      withAllWritersExcluded: async operation => { try { await operation() } catch {} return undefined as never },
+      withAllWritersExcluded: async (operation) => { try { await operation() } catch {} return undefined as never },
       createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
     }, async () => { throw new Error('read failed') })).rejects.toThrow('read failed')
     expect(fence.pending(profileId)).toBeUndefined()
@@ -863,7 +871,7 @@ describe('offline Profile existing-only inspector', () => {
   })
 
   it.each(['omitted', 'early', 'duplicate', 'substituted'] as const)(
-    'does not publish a result if the exclusion adapter invokes the reader incorrectly (%s)', async mode => {
+    'does not publish a result if the exclusion adapter invokes the reader incorrectly (%s)', async (mode) => {
       const value = await bundledFixture()
       const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
         processNonce: 'restricted-exclusion-contract-fixture' })
@@ -878,7 +886,7 @@ describe('offline Profile existing-only inspector', () => {
         persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
         ownership, fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
         assertAllWritersQuiescent: () => {}, signal: new AbortController().signal, onCleanupFailure: () => {},
-        withAllWritersExcluded: async operation => {
+        withAllWritersExcluded: async (operation) => {
           if (mode === 'omitted') return 'synthetic' as never
           const first = operation()
           if (mode === 'early') return 'synthetic' as never
@@ -903,8 +911,8 @@ describe('offline Profile existing-only inspector', () => {
       id => fence.pending(id) !== undefined)
     const extensions = extensionBarrier()
     let enter!: () => void, release!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const deferred = new Promise<void>(resolve => { release = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const deferred = new Promise<void>((resolve) => { release = resolve })
     let settled = false, aborted = false, starts = 0
     onTestFinished(async () => { release(); await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
     const pending = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
@@ -912,14 +920,14 @@ describe('offline Profile existing-only inspector', () => {
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
       ownership, fence, profileId, credentialHandle: 'fixture', assertCurrent: () => {},
       assertAllWritersQuiescent: () => {}, signal: new AbortController().signal, onCleanupFailure: () => {},
-      acquireSessionLocks: async signal => {
+      acquireSessionLocks: async (signal) => {
         enter()
         await deferred
         aborted = signal.aborted
         signal.throwIfAborted()
         return { assertCurrent() {}, close() {} }
       },
-      withAllWritersExcluded: async operation => { void operation(); await entered; return 'synthetic' as never },
+      withAllWritersExcluded: async (operation) => { void operation(); await entered; return 'synthetic' as never },
       createWorker: async () => { starts += 1; return { closeNotifications() {}, abort() {}, done: Promise.resolve() } },
     }, async () => 'private result')
     const rejected = expect(pending).rejects.toMatchObject({ code: 'unavailable' })
@@ -943,7 +951,7 @@ describe('offline Profile existing-only inspector', () => {
     const controller = new AbortController()
     onTestFinished(async () => { controller.abort(); await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
     const pending = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
@@ -952,8 +960,8 @@ describe('offline Profile existing-only inspector', () => {
       withAllWritersExcluded: async (_operation, signal) => {
         enter()
         return await new Promise<never>((_resolve, reject) => {
-          if (signal.aborted) reject(signal.reason)
-          else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          if (signal.aborted) reject(signal.reason as Error)
+          else signal.addEventListener('abort', () => { reject(signal.reason as Error) }, { once: true })
         })
       },
       createWorker: async () => { throw new Error('unexpected isolated worker') },
@@ -980,7 +988,7 @@ describe('offline Profile existing-only inspector', () => {
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
       ownership, fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), profileId, credentialHandle: 'fixture', assertCurrent: () => {},
       assertAllWritersQuiescent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
-      withAllWritersExcluded: async operation => {
+      withAllWritersExcluded: async (operation) => {
         const result = await operation()
         expect(fence.pending(profileId)).toBeDefined()
         controller.abort(new Error('owner disconnected'))
@@ -1017,7 +1025,9 @@ describe('offline Profile existing-only inspector', () => {
       id => fence.pending(id) !== undefined)
     const extensions = extensionBarrier()
     stageCleanupFaults.add(value.hostRoot)
-    onTestFinished(async () => { stageCleanupFaults.delete(value.hostRoot); await extensions.dispose(); await regular.disposeAll(); await ownership.release() })
+    onTestFinished(async () => {
+      stageCleanupFaults.delete(value.hostRoot); await extensions.dispose(); await regular.disposeAll(); await ownership.release()
+    })
     const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     await expect(withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
@@ -1048,7 +1058,7 @@ describe('offline Profile existing-only inspector', () => {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership,
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
-      fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), withAllWritersExcluded: async operation => {
+      fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), withAllWritersExcluded: async (operation) => {
         writerExclusionHeld = true
         try { return await operation() } finally { writerExclusionHeld = false }
       },
@@ -1079,7 +1089,7 @@ describe('offline Profile existing-only inspector', () => {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
       persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership,
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
-      fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), withAllWritersExcluded: async operation => {
+      fence, acquireSessionLocks: async () => ({ assertCurrent() {}, close() {} }), withAllWritersExcluded: async (operation) => {
         expect(writerExclusionHeld).toBe(false)
         writerExclusionHeld = true
         try {
@@ -1088,7 +1098,7 @@ describe('offline Profile existing-only inspector', () => {
           return result
         } finally { writerExclusionHeld = false }
       }, assertAllWritersQuiescent: () => { expect(writerExclusionHeld).toBe(true) }, onCleanupFailure: () => {},
-      createWorker: async spec => {
+      createWorker: async (spec) => {
         const operation = fence.pending(profileId)
         expect(operation).toBeDefined()
         expect(fence.reserved(profileId)).toBeUndefined()
@@ -1118,13 +1128,14 @@ describe('offline Profile existing-only inspector', () => {
     const authority = () => profileId
     const plan = await extensions.prepare(authority, 'plugin', '{}')
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const isolated = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
       onCleanupFailure: () => {}, createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
-    }, async () => { enter(); await new Promise<void>(resolve => { release = resolve }) })
+    }, async () => { enter(); await new Promise<void>((resolve) => { release = resolve }) })
     await entered
     const operationId = randomUUID()
     expect(() => extensions.commit(authority, plan.planId, operationId)).toThrow('busy')
@@ -1146,9 +1157,10 @@ describe('offline Profile existing-only inspector', () => {
     const authority = () => profileId
     const plan = await extensions.prepare(authority, 'plugin', '{}')
     let stopping!: () => void
-    const stopped = new Promise<void>(resolve => { stopping = resolve })
-    const done = new Promise<void>(resolve => { finish = resolve })
-    const isolated = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), { stagingParent: value.hostRoot, expectedUid: uid,
+    const stopped = new Promise<void>((resolve) => { stopping = resolve })
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    const isolated = withRestrictedProfileReader(regular, extensions, new LegacyClaimWorkerGate(() => false), {
+      stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership), profileId,
       credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
@@ -1175,7 +1187,8 @@ describe('offline Profile existing-only inspector', () => {
     const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
     await expect(withRestrictedProfileReader(regular, extensionBarrier(), new LegacyClaimWorkerGate(() => true), {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
-      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership),
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership),
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
       onCleanupFailure: () => {}, createWorker,
     }, async () => {})).rejects.toMatchObject({ code: 'unavailable' })
@@ -1192,13 +1205,14 @@ describe('offline Profile existing-only inspector', () => {
     let release = () => {}
     onTestFinished(async () => { release(); await regular.disposeAll(); await ownership.release() })
     let enter!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
+    const entered = new Promise<void>((resolve) => { enter = resolve })
     const isolated = withRestrictedProfileReader(regular, extensionBarrier(), claims, {
       stagingParent: value.hostRoot, expectedUid: uid, profileRoot: value.profileRoot, ownerPaths: value.ownerPaths,
-      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, ...testFence(value.hostRoot, ownership),
+      persistence: value.persistence, inspectPersistence: () => value.target.inspectRestrictedPersistence(),
+      ownership, ...testFence(value.hostRoot, ownership),
       profileId, credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
       onCleanupFailure: () => {}, createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
-    }, async () => { enter(); await new Promise<void>(resolve => { release = resolve }); return 'private history' })
+    }, async () => { enter(); await new Promise<void>((resolve) => { release = resolve }); return 'private history' })
     const denied = expect(isolated).rejects.toMatchObject({ code: 'unavailable' })
     await entered
     const claim = claims.stop(profileId, () => regular.dispose(profileId))
@@ -1227,22 +1241,22 @@ describe('offline Profile existing-only inspector', () => {
   })
 
   it.each(['reserved', 'worker_gone'] as const)(
-    'recovers an empty %s operation from a dead Host before opening restricted history', async phase => {
-    const value = await bundledFixture()
-    const operation = randomUUID()
-    await writeFile(join(value.hostRoot, `${profileId}.json`), JSON.stringify({ version: 2, profileId,
-      operationId: operation, state: 'pending', phase, ownerGeneration: randomUUID(), ownerPid: 2147483647,
-    }), { mode: 0o600 })
-    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
-      remoteSession: async () => ({ items: ['history'] }) }))
-    const service = await accountService(value, createWorker)
-    const record = profile()
-    await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
-      command_id: '123e4567-e89b-42d3-a456-426614174015' as HostControlRequestId }, new AbortController().signal))
-      .resolves.toEqual({ items: ['history'] })
-    expect(createWorker).toHaveBeenCalledOnce()
-    expect(JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')).state).toBe('cleared')
-  })
+    'recovers an empty %s operation from a dead Host before opening restricted history', async (phase) => {
+      const value = await bundledFixture()
+      const operation = randomUUID()
+      await writeFile(join(value.hostRoot, `${profileId}.json`), JSON.stringify({ version: 2, profileId,
+        operationId: operation, state: 'pending', phase, ownerGeneration: randomUUID(), ownerPid: 2147483647,
+      }), { mode: 0o600 })
+      const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+        remoteSession: async () => ({ items: ['history'] }) }))
+      const service = await accountService(value, createWorker)
+      const record = profile()
+      await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
+        command_id: '123e4567-e89b-42d3-a456-426614174015' as HostControlRequestId }, new AbortController().signal))
+        .resolves.toEqual({ items: ['history'] })
+      expect(createWorker).toHaveBeenCalledOnce()
+      expect((JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')) as { state: string }).state).toBe('cleared')
+    })
 
   it('requires the trusted broker authority guard before consulting local Account proof', async () => {
     const value = await bundledFixture()
@@ -1262,10 +1276,10 @@ describe('offline Profile existing-only inspector', () => {
     const value = await bundledFixture()
     const record = profile()
     let entered!: () => void, stopping!: () => void, finishWorker!: () => void, finishRead!: () => void
-    const readEntered = new Promise<void>(resolve => { entered = resolve })
-    const stopEntered = new Promise<void>(resolve => { stopping = resolve })
-    const workerDone = new Promise<void>(resolve => { finishWorker = resolve })
-    const readDone = new Promise<void>(resolve => { finishRead = resolve })
+    const readEntered = new Promise<void>((resolve) => { entered = resolve })
+    const stopEntered = new Promise<void>((resolve) => { stopping = resolve })
+    const workerDone = new Promise<void>((resolve) => { finishWorker = resolve })
+    const readDone = new Promise<void>((resolve) => { finishRead = resolve })
     onTestFinished(() => { finishRead(); finishWorker() })
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort: stopping,
       done: workerDone, remoteSession: async () => { entered(); await readDone; return { items: ['private'] } } }))
@@ -1294,9 +1308,9 @@ describe('offline Profile existing-only inspector', () => {
     const value = await bundledFixture()
     const service = await accountService(value, async () => { throw new Error('unexpected worker') })
     let finish!: (value: { items: string[] }) => void
-    const pending = new Promise<{ items: string[] }>(resolve => { finish = resolve })
+    const pending = new Promise<{ items: string[] }>((resolve) => { finish = resolve })
     const readOwned = vi.spyOn(Object.getPrototypeOf(service), 'readOwned').mockReturnValueOnce(pending)
-    onTestFinished(() => readOwned.mockRestore())
+    onTestFinished(() => { readOwned.mockRestore() })
     const command = { operation: 'session.list' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174010' as HostControlRequestId }
     const reading = restrictedAccountRead(service, () => profile(), command, new AbortController().signal)
@@ -1375,7 +1389,7 @@ describe('offline Profile existing-only inspector', () => {
     await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
       command_id: '123e4567-e89b-42d3-a456-426614174007' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
-    expect(JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')).state).toBe('pending')
+    expect((JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')) as { state: string }).state).toBe('pending')
     const closing = service.close()
     await expect(closing).rejects.toMatchObject({ code: 'unavailable' })
     expect(service.close()).toBe(closing)
@@ -1401,9 +1415,9 @@ describe('offline Profile existing-only inspector', () => {
     const value = await bundledFixture()
     const record = profile()
     let enter!: () => void, release!: () => void
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    const deferred = new Promise<void>(resolve => { release = resolve })
-    onTestFinished(() => release())
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    const deferred = new Promise<void>((resolve) => { release = resolve })
+    onTestFinished(() => { release() })
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
       remoteSession: async () => { enter(); await deferred; return { items: ['must not return'] } } }))
     const pending = restrictedAccountRead(service, () => record, { operation: 'session.list',
@@ -1425,10 +1439,10 @@ describe('offline Profile existing-only inspector', () => {
     const record = profile()
     let authorized = true
     let enter!: () => void, release = () => {}
-    const entered = new Promise<void>(resolve => { enter = resolve })
-    onTestFinished(() => release())
+    const entered = new Promise<void>((resolve) => { enter = resolve })
+    onTestFinished(() => { release() })
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
-      remoteSession: async () => { enter(); await new Promise<void>(resolve => { release = resolve }); return { items: ['private'] } } }))
+      remoteSession: async () => { enter(); await new Promise<void>((resolve) => { release = resolve }); return { items: ['private'] } } }))
     const pending = restrictedAccountRead(service, () => {
       if (!authorized) throw new HostAuthorityError('unauthorized')
       return record
@@ -1446,9 +1460,9 @@ describe('offline Profile existing-only inspector', () => {
     const record = profile()
     let authorized = true, finish = () => {}
     let enter!: () => void
-    const stopping = new Promise<void>(resolve => { enter = resolve })
-    const done = new Promise<void>(resolve => { finish = resolve })
-    onTestFinished(() => finish())
+    const stopping = new Promise<void>((resolve) => { enter = resolve })
+    const done = new Promise<void>((resolve) => { finish = resolve })
+    onTestFinished(() => { finish() })
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort: enter, done,
       remoteSession: async () => ({ items: ['private'] }) }))
     const pending = restrictedAccountRead(service, () => {
@@ -1532,7 +1546,7 @@ describe('offline Profile existing-only inspector', () => {
       inspectPersistence: () => value.target.inspectRestrictedPersistence(),
       ownership, ...testFence(value.hostRoot, ownership), profileId, credentialHandle: 'fixture', createWorker: (spec, signal) => process.env.DSH_TEST_DENY_FORK === '1'
         ? factory.createRestricted(spec, signal) : factory.create(spec, signal), onCleanupFailure: () => {},
-      assertCurrent: () => {}, signal: new AbortController().signal }, async reader => {
+      assertCurrent: () => {}, signal: new AbortController().signal }, async (reader) => {
       const command = { operation: 'session.list' as const,
         command_id: '123e4567-e89b-42d3-a456-426614174000' as HostControlRequestId }
       const history = await reader.read(command, AbortSignal.timeout(10_000))
@@ -1541,8 +1555,8 @@ describe('offline Profile existing-only inspector', () => {
         const staged = Reflect.get(reader, 'staging') as { root: string }
         expect(JSON.parse(await readFile(join(staged.root, 'sandbox-probe-result'), 'utf8')))
           .toEqual({ fork: 'EPERM', write: 'EPERM', link: 'EPERM', hardlink: 'EPERM' })
-        await vi.waitFor(async () => expect(await readFile(join(staged.root, 'sandbox-network-result'), 'utf8')).toBe('EPERM'))
-        await vi.waitFor(async () => expect(await readFile(join(staged.root, 'sandbox-udp-result'), 'utf8')).toBe('EPERM'))
+        await vi.waitFor(async () => { expect(await readFile(join(staged.root, 'sandbox-network-result'), 'utf8')).toBe('EPERM') })
+        await vi.waitFor(async () => { expect(await readFile(join(staged.root, 'sandbox-udp-result'), 'utf8')).toBe('EPERM') })
         await expect(lstat(join(value.hostRoot, 'forbidden-sandbox-write'))).rejects.toMatchObject({ code: 'ENOENT' })
         expect(await readFile(join(value.hostRoot, 'sandbox-original'), 'utf8')).toBe('unchanged')
       }
