@@ -3,7 +3,7 @@
 
 - insert:
     - id: desktop-host-startup
-      name: '@deepseek-ai/dsh-desktop-host/startup'
+      name: '@deepseek-ai/dsh-slark-desktop-host/startup'
       config:
         root: !!js process.env.DSH_HOST_ROOT
         registrationRoot: !!js process.env.DSH_HOST_REGISTRATION_ROOT
