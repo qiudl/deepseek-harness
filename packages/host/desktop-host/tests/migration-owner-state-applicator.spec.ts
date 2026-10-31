@@ -258,7 +258,8 @@ describe('migration owner-state generation applicator', () => {
     expect((await readdir(parent)).filter(name => name.startsWith('restricted-'))).toEqual([])
   })
 
-  it.each([['symlink', 'profile_integrity_failed'], ['directory', 'recovery_preflight_stale']] as const)(
+  it.each([['symlink', 'profile_integrity_failed'], ['directory', 'recovery_preflight_stale'],
+    ['permissions', 'profile_integrity_failed']] as const)(
     'rejects a source session replaced by a %s after copying', async (replacement, code) => {
       const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
       const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
@@ -276,9 +277,12 @@ describe('migration owner-state generation applicator', () => {
         await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
       })
       diskFaults.afterCopy = async () => {
-        await rm(file)
-        if (replacement === 'symlink') await symlink(sentinel, file)
-        else await mkdir(file, { mode: 0o700 })
+        if (replacement === 'permissions') await chmod(file, 0o644)
+        else {
+          await rm(file)
+          if (replacement === 'symlink') await symlink(sentinel, file)
+          else await mkdir(file, { mode: 0o700 })
+        }
       }
       await expect(stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
         ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' },
