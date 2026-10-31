@@ -17,6 +17,37 @@ export interface FriendBotSigningIdentity {
   readonly installationPrivateKey: KeyObject | string | Buffer
 }
 
+/** Reject a proof when its Account, Host peer, or signing window is no longer current. */
+export function assertCurrentFriendProofAccountHost(
+  challenge: Readonly<{
+    owner_user_id: string
+    authority_environment_id: string
+    binding_id: string
+    binding_epoch: string
+    account_issuer: string
+    account_subject: string
+    host_installation_id: string
+    host_public_key: string
+    host_instance_id: string
+    process_nonce: string
+    issued_at: number
+    expires_at: number
+  }>,
+  account: BotIdentityAccount, identity: FriendBotSigningIdentity, now: number,
+): void {
+  if (!Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
+      challenge.owner_user_id !== account.ownerId ||
+      challenge.authority_environment_id !== account.authorityEnvironmentId ||
+      challenge.binding_id !== account.accountBindingHandle ||
+      challenge.binding_epoch !== String(account.authorityBindingVersion) ||
+      challenge.account_issuer !== account.issuer || challenge.account_subject !== account.subject ||
+      challenge.host_installation_id !== identity.installationId ||
+      challenge.host_public_key !== identity.installationPublicKey ||
+      challenge.host_instance_id !== identity.hostInstanceId ||
+      challenge.process_nonce !== identity.processNonce)
+    throw new HostAuthorityError('profile_mismatch')
+}
+
 /** Shared inputs for signing a Bot proof after Account and Profile checks. */
 export interface FriendBotSigningInput<Challenge> {
   readonly host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>

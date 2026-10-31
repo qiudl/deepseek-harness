@@ -42,8 +42,8 @@ test('friend lease proof has exact domain and operation binding',()=>{
 
 test('friend lease proof rejects malformed objects and noncanonical authority fields',()=>{
   const signature=Buffer.alloc(64).toString('base64url')
-  const rejects=(value:unknown)=>assert.throws(()=>parseHostFriendOnlineLeaseChallenge(value),
-    /invalid_friend_online_lease_proof/u)
+  const rejects=(value:unknown)=>{ assert.throws(()=>parseHostFriendOnlineLeaseChallenge(value),
+    /invalid_friend_online_lease_proof/u) }
   rejects(null)
   rejects({ ...challenge,extra:true })
   rejects(Object.defineProperty({ ...challenge },'nonce',{ get:()=>challenge.nonce,enumerable:true }))

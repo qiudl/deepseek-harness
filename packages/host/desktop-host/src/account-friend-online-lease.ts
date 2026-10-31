@@ -3,7 +3,7 @@ import { createPrivateKey, sign, type KeyObject } from 'node:crypto'
 import { encodeHostFriendOnlineLeasePayload, parseHostFriendOnlineLeaseAssertion,
   parseHostFriendOnlineLeaseChallenge, type HostFriendOnlineLeaseAssertion,
   type HostFriendOnlineLeaseChallenge } from '@deepseek-ai/dsh-host-control-protocol'
-import type { BotIdentityAccount } from './account-bot-identity.ts'
+import { assertCurrentFriendProofAccountHost, type BotIdentityAccount } from './account-bot-identity.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -27,17 +27,7 @@ export function signAccountFriendOnlineLease(input: SigningInput): HostFriendOnl
   input.signal.throwIfAborted()
   const c = parseHostFriendOnlineLeaseChallenge(input.challenge)
   const { account,identity } = input
-  const before = input.now()
-  if (!Number.isSafeInteger(before) || before < c.issued_at || before >= c.expires_at ||
-      c.owner_user_id !== account.ownerId ||
-      c.authority_environment_id !== account.authorityEnvironmentId ||
-      c.binding_id !== account.accountBindingHandle ||
-      c.binding_epoch !== String(account.authorityBindingVersion) ||
-      c.account_issuer !== account.issuer || c.account_subject !== account.subject ||
-      c.host_installation_id !== identity.installationId ||
-      c.host_public_key !== identity.installationPublicKey ||
-      c.host_instance_id !== identity.hostInstanceId || c.process_nonce !== identity.processNonce)
-    return unavailable()
+  assertCurrentFriendProofAccountHost(c,account,identity,input.now())
   input.host.authorizeCollaborationRegistration(account)
   const after = input.now()
   if (!Number.isSafeInteger(after) || after < c.issued_at || after >= c.expires_at)

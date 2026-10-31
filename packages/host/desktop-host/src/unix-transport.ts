@@ -1067,6 +1067,8 @@ class FrameChannel implements HostClientFrameTransport {
 type SlarkImportParams = ProfileImportPreviewRequest['params'] | ProfileImportStatusRequest['params']
   | ProfileImportPrepareRequest['params'] | ProfileImportCommitRequest['params']
   | ProfileImportAbortRequest['params']
+type FriendProofChallenge = HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge |
+  HostFriendOnlineLeaseChallenge
 
 function slarkImportAuthority(p: SlarkImportParams, ownerId: string): Parameters<DesktopHost['authorizeSlarkImportPreview']>[0] {
   return {
@@ -4658,14 +4660,14 @@ export class UnixHostClient {
     return identity
   }
 
-  private assertFriendBotBinding(
+  private assertFriendProofBinding(
     input: {
       accountBindingHandle: string
       authorityBindingVersion: number
       issuer: string
       subject: string
     },
-    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
+    challenge: FriendProofChallenge,
   ): void {
     if (challenge.binding_id !== input.accountBindingHandle ||
       challenge.binding_epoch !== String(input.authorityBindingVersion) ||
@@ -4673,9 +4675,9 @@ export class UnixHostClient {
       throw new HostAuthorityError('profile_mismatch')
   }
 
-  private assertFriendBotAssertion(
-    challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge,
-    assertion: { challenge: HostFriendBotConfirmationChallenge | HostFriendBotEnrollmentChallenge
+  private assertFriendProofAssertion(
+    challenge: FriendProofChallenge,
+    assertion: { challenge: FriendProofChallenge
       signature: string },
     payload: Uint8Array,
   ): void {
@@ -4691,8 +4693,9 @@ export class UnixHostClient {
       throw new HostAuthorityError('unauthorized')
   }
 
-  private async requestFriendBotAssertion(
-    request: ProfileFriendBotConfirmationRequest | ProfileFriendBotEnrollmentRequest,
+  private async requestFriendProofAssertion(
+    request: ProfileFriendBotConfirmationRequest | ProfileFriendBotEnrollmentRequest |
+      ProfileFriendOnlineLeaseRequest,
     signal?: AbortSignal,
   ): Promise<unknown> {
     const frame = await this.call(request, signal)
@@ -4720,14 +4723,14 @@ export class UnixHostClient {
     const challenge = parseHostFriendBotConfirmationChallenge(input.challenge)
     if (!this.inspection.capabilities.includes('profile.friend_bot_confirmation' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
-    this.assertFriendBotBinding(input, challenge)
+    this.assertFriendProofBinding(input, challenge)
     const request: ProfileFriendBotConfirmationRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_confirmation',
       params: { ...this.collaborationAccountRequestParams(input), challenge },
     }
     const assertion = parseHostFriendBotConfirmationAssertion(
-      await this.requestFriendBotAssertion(request, input.signal))
-    this.assertFriendBotAssertion(challenge, assertion,
+      await this.requestFriendProofAssertion(request, input.signal))
+    this.assertFriendProofAssertion(challenge, assertion,
       encodeHostFriendBotConfirmationPayload(challenge))
     return assertion
   }
@@ -4750,14 +4753,14 @@ export class UnixHostClient {
     const challenge = parseHostFriendBotEnrollmentChallenge(input.challenge)
     if (!this.inspection.capabilities.includes('profile.friend_bot_enrollment' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
-    this.assertFriendBotBinding(input, challenge)
+    this.assertFriendProofBinding(input, challenge)
     const request: ProfileFriendBotEnrollmentRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_bot_enrollment',
       params: { ...this.collaborationAccountRequestParams(input), challenge },
     }
     const assertion = parseHostFriendBotEnrollmentAssertion(
-      await this.requestFriendBotAssertion(request, input.signal))
-    this.assertFriendBotAssertion(challenge, assertion,
+      await this.requestFriendProofAssertion(request, input.signal))
+    this.assertFriendProofAssertion(challenge, assertion,
       encodeHostFriendBotEnrollmentPayload(assertion))
     return assertion
   }
@@ -4780,30 +4783,15 @@ export class UnixHostClient {
     const challenge = parseHostFriendOnlineLeaseChallenge(input.challenge)
     if (!this.inspection.capabilities.includes('profile.friend_online_lease' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
-    if (challenge.binding_id !== input.accountBindingHandle ||
-      challenge.binding_epoch !== String(input.authorityBindingVersion) ||
-      challenge.account_issuer !== input.issuer || challenge.account_subject !== input.subject)
-      throw new HostAuthorityError('profile_mismatch')
+    this.assertFriendProofBinding(input,challenge)
     const request: ProfileFriendOnlineLeaseRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.friend_online_lease',
       params: { ...this.collaborationAccountRequestParams(input), challenge },
     }
-    const frame = await this.call(request,input.signal)
-    input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method)
-      throw new HostAuthorityError('unavailable')
-    const assertion = parseHostFriendOnlineLeaseAssertion(frame.result)
-    const now = this.now()
-    if (JSON.stringify(assertion.challenge) !== JSON.stringify(challenge) ||
-      assertion.challenge.host_installation_id !== this.inspection.installation_id ||
-      assertion.challenge.host_public_key !== this.inspection.installation_public_key ||
-      assertion.challenge.host_instance_id !== this.inspection.host_instance_id ||
-      assertion.challenge.process_nonce !== this.inspection.process_nonce ||
-      !Number.isSafeInteger(now) || now < challenge.issued_at || now >= challenge.expires_at ||
-      !verify(null,encodeHostFriendOnlineLeasePayload(assertion),
-        publicKeyObject(this.inspection.installation_public_key),
-        Buffer.from(assertion.signature,'base64url')))
-      throw new HostAuthorityError('unauthorized')
+    const assertion = parseHostFriendOnlineLeaseAssertion(
+      await this.requestFriendProofAssertion(request,input.signal))
+    this.assertFriendProofAssertion(challenge,assertion,
+      encodeHostFriendOnlineLeasePayload(assertion))
     return assertion
   }
 
