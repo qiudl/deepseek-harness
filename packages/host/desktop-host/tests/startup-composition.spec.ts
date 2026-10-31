@@ -756,6 +756,7 @@ it.skipIf(process.platform === 'win32')('composes and closes restricted history 
   onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
   const reader = application.restrictedHistory
   if (!reader) throw new Error('missing restricted reader')
+  await expect(reader.reconcileEmptyFence('../invalid')).rejects.toMatchObject({ code: 'unavailable' })
   expect(capturedOptions).not.toHaveProperty('restrictedHistory')
   const readerClose = vi.spyOn(reader, 'close')
   await application.close()
@@ -843,6 +844,31 @@ it.skipIf(process.platform === 'win32')('retains the fence and Host ownership if
   expect(application.workers.isProfileBlocked(profileId)).toBe(true)
   await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
   expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('blocks the Profile if the reconciliation adapter invokes its callback twice', async () => {
+  const { config, root } = fixture()
+  const profileId = randomUUID()
+  const directory = join(root, 'restricted-fences')
+  mkdirSync(directory, { mode: 0o700 })
+  const path = join(directory, `${profileId}.json`)
+  writeFileSync(path, JSON.stringify({ version: 2, profileId, operationId: randomUUID(), state: 'pending',
+    phase: 'reserved', ownerGeneration: randomUUID(), ownerPid: 2147483647 }), { mode: 0o600 })
+  const server = { start: async () => undefined, close: async () => undefined }
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: options => Object.assign(new UnixHostServer(options), server),
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => { await operation(); return operation() },
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  if (!application.restrictedHistory) throw new Error('missing restricted reader')
+  await expect(application.restrictedHistory.reconcileEmptyFence(profileId)).rejects.toMatchObject({ code: 'unavailable' })
+  expect(application.workers.isLocallyBlocked(profileId)).toBe(true)
+  expect((JSON.parse(readFileSync(path, 'utf8')) as { state: string }).state).toBe('pending')
+  await expect(application.close()).rejects.toMatchObject({ code: 'unavailable' })
 })
 
 it.skipIf(process.platform === 'win32')('fails closed when the reconciliation guard swallows a validation failure', async () => {
