@@ -51,6 +51,7 @@ function applyModelSelectionProjection(
     : { lastUsed, pending }
 }
 
+/** Durable selection projection used by live and cold Session readers. */
 export const modelSelectionProjectionDefinition = {
   key: 'modelSelection',
   stateSchema: modelSelectionProjectionStateSchema,
