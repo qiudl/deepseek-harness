@@ -790,6 +790,13 @@ describe('offline Profile existing-only inspector', () => {
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
     expect(await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)).toBeNull()
+    await chmod(resolved.resolutionRoot, 0o777)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+      .rejects.toThrow('profile_import_plugin_target_resolution_unsafe')
+    await chmod(resolved.resolutionRoot, 0o700)
+    await expect(inspectResolvedProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      manifestPlan: { ...manifestPlan, nextManifestDigest: 'changed' } }))
+      .rejects.toThrow('profile_import_plugin_target_plan_changed')
     const resolvedArchives = join(resolved.resolutionRoot, '.bundled-plugins')
     await chmod(resolvedArchives, 0o777)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
@@ -809,6 +816,11 @@ describe('offline Profile existing-only inspector', () => {
     expect(await readFile(join(resolved.resolutionRoot, 'compatibility.json'), 'utf8')).toBe('{}\n')
     const receiptPath = join(resolved.resolutionRoot, 'resolution-receipt.json')
     const receipt = await readFile(receiptPath)
+    isolatedReadFaults.set(receiptPath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    } finally { isolatedReadFaults.delete(receiptPath) }
     await unlink(receiptPath)
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
@@ -868,6 +880,11 @@ describe('offline Profile existing-only inspector', () => {
     await writeFile(mergedLockPath, lock)
     await writeFile(receiptPath, receipt)
     const copiedBaselineArchive = join(resolved.resolutionRoot, '.bundled-plugins', `${baselineDigest}.tgz`)
+    isolatedReadFaults.set(copiedBaselineArchive, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(copiedBaselineArchive) }
     await writeFile(copiedBaselineArchive, 'tampered')
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_archive_changed')
@@ -878,6 +895,11 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_target_archive_changed')
     await writeFile(liveBaselineArchive, baselineBytes)
     const copiedSelectedArchive = join(resolvedArchives, `${value.source.digest}.tgz`)
+    isolatedReadFaults.set(copiedSelectedArchive, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
+        .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+    } finally { isolatedReadFaults.delete(copiedSelectedArchive) }
     isolatedReadFaults.set(copiedSelectedArchive, { calls: 0, at: 2, mode: 'changed' })
     try {
       await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput))
@@ -922,9 +944,7 @@ describe('offline Profile existing-only inspector', () => {
       trustManifestFaults.nullAt = at
       try {
         await inspectResolvedProfileImportTargetPluginLayer(resolutionInput)
-        throw Error('missing manifest fault rejection')
       } catch (error) {
-        expect((error as Error).message).not.toBe('missing manifest fault rejection')
         if ((error as Error).message === 'profile_import_plugin_target_install_invalid') {
           lateManifestRead = at
         }
