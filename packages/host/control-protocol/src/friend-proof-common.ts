@@ -5,6 +5,7 @@ const ENV = /^[a-z0-9][a-z0-9_-]{0,127}$/u
 const USER = /^[A-Za-z0-9_-][A-Za-z0-9._:-]{0,255}$/u
 const OPAQUE = /^[\x21-\x7e]{1,256}$/u
 
+/** Account, Profile, Computer, and Host coordinates shared by friend proof challenges. */
 export interface HostFriendProofCoreChallenge {
   readonly schema_version: 1
   readonly environment_id: string
@@ -32,6 +33,7 @@ export interface HostFriendProofCoreChallenge {
   readonly nonce: string
 }
 
+/** Ordered fields shared by the enrollment and online lease signature tuples. */
 export const FRIEND_PROOF_CORE_FIELDS = [
   'schema_version','operation','environment_id','authority_environment_id','request_id','owner_user_id',
   'account_issuer','account_subject','profile_id','profile_epoch','identity_id','identity_epoch',
@@ -40,6 +42,13 @@ export const FRIEND_PROOF_CORE_FIELDS = [
   'process_nonce','connection_id',
 ] as const
 
+/**
+ * Read an exact plain record without invoking accessors or accepting hidden fields.
+ * @param value - untrusted record.
+ * @param keys - required own field names.
+ * @param fail - caller-specific rejection function.
+ * @returns a detached record containing the ordered field values.
+ */
 export function exactFriendProofRecord(value: unknown, keys: readonly string[], fail: () => never): Record<string,unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.getPrototypeOf(value) !== Object.prototype || Reflect.ownKeys(value).length !== keys.length)
@@ -49,9 +58,25 @@ export function exactFriendProofRecord(value: unknown, keys: readonly string[], 
   return Object.fromEntries(keys.map(key => [key, fields[key]?.value]))
 }
 
+/**
+ * Check a canonical UUID coordinate.
+ * @param v - untrusted value.
+ * @returns whether the value is a canonical UUID.
+ */
 export const friendProofUuid = (v: unknown): v is string => typeof v === 'string' && UUID.test(v)
+/**
+ * Check a positive signed 64-bit generation.
+ * @param v - untrusted value.
+ * @returns whether the value is a canonical generation.
+ */
 export const friendProofVersion = (v: unknown): v is string => typeof v === 'string' &&
   VERSION.test(v) && BigInt(v) <= 9223372036854775807n
+/**
+ * Check exact unpadded base64url key or nonce bytes.
+ * @param v - untrusted value.
+ * @param length - required byte length.
+ * @returns whether the value has the required canonical encoding.
+ */
 export function friendProofRaw(v: unknown, length: number): v is string {
   if (typeof v !== 'string' || !/^[A-Za-z0-9_-]+$/u.test(v)) return false
   const bytes = Buffer.from(v,'base64url')
@@ -67,6 +92,11 @@ function friendProofOrigin(v: unknown): boolean {
 const friendProofOpaque = (v: unknown, max = 256): boolean => typeof v === 'string' &&
   v.length <= max && OPAQUE.test(v)
 
+/**
+ * Validate shared Account, Profile, Computer, Host, and time coordinates.
+ * @param r - detached challenge record.
+ * @returns whether every shared coordinate is valid.
+ */
 export function validFriendProofCore(r: Record<string,unknown>): boolean {
   return r.schema_version === 1 && typeof r.environment_id === 'string' && ENV.test(r.environment_id) &&
     typeof r.owner_user_id === 'string' && USER.test(r.owner_user_id) && friendProofOrigin(r.account_issuer) &&
