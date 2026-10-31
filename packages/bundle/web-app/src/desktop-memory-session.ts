@@ -72,10 +72,12 @@ export async function readDesktopMemorySession(
   persistence: Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>,
   rawSessionId: string,
   signal: AbortSignal,
+  isLive: (id: SessionIdType) => boolean = () => false,
 ): Promise<DesktopMemorySessionSnapshot> {
   signal.throwIfAborted()
   if (!SESSION_ID.test(rawSessionId)) throw new Error('memory_session_invalid')
   const id = SessionId(rawSessionId)
+  if (isLive(id)) throw new Error('memory_session_unavailable')
   const before = await persistence.stat(id, { signal })
   if (!before || !privateTopLevel(before.header)) throw new Error('memory_session_unavailable')
   const handle = await persistence.open(id, 'read', { signal })
@@ -104,6 +106,7 @@ export async function readDesktopMemorySession(
     }
     const after = await persistence.stat(id, { signal })
     signal.throwIfAborted()
+    if (isLive(id)) throw new Error('memory_session_unavailable')
     if (!after || after.revision !== before.revision || after.header.id !== id)
       throw new Error('memory_session_changed')
     return { sessionId: id, revision: after.revision, text: `${lines.join('\n')}\n` }
@@ -122,6 +125,7 @@ export async function listDesktopMemorySessions(
   persistence: Pick<DesktopMemorySessionPersistence, 'list'>,
   after: string | null,
   signal: AbortSignal,
+  isLive: (id: SessionIdType) => boolean = () => false,
 ): Promise<DesktopMemorySessionPage> {
   signal.throwIfAborted()
   if (after !== null && !SESSION_ID.test(after)) throw new Error('memory_cursor_invalid')
@@ -129,7 +133,7 @@ export async function listDesktopMemorySessions(
   signal.throwIfAborted()
   if (snapshots.length > MAX_EVENTS) throw new Error('memory_inventory_oversized')
   const items = snapshots
-    .filter(snapshot => privateTopLevel(snapshot.header))
+    .filter(snapshot => privateTopLevel(snapshot.header) && !isLive(snapshot.header.id))
     .map(snapshot => ({ sessionId: snapshot.header.id, revision: snapshot.revision }))
     .sort((left, right) => left.sessionId < right.sessionId ? -1 : left.sessionId > right.sessionId ? 1 : 0)
   if (items.some((item, index) => !SESSION_ID.test(item.sessionId)
@@ -194,9 +198,10 @@ export function handleDesktopMemorySessionsRequest(
   res: ServerResponse,
   token: string,
   persistence: Pick<DesktopMemorySessionPersistence, 'list'>,
+  isLive: (id: SessionIdType) => boolean,
 ): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token,
-    (target, signal) => listDesktopMemorySessions(persistence, target.after, signal),
+    (target, signal) => listDesktopMemorySessions(persistence, target.after, signal, isLive),
     (value: unknown) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_input')
       const row = value as Record<string, unknown>
@@ -223,10 +228,11 @@ export function handleDesktopMemorySessionRequest(
   res: ServerResponse,
   token: string,
   persistence: Pick<DesktopMemorySessionPersistence, 'stat' | 'open'>,
+  isLive: (id: SessionIdType) => boolean,
 ): Promise<void> {
   return handleDesktopPrivateRequest(
     req, res, token,
-    (target, signal) => readDesktopMemorySession(persistence, target.session_id, signal),
+    (target, signal) => readDesktopMemorySession(persistence, target.session_id, signal, isLive),
     (value: unknown) => {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_input')
       const record = value as Record<string, unknown>
