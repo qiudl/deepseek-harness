@@ -284,41 +284,38 @@ describe.skipIf(process.platform === 'win32')('private Profile import session co
     expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
   })
 
-  it('rejects changed source, target, and staged owner evidence while preserving the fence', async () => {
-    const scenarios = [
-      { name: 'source inventory', change: async ({ source }: Awaited<ReturnType<typeof fixture>>) => {
-        await source.target.importSession(1, { version: SESSION_FORMAT_VERSION,
-          id: SessionId('late-source'), createdAt: 2, isSeeded: false }, [])
-      }, error: 'profile_import_inventory_changed' },
-      { name: 'target inventory', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
-        await target.target.importSession(1, { version: SESSION_FORMAT_VERSION,
-          id: SessionId('late-target'), createdAt: 2, isSeeded: false }, [])
-      }, error: 'profile_import_inventory_changed' },
-      { name: 'staged owner directory', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
-        await chmod(target.target.generationRoot(2), 0o777)
-      }, error: 'profile_import_owner_state_unsafe' },
-      { name: 'missing staged owner state', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
-        await rm(join(target.target.generationRoot(2), 'owner-state.json'))
-      }, error: 'profile_import_owner_state_unsafe' },
-      { name: 'extra staged Session', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
-        await target.target.importSession(2, { version: SESSION_FORMAT_VERSION,
-          id: SessionId('unexpected-staged'), createdAt: 2, isSeeded: false }, [])
-      }, error: 'profile_import_stage_mismatch' },
-    ] as const
-    for (const scenario of scenarios) {
-      const value = await fixture()
-      const { source, target, journal, fence, base } = value
-      const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
-        revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
-        settleHostOperations: async () => {},
-      })
-      await coordinator.prepare(base)
-      await scenario.change(value)
-      await expect(coordinator.commit({ operationId: base.operationId, source, target, uid,
-        assertAuthority: async () => {} }), scenario.name).rejects.toThrow(scenario.error)
-      expect((await journal.load(base.operationId))?.phase).toBe('staged')
-      expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
-    }
+  it.each([
+    { name: 'source inventory', change: async ({ source }: Awaited<ReturnType<typeof fixture>>) => {
+      await source.target.importSession(1, { version: SESSION_FORMAT_VERSION,
+        id: SessionId('late-source'), createdAt: 2, isSeeded: false }, [])
+    }, error: 'profile_import_inventory_changed' },
+    { name: 'target inventory', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
+      await target.target.importSession(1, { version: SESSION_FORMAT_VERSION,
+        id: SessionId('late-target'), createdAt: 2, isSeeded: false }, [])
+    }, error: 'profile_import_inventory_changed' },
+    { name: 'staged owner directory', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
+      await chmod(target.target.generationRoot(2), 0o777)
+    }, error: 'profile_import_owner_state_unsafe' },
+    { name: 'missing staged owner state', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
+      await rm(join(target.target.generationRoot(2), 'owner-state.json'))
+    }, error: 'profile_import_owner_state_unsafe' },
+    { name: 'extra staged Session', change: async ({ target }: Awaited<ReturnType<typeof fixture>>) => {
+      await target.target.importSession(2, { version: SESSION_FORMAT_VERSION,
+        id: SessionId('unexpected-staged'), createdAt: 2, isSeeded: false }, [])
+    }, error: 'profile_import_stage_mismatch' },
+  ] as const)('rejects changed $name evidence while preserving the fence', async (scenario) => {
+    const value = await fixture()
+    const { source, target, journal, fence, base } = value
+    const coordinator = new ProfileImportSessionCoordinator(journal, fence, {
+      revoke: () => {}, stop: async () => {}, settleExtensions: async () => {},
+      settleHostOperations: async () => {},
+    })
+    await coordinator.prepare(base)
+    await scenario.change(value)
+    await expect(coordinator.commit({ operationId: base.operationId, source, target, uid,
+      assertAuthority: async () => {} }), scenario.name).rejects.toThrow(scenario.error)
+    expect((await journal.load(base.operationId))?.phase).toBe('staged')
+    expect(() =>{  fence.assertOpen(target.profileId) }).toThrow()
   })
 
   it('does not recommit an aborted Session import or abort a committed one', async () => {
