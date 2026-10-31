@@ -14,8 +14,9 @@ const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
 const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, fstatCalls: 0,
   archiveFd: -1, installError: false }))
 const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0,
-  invalidDependenciesAt: 0, unknownDependenciesAt: 0 }))
+  invalidDependenciesAt: 0, unknownDependenciesAt: 0, nullDuringPrepareBaseline: false }))
 const targetLockFaults = vi.hoisted(() => ({ replacement: '', at: 0, calls: 0 }))
+const runPnpmFaults = vi.hoisted(() => ({ removeResolvedAfterFrozen: false }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -64,6 +65,12 @@ vi.mock('../src/profile-import-plugin-isolated-install.ts', async (importOrigina
     isolatedInspectFaults.calls += 1
     if (isolatedInspectFaults.calls === isolatedInspectFaults.missingAt) return null
     return actual.inspectIsolatedProfileImportPluginInstall(...args)
+  }, runPnpm: async (...args: Parameters<typeof actual.runPnpm>) => {
+    await actual.runPnpm(...args)
+    if (runPnpmFaults.removeResolvedAfterFrozen && args[0].frozen
+      && args[0].sandboxRoot.endsWith('/target-merge')) {
+      await (await import('node:fs/promises')).rm(args[0].sandboxRoot, { recursive: true, force: true })
+    }
   } }
 })
 vi.mock('yaml', async (importOriginal) => {
@@ -86,6 +93,9 @@ vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/posix-extension-files.ts')>()
   return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
     const value = actual.readExtensionStateFile(...args)
+    if (trustManifestFaults.nullDuringPrepareBaseline
+      && args[0].endsWith('/profiles/web/package.json')
+      && new Error().stack?.includes('prepareBaseline')) return null
     if (args[0].endsWith('/profiles/web/pnpm-lock.yaml') && targetLockFaults.at) {
       targetLockFaults.calls += 1
       if (targetLockFaults.calls === targetLockFaults.at) return targetLockFaults.replacement
@@ -1071,6 +1081,23 @@ describe('offline Profile existing-only inspector', () => {
     await expect(inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).rejects.toThrow()
     await writeFile(baselineInstalledPath, baselineInstalledBefore)
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
+    runPnpmFaults.removeResolvedAfterFrozen = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_resolution_changed')
+    } finally { runPnpmFaults.removeResolvedAfterFrozen = false }
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
+    trustManifestFaults.nullDuringPrepareBaseline = true
+    try {
+      await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_install_invalid')
+    } finally { trustManifestFaults.nullDuringPrepareBaseline = false }
+    await rm(targetMergeRoot, { recursive: true, force: true })
+    expect(await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+      nodeExecutablePath: process.execPath, pnpmEntrypointPath })).toEqual(resolved)
     const layer = await installResolvedProfileImportTargetPlugins({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     await expect(installResolvedProfileImportTargetPlugins({ ...resolutionInput,
