@@ -22,6 +22,7 @@ interface StartProfileWorkerInput {
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
+  readonly signal?: AbortSignal
 }
 
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
@@ -142,12 +143,14 @@ export class ProfileWorkerSupervisor {
   private async startOwned(input: StartProfileWorkerInput): Promise<void> {
     if (this.blockedProfiles.has(input.profileId)) throw new HostAuthorityError('unavailable')
     if (this.workers.has(input.profileId)) throw new HostAuthorityError('conflict')
+    input.signal?.throwIfAborted()
+    const { signal, ...profile } = input
     const spec: ProfileWorkerSpec = {
-      ...input,
+      ...profile,
       pluginRoots: [...input.pluginRoots],
       env: {},
     }
-    this.workers.set(input.profileId, await this.factory(spec))
+    this.workers.set(input.profileId, await (signal === undefined ? this.factory(spec) : this.factory(spec, signal)))
   }
 
   /**

@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
 import type { ChildProcess } from 'node:child_process'
-import type { ProfileWorkerHandle } from '../src/types.ts'
+import { ProfileWorkerExitUnconfirmedError, type ProfileWorkerHandle } from '../src/types.ts'
 
 function fixture(source: string): string {
   const path = join(mkdtempSync(join(tmpdir(), 'dsh-worker-')), 'worker.mjs')
@@ -520,6 +520,50 @@ describe('dsh web Profile worker', () => {
     } finally { clearTimeout(timer) }
     expect(killed).toBe(true)
   }, 15_000)
+
+  it('cancels worker startup when its owning connection closes', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    let killed = false
+    child.kill = () => { killed = true; child.emit('exit', null, 'SIGKILL'); child.emit('close', null, 'SIGKILL'); return true }
+    onTestFinished(() => { if (!killed) child.emit('exit', null, 'SIGKILL') })
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    const wait = (factory as unknown as { waitForOrigin(child: ChildProcess, signal: AbortSignal): Promise<unknown> })
+      .waitForOrigin(child as unknown as ChildProcess, controller.signal)
+    controller.abort()
+    let timer!: ReturnType<typeof setTimeout>
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('startup cancellation was ignored')), 3_000)
+      timer.unref()
+    })
+    try {
+      await expect(Promise.race([wait, timeout])).rejects.toMatchObject({ code: 'unavailable' })
+    } finally { clearTimeout(timer) }
+    expect(killed).toBe(true)
+  }, 15_000)
+
+  it('reports an unconfirmed worker exit when the startup child cannot be killed', async () => {
+    const child = controlledWebChild() as ReturnType<typeof controlledWebChild> & {
+      pid: number; exitCode: number | null; signalCode: string | null
+    }
+    child.pid = 12345
+    child.exitCode = null
+    child.signalCode = null
+    child.kill = () => { throw new Error('kill failed') }
+    const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+      dshEntrypointPath: process.execPath, readyTimeoutMs: 10_000 })
+    const controller = new AbortController()
+    const wait = (factory as unknown as { waitForOrigin(child: ChildProcess, signal: AbortSignal): Promise<unknown> })
+      .waitForOrigin(child as unknown as ChildProcess, controller.signal)
+    controller.abort()
+    await expect(wait).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+  })
 
   it('settles Web worker handles once across error, exit, and forced abort paths', async () => {
     const factory = new DshWebProfileWorkerFactory({

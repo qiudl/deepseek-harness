@@ -59,6 +59,7 @@ import {
   packagedRuntimeAppRoot,
 } from '../src/offline-profile-recovery.ts'
 import type { PersonProfileRecord } from '../src/types.ts'
+import { ProfileWorkerExitUnconfirmedError } from '../src/types.ts'
 import { BundledPluginCatalog, bundledDependencySpec } from '../src/bundled-plugins.ts'
 
 const uid = process.getuid?.() ?? 0
@@ -591,6 +592,98 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toMatchObject({ code: 'unavailable' })
   })
 
+  it('releases the Profile fence after its connection aborts even if the callback stalls', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-abort-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    let release!: () => void
+    const stalled = new Promise<void>(resolve => { release = resolve })
+    onTestFinished(async () => { release(); await regular.disposeAll(); await ownership.release() })
+    const controller = new AbortController()
+    const stopped = vi.fn()
+    let enter!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
+      createWorker: async () => ({ closeNotifications() {}, abort: stopped, done: Promise.resolve() }),
+    }, async () => { enter(); await stalled })
+    const cancelled = expect(isolated).rejects.toMatchObject({ name: 'AbortError' })
+    await entered
+    const restart = regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] })
+    controller.abort()
+    await cancelled
+    await restart
+    expect(stopped).toHaveBeenCalledOnce()
+  })
+
+  it.each(['return', 'throw'] as const)('discards a result when cancellation and callback %s happen together', async (outcome) => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-abort-result-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
+    const controller = new AbortController()
+    await expect(withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
+      createWorker: async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }),
+    }, () => {
+      controller.abort()
+      if (outcome === 'throw') throw new Error('late callback failure')
+      return Promise.resolve('private history')
+    }))
+      .rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('passes connection cancellation to an isolated worker that is still starting', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-start-abort-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
+    const controller = new AbortController()
+    let enter!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const isolated = withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: controller.signal, onCleanupFailure: () => {},
+      createWorker: async (_spec, signal) => {
+        expect(signal).toBe(controller.signal)
+        enter()
+        return await new Promise<never>((_resolve, reject) => {
+          signal!.addEventListener('abort', () => reject(signal!.reason), { once: true })
+        })
+      },
+    }, async () => {})
+    const cancelled = expect(isolated).rejects.toMatchObject({ name: 'AbortError' })
+    await entered
+    controller.abort()
+    await cancelled
+    await regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] })
+  })
+
+  it('retains staging and fences the Profile when a startup child cannot be stopped', async () => {
+    const value = await bundledFixture()
+    const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-start-uncertain-fixture' })
+    const regular = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    onTestFinished(async () => { await regular.disposeAll(); await ownership.release() })
+    await expect(withRestrictedProfileReader(regular, { stagingParent: value.hostRoot, expectedUid: uid,
+      profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
+      inspectPersistence: () => value.target.inspectRestrictedPersistence(), ownership, profileId,
+      credentialHandle: 'fixture', assertCurrent: () => {}, signal: new AbortController().signal,
+      onCleanupFailure: () => {}, createWorker: async () => { throw new ProfileWorkerExitUnconfirmedError(new Error('fixture')) },
+    }, async () => {})).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+    expect((await readdir(value.hostRoot)).some(name => name.startsWith('restricted-'))).toBe(true)
+    await expect(regular.start({ profileId, profileRoot: value.profileRoot, credentialHandle: 'fixture', pluginRoots: [] }))
+      .rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it.runIf(process.env.DSH_RUN_ISOLATION_SPIKE === '1')('starts a separate default worker without loading the original composition', async () => {
     const value = await bundledFixture()
     const sentinel = join(value.hostRoot, 'plugin-executed')
@@ -623,7 +716,7 @@ describe('offline Profile existing-only inspector', () => {
     const reader = await startRestrictedProfileReader({ stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence: value.persistence,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(),
-      ownership, profileId, credentialHandle: 'fixture', createWorker: spec => factory.create(spec), onCleanupFailure: () => {},
+      ownership, profileId, credentialHandle: 'fixture', createWorker: (spec, signal) => factory.create(spec, signal), onCleanupFailure: () => {},
       assertCurrent: () => {}, signal: new AbortController().signal })
     let stopped = false
     onTestFinished(async () => { if (!stopped) await reader.close() })
@@ -674,7 +767,7 @@ describe('offline Profile existing-only inspector', () => {
     const reader = await startRestrictedProfileReader({ stagingParent: value.hostRoot, expectedUid: uid,
       profileRoot: value.profileRoot, ownerPaths: value.ownerPaths, persistence, ownership, profileId,
       inspectPersistence: () => value.target.inspectRestrictedPersistence(),
-      credentialHandle: 'fixture', createWorker: spec => factory.create(spec), onCleanupFailure: () => {},
+      credentialHandle: 'fixture', createWorker: (spec, signal) => factory.create(spec, signal), onCleanupFailure: () => {},
       assertCurrent: () => {}, signal: new AbortController().signal })
     onTestFinished(() => reader.close())
     const history = await reader.read({ operation: 'session.history',

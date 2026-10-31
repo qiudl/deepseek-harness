@@ -2,10 +2,16 @@ import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-
 import { executeRestrictedSessionCommand } from './session-command.ts'
 import { stageRestrictedProfile } from './restricted-profile-staging.ts'
 import type { ProfileWorkerFactory } from './types.ts'
-import { HostAuthorityError } from './types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
 type StagingInput = Parameters<typeof stageRestrictedProfile>[0]
+
+class RestrictedStartupCleanupError extends Error {
+  constructor(cause: unknown) {
+    super('restricted_profile_cleanup_unconfirmed', { cause })
+  }
+}
 
 /** Host-private reader that exposes Session reads but no worker URL, cookie or writable operation. */
 export class RestrictedProfileReader {
@@ -83,15 +89,19 @@ export async function startRestrictedProfileReader(input: StagingInput & {
   const workers = new ProfileWorkerSupervisor(input.createWorker)
   try {
     await workers.start({ profileId: input.profileId, profileRoot: staged.root,
-      credentialHandle: input.credentialHandle, pluginRoots: [] })
+      credentialHandle: input.credentialHandle, pluginRoots: [], signal: input.signal })
     await staged.verify()
     input.signal.throwIfAborted()
     input.ownership.assertOwner()
     input.assertCurrent()
     return new RestrictedProfileReader(workers, input.profileId, staged, input, input.onCleanupFailure)
   } catch (error) {
-    await workers.disposeAll()
-    await staged.dispose()
+    try {
+      await workers.disposeAll()
+      if (!(error instanceof ProfileWorkerExitUnconfirmedError)) await staged.dispose()
+    } catch (cleanupError) {
+      throw new RestrictedStartupCleanupError(cleanupError)
+    }
     throw error
   }
 }
@@ -99,7 +109,8 @@ export async function startRestrictedProfileReader(input: StagingInput & {
 /**
  * Keep the regular Profile worker stopped for the whole isolated reader lifetime.
  * The caller still owns the Host lock, identity checks, connection lifetime and any external
- * process exclusion. The callback must settle when its connection is revoked.
+ * process exclusion. The callback must return its result without sending it independently;
+ * its result is discarded after connection cancellation.
  * @param workers - Supervisor of the regular Profile worker.
  * @param input - Authenticated, Host-owned staging and worker inputs.
  * @param use - Reader operation, including all responses and connection handling.
@@ -115,13 +126,28 @@ export async function withRestrictedProfileReader<T>(
     try {
       reader = await startRestrictedProfileReader(input)
     } catch (error) {
-      // A failed start may have left a child alive if its teardown also failed.
-      workers.blockProfile(input.profileId)
+      if (error instanceof RestrictedStartupCleanupError || error instanceof ProfileWorkerExitUnconfirmedError)
+        workers.blockProfile(input.profileId)
       throw error
     }
+    let abort: (() => void) | undefined
     try {
-      return await use(reader)
+      input.signal.throwIfAborted()
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        abort = () => reject(input.signal.reason)
+        input.signal.addEventListener('abort', abort, { once: true })
+      })
+      const operation = Promise.resolve().then(() => {
+        input.signal.throwIfAborted()
+        return use(reader)
+      })
+      const result = await Promise.race([operation, cancelled])
+      input.signal.throwIfAborted()
+      input.ownership.assertOwner()
+      input.assertCurrent()
+      return result
     } finally {
+      if (abort) input.signal.removeEventListener('abort', abort)
       try {
         await reader.close()
       } catch (error) {

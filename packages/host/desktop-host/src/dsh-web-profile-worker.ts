@@ -35,7 +35,7 @@ import { parseHostCollaborationArchiveStateValue,
   type HostCollaborationArchiveStateTarget, type HostCollaborationArchiveTransitionTarget,
   type HostCollaborationArchiveTransitionResult } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
-import { HostAuthorityError } from './types.ts'
+import { HostAuthorityError, ProfileWorkerExitUnconfirmedError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
 
 const execFileAsync = promisify(execFile)
@@ -164,9 +164,11 @@ export class DshWebProfileWorkerFactory {
   /**
    * Launch an existing Web profile with a Profile-scoped DSH home and attest its listener.
    * @param spec - selected Person Profile root and opaque local handles.
+   * @param signal - optional owning connection cancellation during startup.
    * @returns lifecycle plus a Host-verified token-free loopback origin.
    */
-  async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
+  async create(spec: ProfileWorkerSpec, signal?: AbortSignal): Promise<ProfileWorkerHandle> {
+    signal?.throwIfAborted()
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
     const sourceToken = randomBytes(32).toString('base64url')
@@ -203,19 +205,27 @@ export class DshWebProfileWorkerFactory {
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
-    const activated = await this.waitForOrigin(child)
+    const activated = await this.waitForOrigin(child, signal)
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
       sourceToken, analysisToken, deliveryToken, referenceToken)
   }
 
-  private async waitForOrigin(child: ChildProcess): Promise<{
+  private async waitForOrigin(child: ChildProcess, signal?: AbortSignal): Promise<{
     readonly origin: string
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
     const pid = child.pid
-    if (!pid || !child.stdout) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
+    if (!pid) { child.kill('SIGKILL'); throw new HostAuthorityError('unavailable') }
+    if (!child.stdout) {
+      const exited = child.exitCode !== null || child.signalCode !== null
+        ? Promise.resolve()
+        : new Promise<void>(resolve => child.once('close', () => resolve()))
+      try { child.kill('SIGKILL') } catch (error) { throw new ProfileWorkerExitUnconfirmedError(error) }
+      await exited
+      throw new HostAuthorityError('unavailable')
+    }
     child.stdout.setEncoding('utf8')
     let buffer = ''
     const deadline = new AbortController()
@@ -243,6 +253,9 @@ export class DshWebProfileWorkerFactory {
     const timer = setTimeout(() => {
       deadline.abort(); rejectReady(new HostAuthorityError('unavailable'))
     }, this.options.readyTimeoutMs ?? 30_000)
+    const onOwnerAbort = () => { deadline.abort(); rejectReady(new HostAuthorityError('unavailable')) }
+    if (signal?.aborted) onOwnerAbort()
+    else signal?.addEventListener('abort', onOwnerAbort, { once: true })
     try {
       const { authenticatedUrl, origin } = await ready
       if (deadline.signal.aborted) throw new HostAuthorityError('unavailable')
@@ -265,12 +278,13 @@ export class DshWebProfileWorkerFactory {
       const exited = child.exitCode !== null || child.signalCode !== null
         ? Promise.resolve()
         : new Promise<void>(resolve => child.once('close', () => resolve()))
-      child.kill('SIGKILL')
+      try { child.kill('SIGKILL') } catch (failure) { throw new ProfileWorkerExitUnconfirmedError(failure) }
       await exited
       if (timedOut) throw new HostAuthorityError('unavailable')
       throw error
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onOwnerAbort)
       child.stdout.off('data', onData)
     }
   }

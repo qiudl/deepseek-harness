@@ -28,6 +28,13 @@ vi.mock('node:fs', async (load) => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) }
 })
 
+// This suite uses a synthetic Windows path even on POSIX. Keep diagnostic writes in memory;
+// the diagnostics writer itself is exercised in its owning tests with mapped file operations.
+vi.mock('../src/host-diagnostics.ts', async (load) => {
+  const actual = await load<typeof import('../src/host-diagnostics.ts')>()
+  return { ...actual, createHostDiagnostics: () => ({ record() {} }) }
+})
+
 const root = String.raw`C:\Users\alice\AppData\Local\Slark\DSH`
 const userSid = 'S-1-5-21-1000-2000-3000-1001'
 const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
