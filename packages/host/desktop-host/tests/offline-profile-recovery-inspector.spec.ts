@@ -761,7 +761,7 @@ describe('offline Profile existing-only inspector', () => {
     // Preserve the original receiver below while injecting one failed status lookup.
     // oxlint-disable-next-line typescript/unbound-method
     const original = ProfileWorkerSupervisor.prototype.isProfileBlocked
-    const blocked = vi.spyOn(ProfileWorkerSupervisor.prototype, 'isProfileBlocked').mockImplementation(function (profile) {
+    const blocked = vi.spyOn(ProfileWorkerSupervisor.prototype, 'isProfileBlocked').mockImplementation(function (this: ProfileWorkerSupervisor, profile) {
       if (checksAfterFailure >= 0 && ++checksAfterFailure === 2) throw new Error('blocked state unreadable')
       return original.call(this, profile)
     })
