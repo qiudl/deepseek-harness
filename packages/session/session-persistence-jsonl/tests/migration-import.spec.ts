@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
-import { access, chmod, link, mkdir, mkdtemp, readFile, symlink, unlink, writeFile } from 'node:fs/promises'
+import { access, chmod, link, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId, SessionSeq, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { migrationSemanticDigest } from '@deepseek-ai/dsh-host-control-protocol/src/index.ts'
 import {
@@ -123,6 +123,23 @@ class Target implements MigrationImportTarget {
 }
 
 describe('owner-only migration import', () => {
+  it('changes restricted inventory when an empty project appears and disappears', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-inventory-directory-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 1)
+    const active = await target.activePersistenceConfig()
+    await target.importOwnerState(1, ownerState)
+    const before = await target.inspectRestrictedPersistence()
+    const transient = join(active.root, 'new-project')
+    await mkdir(transient, { mode: 0o700 })
+    const during = await target.inspectRestrictedPersistence()
+    await rm(transient, { recursive: true })
+    const after = await target.inspectRestrictedPersistence()
+    expect(during.inventoryDigest).not.toBe(before.inventoryDigest)
+    expect(after.inventoryDigest).not.toBe(before.inventoryDigest)
+    expect(after.sessionCount).toBe(0)
+  })
+
   it('inspects a released v3 compressed generation without changing its bytes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-owner-released-v3-'))
     const target = new FileOwnerJsonlMigrationGenerationTarget(root, uid, 1)

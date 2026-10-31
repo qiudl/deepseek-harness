@@ -246,14 +246,26 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     const root = await this.checkedGenerationRoot(generation)
     const ownerState = await this.readOwnerState(generation)
     const sessions: Array<Readonly<{ project: string; session: string; files: readonly string[]; sizes: readonly string[] }>> = []
+    const directories: Array<Readonly<{ path: string; identity: string }>> = []
+    const rememberDirectory = async (path: string, name: string) => {
+      if (!restricted) return
+      const metadata = await lstat(path, { bigint: true })
+      if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== BigInt(this.expectedUid)
+        || (metadata.mode & 0o077n) !== 0n) throw new Error('migration_generation_unsafe')
+      directories.push({ path: name,
+        identity: `${metadata.dev}:${metadata.ino}:${metadata.mtimeNs}:${metadata.ctimeNs}` })
+    }
+    await rememberDirectory(root, '')
     let observedCompression: 'none' | 'zstd' | undefined
     for (const project of await readdir(root, { withFileTypes: true })) {
       if (project.name === 'owner-state.json' && project.isFile() && !project.isSymbolicLink()) continue
       if (!project.isDirectory() || project.isSymbolicLink()) throw new Error('migration_generation_unsafe')
       const projectPath = join(root, project.name)
+      await rememberDirectory(projectPath, project.name)
       for (const session of await readdir(projectPath, { withFileTypes: true })) {
         if (!session.isDirectory() || session.isSymbolicLink()) throw new Error('migration_generation_unsafe')
         const sessionPath = join(projectPath, session.name)
+        await rememberDirectory(sessionPath, `${project.name}/${session.name}`)
         const directoryFiles = (await readdir(sessionPath)).sort()
         if (directoryFiles.length === 0 && session.name === 'preset-user-default') continue
         const files = directoryFiles.filter(name => name !== LEASE_FILENAME)
@@ -287,14 +299,16 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
             || (metadata.mode & 0o077n) !== 0n || metadata.nlink !== 1n || metadata.size < 1n) {
             throw new Error('migration_generation_unsafe')
           }
-          sizes.push(`${String(metadata.size)}:${String(metadata.mtimeNs)}:${String(metadata.ctimeNs)}`)
+          sizes.push(`${restricted ? `${metadata.dev}:${metadata.ino}:` : ''}${String(metadata.size)}:${String(metadata.mtimeNs)}:${String(metadata.ctimeNs)}`)
         }
         sessions.push({ project: project.name, session: session.name, files, sizes })
       }
     }
     sessions.sort((left, right) => `${left.project}/${left.session}`.localeCompare(`${right.project}/${right.session}`, 'en'))
+    directories.sort((left, right) => left.path.localeCompare(right.path, 'en'))
     const inventoryDigest = createHash('sha256').update(JSON.stringify({
       ownerStateDigest: migrationSemanticDigest(migrationOwnerStateRecords(ownerState)), sessions,
+      ...(restricted ? { directories } : {}),
     })).digest('hex')
     return {
       root, compression: restricted ? observedCompression ?? 'none' : 'none', generation, sessionCount: sessions.length, inventoryDigest,
