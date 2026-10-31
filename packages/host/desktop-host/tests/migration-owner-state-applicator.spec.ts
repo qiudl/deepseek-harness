@@ -1,15 +1,26 @@
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
 const diskFaults = vi.hoisted(() => ({ availableBytes: undefined as bigint | undefined,
   copyNoSpace: false, beforeCopy: undefined as (() => Promise<void>) | undefined,
-  afterCopy: undefined as (() => void | Promise<void>) | undefined }))
+  afterCopy: undefined as (() => void | Promise<void>) | undefined, lstatPath: undefined as string | undefined,
+  unsafeStageRoot: undefined as string | undefined }))
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   return { ...actual,
+    mkdir: async (...args: Parameters<typeof actual.mkdir>) => {
+      const result = await actual.mkdir(...args)
+      if (String(args[0]) === diskFaults.unsafeStageRoot) await actual.chmod(args[0], 0o755)
+      return result
+    },
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      if (String(args[0]) === diskFaults.lstatPath) throw Object.assign(new Error('fixture stat denied'), { code: 'EACCES' })
+      return actual.lstat(...args)
+    },
     statfs: async (...args: Parameters<typeof actual.statfs>) => diskFaults.availableBytes === undefined
       ? actual.statfs(...args) : { bavail: diskFaults.availableBytes, bsize: 1n },
     cp: async (...args: Parameters<typeof actual.cp>) => {
@@ -309,6 +320,50 @@ describe('migration owner-state generation applicator', () => {
     await ownership.release()
     await expect(staged.dispose()).rejects.toMatchObject({ code: 'stale' })
     await expect(access(staged.root)).resolves.toBeUndefined()
+  })
+
+  it('does not delete a staged Profile when its identity cannot be checked', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-stat-denied' })
+    onTestFinished(async () => {
+      diskFaults.lstatPath = undefined
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
+    const staged = await stageRestrictedProfile({ stagingParent: parent, expectedUid: uid, profileRoot: source,
+      ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
+      inspectPersistence: inspectFixture(persistenceRoot), assertCurrent: () => {}, signal: new AbortController().signal })
+    diskFaults.lstatPath = staged.root
+    await expect(staged.dispose()).rejects.toMatchObject({ code: 'EACCES' })
+    await expect(access(staged.root)).resolves.toBeUndefined()
+    diskFaults.lstatPath = undefined
+    await staged.dispose()
+  })
+
+  it('retains a staging directory whose permissions change during creation', async () => {
+    const source = await mkdtemp(join(tmpdir(), 'dsh-restricted-source-'))
+    const parent = await mkdtemp(join(tmpdir(), 'dsh-restricted-parent-'))
+    const paths = await new MigrationOwnerStateApplicator(uid).apply(source, 5, state())
+    const persistenceRoot = join(source, 'sessions')
+    await mkdir(persistenceRoot, { mode: 0o700 })
+    const ownership = await acquireSingleHostLock({ root: join(parent, 'lock'), pid: process.pid, uid,
+      processNonce: 'restricted-fixture-unsafe-creation' })
+    const operation = randomUUID()
+    const stagedRoot = join(await realpath(parent), `restricted-${operation}`)
+    diskFaults.unsafeStageRoot = stagedRoot
+    onTestFinished(async () => {
+      diskFaults.unsafeStageRoot = undefined
+      await ownership.release(); await rm(source, { recursive: true, force: true }); await rm(parent, { recursive: true, force: true })
+    })
+    await expect(stageRestrictedProfile({ stagingParent: parent, stagingOperationId: operation, expectedUid: uid,
+      profileRoot: source, ownerPaths: paths, persistence: { root: persistenceRoot, compression: 'none' }, ownership,
+      inspectPersistence: inspectFixture(persistenceRoot), assertCurrent: () => {}, signal: new AbortController().signal }))
+      .rejects.toThrow('restricted_staging_cleanup_unconfirmed')
+    await expect(access(stagedRoot)).resolves.toBeUndefined()
   })
 
   it('refuses a workspace snapshot changed while the restricted Profile is staged', async () => {
