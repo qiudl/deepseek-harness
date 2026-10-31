@@ -100,7 +100,8 @@ export async function inspectProfileImportPluginArchives(input: {
   const evidence: ProfileImportPluginArchiveEvidence[] = []
   const verifiedArchives: { path: string; digest: string }[] = []
   const verifiedInstallations: { plugin: NonNullable<ReturnType<BundledPluginCatalog['getForDependency']>>
-    layout: 'copied' | 'pnpm_link' }[] = []
+    layout: 'copied' | 'pnpm_link'
+    catalog: BundledPluginCatalog }[] = []
   for (const name of selectedPluginNames) {
     signal?.throwIfAborted()
     if (!available.has(name)) throw Error('profile_import_plugin_selection_invalid')
@@ -125,7 +126,7 @@ export async function inspectProfileImportPluginArchives(input: {
       const layout = installed.isSymbolicLink() ? 'pnpm_link' as const : 'copied' as const
       try { await verifyCopiedBundledPlugin(catalog, plugin, webRoot, uid, layout) }
       catch (error) { throw Error('profile_import_plugin_install_unsafe', { cause: error }) }
-      verifiedInstallations.push({ plugin, layout })
+      verifiedInstallations.push({ plugin, layout, catalog })
     }
     evidence.push({ name, status: installed ? 'installed_verified' : 'archive_verified',
       archiveDigest: sourceDigest,
@@ -143,10 +144,9 @@ export async function inspectProfileImportPluginArchives(input: {
     signal?.throwIfAborted()
     if (sourceArchiveDigest(archive.path, uid) !== archive.digest) throw Error('profile_import_plugin_archive_changed')
   }
-  for (const { plugin, layout } of verifiedInstallations) {
+  for (const { plugin, layout, catalog: verifiedCatalog } of verifiedInstallations) {
     signal?.throwIfAborted()
-    if (!catalog) throw Error('profile_import_plugin_catalog_missing')
-    try { await verifyCopiedBundledPlugin(catalog, plugin, webRoot, uid, layout) }
+    try { await verifyCopiedBundledPlugin(verifiedCatalog, plugin, webRoot, uid, layout) }
     catch (error) { throw Error('profile_import_plugin_install_unsafe', { cause: error }) }
   }
   return evidence

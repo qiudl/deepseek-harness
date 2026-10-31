@@ -10,6 +10,65 @@ import { gzipSync } from 'node:zlib'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 
 const stageFaults = vi.hoisted(() => ({ invalidDigest: false }))
+const trustFsFaults = vi.hoisted(() => ({ shortRead: false, changedStat: false, fstatCalls: 0,
+  archiveFd: -1, installError: false }))
+const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 0 }))
+const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
+vi.mock('yaml', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('yaml')>()
+  return { ...actual, parseDocument: (...args: Parameters<typeof actual.parseDocument>) => {
+    if (args[0] === 'throw-parser') throw Error('parser fault')
+    return actual.parseDocument(...args)
+  } }
+})
+vi.mock('../src/bundled-plugin-recovery.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/bundled-plugin-recovery.ts')>()
+  return { ...actual, verifyCopiedBundledPlugin: async (
+    ...args: Parameters<typeof actual.verifyCopiedBundledPlugin>
+  ) => {
+    if (trustVerifyFaults.failSecond && ++trustVerifyFaults.calls === 2) throw Error('later verification failed')
+    return actual.verifyCopiedBundledPlugin(...args)
+  } }
+})
+vi.mock('../src/posix-extension-files.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/posix-extension-files.ts')>()
+  return { ...actual, readExtensionStateFile: (...args: Parameters<typeof actual.readExtensionStateFile>) => {
+    const value = actual.readExtensionStateFile(...args)
+    if (args[0].endsWith('/profiles/web/package.json') && (trustManifestFaults.nullAt || trustManifestFaults.changedAt)) {
+      trustManifestFaults.count += 1
+      if (trustManifestFaults.count === trustManifestFaults.nullAt) return null
+      if (trustManifestFaults.count === trustManifestFaults.changedAt) return `${value} `
+    }
+    return value
+  } }
+})
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual,
+    openSync: (path: string, flags: number, mode?: number) => {
+      const fd = actual.openSync(path, flags, mode)
+      if (trustFsFaults.changedStat && path.endsWith('.tgz')) trustFsFaults.archiveFd = fd
+      return fd
+    },
+    readSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number | null) => {
+      if (trustFsFaults.shortRead) { trustFsFaults.shortRead = false; return 0 }
+      return actual.readSync(fd, buffer, offset, length, position)
+    },
+    fstatSync: (fd: number) => {
+      const stat = actual.fstatSync(fd)
+      if (trustFsFaults.changedStat && fd === trustFsFaults.archiveFd && ++trustFsFaults.fstatCalls === 2) {
+        return Object.assign(stat, { mtimeMs: stat.mtimeMs + 1 })
+      }
+      return stat
+    },
+    lstatSync: (path: string) => {
+      if (trustFsFaults.installError && path.endsWith('/node_modules/fixture-plugin')) {
+        throw Object.assign(new Error('installation access denied'), { code: 'EACCES' })
+      }
+      return actual.lstatSync(path)
+    },
+  }
+})
 vi.mock('../src/profile-import-plugin-plan.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/profile-import-plugin-plan.ts')>()
   return { ...actual, planSelectedProfileImportPlugins: async (
@@ -22,7 +81,7 @@ vi.mock('../src/profile-import-plugin-plan.ts', async (importOriginal) => {
 })
 import { verifyCopiedBundledPlugin } from '../src/bundled-plugin-recovery.ts'
 import { compareProfileImportInventory, inspectProfileImportInventory } from '../src/profile-import-preview.ts'
-import { inspectProfileImportPluginArchives } from '../src/profile-import-plugin-trust.ts'
+import { inspectProfileImportPluginArchives, lockfileResolutionMatches } from '../src/profile-import-plugin-trust.ts'
 import { planSelectedProfileImportPlugins } from '../src/profile-import-plugin-plan.ts'
 import { inspectStagedProfileImportPluginArchives, stageSelectedProfileImportPluginArchives } from '../src/profile-import-plugin-stage.ts'
 import { FileProfileImportOperationJournal } from '../src/profile-import-operation-journal.ts'
@@ -1347,6 +1406,106 @@ describe('offline Profile existing-only inspector', () => {
     await unlink(value.installed)
     await symlink(`.pnpm/${folder}/node_modules/../node_modules/fixture-plugin`, value.installed)
     await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it('rejects unsafe archive directory and non-package installation evidence', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const archiveDirectory = join(value.web, '.bundled-plugins')
+    await chmod(archiveDirectory, 0o777)
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_unsafe')
+    await chmod(archiveDirectory, 0o700)
+    await rm(value.installed, { recursive: true })
+    await writeFile(value.installed, 'not a package', { mode: 0o600 })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+  })
+
+  it('rejects inventory and manifest changes during archive proof', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const readArchive = value.catalog.readArchive.bind(value.catalog)
+    vi.spyOn(value.catalog, 'readArchive').mockImplementationOnce((plugin) => {
+      const bytes = readArchive(plugin)
+      writeFileSync(join(value.web, 'package.json'), JSON.stringify({ dependencies: {
+        'fixture-plugin': bundledDependencySpec(value.digest), extra: '1.0.0',
+      } }))
+      return bytes
+    })
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_inventory_changed')
+  })
+
+  it('checks cancellation and selection before reading archive evidence', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(inspectProfileImportPluginArchives({ ...input, signal: controller.signal }))
+      .rejects.toThrow()
+    await expect(inspectProfileImportPluginArchives({ ...input, selectedPluginNames: ['missing'] }))
+      .rejects.toThrow('profile_import_plugin_selection_invalid')
+    await expect(inspectProfileImportPluginArchives({ profileRoot: value.profileRoot, target: value.target,
+      uid, expectedSnapshotDigest: inventory.snapshotDigest,
+      selectedPluginNames: ['fixture-plugin'] })).resolves.toEqual([
+      { name: 'fixture-plugin', status: 'source_unverified' },
+    ])
+  })
+
+  it('rejects a short archive read and changed file metadata', async () => {
+    const value = await bundledFixture()
+    await rm(value.installed, { recursive: true })
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustFsFaults.shortRead = true
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_changed')
+    trustFsFaults.changedStat = true
+    trustFsFaults.fstatCalls = 0
+    trustFsFaults.archiveFd = -1
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_archive_changed')
+    trustFsFaults.changedStat = false
+  })
+
+  it('rejects manifest disappearance, final manifest drift, and installation access faults', async () => {
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustManifestFaults.count = 0
+    trustManifestFaults.nullAt = 3
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_manifest_invalid')
+    trustManifestFaults.nullAt = 0
+    trustManifestFaults.count = 0
+    trustManifestFaults.changedAt = 6
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_inventory_changed')
+    trustManifestFaults.changedAt = 0
+    trustFsFaults.installError = true
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+    trustFsFaults.installError = false
+  })
+
+  it('fails closed on lockfile parser and later installation verification faults', async () => {
+    expect(lockfileResolutionMatches('throw-parser', 'fixture-plugin', 'file:fixture.tgz', '1.0.0',
+      Buffer.from('archive'))).toBe(false)
+    const value = await bundledFixture()
+    const inventory = await inspectProfileImportInventory({ profileRoot: value.profileRoot,
+      target: value.target, uid })
+    const input = { profileRoot: value.profileRoot, target: value.target, uid,
+      expectedSnapshotDigest: inventory.snapshotDigest, selectedPluginNames: ['fixture-plugin'], catalog: value.catalog }
+    trustVerifyFaults.failSecond = true
+    trustVerifyFaults.calls = 0
+    await expect(inspectProfileImportPluginArchives(input)).rejects.toThrow('profile_import_plugin_install_unsafe')
+    trustVerifyFaults.failSecond = false
   })
 
   it.each(['private-store', 'installed-package'] as const)

@@ -358,6 +358,7 @@ describe.skipIf(process.platform === 'win32')('inactive Profile import session s
     )
     const staged = await stageSelectedProfileImportSessions({ ...fencedStage(), source, target, uid,
       expectedPreviewDigest: preview.previewDigest, selectedSessionIds: ['new-id'],
+      signal: new AbortController().signal,
     })
     expect(staged.stagedSessionCount).toBe(2)
     expect(await target.target.activeGeneration()).toBe(1)
@@ -394,6 +395,54 @@ describe.skipIf(process.platform === 'win32')('inactive Profile import session s
     expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1'])
   })
 
+  it('rejects malformed selections and cancellation before staging sessions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-stage-selection-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [{ id: 'new-id', createdAt: 2 }])
+    const target = await profile(root, 'target', {}, [])
+    const preview = compareProfileImportInventory(
+      await inspectProfileImportInventory({ ...source, uid }),
+      await inspectProfileImportInventory({ ...target, uid }),
+    )
+    const base = { ...fencedStage(), source, target, uid, expectedPreviewDigest: preview.previewDigest }
+    for (const selectedSessionIds of [['new-id', 'new-id'], [''], Array.from({ length: 10_001 },
+      (_, index) => `session-${index}`)]) {
+      await expect(stageSelectedProfileImportSessions({ ...base, selectedSessionIds }))
+        .rejects.toThrow('profile_import_selection_invalid')
+    }
+    const controller = new AbortController()
+    controller.abort()
+    await expect(stageSelectedProfileImportSessions({ ...base, selectedSessionIds: ['new-id'],
+      signal: controller.signal })).rejects.toThrow()
+    await expect(stageSelectedProfileImportSessions({ ...base, selectedSessionIds: ['absent'] }))
+      .rejects.toThrow('profile_import_selection_invalid')
+    expect(await target.target.activeGeneration()).toBe(1)
+  })
+
+  it('rejects a generation switch after preview and before reading sessions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-stage-generation-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [{ id: 'new-id', createdAt: 2 }])
+    const target = await profile(root, 'target', {}, [])
+    const preview = compareProfileImportInventory(
+      await inspectProfileImportInventory({ ...source, uid }),
+      await inspectProfileImportInventory({ ...target, uid }),
+    )
+    const inspect = source.target.inspectExistingPersistence.bind(source.target)
+    let calls = 0
+    vi.spyOn(source.target, 'inspectExistingPersistence').mockImplementation(async () => {
+      const state = await inspect()
+      calls += 1
+      return calls === 3 ? { ...state, generation: 2 } : state
+    })
+    await expect(stageSelectedProfileImportSessions({ ...fencedStage(), source, target, uid,
+      expectedPreviewDigest: preview.previewDigest, selectedSessionIds: ['new-id'],
+    })).rejects.toThrow('profile_import_inventory_changed')
+    expect(calls).toBe(3)
+    expect(await target.target.activeGeneration()).toBe(1)
+  })
+
+
   it('removes an inactive generation if the source changes during staging', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-import-stage-'))
     onTestFinished(() => rm(root, { recursive: true, force: true }))
@@ -412,6 +461,31 @@ describe.skipIf(process.platform === 'win32')('inactive Profile import session s
       },
     })).rejects.toThrow('profile_import_inventory_changed')
     expect(await target.target.activeGeneration()).toBe(1)
+    expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1'])
+  })
+
+  it('rejects source drift before staging and removes a mismatched inactive generation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-import-stage-drift-'))
+    onTestFinished(() => rm(root, { recursive: true, force: true }))
+    const source = await profile(root, 'source', {}, [{ id: 'new-id', createdAt: 2 }])
+    const target = await profile(root, 'target', {}, [])
+    const preview = compareProfileImportInventory(
+      await inspectProfileImportInventory({ ...source, uid }),
+      await inspectProfileImportInventory({ ...target, uid }),
+    )
+    let calls = 0
+    await expect(stageSelectedProfileImportSessions({ ...fencedStage(), source, target, uid,
+      expectedPreviewDigest: preview.previewDigest, selectedSessionIds: ['new-id'],
+      assertQuiescent: async () => {
+        calls += 1
+        if (calls === 2) await writeFile(source.manifestPath, JSON.stringify({ dependencies: {}, changed: true }))
+      },
+    })).rejects.toThrow('profile_import_inventory_changed')
+    await writeFile(source.manifestPath, JSON.stringify({ dependencies: {} }))
+    vi.spyOn(target.target, 'importSession').mockResolvedValueOnce(undefined)
+    await expect(stageSelectedProfileImportSessions({ ...fencedStage(), source, target, uid,
+      expectedPreviewDigest: preview.previewDigest, selectedSessionIds: ['new-id'],
+    })).rejects.toThrow('profile_import_stage_mismatch')
     expect(await readdir(join(target.profileRoot, 'persistence', 'generations'))).toEqual(['1'])
   })
 
