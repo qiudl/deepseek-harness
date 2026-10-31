@@ -18,6 +18,7 @@ const trustManifestFaults = vi.hoisted(() => ({ count: 0, nullAt: 0, changedAt: 
 const targetLockFaults = vi.hoisted(() => ({ replacement: '', at: 0, calls: 0 }))
 const runPnpmFaults = vi.hoisted(() => ({ removeResolvedAfterFrozen: false }))
 const layerSyncFaults = vi.hoisted(() => ({ removeModulesAfterReceiptSync: false, armed: false }))
+const resolutionSyncFaults = vi.hoisted(() => ({ mode: 'none' as 'none' | 'remove' | 'rewrite', armed: false }))
 const trustVerifyFaults = vi.hoisted(() => ({ failSecond: false, calls: 0 }))
 const isolatedMkdirFaults = vi.hoisted(() => new Set<string>())
 const isolatedReadFaults = vi.hoisted(() => new Map<string, {
@@ -81,8 +82,27 @@ vi.mock('../src/profile-import-plugin-private-dir.ts', async (importOriginal) =>
     if (layerSyncFaults.removeModulesAfterReceiptSync && args[0].endsWith('/layer-receipt.json')) {
       layerSyncFaults.armed = true
     }
+    if (resolutionSyncFaults.mode !== 'none' && args[0].endsWith('/resolution-receipt.json')) {
+      resolutionSyncFaults.armed = true
+    }
   }, syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) => {
     await actual.syncDirectory(...args)
+    if (resolutionSyncFaults.armed && args[0].endsWith('/target-merge')) {
+      resolutionSyncFaults.armed = false
+      const fs = await import('node:fs/promises')
+      if (resolutionSyncFaults.mode === 'remove') {
+        await fs.rm(args[0], { recursive: true, force: true })
+      } else if (resolutionSyncFaults.mode === 'rewrite') {
+        const lockPath = `${args[0]}/pnpm-lock.yaml`
+        const changed = `${await fs.readFile(lockPath, 'utf8')}\n`
+        await fs.writeFile(lockPath, changed)
+        const receiptPath = `${args[0]}/resolution-receipt.json`
+        const receipt = JSON.parse(await fs.readFile(receiptPath, 'utf8')) as Record<string, unknown>
+        const { createHash: hash } = await import('node:crypto')
+        await fs.writeFile(receiptPath, `${JSON.stringify({ ...receipt,
+          lockfileDigest: hash('sha256').update(changed).digest('hex') })}\n`)
+      }
+    }
     if (layerSyncFaults.armed && args[0].endsWith('/target-merge')) {
       layerSyncFaults.armed = false
       await (await import('node:fs/promises')).rm(`${args[0]}/node_modules`, { recursive: true, force: true })
@@ -921,6 +941,35 @@ describe('offline Profile existing-only inspector', () => {
       }
     }
     expect([...catalogDriftFailures]).toEqual([])
+    let rejectedLateIsolatedLoss = false
+    for (let at = 1; at <= 8 && !rejectedLateIsolatedLoss; at++) {
+      isolatedInspectFaults.calls = 0
+      isolatedInspectFaults.missingAt = at
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        rejectedLateIsolatedLoss = failure?.message === 'profile_import_plugin_target_plan_changed'
+          && !!failure.stack?.includes('profile-import-plugin-target-resolution.ts:267')
+        if (!failure && isolatedInspectFaults.calls < at) break
+      } finally {
+        isolatedInspectFaults.missingAt = 0
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect(rejectedLateIsolatedLoss).toBe(true)
+    for (const mode of ['remove', 'rewrite'] as const) {
+      resolutionSyncFaults.mode = mode
+      try {
+        await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+          .rejects.toThrow('profile_import_plugin_target_resolution_invalid')
+      } finally {
+        resolutionSyncFaults.mode = 'none'
+        resolutionSyncFaults.armed = false
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
     const selectedCopiedArchivePath = join(targetMergeRoot, '.bundled-plugins',
       `${value.source.digest}.tgz`)
     for (const mode of ['throw', 'changed'] as const) {
