@@ -36,6 +36,12 @@ function samePersistence(left: RestrictedPersistenceInspection, right: Restricte
 
 /** Host-private, one-shot Account history reader. It does not grant a view or remote access. */
 export class RestrictedAccountSessionService {
+  private readonly lifetime = new AbortController()
+  private readonly active = new Set<Promise<HostRemoteSessionJson>>()
+  private closed = false
+  private cleanupUnconfirmed = false
+  private closing?: Promise<void>
+
   constructor(private readonly options: {
     readonly hostRoot: string
     readonly expectedUid: number
@@ -66,6 +72,37 @@ export class RestrictedAccountSessionService {
    * @returns A private, bounded Session response after isolated worker cleanup.
    */
   async read(host: Pick<DesktopHost, 'authorizeRestrictedAccountHistory'>, proof: ExistingAccountProof,
+    assertFreshAuthority: () => void, command: HostRemoteSessionCommand,
+    signal: AbortSignal): Promise<HostRemoteSessionJson> {
+    if (this.closed) throw new HostAuthorityError('unavailable')
+    const combined = AbortSignal.any([signal, this.lifetime.signal])
+    // Register the operation before any caller-supplied authority callback can reenter close().
+    const operation = Promise.resolve().then(() => this.readOwned(host, proof, assertFreshAuthority, command, combined))
+    this.active.add(operation)
+    try {
+      const value = await operation
+      if (this.closed) throw new HostAuthorityError('unavailable')
+      signal.throwIfAborted()
+      return value
+    } finally { this.active.delete(operation) }
+  }
+
+  /** Cancel all readers and wait for their cleanup before releasing Host ownership. */
+  close(): Promise<void> {
+    if (!this.closing) {
+      let finish!: () => void, fail!: (reason: unknown) => void
+      this.closing = new Promise((resolve, reject) => { finish = resolve; fail = reject })
+      this.closed = true
+      this.lifetime.abort(new HostAuthorityError('unavailable'))
+      void Promise.allSettled([...this.active]).then(() => {
+        if (this.cleanupUnconfirmed) fail(new HostAuthorityError('unavailable'))
+        else finish()
+      })
+    }
+    return this.closing
+  }
+
+  private async readOwned(host: Pick<DesktopHost, 'authorizeRestrictedAccountHistory'>, proof: ExistingAccountProof,
     assertFreshAuthority: () => void, command: HostRemoteSessionCommand,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     signal.throwIfAborted()
@@ -107,54 +144,64 @@ export class RestrictedAccountSessionService {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
     assertCurrent()
-    const value = await withRestrictedProfileReader(this.options.workers, this.options.extensions, this.options.claims, {
-      stagingParent: this.options.hostRoot, expectedUid: this.options.expectedUid, profileRoot, ownerPaths,
-      persistence: { root: persistence.root, compression: persistence.compression },
-      inspectPersistence: () => this.options.inspectPersistence(expectedProfileId),
-      expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
-      ownership: this.options.ownership, assertCurrent, signal,
-      fence: this.options.fence,
-      withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, async () => {
-        const current = await this.options.inspectPersistence(expectedProfileId)
-        if (!samePersistence(current, persistence)) {
-          throw new HostAuthorityError('recovery_preflight_stale')
-        }
-        try {
-          sessionLocks = await ExistingSessionLockSet.acquire(current.sessionDirectories, this.options.expectedUid, signal)
-        } catch (error) {
-          if (error instanceof AggregateError) {
-            this.options.workers.blockProfile(expectedProfileId)
-            this.options.onCleanupFailure()
-          }
-          signal.throwIfAborted()
-          const code = (error as NodeJS.ErrnoException | undefined)?.code
-          if (code === 'EAGAIN' || code === 'EWOULDBLOCK') throw new HostAuthorityError('busy')
-          if (code === 'ENOENT') throw new HostAuthorityError('recovery_preflight_stale')
-          throw new HostAuthorityError('unavailable')
-        }
-        try {
-          const locked = await this.options.inspectPersistence(expectedProfileId)
-          if (!samePersistence(locked, persistence)) {
+    let value: HostRemoteSessionJson
+    try {
+      value = await withRestrictedProfileReader(this.options.workers, this.options.extensions, this.options.claims, {
+        stagingParent: this.options.hostRoot, expectedUid: this.options.expectedUid, profileRoot, ownerPaths,
+        persistence: { root: persistence.root, compression: persistence.compression },
+        inspectPersistence: () => this.options.inspectPersistence(expectedProfileId),
+        expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
+        ownership: this.options.ownership, assertCurrent, signal,
+        fence: this.options.fence,
+        withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, async () => {
+          const current = await this.options.inspectPersistence(expectedProfileId)
+          if (!samePersistence(current, persistence)) {
             throw new HostAuthorityError('recovery_preflight_stale')
           }
-          assertCurrent()
-          return await operation()
-        } finally {
-          try { sessionLocks.close() } catch (error) {
-            this.options.workers.blockProfile(expectedProfileId)
-            this.options.onCleanupFailure()
-            throw error
-          } finally { sessionLocks = undefined }
-        }
-      }),
-      assertAllWritersQuiescent: () => {
-        if (!sessionLocks) throw new HostAuthorityError('unavailable')
-        try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
-        this.options.assertAllWritersQuiescent(expectedProfileId)
-      },
-      profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
-      onCleanupFailure: this.options.onCleanupFailure,
-    }, reader => reader.read(command, signal))
+          try {
+            sessionLocks = await ExistingSessionLockSet.acquire(current.sessionDirectories, this.options.expectedUid, signal)
+          } catch (error) {
+            if (error instanceof AggregateError) {
+              this.options.workers.blockProfile(expectedProfileId)
+              this.cleanupUnconfirmed = true
+              this.options.onCleanupFailure()
+            }
+            signal.throwIfAborted()
+            const code = (error as NodeJS.ErrnoException | undefined)?.code
+            if (code === 'EAGAIN' || code === 'EWOULDBLOCK') throw new HostAuthorityError('busy')
+            if (code === 'ENOENT') throw new HostAuthorityError('recovery_preflight_stale')
+            throw new HostAuthorityError('unavailable')
+          }
+          try {
+            const locked = await this.options.inspectPersistence(expectedProfileId)
+            if (!samePersistence(locked, persistence)) {
+              throw new HostAuthorityError('recovery_preflight_stale')
+            }
+            assertCurrent()
+            return await operation()
+          } finally {
+            try { sessionLocks.close() } catch (error) {
+              this.options.workers.blockProfile(expectedProfileId)
+              this.cleanupUnconfirmed = true
+              this.options.onCleanupFailure()
+              throw error
+            } finally { sessionLocks = undefined }
+          }
+        }),
+        assertAllWritersQuiescent: () => {
+          if (!sessionLocks) throw new HostAuthorityError('unavailable')
+          try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+          this.options.assertAllWritersQuiescent(expectedProfileId)
+        },
+        profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
+        onCleanupFailure: () => { this.cleanupUnconfirmed = true; this.options.onCleanupFailure() },
+      }, reader => reader.read(command, signal))
+    } catch (error) {
+      try {
+        if (this.options.workers.isProfileBlocked(expectedProfileId)) this.cleanupUnconfirmed = true
+      } catch { this.cleanupUnconfirmed = true }
+      throw error
+    }
     assertCurrent()
     return value
   }

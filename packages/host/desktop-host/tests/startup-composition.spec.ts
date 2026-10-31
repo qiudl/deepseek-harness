@@ -282,6 +282,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   })
   cleanup.closeApplication = () => application.close()
   expect(serverStart).toHaveBeenCalledOnce()
+  expect(application.restrictedHistory).toBeUndefined()
   if (!serverOptions) throw new Error('missing captured server options')
   const capturedServerOptions = serverOptions
   expect(await serverOptions.inspectModelClaimSource?.()).toMatchObject({ candidates: [] })
@@ -733,6 +734,74 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
   expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)
+})
+
+it.skipIf(process.platform === 'win32')('composes and closes restricted history only with an explicit trusted adapter', async () => {
+  const { config, root } = fixture()
+  const serverClose = vi.fn(async () => undefined)
+  const server = { start: async () => undefined, close: serverClose } as unknown as UnixHostServer
+  let capturedOptions: UnixHostServerOptions | undefined
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: options => { capturedOptions = options; return server },
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => operation(),
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const reader = application.restrictedHistory
+  if (!reader) throw new Error('missing restricted reader')
+  expect(capturedOptions).not.toHaveProperty('restrictedHistory')
+  const readerClose = vi.spyOn(reader, 'close')
+  await application.close()
+  expect(serverClose).toHaveBeenCalledOnce()
+  expect(readerClose).toHaveBeenCalledOnce()
+  await expect(reader.read(application.host, {} as never, () => {}, {
+    operation: 'session.list', command_id: randomUUID() as never,
+  }, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it.skipIf(process.platform === 'win32')('keeps Host ownership when restricted reader cleanup is unconfirmed', async () => {
+  const { config, root } = fixture()
+  const stopWorker = vi.fn()
+  const server = { start: async () => undefined, close: async () => undefined } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+    profileWorkerFactory: async () => ({ closeNotifications() {}, abort: stopWorker, done: Promise.resolve() }),
+    restrictedHistory: {
+      withAllWritersExcluded: async (_profileId, operation) => operation(),
+      assertAllWritersQuiescent: () => {}, onCleanupFailure: () => {},
+    },
+  })
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }))
+  if (!application.restrictedHistory) throw new Error('missing restricted reader')
+  await application.workers.start({ profileId: randomUUID(), profileRoot: root, credentialHandle: 'fixture', pluginRoots: [] })
+  vi.spyOn(application.restrictedHistory, 'close').mockRejectedValue(new Error('cleanup unconfirmed'))
+  const closing = application.close()
+  await expect(closing).rejects.toThrow('cleanup unconfirmed')
+  expect(application.close()).toBe(closing)
+  expect(stopWorker).toHaveBeenCalledOnce()
+  expect(existsSync(join(root, 'host.lock'))).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('shares one Host close when server shutdown reenters it', async () => {
+  const { config, root } = fixture()
+  let application: Awaited<ReturnType<typeof import('../src/startup.ts').startDesktopHostApplication>>
+  let nested: Promise<void> | undefined
+  let entered = false
+  const server = { start: async () => undefined, close: async () => {
+    if (!entered) { entered = true; nested = application.close() }
+  } } as unknown as UnixHostServer
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin', createServer: () => server,
+  })
+  onTestFinished(async () => { await application.close(); rmSync(root, { recursive: true, force: true }) })
+  const closing = application.close()
+  await closing
+  expect(nested).toBe(closing)
 })
 
 it.skipIf(process.platform === 'win32')('restores a per-Profile restricted fence when Host starts again', async () => {

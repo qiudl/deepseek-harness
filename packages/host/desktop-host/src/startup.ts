@@ -67,6 +67,7 @@ import { RestartingMigrationTarget } from './restarting-migration-target.ts'
 import { executeRemoteSessionCommand, FileHostJournal, SessionCommandAuthority } from './session-command.ts'
 import { acquireSingleHostLock, type SingleHostLock } from './single-instance.ts'
 import { RestrictedProfileFence } from './restricted-profile-fence.ts'
+import { RestrictedAccountSessionService } from './restricted-account-session.ts'
 import type { HostClock, OfflineProfileRecoveryPreflight, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import {
@@ -197,6 +198,8 @@ export interface DesktopHostApplication {
   readonly server: UnixHostServer
   readonly workers: ProfileWorkerSupervisor
   readonly commandAuthority: SessionCommandAuthority
+  /** Host-private reader; unavailable unless a trusted writer-exclusion adapter is supplied. @internal */
+  readonly restrictedHistory?: RestrictedAccountSessionService
   close(): Promise<void>
 }
 
@@ -223,6 +226,13 @@ export interface StartDesktopHostApplicationDependencies {
   readonly profileWorkerFactory?: ProfileWorkerFactory
   readonly attestPeer?: UnixPeerAttestor
   readonly createServer?: (options: UnixHostServerOptions) => UnixHostServer
+  /** Host-private composition boundary; this does not enable a control protocol or user entry. */
+  readonly restrictedHistory?: {
+    readonly withAllWritersExcluded: <T>(profileId: string, operation: () => Promise<T>) => Promise<T>
+    readonly assertAllWritersQuiescent: (profileId: string) => void
+    readonly createWorker?: ProfileWorkerFactory
+    readonly onCleanupFailure: () => void
+  }
 }
 
 interface ClosableDesktopHostApplication {
@@ -468,6 +478,7 @@ export async function startDesktopHostApplication(
   ownerDirectory(root, uid)
   let ownership: SingleHostLock | undefined
   let restrictedFence: RestrictedProfileFence | undefined
+  let restrictedHistory: RestrictedAccountSessionService | undefined
   let server: UnixHostServer | undefined
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
@@ -799,6 +810,19 @@ export async function startDesktopHostApplication(
       new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
       profileId => workers.isProfileBlocked(profileId),
     )
+    if (dependencies.restrictedHistory) {
+      const adapter = dependencies.restrictedHistory
+      restrictedHistory = new RestrictedAccountSessionService({
+        hostRoot: root, expectedUid: uid, runtimeGeneration: config.runtimeGeneration,
+        schemaGeneration: config.schemaGeneration, ownership, fence: restrictedFence,
+        withAllWritersExcluded: adapter.withAllWritersExcluded,
+        assertAllWritersQuiescent: adapter.assertAllWritersQuiescent,
+        workers, extensions: extensionOperations, claims: claimWorkerGate, inspector: recoveryInspector,
+        ownerStateApplicator, inspectPersistence: profileId => targetFor(profileId).inspectRestrictedPersistence(),
+        createWorker: adapter.createWorker ?? ((spec, signal) => workerFactory.createRestricted(spec, signal)),
+        onCleanupFailure: adapter.onCleanupFailure,
+      })
+    }
     const socketPath = join(root, 'host.sock')
     let modelClaimCoordinator: LegacyClaimCoordinator | undefined
     const claims = (): LegacyClaimCoordinator => {
@@ -1017,19 +1041,25 @@ export async function startDesktopHostApplication(
     server = dependencies.createServer?.(serverOptions) ?? new UnixHostServer(serverOptions)
     await server.start()
     publishRegistration(config, socketPath, uid)
-    let closed = false
+    let closing: Promise<void> | undefined
     return {
-      host, server, workers, commandAuthority,
-      async close() {
-        if (closed) return
-        closed = true
-        await server?.close()
-        await workers.disposeAll()
-        await ownership?.release()
+      host, server, workers, commandAuthority, ...(restrictedHistory ? { restrictedHistory } : {}),
+      close() {
+        if (!closing) closing = Promise.resolve().then(async () => {
+          await server?.close()
+          const failures: unknown[] = []
+          try { await restrictedHistory?.close() } catch (error) { failures.push(error) }
+          try { await workers.disposeAll() } catch (error) { failures.push(error) }
+          if (failures.length === 1) throw failures[0]
+          if (failures.length > 1) throw new AggregateError(failures, 'host_cleanup_unconfirmed')
+          await ownership?.release()
+        })
+        return closing
       },
     }
   } catch (error) {
     await server?.close().catch(() => undefined)
+    await restrictedHistory?.close().catch(() => undefined)
     /* v8 ignore next -- no worker can exist before server.start succeeds; worker failures are owned by supervisor tests. */
     await workers.disposeAll().catch(() => undefined)
     await ownership?.release().catch(() => undefined)

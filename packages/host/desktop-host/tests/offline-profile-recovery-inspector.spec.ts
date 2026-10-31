@@ -212,17 +212,23 @@ async function bundledFixture(archiveBytes?: Buffer, files: Record<string, strin
 }
 
 async function accountService(value: Awaited<ReturnType<typeof bundledFixture>>, createWorker: ProfileWorkerFactory,
-  inspectPersistence = () => value.target.inspectRestrictedPersistence()) {
+  inspectPersistence = () => value.target.inspectRestrictedPersistence(), expectCloseFailure = false) {
   const ownership = await acquireSingleHostLock({ root: join(value.hostRoot, 'lock'), pid: process.pid, uid,
     processNonce: 'restricted-account-service-fixture' })
   const workers = new ProfileWorkerSupervisor(async () => { throw new Error('unexpected regular worker') })
   const extensions = extensionBarrier()
-  onTestFinished(async () => { await extensions.dispose(); await workers.disposeAll(); await ownership.release() })
-  return new RestrictedAccountSessionService({ hostRoot: value.hostRoot, expectedUid: uid,
+  const service = new RestrictedAccountSessionService({ hostRoot: value.hostRoot, expectedUid: uid,
     runtimeGeneration: 5, schemaGeneration: 1, ownership, workers, extensions,
     ...testFence(value.hostRoot, ownership),
     claims: new LegacyClaimWorkerGate(() => false), inspector: value.inspector,
     ownerStateApplicator: value.ownerStateApplicator, inspectPersistence, createWorker, onCleanupFailure: () => {} })
+  onTestFinished(async () => {
+    try {
+      if (expectCloseFailure) await service.close().catch(() => {})
+      else await service.close()
+    } finally { await extensions.dispose(); await workers.disposeAll(); await ownership.release() }
+  })
+  return service
 }
 
 function restrictedAccountRead(service: RestrictedAccountSessionService, authorize: () => PersonProfileRecord,
@@ -985,6 +991,67 @@ describe('offline Profile existing-only inspector', () => {
     expect(createWorker).not.toHaveBeenCalled()
   })
 
+  it('cancels active reads and waits for isolated worker exit before Host close completes', async () => {
+    const value = await bundledFixture()
+    const record = profile()
+    let entered!: () => void, stopping!: () => void, finishWorker!: () => void, finishRead!: () => void
+    const readEntered = new Promise<void>(resolve => { entered = resolve })
+    const stopEntered = new Promise<void>(resolve => { stopping = resolve })
+    const workerDone = new Promise<void>(resolve => { finishWorker = resolve })
+    const readDone = new Promise<void>(resolve => { finishRead = resolve })
+    onTestFinished(() => { finishRead(); finishWorker() })
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort: stopping,
+      done: workerDone, remoteSession: async () => { entered(); await readDone; return { items: ['private'] } } }))
+    try {
+      const command = { operation: 'session.list' as const,
+        command_id: '123e4567-e89b-42d3-a456-426614174009' as HostControlRequestId }
+      const reading = restrictedAccountRead(service, () => record, command, new AbortController().signal)
+      const rejected = expect(reading).rejects.toMatchObject({ code: 'unavailable' })
+      await readEntered
+      const closing = service.close()
+      expect(service.close()).toBe(closing)
+      await stopEntered
+      let completed = false
+      void closing.then(() => { completed = true })
+      await Promise.resolve()
+      expect(completed).toBe(false)
+      await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      finishWorker()
+      await closing
+      await rejected
+    } finally { finishRead(); finishWorker(); await service.close() }
+  })
+
+  it('does not return a completed read if Host close wins before delivery', async () => {
+    const value = await bundledFixture()
+    const service = await accountService(value, async () => { throw new Error('unexpected worker') })
+    let finish!: (value: { items: string[] }) => void
+    const pending = new Promise<{ items: string[] }>(resolve => { finish = resolve })
+    vi.spyOn(service as unknown as { readOwned: () => Promise<{ items: string[] }> }, 'readOwned')
+      .mockReturnValueOnce(pending)
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174010' as HostControlRequestId }
+    const reading = restrictedAccountRead(service, () => profile(), command, new AbortController().signal)
+    const rejected = expect(reading).rejects.toMatchObject({ code: 'unavailable' })
+    finish({ items: ['private'] })
+    await service.close()
+    await rejected
+  })
+
+  it('registers a read before Host close can release its ownership', async () => {
+    const value = await bundledFixture()
+    const service = await accountService(value, async () => { throw new Error('unexpected worker') })
+    const authorize = vi.fn(() => profile())
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174011' as HostControlRequestId }
+    const reading = restrictedAccountRead(service, authorize, command, new AbortController().signal)
+    const rejected = expect(reading).rejects.toMatchObject({ code: 'unavailable' })
+    await service.close()
+    await rejected
+    expect(authorize).not.toHaveBeenCalled()
+  })
+
   it('refuses restricted history while an existing session writer holds its kernel lock', async () => {
     const value = await bundledFixture()
     const id = SessionId('restricted-lock-contention')
@@ -1035,12 +1102,16 @@ describe('offline Profile existing-only inspector', () => {
     const lock = join(directory, 'session.lock')
     await writeFile(lock, '', { mode: 0o600 })
     const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
-      remoteSession: async () => { await unlink(lock); await writeFile(lock, '', { mode: 0o600 }); return { items: ['private'] } } }))
+      remoteSession: async () => { await unlink(lock); await writeFile(lock, '', { mode: 0o600 }); return { items: ['private'] } } }),
+    undefined, true)
     const record = profile()
     await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
       command_id: '123e4567-e89b-42d3-a456-426614174007' as HostControlRequestId }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     expect(JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')).state).toBe('pending')
+    const closing = service.close()
+    await expect(closing).rejects.toMatchObject({ code: 'unavailable' })
+    expect(service.close()).toBe(closing)
   })
 
   it('rejects a session directory list that changes without a matching inventory change', async () => {
