@@ -787,6 +787,39 @@ describe('offline Profile existing-only inspector', () => {
       .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
     await expect(inspectResolvedProfileImportTargetPluginLayer(resolutionInput))
       .rejects.toThrow('profile_import_plugin_target_resolution_incomplete')
+    const baselineSourceArchivePath = join(targetArchives, `${baselineDigest}.tgz`)
+    isolatedReadFaults.set(baselineSourceArchivePath, { calls: 0, at: 1, mode: 'throw' })
+    try {
+      await expect(resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+        nodeExecutablePath: process.execPath, pnpmEntrypointPath }))
+        .rejects.toThrow('profile_import_plugin_target_archive_changed')
+    } finally { isolatedReadFaults.delete(baselineSourceArchivePath) }
+    const targetMergeRoot = join(value.target.profileRoot, 'profile-import-plugin-install',
+      input.operationId, 'target-merge')
+    const getForDependency = catalog.getForDependency.bind(catalog)
+    const catalogDriftFailures = new Set([
+      'profile_import_plugin_target_source_unsupported',
+      'profile_import_plugin_target_archive_changed',
+      'profile_import_plugin_target_resolution_invalid',
+    ])
+    for (let at = 1; at <= 24 && catalogDriftFailures.size > 0; at++) {
+      let calls = 0
+      const lookup = vi.spyOn(catalog, 'getForDependency').mockImplementation((name, spec) => {
+        calls += 1
+        return calls === at ? undefined : getForDependency(name, spec)
+      })
+      try {
+        const failure = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
+          nodeExecutablePath: process.execPath, pnpmEntrypointPath })
+          .then(() => null, (error: unknown) => error as Error)
+        if (failure) catalogDriftFailures.delete(failure.message)
+        if (calls < at) break
+      } finally {
+        lookup.mockRestore()
+        await rm(targetMergeRoot, { recursive: true, force: true })
+      }
+    }
+    expect([...catalogDriftFailures]).toEqual([])
     const resolved = await resolveProfileImportTargetPluginsInIsolation({ ...resolutionInput,
       nodeExecutablePath: process.execPath, pnpmEntrypointPath })
     expect(await inspectResolvedProfileImportTargetPluginsInIsolation(resolutionInput)).toEqual(resolved)
