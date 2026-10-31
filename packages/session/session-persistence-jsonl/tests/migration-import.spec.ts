@@ -151,7 +151,9 @@ describe('owner-only migration import', () => {
     const original = await readFile(new URL('./fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url))
     await writeFile(path, original, { mode: 0o600 })
     await expect(target.inspectExistingPersistence()).rejects.toThrow('migration_generation_unsafe')
-    await expect(target.inspectRestrictedPersistence()).resolves.toMatchObject({ generation: 1, sessionCount: 1, compression: 'zstd' })
+    await expect(target.inspectRestrictedPersistence()).resolves.toMatchObject({
+      generation: 1, sessionCount: 1, compression: 'zstd', sessionDirectories: [dirname(path)],
+    })
     expect(await readFile(path)).toEqual(original)
     const unknown = join(dirname(path), 'session.v99.jsonl.zstd')
     await writeFile(unknown, original, { mode: 0o600 })

@@ -1,6 +1,7 @@
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { RestrictedPersistenceInspection } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { ExistingSessionLockSet } from '@deepseek-ai/dsh-session-persistence-jsonl/src/existing-session-lock.ts'
 import type { DesktopHost, ExistingAccountProof } from './desktop-host.ts'
 import type { ProfileExtensionOperations } from './extension-operations.ts'
 import type { LegacyClaimWorkerGate } from './legacy-claim-worker-gate.ts'
@@ -13,6 +14,25 @@ import { HostAuthorityError, type ProfileWorkerFactory } from './types.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 
 const PROFILE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+
+function validSessionDirectories(value: RestrictedPersistenceInspection): boolean {
+  if (typeof value.root !== 'string' || !isAbsolute(value.root) || resolve(value.root) !== value.root
+    || !Number.isSafeInteger(value.sessionCount) || value.sessionCount < 0 || !Array.isArray(value.sessionDirectories)
+    || value.sessionDirectories.length !== value.sessionCount
+    || new Set(value.sessionDirectories).size !== value.sessionDirectories.length) return false
+  return value.sessionDirectories.every(directory => {
+    if (typeof directory !== 'string' || !isAbsolute(directory) || resolve(directory) !== directory) return false
+    const parts = relative(value.root, directory).split(sep)
+    return parts.length === 2 && parts.every(part => part !== '' && part !== '.' && part !== '..')
+  })
+}
+
+function samePersistence(left: RestrictedPersistenceInspection, right: RestrictedPersistenceInspection): boolean {
+  return validSessionDirectories(left) && validSessionDirectories(right) && left.root === right.root
+    && left.generation === right.generation && left.compression === right.compression
+    && left.sessionCount === right.sessionCount && left.inventoryDigest === right.inventoryDigest
+    && left.sessionDirectories.every((directory, index) => directory === right.sessionDirectories[index])
+}
 
 /** Host-private, one-shot Account history reader. It does not grant a view or remote access. */
 export class RestrictedAccountSessionService {
@@ -63,8 +83,12 @@ export class RestrictedAccountSessionService {
     const expectedProfileId = profile.profileId
     const expectedGeneration = profile.bindingGeneration
     const expectedKeyHandle = profile.keyHandle
+    let sessionLocks: ExistingSessionLockSet | undefined
     const assertCurrent = () => {
       signal.throwIfAborted()
+      if (sessionLocks) {
+        try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+      }
       const current = authorize()
       if (current !== profile || current.kind !== 'account' || current.profileId !== expectedProfileId
         || current.bindingGeneration !== expectedGeneration || current.keyHandle !== expectedKeyHandle) {
@@ -78,7 +102,7 @@ export class RestrictedAccountSessionService {
     const profileRoot = join(this.options.hostRoot, 'profiles', expectedProfileId)
     const ownerPaths = await this.options.ownerStateApplicator.inspectExisting(profileRoot, preflight.persistenceGeneration)
     const persistence = await this.options.inspectPersistence(expectedProfileId)
-    if (persistence.generation !== preflight.persistenceGeneration || persistence.compression !== preflight.compression
+    if (!validSessionDirectories(persistence) || persistence.generation !== preflight.persistenceGeneration || persistence.compression !== preflight.compression
       || persistence.inventoryDigest !== preflight.persistenceInventoryDigest) {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
@@ -90,8 +114,44 @@ export class RestrictedAccountSessionService {
       expectedPersistenceInventoryDigest: preflight.persistenceInventoryDigest,
       ownership: this.options.ownership, assertCurrent, signal,
       fence: this.options.fence,
-      withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, operation),
-      assertAllWritersQuiescent: () => this.options.assertAllWritersQuiescent(expectedProfileId),
+      withAllWritersExcluded: operation => this.options.withAllWritersExcluded(expectedProfileId, async () => {
+        const current = await this.options.inspectPersistence(expectedProfileId)
+        if (!samePersistence(current, persistence)) {
+          throw new HostAuthorityError('recovery_preflight_stale')
+        }
+        try {
+          sessionLocks = await ExistingSessionLockSet.acquire(current.sessionDirectories, this.options.expectedUid, signal)
+        } catch (error) {
+          if (error instanceof AggregateError) {
+            this.options.workers.blockProfile(expectedProfileId)
+            this.options.onCleanupFailure()
+          }
+          signal.throwIfAborted()
+          const code = (error as NodeJS.ErrnoException | undefined)?.code
+          if (code === 'EAGAIN' || code === 'EWOULDBLOCK') throw new HostAuthorityError('busy')
+          if (code === 'ENOENT') throw new HostAuthorityError('recovery_preflight_stale')
+          throw new HostAuthorityError('unavailable')
+        }
+        try {
+          const locked = await this.options.inspectPersistence(expectedProfileId)
+          if (!samePersistence(locked, persistence)) {
+            throw new HostAuthorityError('recovery_preflight_stale')
+          }
+          assertCurrent()
+          return await operation()
+        } finally {
+          try { sessionLocks.close() } catch (error) {
+            this.options.workers.blockProfile(expectedProfileId)
+            this.options.onCleanupFailure()
+            throw error
+          } finally { sessionLocks = undefined }
+        }
+      }),
+      assertAllWritersQuiescent: () => {
+        if (!sessionLocks) throw new HostAuthorityError('unavailable')
+        try { sessionLocks.assertCurrent() } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+        this.options.assertAllWritersQuiescent(expectedProfileId)
+      },
       profileId: expectedProfileId, credentialHandle: expectedKeyHandle, createWorker: this.options.createWorker,
       onCleanupFailure: this.options.onCleanupFailure,
     }, reader => reader.read(command, signal))

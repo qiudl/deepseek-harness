@@ -181,6 +181,8 @@ export interface ExistingPersistenceInspection {
 /** Existing generation facts for a restricted reader with one consistent physical encoding. */
 export interface RestrictedPersistenceInspection extends Omit<ExistingPersistenceInspection, 'compression'> {
   readonly compression: 'none' | 'zstd'
+  /** Host-private session directories; never send these paths to a renderer. */
+  readonly sessionDirectories: readonly string[]
 }
 
 /**
@@ -229,7 +231,8 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
    */
   async inspectExistingPersistence(): Promise<ExistingPersistenceInspection> {
     const result = await this.inspectPersistence(false)
-    return { ...result, compression: 'none' }
+    return { root: result.root, compression: 'none', generation: result.generation,
+      sessionCount: result.sessionCount, inventoryDigest: result.inventoryDigest }
   }
 
   /**
@@ -312,6 +315,7 @@ export class FileOwnerJsonlMigrationGenerationTarget implements MigrationImportT
     })).digest('hex')
     return {
       root, compression: restricted ? observedCompression ?? 'none' : 'none', generation, sessionCount: sessions.length, inventoryDigest,
+      sessionDirectories: sessions.map(session => join(root, session.project, session.session)),
     }
   }
 

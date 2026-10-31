@@ -112,7 +112,7 @@ export async function stageRestrictedProfile(input: {
   readonly profileRoot: string
   readonly ownerPaths: AppliedMigrationOwnerState
   readonly persistence: { readonly root: string; readonly compression: 'none' | 'zstd' }
-  readonly inspectPersistence: () => Promise<RestrictedPersistenceInspection>
+  readonly inspectPersistence: () => Promise<Omit<RestrictedPersistenceInspection, 'sessionDirectories'>>
   readonly expectedPersistenceInventoryDigest?: string
   readonly ownership: SingleHostLock
   readonly assertCurrent: () => void

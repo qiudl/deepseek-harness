@@ -55,6 +55,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import {
   FileOwnerJsonlMigrationGenerationTarget,
 } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
+import { SessionWriteLease } from '@deepseek-ai/dsh-session-persistence-jsonl/src/lease.ts'
+import { ExistingSessionLock } from '@deepseek-ai/dsh-session-persistence-jsonl/src/existing-session-lock.ts'
 import type { MigrationOwnerStateBundle } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-export.ts'
 import { MigrationOwnerStateApplicator } from '../src/migration-owner-state-applicator.ts'
 import {
@@ -963,6 +965,80 @@ describe('offline Profile existing-only inspector', () => {
     expect(createWorker).not.toHaveBeenCalled()
   })
 
+  it('refuses restricted history while an existing session writer holds its kernel lock', async () => {
+    const value = await bundledFixture()
+    const id = SessionId('restricted-lock-contention')
+    await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id, createdAt: 1,
+      cwd: '/work', isSeeded: false }, [
+      { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ])
+    const [directory] = (await value.target.inspectRestrictedPersistence()).sessionDirectories
+    if (!directory) throw new Error('missing fixture session')
+    await writeFile(join(directory, 'session.lock'), '', { mode: 0o600 })
+    const writer = await SessionWriteLease.acquire(directory, id)
+    onTestFinished(() => writer.release())
+    let writerBlockedDuringRead = false
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      remoteSession: async () => {
+        try { const other = await ExistingSessionLock.acquire(directory, uid); other.close() } catch (error) {
+          if (!['EAGAIN', 'EWOULDBLOCK'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+          writerBlockedDuringRead = true
+        }
+        return { items: [] }
+      } }))
+    const service = await accountService(value, createWorker)
+    const record = profile()
+    const command = { operation: 'session.list' as const,
+      command_id: '123e4567-e89b-42d3-a456-426614174006' as HostControlRequestId }
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'busy' })
+    expect(createWorker).not.toHaveBeenCalled()
+    await writer.release()
+    const before = await treeInventory(value.profileRoot)
+    await expect(restrictedAccountRead(service, () => record, command, new AbortController().signal))
+      .resolves.toEqual({ items: [] })
+    expect(writerBlockedDuringRead).toBe(true)
+    expect(await treeInventory(value.profileRoot)).toEqual(before)
+  })
+
+  it('does not return restricted history after a held session lock is replaced', async () => {
+    const value = await bundledFixture()
+    const id = SessionId('restricted-lock-replacement')
+    await value.target.importSession(1, { version: SESSION_FORMAT_VERSION, id, createdAt: 1,
+      cwd: '/work', isSeeded: false }, [
+      { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { turn: 1 } },
+      { type: 'turn/end', seq: SessionSeq(1), time: 2, data: { turn: 1, reason: { kind: 'completed' } } },
+    ])
+    const [directory] = (await value.target.inspectRestrictedPersistence()).sessionDirectories
+    if (!directory) throw new Error('missing fixture session')
+    const lock = join(directory, 'session.lock')
+    await writeFile(lock, '', { mode: 0o600 })
+    const service = await accountService(value, async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      remoteSession: async () => { await unlink(lock); await writeFile(lock, '', { mode: 0o600 }); return { items: ['private'] } } }))
+    const record = profile()
+    await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174007' as HostControlRequestId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(JSON.parse(await readFile(join(value.hostRoot, `${profileId}.json`), 'utf8')).state).toBe('pending')
+  })
+
+  it('rejects a session directory list that changes without a matching inventory change', async () => {
+    const value = await bundledFixture()
+    let inspections = 0
+    const createWorker = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+    const service = await accountService(value, createWorker, async () => {
+      const current = await value.target.inspectRestrictedPersistence()
+      return ++inspections === 1 ? current : { ...current, sessionCount: 1,
+        sessionDirectories: [join(current.root, 'unexpected-project', 'unexpected-session')] }
+    })
+    const record = profile()
+    await expect(restrictedAccountRead(service, () => record, { operation: 'session.list',
+      command_id: '123e4567-e89b-42d3-a456-426614174008' as HostControlRequestId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    expect(createWorker).not.toHaveBeenCalled()
+  })
+
   it('does not return restricted history if Account authorization is revoked during the read', async () => {
     const value = await bundledFixture()
     const record = profile()
@@ -1119,6 +1195,7 @@ describe('offline Profile existing-only inspector', () => {
     await writeFile(path,
       await readFile(new URL('../../../session/session-persistence-jsonl/tests/fixtures/released-v3-old-writer.jsonl.zstd', import.meta.url)),
       { mode: 0o600 })
+    await writeFile(join(dirname(path), 'session.lock'), '', { mode: 0o600 })
     const persistence = await value.target.inspectRestrictedPersistence()
     expect(persistence.compression).toBe('zstd')
     const preflight = await value.inspector.inspectRestricted(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
