@@ -161,5 +161,6 @@ export function projectMemorySession(snapshot: HostMemorySessionSnapshot): reado
     }
     if (records.length > MAX_PROJECTED_RECORDS) throw new HostAuthorityError('unavailable')
   }
+  if (pending) throw new HostAuthorityError('unavailable')
   return records
 }

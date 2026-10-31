@@ -117,8 +117,8 @@ describe('local memory Session projection', () => {
     expect(JSON.stringify(result)).not.toMatch(/private reasoning|private tool arguments/u)
   })
 
-  it('withholds unfinished or failed turns and refuses delegated or replaced history', () => {
-    expect(projectMemorySession(snapshot(oneTurn.slice(0, -1)))).toEqual([])
+  it('refuses unfinished turns and delegated or replaced history while withholding failed turns', () => {
+    expect(() => projectMemorySession(snapshot(oneTurn.slice(0, -1)))).toThrow()
     const failed = oneTurn.map(event => event.type === 'turn/end'
       ? { ...event, data: { turn: 0, reason: { kind: 'error' } } } : event)
     expect(projectMemorySession(snapshot(failed))).toEqual([])
@@ -161,6 +161,16 @@ describe('local memory Session projection', () => {
     ]
     for (const [index, input] of invalidSnapshots.entries())
       expect(() => projectMemorySession(input), `invalid snapshot ${index}`).toThrow()
+  })
+
+  it('rejects a Session with an unfinished live turn after completed history', () => {
+    const live = [
+      ...oneTurn,
+      row('turn/start', 6, { turn: 1 }),
+      row('user/message', 7, { id: 'live', role: 'user', source: { kind: 'user' },
+        content: text('unfinished private request') }),
+    ]
+    expect(() => projectMemorySession(snapshot(live))).toThrow()
   })
 
   it('drops invalid visible blocks and keeps a completed user-only turn', () => {
