@@ -728,3 +728,10 @@ describe('readDshAppVersion', () => {
     }
   })
 })
+
+it('starts with the default runtime-version reader when none is injected', async () => {
+  const state = fixture()
+  const { readDshRuntimeVersion: _read, ...dependencies } = state.dependencies
+  const application = await startWindowsDesktopHostApplication(state.options, undefined, dependencies)
+  await application.close()
+})
