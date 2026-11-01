@@ -21,7 +21,10 @@ export async function waitForPluginRuntime(
   // REQ-20261028-0021: a cold Windows worker restarts the DSH runtime and loads a large bundled
   // plugin (ds-bot imports the DSH platform packages), which exceeds 20s; keep the verification
   // bounded by the operation's own lifetime instead of failing the install on a slow first load.
-  const lifetime = AbortSignal.any([signal, AbortSignal.timeout(90_000)])
+  // REQ-20261028-0021: a cold Windows worker restarts the DSH runtime and loads a large bundled
+  // plugin (ds-bot imports the DSH platform packages), which can take minutes; keep the
+  // verification bounded by the operation's own lifetime instead of failing the install early.
+  const lifetime = AbortSignal.any([signal, AbortSignal.timeout(300_000)])
   while (true) {
     lifetime.throwIfAborted()
     const rpcId = randomUUID()

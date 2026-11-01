@@ -552,7 +552,11 @@ async function startWindowsDesktopHostApplicationWithTrust(
             // it settles after an install, so the composition can momentarily lack the package the
             // manifest check just confirmed. Only the composition read retries — re-running the
             // worker reactivation would kill the worker before it can settle.
-            const deadline = Date.now() + 90_000
+            // REQ-20261028-0021: the worker's plugin manager drops bundles it cannot resolve while
+            // it relinks node_modules, so on a cold machine the composition can stay incomplete
+            // for minutes. Wait within the operation's own lifetime instead of failing the
+            // install at 90 seconds.
+            const deadline = Date.now() + 300_000
             let expected: Parameters<typeof reactivatePlugin>[1] | undefined
             for (;;) {
               context.guard(); context.signal.throwIfAborted()
