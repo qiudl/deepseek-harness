@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { LegacyClaimWorkerGate } from '../src/legacy-claim-worker-gate.ts'
 
 describe('legacy model claim worker gate', () => {
+  it('checks the claim state independently from an external recovery fence', async () => {
+    let pending = false
+    const gate = new LegacyClaimWorkerGate(() => pending, () => true)
+    expect(() => { gate.assertClaimOpen('profile') }).not.toThrow()
+    pending = true
+    expect(() => { gate.assertClaimOpen('profile') }).toThrow(/unavailable/u)
+    pending = false
+    const fenced = new LegacyClaimWorkerGate(() => false)
+    await fenced.stop('profile', async () => {})
+    expect(() => { fenced.assertClaimOpen('profile') }).toThrow(/unavailable/u)
+  })
   it('does not begin a claim while a restricted recovery fence exists', async () => {
     let blocked = true
     const gate = new LegacyClaimWorkerGate(() => false, () => blocked)

@@ -4,6 +4,40 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
   parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { ProfileWorkerExitUnconfirmedError } from '../src/types.ts'
+
+it('passes the owning cancellation signal to worker startup', async () => {
+  const create = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  const workers = new ProfileWorkerSupervisor(create)
+  const controller = new AbortController()
+  await workers.start({ profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [], signal: controller.signal })
+  expect(create).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'profile' }), controller.signal)
+  await workers.disposeAll()
+})
+
+it('fences a Profile if startup cannot confirm child exit', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => { throw new ProfileWorkerExitUnconfirmedError(new Error('unknown exit')) })
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await expect(workers.start(input)).rejects.toBeInstanceOf(ProfileWorkerExitUnconfirmedError)
+  expect(workers.isLocallyBlocked('profile')).toBe(true)
+  await expect(workers.withPreparation('profile', async () => {})).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.disposeAll()
+})
+
+it('serializes duplicate scoped starts and handles scoped worker shutdown failures', async () => {
+  const failure = new Error('worker shutdown failed')
+  const create = vi.fn(async () => ({ closeNotifications() {}, abort() {}, done: Promise.reject(failure) }))
+  const workers = new ProfileWorkerSupervisor(create)
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'key', pluginRoots: [] }
+  await expect(workers.withPreparation('profile', async (scope) => {
+    await scope.ensure(input)
+    await scope.ensure(input)
+    await scope.dispose()
+  })).rejects.toBe(failure)
+  expect(create).toHaveBeenCalledOnce()
+  expect(workers.isLocallyBlocked('profile')).toBe(true)
+  await workers.disposeAll()
+})
 
 it('holds the original Profile stopped until the isolated reader releases its reservation', async () => {
   let starts = 0

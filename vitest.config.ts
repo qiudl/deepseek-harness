@@ -180,6 +180,14 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       'packages/host/desktop-host/src/profile-worker-process.ts',
       'packages/host/desktop-host/src/private-file-io.ts',
       'packages/host/desktop-host/src/restarting-migration-target.ts',
+      // Restricted history currently composes only through the POSIX Host and
+      // depends on uid/mode, O_NOFOLLOW and flock. Linux holds their per-file
+      // 100% coverage; Windows does not expose this reader or its session lock.
+      'packages/host/desktop-host/src/restricted-account-session.ts',
+      'packages/host/desktop-host/src/restricted-profile-fence.ts',
+      'packages/host/desktop-host/src/restricted-profile-reader.ts',
+      'packages/host/desktop-host/src/restricted-profile-staging.ts',
+      'packages/session/session-persistence-jsonl/src/existing-session-lock.ts',
       'packages/host/desktop-host/src/session-command.ts',
       'packages/host/desktop-host/src/single-instance.ts',
       'packages/host/desktop-host/src/startup.ts',
