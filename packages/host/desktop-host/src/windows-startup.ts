@@ -550,21 +550,22 @@ async function startWindowsDesktopHostApplicationWithTrust(
           acknowledge: async (profileId, packageName, context) => {
             // REQ-20261028-0021: the worker's plugin manager rewrites the Profile manifest while
             // it settles after an install, so the composition can momentarily lack the package the
-            // manifest check just confirmed; wait it out inside the operation's own lifetime
-            // instead of recording a false executor_failed.
+            // manifest check just confirmed. Only the composition read retries — re-running the
+            // worker reactivation would kill the worker before it can settle.
             const deadline = Date.now() + 90_000
+            let expected: Parameters<typeof reactivatePlugin>[1] | undefined
             for (;;) {
               context.guard(); context.signal.throwIfAborted()
               try {
                 const { loaded, overlays } = loadComposition(profileRoot(profileId))
-                const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
-                await reactivatePlugin(profileId, expected, context)
-                return
+                expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+                break
               } catch (error) {
                 if (!(error instanceof Error && error.message === 'plugin_bundle_missing') || Date.now() >= deadline) throw error
                 await new Promise<void>((resolve) => { setTimeout(resolve, 200) })
               }
             }
+            await reactivatePlugin(profileId, expected, context)
           },
         })
       }
