@@ -41,6 +41,30 @@ export class MaterializedMigrationOwnerStateSource {
       || Object.keys(credentialDocument).some(key => !['version', 'refs', 'records'].includes(key))) {
       throw new Error('migration_owner_state_invalid')
     }
+    const workspace = await this.readWorkspace()
+    const state: MigrationOwnerStateBundle = {
+      version: 1,
+      documents: [
+        { kind: 'settings', schemaVersion: 1, value: settings },
+        { kind: 'credentials', schemaVersion: 1, value: {
+          refs: migrationOwnerStateObject(credentialDocument.refs ?? {}),
+          records: migrationOwnerStateObject(credentialDocument.records ?? {}),
+        } },
+        workspace,
+        { kind: 'profile', schemaVersion: 1, value: migrationOwnerStateObject(
+          await readOwnerYaml(join(this.paths.storageRoot, '..', 'profile.json'), this.expectedUid),
+        ) },
+      ],
+    }
+    migrationOwnerStateRecords(state)
+    return state
+  }
+
+  /**
+   * Read workspace metadata without loading settings or credentials while the worker is quiesced.
+   * @returns The validated workspace owner document.
+   */
+  async readWorkspace(): Promise<Readonly<{ kind: 'workspace'; schemaVersion: 1; value: unknown }>> {
     const storage = migrationOwnerStateObject(await readOwnerYaml(join(this.paths.storageRoot, 'workspace.json'), this.expectedUid))
     const unit = migrationOwnerStateObject(storage.unit)
     const tables = migrationOwnerStateObject(storage.tables)
@@ -50,23 +74,6 @@ export class MaterializedMigrationOwnerStateSource {
     if (grants.some(path => typeof path !== 'string' || !path.startsWith('/'))) {
       throw new Error('migration_owner_state_invalid')
     }
-    const state: MigrationOwnerStateBundle = {
-      version: 1,
-      documents: [
-        { kind: 'settings', schemaVersion: 1, value: settings },
-        { kind: 'credentials', schemaVersion: 1, value: {
-          refs: migrationOwnerStateObject(credentialDocument.refs ?? {}),
-          records: migrationOwnerStateObject(credentialDocument.records ?? {}),
-        } },
-        { kind: 'workspace', schemaVersion: 1, value: {
-          grants: [...new Set(grants as string[])].sort(), storage,
-        } },
-        { kind: 'profile', schemaVersion: 1, value: migrationOwnerStateObject(
-          await readOwnerYaml(join(this.paths.storageRoot, '..', 'profile.json'), this.expectedUid),
-        ) },
-      ],
-    }
-    migrationOwnerStateRecords(state)
-    return state
+    return { kind: 'workspace', schemaVersion: 1, value: { grants: [...new Set(grants as string[])].sort(), storage } }
   }
 }

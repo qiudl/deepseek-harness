@@ -225,7 +225,9 @@ export class FileExtensionReceipts implements ExtensionReceiptStore {
 /** Target-bound operation owner. Call dispose and await it before releasing the Host process lock. */
 export class ProfileExtensionOperations {
   private readonly plans = new Map<string, Plan>()
-  private readonly jobs = new Map<string, { controller: AbortController; done: Promise<void> }>()
+  private readonly jobs = new Map<string, { profileId: string; controller: AbortController; done: Promise<void> }>()
+  private readonly restrictedProfiles = new Set<string>()
+  private readonly blockedProfiles = new Set<string>()
   private readonly tails = new Map<string, Promise<void>>()
   private closed = false
   /** @param store Host-owned receipt store. @param executor Profile-aware executor. @param clock Host clock. */
@@ -233,7 +235,30 @@ export class ProfileExtensionOperations {
     private readonly store: ExtensionReceiptStore,
     private readonly executor: ExtensionExecutor,
     private readonly clock: { now(): number },
+    private readonly isProfileBlocked: (profileId: string) => boolean = () => false,
   ) {}
+
+  /** Hold extension mutations out while an already-authorized restricted reader is active.
+   * @param profileId - Host-resolved Profile, not a client-supplied identity.
+   * @param operation - Entire reader lifetime, including cleanup.
+   * @returns The operation result.
+   */
+  async withRestrictedAccess<T>(profileId: string, operation: () => Promise<T>): Promise<T> {
+    this.assertOpen()
+    uuid(profileId)
+    if (this.blockedProfiles.has(profileId) || this.isProfileBlocked(profileId)
+      || this.restrictedProfiles.has(profileId) || [...this.jobs.values()].some(job => job.profileId === profileId))
+      throw new Error('busy')
+    this.restrictedProfiles.add(profileId)
+    try { return await operation() } finally { this.restrictedProfiles.delete(profileId) }
+  }
+
+  /** Keep Profile mutations fenced after an unconfirmed isolated worker exit.
+   * @param profileId - Host-resolved Profile whose worker state is uncertain.
+   */
+  blockProfile(profileId: string): void {
+    this.blockedProfiles.add(uuid(profileId))
+  }
 
   /**
    * @param authority Rechecks live Host authorization.
@@ -307,6 +332,8 @@ export class ProfileExtensionOperations {
     if (plan.scriptApproval ? scriptDigest !== plan.scriptApproval.digest : scriptDigest !== undefined) {
       throw new Error('script_approval_required')
     }
+    if (this.blockedProfiles.has(profileId) || this.isProfileBlocked(profileId)
+      || this.restrictedProfiles.has(profileId)) throw new Error('busy')
     if (this.blocked(profileId, plan.restores)) throw new Error('busy')
     // One confirmation plan can produce only one operation, even with a different client UUID.
     if (this.store.list(profileId).some(receipt => receipt.planId === planId)) throw new Error('idempotency_conflict')
@@ -325,7 +352,7 @@ export class ProfileExtensionOperations {
       this.jobs.delete(operationId)
       this.plans.delete(planId)
     })
-    this.jobs.set(operationId, { controller, done })
+    this.jobs.set(operationId, { profileId, controller, done })
     // A storage failure fences subsequent work through the rejected tail; no ignored rejection.
     this.tails.set(profileId, done)
     void done.catch(() => {})

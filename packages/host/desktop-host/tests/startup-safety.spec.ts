@@ -143,7 +143,7 @@ it.skipIf(process.platform === 'win32')('rejects malformed registration ownershi
   }
 })
 
-it.skipIf(process.platform === 'win32')('contains startup cleanup failures without replacing the primary error', async () => {
+it.skipIf(process.platform === 'win32')('reports unconfirmed cleanup when startup and cleanup both fail', async () => {
   const { config, root } = fixture()
   const serverClose = vi.fn(async () => { throw new Error('listener cleanup failure') })
   const server = {
@@ -157,7 +157,7 @@ it.skipIf(process.platform === 'win32')('contains startup cleanup failures witho
     platform: 'darwin', profileWorkerFactory: async () => { throw Error('unused') },
     attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
     createServer: () => server,
-  })).rejects.toThrow('primary startup failure')
+  })).rejects.toThrow('host_startup_cleanup_unconfirmed')
   expect(serverClose).toHaveBeenCalledOnce()
 })
 

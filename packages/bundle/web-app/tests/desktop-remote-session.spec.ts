@@ -360,7 +360,30 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'session-1', max_events: 100,
     }, new AbortController().signal)
     expect((result as { events: typeof recent[] }).events.map(item => item.event.seq)).toEqual([2])
+    expect(result).toMatchObject({ truncated: true })
     expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(HOST_CONTROL_MAX_FRAME_BYTES)
+  })
+
+  it('reports older history when the source snapshot is paged', async () => {
+    const gateway = gatewayFixture({ stream: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'snapshot', records: [], hasMore: true } },
+    })) })
+    const executor = new DesktopRemoteSessionExecutor(gateway)
+    await expect(executor.execute({ operation: 'session.history',
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', max_events: 100 }, new AbortController().signal))
+      .resolves.toEqual({ events: [], truncated: true })
+  })
+
+  it('rejects malformed history pagination metadata', async () => {
+    const gateway = gatewayFixture({ stream: vi.fn(async () => ({
+      async *[Symbol.asyncIterator]() { yield { type: 'snapshot', records: [], hasMore: 'unknown' } },
+    })) })
+    const executor = new DesktopRemoteSessionExecutor(gateway)
+    await expect(executor.execute({ operation: 'session.history',
+      command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
+      session_id: 'session-1', max_events: 100 }, new AbortController().signal))
+      .rejects.toThrow('invalid history snapshot')
   })
 
   it('projects display events and omits deep internal records before Host encoding', async () => {

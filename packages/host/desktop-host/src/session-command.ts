@@ -130,6 +130,26 @@ const READ_OPERATIONS = new Set<HostRemoteSessionCommand['operation']>([
   'session.list', 'session.history', 'approval.poll', 'control.status', 'directory.pick',
 ])
 
+/**
+ * Forward only Session history reads for an already-authorized restricted Profile.
+ * @param input - Host-selected Profile, worker and connection lifetime.
+ * @returns The worker's bounded Session response.
+ */
+export async function executeRestrictedSessionCommand(input: {
+  readonly workers: ProfileWorkerSupervisor
+  readonly profileId: string
+  readonly command: HostRemoteSessionCommand
+  readonly signal: AbortSignal
+}): Promise<HostRemoteSessionJson> {
+  input.signal.throwIfAborted()
+  if (input.command.operation !== 'session.list' && input.command.operation !== 'session.history') {
+    throw new HostAuthorityError('unauthorized')
+  }
+  const result = await input.workers.readRestrictedSession(input.profileId, input.command, input.signal)
+  input.signal.throwIfAborted()
+  return result
+}
+
 /** Apply durable idempotency to mutations before forwarding them to one Profile worker. */
 export async function executeRemoteSessionCommand(input: {
   readonly authority: SessionCommandAuthority

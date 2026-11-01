@@ -11,6 +11,7 @@ export class RestartingMigrationTarget implements MigrationImportTarget {
   constructor(
     private readonly target: MigrationImportTarget,
     private readonly activate: (generation: number) => Promise<void>,
+    private readonly withCutover?: (operation: () => Promise<void>, expectedCurrentGeneration: number) => Promise<void>,
   ) {}
 
   prepareEmptyGeneration(generation: number): Promise<void> {
@@ -38,13 +39,17 @@ export class RestartingMigrationTarget implements MigrationImportTarget {
   }
 
   async commitGeneration(expectedCurrentGeneration: number, targetGeneration: number): Promise<void> {
-    await this.target.commitGeneration(expectedCurrentGeneration, targetGeneration)
-    try {
-      await this.activate(targetGeneration)
-    } catch (error) {
-      await this.target.commitGeneration(targetGeneration, expectedCurrentGeneration)
-      try { await this.activate(expectedCurrentGeneration) } catch { /* active pointer is already safe */ }
-      throw error
+    const commit = async () => {
+      await this.target.commitGeneration(expectedCurrentGeneration, targetGeneration)
+      try {
+        await this.activate(targetGeneration)
+      } catch (error) {
+        await this.target.commitGeneration(targetGeneration, expectedCurrentGeneration)
+        try { await this.activate(expectedCurrentGeneration) } catch { /* active pointer is already safe */ }
+        throw error
+      }
     }
+    if (this.withCutover) return this.withCutover(commit, expectedCurrentGeneration)
+    return commit()
   }
 }

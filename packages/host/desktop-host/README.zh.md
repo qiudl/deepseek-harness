@@ -99,7 +99,7 @@ Bot 群凭据校验器检查受信任的 Slark 环境 Ed25519 公钥、当前 Ac
 
 在 macOS 上，签名嵌入应用在 Host 启动时传入只含公钥的 `DSH_HOST_SLARK_BOT_GROUP_KEYRINGS`。Host 校验并固定公钥环后才公布 `profile.bot_group_deliver`；缺失或格式无效的投影不能授权派送。请求仅携带凭据和命令，不能替换验签公钥。
 
-仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
+仅打开既有 Profile 的预检接受精确的当前 worker patch 或已发布的 `settings` owner 布局，持久化、存储、凭据和设置路径仍须全部绑定到已检查的代际。检查不会重写任何一种布局。Host 内部检查会统计未经验证的插件依赖，但不会加载它们；存在此类依赖时仍会阻断恢复。worker 在获得授权后启动时选择当前的 `config-editor` owner 布局；已改动或重定向的旧 patch 仍被拒绝。
 
 Desktop 模型文本请求必须使用由请求连接持有、已验证令牌的在线 Account 授权。Host 在调用 worker 前后检查授权，不改变可见 Profile 的视图租约，并传递取消信号，只返回分类错误或有长度限制的文本。每个 worker 的本机接口使用随机私有令牌；普通浏览器 cookie 无法授权该接口。
 

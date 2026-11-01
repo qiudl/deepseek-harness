@@ -79,7 +79,7 @@ it('attests the default macOS listener and rejects a listener owned by another p
   await expect(attestMacOSListener(42, 'http://127.0.0.1:4123')).resolves.toBeUndefined()
   expect(native.execFile).toHaveBeenCalledWith('/usr/sbin/lsof', [
     '-nP', '-a', '-p', '42', '-iTCP@127.0.0.1:4123', '-sTCP:LISTEN', '-Fn',
-  ], { encoding: 'utf8', maxBuffer: 64 * 1024 })
+  ], { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 30_000 })
 
   native.execFile.mockResolvedValueOnce({ stdout: 'p41\n', stderr: '' })
   await expect(attestMacOSListener(42, 'http://127.0.0.1:4123')).rejects.toBeInstanceOf(HostAuthorityError)
@@ -166,8 +166,13 @@ it.each(['https://example.com/', '//example.com/', '/other', './?token=fixture',
   const stdout = new PassThrough()
   const stderr = new PassThrough()
   onTestFinished(() => { stdout.destroy(); stderr.destroy() })
-  const kill = vi.fn(() => true)
-  const child = Object.assign(new ChildProcess(), { pid: 42, stdout, stderr, kill })
+  const child = new ChildProcess()
+  const kill = vi.fn(() => {
+    child.emit('exit', null, 'SIGKILL')
+    child.emit('close', null, 'SIGKILL')
+    return true
+  })
+  Object.assign(child, { pid: 42, stdout, stderr, kill })
   const factory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath, attestListener: async () => undefined,
   })

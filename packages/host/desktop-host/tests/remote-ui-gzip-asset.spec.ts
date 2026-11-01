@@ -102,8 +102,13 @@ describe('lease-owned compressed plugin assets', () => {
       entry.gzip = obsolete
       let observed!: () => void
       const enteredCompression = new Promise<void>((resolve) => { observed = resolve })
-      let checks = 0
-      const late = chunk(0, () => { if (++checks === 3) observed(); return false })
+      let currentGzip = obsolete
+      Object.defineProperty(entry, 'gzip', {
+        configurable: true,
+        get() { observed(); return currentGzip },
+        set(value: Promise<Buffer>) { currentGzip = value },
+      })
+      const late = chunk(0)
       await enteredCompression
       const replacement = Promise.resolve(gzipSync(body))
       entry.gzip = replacement

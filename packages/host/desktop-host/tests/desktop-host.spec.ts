@@ -1660,14 +1660,14 @@ describe('authenticated Unix transport', () => {
       issued_at: 1_000, expires_at: 2_000,
     }
     authority.authorize(params)
-    expect(() =>{  authority.authorize(params) }).toThrow(HostAuthorityError)
-    expect(() =>{  new HostRequestAuthorizer({ ...state, processNonce: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never }, clock.now).authorize(params) })
+    expect(() => { authority.authorize(params) }).toThrow(HostAuthorityError)
+    expect(() => { new HostRequestAuthorizer({ ...state, processNonce: 'ABEiM0RVZneImaq7zN3u_wARIjNEVWZ3iJmqu8zd7v8' as never }, clock.now).authorize(params) })
       .toThrow(HostAuthorityError)
-    expect(() =>{  new HostRequestAuthorizer(state, () => 2_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3191' as never }) })
+    expect(() => { new HostRequestAuthorizer(state, () => 2_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3191' as never }) })
       .toThrow(HostAuthorityError)
-    expect(() =>{  new HostRequestAuthorizer(state, clock.now).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3192' as never, issued_at: 1_500, expires_at: 1_400 }) })
+    expect(() => { new HostRequestAuthorizer(state, clock.now).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3192' as never, issued_at: 1_500, expires_at: 1_400 }) })
       .toThrow(HostAuthorityError)
-    expect(() =>{  new HostRequestAuthorizer(state, () => 40_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3193' as never, expires_at: 50_000 }) })
+    expect(() => { new HostRequestAuthorizer(state, () => 40_001).authorize({ ...params, jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3193' as never, expires_at: 50_000 }) })
       .toThrow(HostAuthorityError)
   })
 })
@@ -1957,6 +1957,33 @@ describe('worker and Desktop-only bundle', () => {
 
     await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement worker failed')
     expect(active).toBe(4)
+  })
+
+  it('keeps migration cutover fenced through a failed activation and rollback', async () => {
+    const events: string[] = []
+    let active = 4
+    const target = new RestartingMigrationTarget({
+      prepareEmptyGeneration: async () => undefined,
+      importOwnerState: async () => undefined,
+      importSession: async () => undefined,
+      semanticRecords: async () => [],
+      activeGeneration: async () => active,
+      commitGeneration: async (expected, next) => {
+        expect(active).toBe(expected)
+        events.push(`commit:${next}`)
+        active = next
+      },
+      abortGeneration: async () => undefined,
+    }, async (generation) => {
+      events.push(`activate:${generation}`)
+      if (generation === 5) throw new Error('replacement failed')
+    }, async (operation) => {
+      events.push('fence-enter')
+      try { await operation() } finally { events.push('fence-exit') }
+    })
+    await expect(target.commitGeneration(4, 5)).rejects.toThrow('replacement failed')
+    expect(active).toBe(4)
+    expect(events).toEqual(['fence-enter', 'commit:5', 'activate:5', 'commit:4', 'activate:4', 'fence-exit'])
   })
 
   it('isolates worker inputs and waits for quiescence after closing notifications', async () => {

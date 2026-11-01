@@ -132,6 +132,8 @@ export interface ProfileWorkerHandle {
   closeNotifications(): void
   abort(): void
   readonly done: Promise<void>
+  /** Resolves only when the operating system confirms the direct child has exited; not a process-tree guarantee. */
+  readonly exited?: Promise<void>
   /** Host-verified loopback origin when this worker owns a personal Web view. */
   readonly viewOrigin?: string
   /** Monotonic worker generation associated with `viewOrigin`. */
@@ -224,7 +226,16 @@ export interface ProfileWorkerHandle {
 }
 
 /** Factory that starts one isolated profile worker. */
-export type ProfileWorkerFactory = (spec: ProfileWorkerSpec) => Promise<ProfileWorkerHandle>
+/** Restricted readers require a factory that awaits spawned-child exit before rejecting startup,
+ * or rejects with ProfileWorkerExitUnconfirmedError when it cannot establish quiescence. */
+export type ProfileWorkerFactory = (spec: ProfileWorkerSpec, signal?: AbortSignal) => Promise<ProfileWorkerHandle>
+
+/** A worker could not be stopped, so its Profile must remain fenced. */
+export class ProfileWorkerExitUnconfirmedError extends Error {
+  constructor(cause: unknown) {
+    super('profile_worker_exit_unconfirmed', { cause })
+  }
+}
 
 /** Main-only result used to create a local personal DSH window. */
 export interface ProfileOpenResult {

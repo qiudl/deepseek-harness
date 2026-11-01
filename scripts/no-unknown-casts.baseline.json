@@ -1376,26 +1376,10 @@
     "5ded30395f3d8174bbbeb8f40492e085b87bd22d2f153dec3f6ec4b21429ac99": 1
   },
   "packages/host/desktop-host/tests/profile-worker-process.spec.ts": {
-    "0c5372710adecd9676e9dfe2b1a045ba7030484697143b21a0ded4ed8c15d4be": 1,
-    "15a6475b824ba96f136bbdada8b9e745049d28dcbf099c76f3e0ec8db10932a9": 1,
-    "19953deac3eb733749fafdad26d3073b460cd17cefa72b543fa61dd9c557ccfe": 1,
-    "2b288b0f2cde5f2791caa5dc06c48999c5a5fda66b46ecd9a96c0edda4ec4a05": 1,
-    "7241db2781fe642e975595562a2e29cb65186bb3f85c70926527bf9767b37c41": 1,
-    "981d5e235a7d2a9776808b3e70aa8adbbd14f3b5e00631fdf6e17d4e8d35a6fc": 1,
-    "9c8a2d823c424815c00052c079d903218f6483a500122b84fbdb91fe992cc271": 1,
-    "a130eda5d9ce1facf43cfd0eae7558d3ab0fcefa851a14c93935a737ff5be31b": 1,
-    "c148ec23925e54c9bf0e0969b881a154e651bfbeb0d861e564895797eb57fa3a": 4,
-    "c3971f03c12dfbaa46a76d08cb5a44df2ae3ff03b777fd809cdfa52d971dfec3": 2,
-    "d8b5b62347c0cdf9f687d125882e208c0ead53eca6d639819bb7568faabe1e3f": 1,
-    "e324f01c770b209152a062d647b6d618cab97339459f283bb5c1a526a40d2f9f": 1,
-    "f87258473b42b1e1d9d970b2060e1e99bbeb7b34acd14f497a12ac9904771b3c": 1
+    "e324f01c770b209152a062d647b6d618cab97339459f283bb5c1a526a40d2f9f": 1
   },
   "packages/host/desktop-host/tests/remote-session-command.spec.ts": {
     "9dae0e14badc9fd3ab730b8fadea03f2fc2f973f033e5b50cf746fa109ae51fe": 2
-  },
-  "packages/host/desktop-host/tests/startup-composition.spec.ts": {
-    "5b113b373c06e28f0fd1f8d6fa2e6d62e207a635f64fd018be29ac1af4190722": 1,
-    "7f411fa0c30114e853b2f6219865902ac1b808ab33b4484cbddcd8f8f808f72c": 2
   },
   "packages/host/desktop-host/tests/startup-platform.spec.ts": {
     "44ad47dde99ddc45317f3aa7e1cc5570e7872dbfd244ef8c51f082cfe728bc84": 1,
