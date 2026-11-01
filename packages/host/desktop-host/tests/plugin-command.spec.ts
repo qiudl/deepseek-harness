@@ -165,7 +165,7 @@ it('enforces the install deadline and force-kills a process that ignores gracefu
   writeFileSync(f.cli, "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)")
   const schedule = globalThis.setTimeout
   const timers = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback, delay) => schedule(
-    callback, delay === 120_000 ? 1_000 : delay === 2_000 ? 100 : delay,
+    callback, delay === 600_000 ? 1_000 : delay === 2_000 ? 100 : delay,
   ))
   onTestFinished(() => { timers.mockRestore() })
   await expect(runProfilePluginCommand({ ...f.options, spec: 'bundle@1.0.0',

@@ -146,3 +146,8 @@ it('takes npm integrity from the workspace lock without querying registry metada
   await writeFile(lockfile, JSON.stringify({ packages: { '@scope/fixture@1.2.3': { resolution: { integrity: 'sha256-invalid' } } } }))
   await expect(runtimeNpmArchive('@scope/fixture', '1.2.3', lockfile)).rejects.toThrow('missing SHA-512 integrity')
 })
+
+it('locks the tslib archive used by the Python runtime Office closure', async () => {
+  const archive = await runtimeNpmArchive('tslib', '2.9.1')
+  expect(archive.integrity).toMatch(/^sha512-/u)
+})
