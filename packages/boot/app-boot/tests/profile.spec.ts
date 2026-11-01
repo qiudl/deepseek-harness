@@ -471,6 +471,24 @@ describe('loadProfile', () => {
     expect(loadProfileDirectory('dsh', dir, anchor).layers.map(layer => layer.packageName)).toEqual(['guarded', 'kept'])
   })
 
+  it('checks bundle dsh peers against an explicitly given runtime version', () => {
+    const anchor = stageInstallation({
+      guarded: { patch: '- insert: [{ id: a, name: pkg-a }]\n' },
+      kept: { patch: '- insert: [{ id: b, name: pkg-b }]\n' },
+    })
+    const manifestPath = join(anchor, '..', 'node_modules', 'guarded', 'package.json')
+    writeFileSync(manifestPath, JSON.stringify({
+      ...JSON.parse(readFileSync(manifestPath, 'utf8')) as object, peerDependencies: { '@deepseek-ai/dsh': '^1.0.0' },
+    }))
+    const dir = resolveProfileDir('demo', tmp())
+    initProfile(dir, ['guarded', 'kept'])
+    // The module-manifest version is 0.2.1-alpha.x, which ^1.0.0 rejects; hosts running
+    // outside a package directory pass the real dsh version explicitly instead.
+    expect(loadProfileDirectory('dsh', dir, anchor).layers.map(layer => layer.packageName)).toEqual(['kept'])
+    expect(loadProfileDirectory('dsh', dir, anchor, { runtimeVersion: '1.2.3' }).layers.map(layer => layer.packageName))
+      .toEqual(['guarded', 'kept'])
+  })
+
   it('still rejects invalid profile manifests and user patches', () => {
     const anchor = stageInstallation({})
     const dir = tmp()

@@ -14,6 +14,7 @@ import { parseHostCollaborationRegistrationChallenge, parseHostCollaborationSour
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
 import {
+  readDshAppVersion,
   startWindowsDesktopHostApplication,
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type StartWindowsDesktopHostApplicationDependencies,
@@ -154,7 +155,8 @@ function fixture() {
     loadWorkerIoCancellation,
     createProfileWorkerFactory,
     startTransport,
-  } as unknown as StartWindowsDesktopHostApplicationDependencies
+    readDshRuntimeVersion: () => '0.2.1-alpha.2',
+  } satisfies StartWindowsDesktopHostApplicationDependencies
   const deadline = (signal: AbortSignal) => new Promise<void>((resolve) => {
     signal.addEventListener('abort', () => { resolve() }, { once: true })
   })
@@ -627,7 +629,7 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   const acknowledge = vi.spyOn(pluginRuntime, 'waitForPluginRuntime').mockResolvedValue(undefined)
   vi.spyOn(fs, 'existsSync').mockReturnValue(true)
   vi.spyOn(appBoot, 'loadOverlayPatches').mockReturnValue([])
-  vi.spyOn(appBoot, 'loadProfileDirectory').mockReturnValue({
+  const loadProfile = vi.spyOn(appBoot, 'loadProfileDirectory').mockReturnValue({
     name: 'web', dir: 'web', patchPath: 'patch', patches: [], skippedBundles: [],
     layers: [{ packageName: 'fixture', packageDir: 'fixture', patchPaths: [], patches: [{ insert: [{ id: 'fixture', name: 'fixture' }] }] }],
   })
@@ -678,6 +680,16 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   expect(acknowledge.mock.lastCall?.slice(1)).toEqual([plan.expected, context.signal, [], plan.disabled])
   await callbacks.acknowledge(local.profileId, 'fixture', context)
   expect(acknowledge.mock.lastCall?.[1]).toEqual([{ entryId: 'include:fixture', moduleName: 'fixture' }])
+  loadProfile.mockImplementationOnce(() => { throw new Error('plugin_bundle_missing') })
+  await callbacks.acknowledge(local.profileId, 'fixture', context)
+  loadProfile.mockImplementationOnce(() => { throw new Error('unexpected') })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toThrow('unexpected')
+  loadProfile.mockImplementationOnce(() => { throw 'invalid composition' })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toBe('invalid composition')
+  const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValue(301_000)
+  loadProfile.mockImplementationOnce(() => { throw new Error('plugin_bundle_missing') })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toThrow('plugin_bundle_missing')
+  clock.mockRestore()
   await application.close()
   catalogLookup.mockReturnValue(undefined)
   callbacks = undefined
@@ -710,4 +722,28 @@ it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalize
   ])
   const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
   expect(passthrough.ownerSid).toBe('LA')
+})
+
+describe('readDshAppVersion', () => {
+  it('reads the dsh package version beside the entrypoint and rejects manifests without one', () => {
+    const read = vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-alpha.2' }))
+    expect(readDshAppVersion(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\lib\bin.js`)).toBe('0.2.1-alpha.2')
+    expect(read).toHaveBeenCalledWith(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\package.json`, 'utf8')
+    read.mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh' }))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`))
+      .toThrow(String.raw`dsh package manifest C:\runtime\dsh\package.json must hold a non-empty version string`)
+    read.mockReturnValue(JSON.stringify(['not-an-object']))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`)).toThrow('must hold a non-empty version string')
+    for (const invalid of [null, 'invalid', { version: '' }, { version: '   ' }, { version: 1 }]) {
+      read.mockReturnValue(JSON.stringify(invalid))
+      expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`)).toThrow('must hold a non-empty version string')
+    }
+  })
+})
+
+it('starts with the default runtime-version reader when none is injected', async () => {
+  const state = fixture()
+  const { readDshRuntimeVersion: _read, ...dependencies } = state.dependencies
+  const application = await startWindowsDesktopHostApplication(state.options, undefined, dependencies)
+  await application.close()
 })

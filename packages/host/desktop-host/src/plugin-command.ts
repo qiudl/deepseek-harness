@@ -179,7 +179,10 @@ export async function runProfilePluginCommand(input: ProfilePluginCommand): Prom
       }
       const abort = () => { stop('plugin_install_cancelled') }
       input.signal.addEventListener('abort', abort, { once: true })
-      const deadline = setTimeout(() => { stop('plugin_install_timeout') }, 120_000)
+      // REQ-20261028-0021: a bundled install pulls the plugin's registry dependencies; a cold
+      // Windows store with a slow network exceeds two minutes and was being taskkilled into a
+      // false executor_failed that fenced the Profile.
+      const deadline = setTimeout(() => { stop('plugin_install_timeout') }, 600_000)
       const authority = setInterval(() => { try { assertPluginAuthority(input.guard) } catch { stop('plugin_authority_revoked') } }, 100)
       // Drain both pipes without retaining package output or credentials in Host receipts.
       child.stdout.resume(); child.stderr.resume()
