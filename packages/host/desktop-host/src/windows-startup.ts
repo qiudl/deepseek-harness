@@ -1,6 +1,6 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, symlinkSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
@@ -65,6 +65,24 @@ const PUBLIC_KEY = /^[A-Za-z0-9_-]{43}$/u
 const SHA256 = /^[0-9a-f]{64}$/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
+
+/**
+ * Read the running dsh app's version from the manifest beside its entrypoint.
+ * `dshEntrypointPath` is `<...>/app/node_modules/@deepseek-ai/dsh/lib/bin.js`.
+ * @param dshEntrypointPath - absolute dsh app entrypoint path.
+ * @returns the dsh package version string.
+ */
+export function readDshAppVersion(dshEntrypointPath: string): string {
+  const manifestPath = win32.join(win32.dirname(win32.dirname(dshEntrypointPath)), 'package.json')
+  const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const version = typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)
+    ? (manifest as { version?: unknown }).version
+    : undefined
+  if (typeof version !== 'string' || version.trim() === '') {
+    throw new Error(`dsh package manifest ${manifestPath} must hold a non-empty version string`)
+  }
+  return version
+}
 
 /**
  * REQ-20261028-0021: bundled plugins declare the DSH platform packages as peerDependencies
@@ -155,6 +173,8 @@ export interface StartWindowsDesktopHostApplicationDependencies {
   readonly loadWorkerIoCancellation?: typeof loadWindowsWorkerIoCancellation
   readonly createProfileWorkerFactory?: (options: DshWebProfileWorkerFactoryOptions) => ProfileWorkerFactory
   readonly startTransport?: StartTransport
+  /** Reads the running dsh app's version for bundle peer checks; defaults to {@link readDshAppVersion}. */
+  readonly readDshRuntimeVersion?: (dshEntrypointPath: string) => string
 }
 
 function positive(value: number): boolean {
@@ -320,6 +340,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
   dependencies: StartWindowsDesktopHostApplicationDependencies,
 ): Promise<WindowsDesktopHostApplication> {
   const diagnostics = createHostDiagnostics({ root: config.root })
+  const readRuntimeVersion = dependencies.readDshRuntimeVersion ?? readDshAppVersion
   let pinnedNative: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
   /* v8 ignore next 3 -- the signed native addon loader is exercised by the Windows platform lane. */
   const loadKoffi = () => Promise.resolve(
@@ -474,8 +495,14 @@ async function startWindowsDesktopHostApplicationWithTrust(
         }
         const controlRoot = win32.join(config.root, 'control')
         const webRoot = (root: string): string => win32.join(root, 'profiles', 'web')
+        // REQ-20261028-0021: this startup runs from verified bytes staged outside any package
+        // directory, so the app-boot default that resolves `../package.json` from its own module
+        // URL finds no manifest and every bundle peer check fails. Read the running dsh app's
+        // version from its own manifest next to the entrypoint and pass it explicitly.
+        const dshRuntimeVersion = readRuntimeVersion(config.dshEntrypointPath)
         const loadComposition = (root: string) => {
-          const loaded = loadProfileDirectory('dsh', webRoot(root), config.dshEntrypointPath)
+          const loaded = loadProfileDirectory('dsh', webRoot(root), config.dshEntrypointPath,
+            { runtimeVersion: dshRuntimeVersion })
           const homePatch = win32.join(root, 'cordis.patch.yml')
           /* v8 ignore next -- ensureWorker materializes homePatch before any authorized extension operation. */
           const overlays = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []

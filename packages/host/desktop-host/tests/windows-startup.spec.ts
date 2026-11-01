@@ -14,6 +14,7 @@ import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
 import {
+  readDshAppVersion,
   startWindowsDesktopHostApplication,
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type StartWindowsDesktopHostApplicationDependencies,
@@ -154,6 +155,7 @@ function fixture() {
     loadWorkerIoCancellation,
     createProfileWorkerFactory,
     startTransport,
+    readDshRuntimeVersion: () => '0.2.1-alpha.2',
   } as unknown as StartWindowsDesktopHostApplicationDependencies
   const deadline = (signal: AbortSignal) => new Promise<void>((resolve) => {
     signal.addEventListener('abort', () => { resolve() }, { once: true })
@@ -698,4 +700,17 @@ it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalize
   ])
   const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
   expect(passthrough.ownerSid).toBe('LA')
+})
+
+describe('readDshAppVersion', () => {
+  it('reads the dsh package version beside the entrypoint and rejects manifests without one', () => {
+    const read = vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-alpha.2' }))
+    expect(readDshAppVersion(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\lib\bin.js`)).toBe('0.2.1-alpha.2')
+    expect(read).toHaveBeenCalledWith(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\package.json`, 'utf8')
+    read.mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh' }))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`))
+      .toThrow(String.raw`dsh package manifest C:\runtime\dsh\package.json must hold a non-empty version string`)
+    read.mockReturnValue(JSON.stringify(['not-an-object']))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`)).toThrow('must hold a non-empty version string')
+  })
 })
