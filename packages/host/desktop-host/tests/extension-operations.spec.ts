@@ -419,7 +419,7 @@ describe('Profile extension operations', () => {
     const f = setup(); let now = 1000
     const engine = new ProfileExtensionOperations(f.store, f.executor, { now: () => now })
     const old = await engine.prepare(f.authority, 'mcp', 'old')
-    now += 300_001
+    now += 900_001
     expect(() => engine.commit(f.authority, old.planId, randomUUID())).toThrow('expired')
     const plan = await engine.prepare(f.authority, 'mcp', 'new'); const id = randomUUID()
     engine.commit(f.authority, plan.planId, id)

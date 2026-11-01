@@ -1428,8 +1428,7 @@
     "f8ec99ad0c09612ad70069e706852288677ea5bcaad1e5fe0936f9098cb070a8": 1
   },
   "packages/host/desktop-host/tests/windows-startup.spec.ts": {
-    "a973ca70955fca286a9e73b9b50ed77664b7de5b91bc9e480368e537ec21bb91": 1,
-    "b487af130b8c2e05c411ebd5f922d7007eb7f23a6210c1bf8acdfe188b80ff15": 1
+    "a973ca70955fca286a9e73b9b50ed77664b7de5b91bc9e480368e537ec21bb91": 1
   },
   "packages/host/directory-picker-auto/tests/loader-composition.spec.ts": {
     "923a65f07e42e49412ff5a8b2f7ff681e37ed1d07bfbf2187b3672b11685edd1": 1
