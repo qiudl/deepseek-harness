@@ -97,12 +97,16 @@ function section(sddl: string, name: 'O' | 'D'): string | undefined {
 }
 
 // Preserve generic rights as unsigned bits; private-file admission requires exact file rights.
+// The CC/DC/LC/SW/RP/WP/DT/LO/CR strings are the directory-service names for the same bit values
+// files carry (Sddl.h, https://learn.microsoft.com/windows/win32/secauthz/ace-strings); a stock
+// drive root grants `LC` to authenticated users, so inspecting `C:\` needs them.
 function decodeFileRights(rights: string): number {
   if (/^0x[0-9a-f]{1,8}$/iu.test(rights)) return Number.parseInt(rights.slice(2), 16)
   const tokens: Readonly<Record<string, number>> = {
     GA: 0x10000000, GR: 0x80000000, GW: 0x40000000, GX: 0x20000000,
     RC: 0x20000, SD: 0x10000, WD: 0x40000, WO: 0x80000,
     FA: FULL_CONTROL, FR: 0x120089, FW: 0x120116, FX: 0x1200a0,
+    CC: 0x1, DC: 0x2, LC: 0x4, SW: 0x8, RP: 0x10, WP: 0x20, DT: 0x40, LO: 0x80, CR: 0x100,
   }
   let mask = 0
   for (let offset = 0; offset < rights.length; offset += 2) {
