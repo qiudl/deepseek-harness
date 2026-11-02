@@ -724,6 +724,23 @@ it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalize
   expect(passthrough.ownerSid).toBe('LA')
 })
 
+it('decodes the stock drive-root DACL mixing directory-service and file rights strings', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  // The stock C:\ DACL grants LC (FILE_APPEND_DATA / ADS list) to authenticated users.
+  const decoded = decodeEvidenceSddl(
+    'O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    + 'G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    + 'D:PAI(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)',
+  )
+  expect(decoded.access.map(entry => [entry.sid, entry.mask])).toEqual([
+    ['AU', 0x4],
+    ['AU', (0x10000 | 0x20000000 | 0x40000000 | 0x80000000) >>> 0],
+    ['SY', 0x1f01ff],
+    ['BA', 0x1f01ff],
+    ['BU', 0x1200a9],
+  ])
+})
+
 describe('readDshAppVersion', () => {
   it('reads the dsh package version beside the entrypoint and rejects manifests without one', () => {
     const read = vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-alpha.2' }))
