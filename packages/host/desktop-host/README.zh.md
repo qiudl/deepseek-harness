@@ -139,6 +139,28 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 
 `profile.source_snapshot` 使用同一当前 Account 与 Profile worker 读取器私有传输 journal 原始内容。worker bearer 路由校验完整持久 Source；监管器拒绝已销毁或被替换的 worker。固定 32 KiB 字节分块保留现有控制帧预算，客户端在有界读取内跨块核验坐标、描述符和长度一致性、完整 UTF-8、取消及已检查的 peer。返回原文与脱敏模型/提交元数据，不含凭据，不准备模型或恢复调用。macOS 与 Windows 启动组合安装读取器；真实聊天捕获和派发仍须单独接入。
 
+父 Host 为每个 Profile worker 提供独立随机记忆 bearer 令牌。本地 `listMemorySessions` 方法通过私有 worker 路由分页列出顶层 Session ID 和版本，校验页面顺序和游标，并拒绝被替换的 worker。本地 `readMemorySession` 方法只接受一个 Session ID，检查有界 JSONL 响应，并拒绝被替换的 worker 或不匹配的 Session ID。`memoryProfileReader` 在同一 worker 代际内返回同一个 reader，供预热后的缓存继续使用；worker 更换后，旧 reader 拒绝读取。这些方法不授予控制协议读取或云端传输权限；原始内容离开本地路径前仍需独立核验 Account、Profile 和 grant。
+
+`HostMemoryEvidenceIndex` 在 Host 进程内投影每个原始 Session 快照，只在内存中保留脱敏文本和三元字符索引。无标签的 40 位和 64 位十六进制值也会脱敏，因为它们可能是凭据。所有更新与读取都绑定同一 Account 所有者、安装和 Profile；替换与删除使用代际检查，Session 变化后旧 Evidence 引用失效。`buildHostMemoryEvidenceIndex` 在固定的 worker 代际上扫描，并再次核对完整的 ID/版本清单后才返回索引；版本或 worker 变化会丢弃本次构建。`HostMemoryIndexCache` 只为精确匹配的 Account、安装、Profile 和固定 reader 保留一个就绪索引。新的预热或显式清除会取消旧构建；被取代的构建不能发布。搜索和 Evidence 读取在选取结果前后复核完整清单；清单过期或身份变化时清除缓存。文本、记录、索引项和 Session 数量均有上限；Host 重启后索引丢失。控制协议读取要求已认证连接和签名 grant。
+
+记忆指令验签器只接受固定的 Ed25519 公钥环，并对每个签名的 15 秒 nonce 只消费一次。指令绑定当前 Slark 用户、已注册设备、安装、Profile、Host 进程、操作和查询摘要，然后返回不可变的 grant 字段与截止时间，供读取完成后再次检查。用户与设备输入必须来自当前已认证状态，不能从指令本身复制。签名的 macOS 嵌入应用可经 Host Profile 的环境映射同时提供 `memoryKeyringPath` 与 `memoryKeyringSha256`；启动时读取仅所有者可访问的文件，摘要不符即拒绝。安装读取器后，已认证的 `profile.memory_query` 处理器使用该验签器。
+
+`HostMemoryReadController` 组合固定公钥验签器与预热缓存。调用方每次读取都须提供当前已认证的 Desktop 用户、设备和 Account Profile 权限；控制器在验签前复制这份权限，并在索引读取后与新取得的权限比较。返回结果前再次检查指令期限；身份、worker 或清单校验失败时清除缓存。预热在签名查询有效期之外进行，构建前后都检查当前权限。每条签名指令只读取一段至多 8 KiB 的脱敏 Evidence 文本字节，并返回精确来源、总字节数和全文 SHA-256。已认证的 `profile.memory_query` 处理器提供当前权限；grant 撤销由 Slark Server 单独复核。
+
+私有索引可按顺序解析最多十个外部排序的 `{sourceRef, sourceVersion}` 候选。搜索返回随机索引 epoch；索引重建后该值会改变。候选解析同时要求匹配 epoch 和当前数字代际，因此即使重建后的代际与来源引用相同，旧结果也会被拒绝。未知、重复或来源版本不符的引用也会被拒绝，缓存会在解析前后核对完整的当前 Session 清单。控制器使用这项内部解析前，要求与查询绑定的新签名搜索指令。Host 专用投影读取在每页前后检查当前 Account、worker 身份和完整 Session 清单；身份变化时清除索引。可选的 `profile.memory_query` 语义路由要求已核验身份的 worker factory；启动配置尚未安装该 factory 或启动 HY，后续 IPC 启动器还须绑定当前 worker 进程身份。
+
+Host 内部已有 HY socket 帧解码器与事务顺序器。解码器只接受至多 512 KiB 的精确长度前缀 JSON 帧，最多缓存一帧，并拒绝截断的流结束。投影页最多包含 16 条脱敏记录和合计 256 KiB 的 UTF-8 文本。顺序器要求逐页收到匹配的确认后才继续；最后一页确认必须回显总记录数及带长度前缀的 UTF-8 投影字段 SHA-256，之后才允许查询。候选响应必须匹配当前请求、worker nonce、索引 epoch 和代际。Host 侧通道仅在 macOS 内核报告的 peer UID/PID 与预期 worker 匹配后接管已连接的 Unix socket；每次只允许一个请求在途，响应异常、取消或投影 45 秒与查询 10 秒时限届满即关闭连接。独立监听器先创建 `0700` 目录，在绑定 socket 前清除继承的 macOS ACL，再设置 socket `0600` 模式和 `slark-memory` 读写 ACL；核对 inode 后才将目录改为可遍历的 `0711`。Host 专用交换在调用方打开并核验通道前取得当前索引身份，逐页发送脱敏记录，并在最后确认后再次核对索引。它在请求候选前消费签名搜索指令，只解析当前来源引用；失败时清除索引并等待租约关闭及子进程退出。配置已核验身份的 worker factory 后，`profile.memory_query` 的预热将记录投影到该 worker，搜索只接受通过 Host 复核的引用；该模式不会回退到关键词搜索。启动配置仍未提供 UID505 启动器或安装此 factory。
+
+帧解码器和事务顺序器在各 CI 平台继续接受逐文件覆盖率门禁。macOS 对端身份核验器、通道和 ACL 监听器从 Linux/Windows 覆盖率中排除，因为内核对端身份和 ACL 行为需要 macOS；聚焦测试和 m5max 上独立的 UID501/UID505 合成往返提供运行证据。该往返使用 Python Host 探针，尚不能证明 Desktop Host 已将 worker 接入语义检索。
+
+内部 worker 租约先关闭通道和监听器，再请求有界的进程停止，并等待进程退出；先前关闭步骤失败时仍继续清理并报告所有错误。进程自行退出时也自动关闭入口；所有者必须观察租约的 `done` 结果并废弃索引。进程所有者须实现停止升级；租约本身不会启动 UID505。
+
+Host 专用的 worker 打开器生成新的 128 位 worker nonce，启动一个私有监听器，只向受信任的启动回调传入 socket 路径、nonce 和当前索引身份。启动回调必须返回固定的 worker UID 和正整数 PID；打开器把首个连接交给受信任的原生对端核验器，并传入这些预期身份，销毁第二个连接。准入时限为十秒；取消、进程提前退出、身份无效或对端核验失败时，打开器关闭监听器，请求有界停止并等待进程退出。启动器在取消后也必须收敛，包括迟到的进程启动。启动配置目前未安装这个回调，也未授予 Host sudo 权限。
+
+Unix Host 在关闭时先销毁 socket，再等待已接收的控制帧完成。被阻塞的记忆读取会使关闭保持等待，直到取消或底层 Profile 读取结束。随后 Host 关闭所有已接收的语义 worker 租约并等待进程退出；启动配置目前仍不会启动 UID505 worker。
+
+投影或查询期间，通道允许每条连接最多 64 次顺序 embedding 子请求。每次包含 1 至 8 个有效 UTF-8 字符串，单个不超过 4,096 字符、合计不超过 16 KiB；响应须包含相同数量、每条 1,024 维且数值有限的向量。Host 调用方提供模型 broker；broker 失败即关闭连接，不发布部分结果。真实 Session 内容进入前还需完成模型调用授权与留存检查、UID505 HY 适配器及 worker 生命周期。
+
 ### 远端工作区目录
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。

@@ -28,7 +28,11 @@ export interface BootPayload {
 }
 
 /** Fetch-shaped transport the client tree consumes. */
-export type TunnelFetch = (input: URL | string, init?: RequestInit) => Promise<Response>
+export type TunnelFetch = (
+  input: URL | string,
+  init?: RequestInit,
+  onProgress?: (progress: { readonly loaded: number; readonly total?: number }) => void,
+) => Promise<Response>
 
 /** Message endpoint supplied by either a Worker or an isolated parent frame. */
 export interface TunnelEndpoint {
@@ -43,6 +47,11 @@ export interface TunnelEndpoint {
 interface PendingUnary {
   resolve(response: Response): void
   reject(reason: Error): void
+}
+
+interface PendingRequestProgress {
+  readonly observe: (progress: { readonly loaded: number; readonly total?: number }) => void
+  loaded: number
 }
 
 type LogicalStreamFrame = TunnelStreamItemFrame | TunnelStreamEndFrame | TunnelStreamErrorFrame
@@ -182,6 +191,9 @@ export class WorkerTunnel {
    */
   private readonly inFlight = new Map<TunnelRequestId, string>()
 
+  /** Optional upload observers keyed by the same request id as the unary response. */
+  private readonly requestProgress = new Map<TunnelRequestId, PendingRequestProgress>()
+
   /** Body-phase abort listeners, released when their stream settles. */
   private readonly releases = new Map<TunnelRequestId, () => void>()
 
@@ -202,6 +214,7 @@ export class WorkerTunnel {
       this.inFlight.clear()
       for (const pending of this.unary.values()) pending.reject(reason)
       this.unary.clear()
+      this.requestProgress.clear()
       for (const controller of this.bodyStreams.values()) controller.error(reason)
       this.bodyStreams.clear()
       const failure = new TunnelLogicalStreamError({
@@ -225,7 +238,7 @@ export class WorkerTunnel {
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */
-  readonly fetch: TunnelFetch = async (input, init) => {
+  readonly fetch: TunnelFetch = async (input, init, onProgress) => {
     const signal = init?.signal
     // Checked before any frame leaves: a request the caller already abandoned
     // must not reach the worker, where a write-shaped route would still run.
@@ -244,6 +257,7 @@ export class WorkerTunnel {
       this.unary.set(id, { resolve, reject })
     })
     this.inFlight.set(id, `${frame.method} ${frame.url}`)
+    if (onProgress !== undefined) this.requestProgress.set(id, { observe: onProgress, loaded: 0 })
     if (body instanceof ReadableStream) this.worker.postMessage(frame, [body])
     else this.worker.postMessage(frame)
     if (signal === undefined || signal === null) return await response
@@ -437,6 +451,7 @@ export class WorkerTunnel {
    */
   private abortRequest(id: TunnelRequestId): DOMException {
     this.unary.delete(id)
+    this.requestProgress.delete(id)
     const controller = this.bodyStreams.get(id)
     this.bodyStreams.delete(id)
     this.inFlight.delete(id)
@@ -500,6 +515,14 @@ export class WorkerTunnel {
 
   private receive(frame: ResponseFrame): void {
     switch (frame.t) {
+      case 'req-progress': {
+        const pending = this.requestProgress.get(frame.id)
+        if (pending === undefined || !Number.isSafeInteger(frame.loaded) || frame.loaded < pending.loaded ||
+            (frame.total !== undefined && (!Number.isSafeInteger(frame.total) || frame.total < frame.loaded))) return
+        pending.loaded = frame.loaded
+        pending.observe({ loaded: frame.loaded, ...(frame.total === undefined ? {} : { total: frame.total }) })
+        return
+      }
       case 'res': {
         const pending = this.unary.get(frame.id)
         if (pending === undefined) return
@@ -507,6 +530,7 @@ export class WorkerTunnel {
           this.warnRefusal(frame.id, `HTTP ${String(frame.status)}${frame.message === undefined ? '' : `: ${frame.message}`}`)
         }
         this.unary.delete(frame.id)
+        this.requestProgress.delete(frame.id)
         this.inFlight.delete(frame.id)
         const body = NULL_BODY_STATUS.has(frame.status)
           ? null
@@ -518,6 +542,7 @@ export class WorkerTunnel {
         const pending = this.unary.get(frame.id)
         if (pending === undefined) return
         this.unary.delete(frame.id)
+        this.requestProgress.delete(frame.id)
         const stream = new ReadableStream<Uint8Array>({
           start: (controller) => {
             this.bodyStreams.set(frame.id, controller)
@@ -546,6 +571,7 @@ export class WorkerTunnel {
         const reason = new Error(`web-preview tunnel: ${frame.message}`)
         this.warnRefusal(frame.id, `res-err: ${frame.message}`)
         const pending = this.unary.get(frame.id)
+        this.requestProgress.delete(frame.id)
         this.inFlight.delete(frame.id)
         if (pending !== undefined) {
           this.unary.delete(frame.id)

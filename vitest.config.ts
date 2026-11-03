@@ -130,6 +130,18 @@ const windowsOnlyCoverageExclusions = process.platform !== 'win32'
     ]
   : []
 
+// These paths depend on macOS kernel peer attestation and socket ACLs.
+// macOS-focused tests cover the channel/listener, and a separate UID501/505
+// m5max probe validates the OS primitives. Linux/Windows cannot run those
+// native paths. Keep pure frame and ordering code gated on every platform.
+const macosMemoryWorkerCoverageExclusions = process.platform !== 'darwin'
+  ? [
+      'packages/host/desktop-host/src/macos-peer-attestor.ts',
+      'packages/host/desktop-host/src/memory-worker-channel.ts',
+      'packages/host/desktop-host/src/memory-worker-listener.ts',
+    ]
+  : []
+
 // The confinement runner entry executes exclusively as a spawned child
 // process (the sandbox seam's argv-prefix wrapper): its module-level main()
 // would run the confinement in-process if imported, and vitest's v8 coverage
@@ -450,6 +462,7 @@ export default defineConfig({
         'packages/session/session-projection/src/index.ts',
         ...windowsUnsupportedCoveragePackages.map(path => `${path}/src/**/*.ts`),
         ...windowsOnlyCoverageExclusions,
+        ...macosMemoryWorkerCoverageExclusions,
         ...windowsRunnerCoverageExclusions,
         ...pwshCoverageExclusions,
       ],

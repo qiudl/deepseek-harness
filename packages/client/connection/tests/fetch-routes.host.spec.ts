@@ -25,7 +25,7 @@ describe('Connection exact Fetch routes', () => {
       Response.json({ query: new URL(request.url).searchParams.get('sessionId') }))
     const dispose = connection.fetch.register({
       path: '/api/session.export',
-      methods: ['GET', 'HEAD', 'POST'],
+      methods: ['GET', 'HEAD', 'POST', 'DELETE'],
       requestBody: 'streaming',
       fetch: route,
     })
@@ -39,13 +39,16 @@ describe('Connection exact Fetch routes', () => {
     })).toBe('streaming')
     expect(shared.requestBodyMode({
       method: 'DELETE', url: new URL('http://host/api/session.export'),
-    })).toBe('buffered')
+    })).toBe('streaming')
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ query: 'session-1' })
     expect(route).toHaveBeenCalledOnce()
     const post = await shared.fetch(new Request('http://host/api/session.export', { method: 'POST' }))
     expect(post.status).toBe(200)
     expect(route).toHaveBeenCalledTimes(2)
+    const deleted = await shared.fetch(new Request('http://host/api/session.export', { method: 'DELETE' }))
+    expect(deleted.status).toBe(200)
+    expect(route).toHaveBeenCalledTimes(3)
 
     await dispose()
     const withdrawn = await shared.fetch(new Request('http://host/api/session.export'))

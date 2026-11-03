@@ -135,7 +135,7 @@ export type ConnectionRpcHandler = (
 export type ConnectionRpcEndpointMatcher = (endpoint: string) => boolean
 
 /** HTTP methods supported by exact Fetch routes on the shared API channel. */
-export type ConnectionFetchMethod = 'GET' | 'HEAD' | 'POST'
+export type ConnectionFetchMethod = 'GET' | 'HEAD' | 'POST' | 'DELETE'
 
 /** How the node:http bridge presents one request body to its Fetch route. */
 export type ConnectionRequestBodyMode = 'buffered' | 'streaming'

@@ -23,6 +23,18 @@ export type OfflineProfileRecoveryOperationId = Branded<'OfflineProfileRecoveryO
 /** Mutually exclusive authority granted to one authenticated Host connection. */
 export type ProfileAccessScope = 'connected' | 'local_profile' | 'offline_local'
 
+/** Raw Session snapshot confined to the parent Host until local redaction. */
+export interface HostMemorySessionSnapshot {
+  readonly sessionId: string
+  readonly revision: string
+  readonly text: string
+}
+/** Bounded metadata from the current Profile worker; never a raw Session body. */
+export interface HostMemorySessionPage {
+  readonly items: readonly { readonly sessionId: string; readonly revision: string }[]
+  readonly nextAfter: string | null
+}
+
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
 
@@ -189,6 +201,9 @@ export interface ProfileWorkerHandle {
   readonly readCollaborationSourceSnapshot?: (
     target: HostCollaborationSourceTarget, signal: AbortSignal,
   ) => Promise<HostCollaborationSourceSnapshot>
+  /** Private Profile persistence read; raw text must not enter a view lease or cloud reply. */
+  readonly readMemorySession?: (sessionId: string, signal: AbortSignal) => Promise<HostMemorySessionSnapshot>
+  readonly listMemorySessions?: (after: string | null, signal: AbortSignal) => Promise<HostMemorySessionPage>
   /** Host-only closed Session command; no worker token enters a view lease. */
   readonly remoteSession?: (
     command: HostRemoteSessionCommand,

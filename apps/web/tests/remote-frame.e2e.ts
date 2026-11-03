@@ -51,6 +51,7 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
       await route.fulfill({ contentType: 'text/html', body: `<!doctype html><iframe id="dsh" src="${remoteOrigin}/remote.html"></iframe><script>
         window.requests = 0;
         window.capabilityRequests = 0;
+        window.uploads = [];
         addEventListener('message', event => {
           if (event.origin !== '${remoteOrigin}' || event.data?.kind !== 'ready') return;
           const channel = new MessageChannel();
@@ -59,6 +60,13 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
             if (data.method === 'GET' && data.url.endsWith('/__collaboration__')) {
               window.capabilityRequests++;
               channel.port1.postMessage({t:'res', id:data.id, status:404, headers:{}, body:''});
+              return;
+            }
+            if (data.method === 'POST' && new URL(data.url).pathname === '/api/session/uploadFileBinary') {
+              window.uploads.push({ blob: data.body instanceof Blob, size: data.body?.size,
+                contentType: data.headers?.['content-type'] });
+              channel.port1.postMessage({t:'res', id:data.id, status:200,
+                headers:{'content-type':'application/json'}, body:JSON.stringify({ok:true})});
               return;
             }
             if (data.method === 'GET' && data.url.endsWith('/__native_workbench__')) {
@@ -92,6 +100,20 @@ it('boots the stock DSH entry through one cross-origin parent port and rejects a
       return bridge
     })).toBeUndefined()
     expect(await child.locator('body').evaluate(() => document.cookie)).toBe('')
+    expect(await child.locator('body').evaluate(async () => {
+      const hooks = Reflect.get(window, '__DSH_FILE_UPLOAD__') as { fetch?: typeof fetch } | undefined
+      if (typeof hooks?.fetch !== 'function') return 'missing'
+      const response = await hooks.fetch('/api/session/uploadFileBinary?sessionId=acceptance', {
+        method: 'POST', headers: { 'content-type': 'application/octet-stream' }, body: new Blob(['abc']),
+      })
+      return response.status
+    })).toBe(200)
+    expect(await page.evaluate(() => {
+      const uploads: unknown = Reflect.get(window, 'uploads')
+      return uploads
+    })).toEqual([
+      { blob: true, size: 3, contentType: 'application/octet-stream' },
+    ])
     expect(await child.locator('body').evaluate(async () => {
       try { await fetch('https://example.com/'); return 'allowed' }
       catch { return 'blocked' }

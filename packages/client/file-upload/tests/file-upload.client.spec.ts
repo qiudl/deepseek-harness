@@ -391,9 +391,10 @@ describe('Session-addressed file upload', () => {
 
   it('assembles the scoped streaming request and parses progress and receipt fields', async () => {
     const progress = vi.fn()
-    const fetch = vi.fn((_url: string | URL, init: RequestInit) => {
+    const fetch = vi.fn((_url: string | URL, init: RequestInit,
+      onProgress?: (value: { loaded: number; total?: number }) => void) => {
       expect(init.body).toBeInstanceOf(Blob)
-      progress({ loaded: 2, total: 4 })
+      onProgress?.({ loaded: 2, total: 4 })
       return Promise.resolve(new Response(JSON.stringify({
         ok: true,
         value: {
@@ -422,6 +423,7 @@ describe('Session-addressed file upload', () => {
         body: file,
         signal,
       }),
+      progress,
     )
     await fiber.dispose()
   })

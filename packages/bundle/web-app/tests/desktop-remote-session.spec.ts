@@ -272,6 +272,21 @@ describe('Desktop remote Session bridge', () => {
         content: [{ type: 'text', text: 'hello' }], clientTimeZone: 'Asia/Shanghai',
       } },
     })
+    await expect(executor.execute({
+      operation: 'session.prompt', command_id: '123e4567-e89b-42d3-a456-426614174001' as never,
+      session_id: 'session-1', control: proof, mode: 'queue', content: [
+        { type: 'text', text: 'read this file' },
+        { type: 'file', receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+      ],
+    }, signal)).resolves.toEqual({ accepted: true })
+    expect(invoke).toHaveBeenLastCalledWith({
+      namespace: 'session', method: 'prompt', signal,
+      args: { request: {
+        requestId: '123e4567-e89b-42d3-a456-426614174001', sessionId: 'session-1', mode: 'queue',
+        content: [{ type: 'text', text: 'read this file' },
+          { type: 'file', receiptId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }],
+      } },
+    })
   })
 
   it('does not acknowledge takeover while a remote write is still settling', async () => {
