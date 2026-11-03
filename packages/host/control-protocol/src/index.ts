@@ -32,6 +32,19 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostBotIdentity, parseHostBotIdentityTarget } from './bot-identity.js'
+export type { HostBotIdentity } from './bot-identity.js'
+export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotGroupDeliverRequest, ProfileBotGroupDeliverResult,
+  ProfileBotGroupResultPageRequest, ProfileBotGroupResultPageResult,
+  ProfileBotGroupResultAckRequest, ProfileBotGroupResultAckResult } from './types.js'
+export { parseHostBotGroupCommand, parseHostBotGroupResponse,
+  matchesHostBotGroupResponse, parseHostBotGroupPublicKeyring,
+  parseHostBotGroupDeliveryInput } from './bot-group.js'
+export type { HostBotGroupCommand, HostBotGroupResponse,
+  HostBotGroupPublicKeyring, HostBotGroupDeliveryInput } from './bot-group.js'
+export { parseHostBotGroupResultProof, encodeHostBotGroupResultProofPayload } from './bot-group-result-proof.js'
+export type { HostBotGroupResultProof } from './bot-group-result-proof.js'
 export { encodeHostRootTextInput, parseHostRootTextContextReceipt, encodeHostRootTextContextPayload } from './root-text-context.js'
 export type { HostRootTextContextReceipt } from './root-text-context.js'
 export {
