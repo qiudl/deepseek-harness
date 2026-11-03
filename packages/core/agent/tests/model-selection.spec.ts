@@ -203,6 +203,21 @@ describe('installModelSelection()', () => {
 
 
 describe('AgentModel durable selection', () => {
+  it('uses the live fallback until an explicit selection is recorded', () => {
+    const session = Session.create(SessionId('model-fallback'))
+    const model = new AgentModel(() => foldModelSelection(session.snapshotEvents()), session, INITIAL)
+    const fallback: { value: ModelSelection | undefined } = { value: undefined }
+    model.setFallback(() => fallback.value)
+    expect(model.selected()).toBeUndefined()
+    fallback.value = { provider: 'live', model: 'first' }
+    const value = model.selected()!
+    expect(value).toEqual(fallback.value)
+    fallback.value.model = 'second'
+    expect(value.model).toBe('first')
+    expect(model.selected()?.model).toBe('second')
+    model.select({ provider: 'chosen', model: 'fixed' })
+    expect(model.selected()).toEqual({ provider: 'chosen', model: 'fixed' })
+  })
   it('keeps explicit selections durable while a turn pin controls request routing', () => {
     const session = Session.create(SessionId('model-owner'))
     const model = new AgentModel(() => foldModelSelection(session.snapshotEvents()), session, { provider: 'default', model: 'default' })
