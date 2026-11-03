@@ -231,7 +231,9 @@ function customTransport(customFetch: FileUploadFetch): FileUploadTransport {
         ...(request.body instanceof ReadableStream ? { duplex: 'half' as const } : {}),
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       }
-      const response = await customFetch(request.path, init)
+      const response = request.onProgress === undefined
+        ? await customFetch(request.path, init)
+        : await customFetch(request.path, init, request.onProgress)
       return { status: response.status, body: await response.text() }
     },
   }

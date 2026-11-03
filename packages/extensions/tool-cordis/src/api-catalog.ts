@@ -1084,6 +1084,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'durable file reference, or `undefined` for an unknown or foreign receipt.',
       },
       {
+        signature: 'async discardUpload(sessionId: SessionId, receiptId: FileUploadReceiptId): Promise<boolean>',
+        description: 'Retire one staged receipt without deleting its immutable stored object.',
+        parameters: [{ name: 'sessionId', description: 'exact Session that owns the receipt.' }, { name: 'receiptId', description: 'opaque receipt returned by a completed upload.' }],
+        returns: 'whether the receipt was still staged for that Session.',
+      },
+      {
         signature: 'bindPrompt( agent: Agent, receiptIds: readonly FileUploadReceiptId[], requestId: string, ): PromptFileBinding',
         description: 'Bind receipts while one prompt enters an Agent inbox. Disposal restores every prior binding unless the caller commits successful delivery.',
         parameters: [{ name: 'agent', description: 'receiving Agent.' }, { name: 'receiptIds', description: 'distinct staged receipts referenced by the prompt.' }, { name: 'requestId', description: 'prompt identity later observed in queue or history.' }],
@@ -5312,7 +5318,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionFetchMethod',
-    declaration: 'export type ConnectionFetchMethod = \'GET\' | \'HEAD\' | \'POST\';',
+    declaration: 'export type ConnectionFetchMethod = \'GET\' | \'HEAD\' | \'POST\' | \'DELETE\';',
   },
   {
     name: 'ConnectionFetchRoute',

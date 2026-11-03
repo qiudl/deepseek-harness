@@ -74,7 +74,7 @@ describe('Client Session contracts', () => {
   })
 
   it('keeps its text and image prompt parts identical to attachment intake', () => {
-    expectTypeOf<Exclude<SessionPromptContentPart, { type: 'file' }>>()
+    expectTypeOf<Exclude<SessionPromptContentPart, { receiptId: unknown }>>()
       .toEqualTypeOf<AttachmentPromptContentPart>()
   })
 

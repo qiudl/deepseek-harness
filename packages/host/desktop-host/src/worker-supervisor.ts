@@ -2,7 +2,8 @@ import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-contro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemorySessionPage, HostMemorySessionSnapshot, ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -29,6 +30,7 @@ export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
+  private readonly memoryReaders = new Map<string, { worker: ProfileWorkerHandle; reader: HostMemoryProfileReader }>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
@@ -508,6 +510,81 @@ export class ProfileWorkerSupervisor {
   }
 
   /**
+   * Read one current Profile's Session for local memory redaction.
+   * @param profileId - Profile resolved from the Host's current Account binding.
+   * @param sessionId - Exact Session identity, never a filesystem path.
+   * @param signal - Current Host operation lifetime.
+   * @returns Bounded raw JSONL while the same worker remains current.
+   */
+  async readMemorySession(
+    profileId: string,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<HostMemorySessionSnapshot> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.readMemorySession) throw new HostAuthorityError('unavailable')
+    const result = await worker.readMemorySession(sessionId, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result.sessionId !== sessionId) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
+  /** List only metadata from the current Account Profile worker.
+   * @param profileId - Active Profile identity.
+   * @param after - Last returned Session ID, or null for the first page.
+   * @param signal - Request cancellation.
+   * @returns A bounded page from the pinned worker.
+   */
+  async listMemorySessions(profileId: string, after: string | null, signal: AbortSignal): Promise<HostMemorySessionPage> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.listMemorySessions) throw new HostAuthorityError('unavailable')
+    const result = await worker.listMemorySessions(after, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return result
+  }
+
+  /** Reuse one reader within a worker generation; old readers reject after disposal.
+   * @param profileId - Active Profile identity.
+   * @returns A reader pinned to the current worker generation.
+   */
+  memoryProfileReader(profileId: string): HostMemoryProfileReader {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.listMemorySessions || !worker.readMemorySession)
+      throw new HostAuthorityError('unavailable')
+    const existing = this.memoryReaders.get(profileId)
+    if (existing?.worker === worker) return existing.reader
+    const list = worker.listMemorySessions
+    const read = worker.readMemorySession
+    const current = () => { this.assertCurrentWorker(profileId, worker) }
+    const reader: HostMemoryProfileReader = {
+      assertCurrent: current,
+      list: async (after, signal) => {
+        signal.throwIfAborted()
+        current()
+        const result = await list(after, signal)
+        signal.throwIfAborted()
+        current()
+        return result
+      },
+      read: async (sessionId, signal) => {
+        signal.throwIfAborted()
+        current()
+        const result = await read(sessionId, signal)
+        signal.throwIfAborted()
+        current()
+        if (result.sessionId !== sessionId) throw new HostAuthorityError('profile_mismatch')
+        return result
+      },
+    }
+    this.memoryReaders.set(profileId, { worker, reader })
+    return reader
+  }
+
+  /**
    * Execute one closed Session command in the running Profile worker.
    * @param profileId - Active Profile identity.
    * @param command - Validated Session operation.
@@ -564,6 +641,7 @@ export class ProfileWorkerSupervisor {
   private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
+    this.memoryReaders.delete(profileId)
     this.workers.delete(profileId)
     worker.closeNotifications()
     worker.abort()

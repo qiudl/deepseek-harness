@@ -101,6 +101,8 @@ export type {
   ProfileExtensionsRequest, ProfileExtensionsResult,
   HostRemoteSessionCommand, HostRemoteSessionControlProof, HostRemoteSessionJson,
   ProfileRemoteSessionRequest, ProfileRemoteSessionResult,
+  ProfileMemoryQueryRequest, ProfileMemoryQueryResult,
+  ProfileMemorySource, ProfileMemoryEvidenceIdentity,
   ProfileRemoteUiReadRequest, ProfileRemoteUiReadResult,
   ProfileRemoteUiStreamCommand, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest, ProfileModelClaimInventoryResult,

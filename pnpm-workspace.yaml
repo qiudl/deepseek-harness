@@ -16,6 +16,8 @@ packages:
 
 overrides:
   'extract-zip>yauzl': '3.4.0'
+  # Legacy Python runtime deploy resolves semver again without the workspace lock.
+  tslib: '2.8.1'
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
 

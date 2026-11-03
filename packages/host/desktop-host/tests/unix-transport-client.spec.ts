@@ -133,6 +133,34 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('gates memory reads on Host capability and forwards only the bound Account request', async () => {
+    const seen: HostControlFrame[] = []
+    const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },
+      [...baseCapabilities].sort())
+    const input = { ...binding, issuer: 'https://accounts.example.test', subject: 'owner',
+      ownerUserId: 'owner-user', computerId: 'computer-one', command: { action: 'warm' as const } }
+    await expect(unsupported.client.memoryQuery(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(seen).toEqual([])
+
+    const enabled = await makeClient((frame) => { seen.push(frame)
+      return result(frame, { action: 'warm', state: 'ready' }) },
+    [...baseCapabilities, 'profile.memory_query'].sort() as HostControlCapability[])
+    await expect(enabled.client.memoryQuery(input)).resolves.toEqual({ action: 'warm', state: 'ready' })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ method: 'profile.memory_query', params: {
+      authority_environment_id: binding.authorityEnvironmentId,
+      account_binding_handle: binding.accountBindingHandle,
+      authority_binding_version: binding.authorityBindingVersion,
+      account_issuer: input.issuer, account_subject: input.subject,
+      owner_user_id: input.ownerUserId, computer_id: input.computerId,
+      command: { action: 'warm' },
+    } })
+    const mismatched = await makeClient(frame => ({ ...result(frame, { action: 'warm', state: 'ready' }),
+      method: 'profile.model_text' } as HostControlFrame),
+    [...baseCapabilities, 'profile.memory_query'].sort() as HostControlCapability[])
+    await expect(mismatched.client.memoryQuery(input)).rejects.toMatchObject({ code: 'unavailable' })
+  })
+
   it('projects bounded personal model text only when the Host advertises it', async () => {
     const seen: HostControlFrame[] = []
     const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },

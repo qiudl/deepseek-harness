@@ -71,7 +71,7 @@ export class FileUploads extends TypertRemoteService {
     ctx.effect(
       () => ctx.connection.fetch.register({
         path: FILE_UPLOAD_PATH,
-        methods: ['POST'],
+        methods: ['POST', 'DELETE'],
         requestBody: 'streaming',
         fetch: request => handleFileUploadHttp(this, request),
       }),
@@ -140,6 +140,20 @@ export class FileUploads extends TypertRemoteService {
    */
   resolve(agent: Agent, receiptId: FileUploadReceiptId): FileAttachmentRef | undefined {
     return this.stagedFiles.get(agent.session)?.get(receiptId)?.file
+  }
+
+  /**
+   * Retire one staged receipt without deleting its immutable stored object.
+   * @param sessionId - exact Session that owns the receipt.
+   * @param receiptId - opaque receipt returned by a completed upload.
+   * @returns whether the receipt was still staged for that Session.
+   */
+  async discardUpload(sessionId: SessionId, receiptId: FileUploadReceiptId): Promise<boolean> {
+    const agent = await this.resolveAgent(sessionId)
+    const staged = this.stagedFiles.get(agent.session)
+    if (staged === undefined || !staged.delete(receiptId)) return false
+    if (staged.size === 0) this.stagedFiles.delete(agent.session)
+    return true
   }
 
   /**

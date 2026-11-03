@@ -383,9 +383,27 @@ export class SessionCommandController {
             )
           }
         }
-        const admission = resolvePromptFileReceipts(
+        const admission = await resolvePromptFileReceipts(
           request.content,
           receiptId => this.ctx.fileUploads.resolve(agent, receiptId),
+          async (attachment) => {
+            const limit = 20 * 1024 * 1024
+            const chunks: Buffer[] = []
+            let bytes = 0
+            for await (const chunk of this.ctx.attachments.readFileStream(attachment)) {
+              bytes += chunk.byteLength
+              if (bytes > limit) throw new RemoteError(
+                'session/attachment-invalid', 'Image exceeds the remote receipt limit.',
+                { reason: 'IMAGE_TOO_LARGE' },
+              )
+              chunks.push(Buffer.from(chunk))
+            }
+            if (bytes !== attachment.bytes) throw new RemoteError(
+              'session/attachment-invalid', 'Staged image size changed.',
+              { reason: 'IMAGE_SIZE_MISMATCH' },
+            )
+            return Buffer.concat(chunks, bytes).toString('base64')
+          },
         )
         const content = await this.ctx.attachments.admitPromptContent(admission.content)
         const message: UserMessage = createUserMessage({ content, source })
@@ -622,13 +640,19 @@ export class SessionCommandController {
   }
 }
 
-function resolvePromptFileReceipts(
+async function resolvePromptFileReceipts(
   content: SessionPromptRequest['content'],
   stagedFile: (receiptId: FileUploadReceiptId) => FileAttachmentRef | undefined,
-): { readonly content: AttachmentAdmissionPart[]; readonly receiptIds: readonly FileUploadReceiptId[] } {
+  readImage: (attachment: FileAttachmentRef) => Promise<string>,
+): Promise<{ readonly content: AttachmentAdmissionPart[]; readonly receiptIds: readonly FileUploadReceiptId[] }> {
   const receiptIds = new Set<FileUploadReceiptId>()
-  const resolved = content.map((part): AttachmentAdmissionPart => {
-    if (part.type !== 'file') return part
+  const resolved: AttachmentAdmissionPart[] = []
+  let imageBytes = 0
+  for (const part of content) {
+    if (part.type !== 'file' && !(part.type === 'image' && 'receiptId' in part)) {
+      resolved.push(part)
+      continue
+    }
     const attachment = stagedFile(part.receiptId)
     if (attachment === undefined) {
       throw new RemoteError(
@@ -638,8 +662,18 @@ function resolvePromptFileReceipts(
       )
     }
     receiptIds.add(part.receiptId)
-    return { type: 'file', attachment }
-  })
+    if (part.type === 'image') {
+      imageBytes += attachment.bytes
+      if (imageBytes > 20 * 1024 * 1024) throw new RemoteError(
+        'session/attachment-invalid', 'Image receipt batch exceeds the remote limit.',
+        { reason: 'IMAGE_TOO_LARGE' },
+      )
+      resolved.push({
+        type: 'image', mediaType: part.mediaType, data: await readImage(attachment),
+        name: attachment.name,
+      })
+    } else resolved.push({ type: 'file', attachment })
+  }
   return { content: resolved, receiptIds: [...receiptIds] }
 }
 

@@ -46,6 +46,7 @@ import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
 import { DesktopHost } from './desktop-host.ts'
 import { createSkillHubPackageStoreFactory } from './skillhub-package-install.ts'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
+import { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
 import { CurrentMigrationExportService } from './current-migration-export.ts'
 import { DshWebProfileWorkerFactory } from './dsh-web-profile-worker.ts'
 import { createLegacyMigrationExportService, inspectLegacyModelClaimSource, readLegacyModelClaimDocuments } from './legacy-migration-source.ts'
@@ -119,6 +120,8 @@ export interface Config {
   readonly accountKeyringSha256: string
   /** Public assertion keys projected from the embedding's signed Slark environment profile. */
   readonly botGroupPublicKeyringsJson?: string
+  readonly memoryKeyringPath?: string
+  readonly memoryKeyringSha256?: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -160,6 +163,8 @@ export const Config: z<Config> = z.object({
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
   botGroupPublicKeyringsJson: z.string(),
+  memoryKeyringPath: z.string(),
+  memoryKeyringSha256: z.string(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -484,6 +489,12 @@ export async function startDesktopHostApplication(
       pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
+    if ((config.memoryKeyringPath === undefined) !== (config.memoryKeyringSha256 === undefined))
+      throw new HostAuthorityError('invalid_input')
+    const memoryDirectiveVerifier = config.memoryKeyringPath === undefined
+      || config.memoryKeyringSha256 === undefined ? undefined
+      : new MemoryDirectiveVerifier(pinnedOwnerFile(config.memoryKeyringPath, uid,
+        config.memoryKeyringSha256).toString('utf8'), () => clock.now())
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)
     const transferStore = new FileOwnerMigrationTransferStore(join(migrationRoot, 'transfers'), uid)
@@ -843,6 +854,8 @@ export async function startDesktopHostApplication(
       operateNativeRoom: workers.operateNativeRoom.bind(workers),
       operateBotGroup: workers.operateBotGroup.bind(workers),
       trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
+      ...(memoryDirectiveVerifier ? { memoryDirectiveVerifier,
+        memoryProfileReader: (profileId: string) => workers.memoryProfileReader(profileId) } : {}),
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),
