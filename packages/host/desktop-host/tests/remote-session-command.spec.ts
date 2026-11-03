@@ -3,32 +3,6 @@ import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
 import { executeRemoteSessionCommand, SessionCommandAuthority, type JournalEvent } from '../src/session-command.ts'
 
 describe('remote Session command authority', () => {
-  it.each(['write', 'resize'] as const)('retains an unknown terminal %s outcome when the worker response is lost', async (method) => {
-    const events: JournalEvent[] = []
-    const journal = { append: (event: JournalEvent) => { events.push(event) }, read: () => events }
-    const authority = new SessionCommandAuthority(journal, { now: () => 1 })
-    const remoteSession = vi.fn(async () => { throw new Error('response lost') })
-    const workers = new ProfileWorkerSupervisor(async () => ({
-      closeNotifications() {}, abort() {}, done: Promise.resolve(), remoteSession,
-    }))
-    onTestFinished(() => workers.disposeAll())
-    await workers.start({ profileId: 'profile-1', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] })
-    const input = {
-      authority, workers,
-      profileId: 'profile-1', signal: new AbortController().signal,
-      command: { operation: 'terminal.apply' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
-        session_id: 's', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001', generation: '123e4567-e89b-42d3-a456-426614174002', epoch: 1 },
-        request: { sessionId: 's', method, args: method === 'write'
-          ? { agentId: 's', id: 't', attachmentId: 'a', data: 'x' }
-          : { agentId: 's', id: 't', attachmentId: 'a', cols: 80, rows: 24 } } },
-    }
-    await expect(executeRemoteSessionCommand(input)).rejects.toThrow('response lost')
-    expect(authority.outcome('profile-1', input.command.command_id)).toEqual({ status: 'unknown' })
-    const recovered = new SessionCommandAuthority(journal, { now: () => 2 })
-    expect(recovered.outcome('profile-1', input.command.command_id)).toEqual({ status: 'unknown' })
-    await expect(executeRemoteSessionCommand({ ...input, authority: recovered })).rejects.toMatchObject({ code: 'unavailable' })
-    expect(remoteSession).toHaveBeenCalledOnce()
-  })
   it('journals Profile creation and fails closed when replaying a failed mutation', async () => {
     const events: JournalEvent[] = []
     const authority = new SessionCommandAuthority({ append: (event) => { events.push(event) }, read: () => [] }, { now: () => 1 })

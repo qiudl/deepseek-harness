@@ -175,10 +175,6 @@ export class DesktopRemoteSessionExecutor {
         if (command.request.sessionId !== command.session_id) throw new Error('desktop terminal: Session mismatch')
         if (command.request.method === 'follow' || command.request.method === 'retain') return { ok: true, value: this.terminalStreams.issue(command) }
         try {
-          if (command.request.method === 'write' || command.request.method === 'resize') {
-            await this.terminalStreams.send(command, signal)
-            return { ok: true }
-          }
           const value = await this.gateway.invoke({ namespace: 'terminal', method: command.request.method,
             args: command.request.args, signal })
           return value === undefined ? { ok: true } : { ok: true, value: value as HostRemoteSessionJson }
