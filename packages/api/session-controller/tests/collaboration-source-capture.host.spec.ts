@@ -237,6 +237,9 @@ describe('Profile-owned collaboration Source capture', () => {
       expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
         { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: true, pinned: false, archived: false },
       ] })
+      const allows = vi.spyOn(h.ctx.remoteAccess, 'allows').mockReturnValue(false)
+      expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [] })
+      allows.mockRestore()
       await expect(h.controller.collaborationMembership({ ...request, owner: 'other' } as never, signal)).rejects.toThrow()
       await expect(h.controller.collaborationMembership({ entries: [request.entries[0]!, request.entries[0]!] }, signal)).rejects.toThrow()
       for (const invalid of [null, [], { entries: [] }, { entries: [null] },

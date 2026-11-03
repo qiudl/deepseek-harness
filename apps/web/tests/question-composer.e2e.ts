@@ -764,7 +764,7 @@ describe('web e2e: resident question composer round trip', () => {
         { width: 390, height: 700 },
       ]) {
         await page.setViewportSize(viewport)
-        await expect.poll(readMetrics).not.toBeNull()
+        await expect.poll(async () => (await readMetrics())?.footerFits).toBe(true)
         const metrics = await readMetrics()
         expect(metrics?.footerFits).toBe(true)
         expect(metrics?.titleInScrollport).toBe(true)

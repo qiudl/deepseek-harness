@@ -142,9 +142,10 @@ export class ApiSessionList {
   /**
    * Read every visible attached and persisted Session without activating an Agent.
    * @param signal - optional cancellation for persistence reads and summary generation.
+   * @param includeArchived - include archived Sessions in the result.
    * @returns visible Session summaries ordered by activity.
    */
-  async list(signal?: AbortSignal): Promise<SessionSummary[]> {
+  async list(signal?: AbortSignal, includeArchived = false): Promise<SessionSummary[]> {
     signal?.throwIfAborted()
     const records = await this.ctx.sessionQuery.listSessions(signal)
     signal?.throwIfAborted()
@@ -153,7 +154,7 @@ export class ApiSessionList {
     const cold: SessionRecord[] = []
     let yieldDeadline = performance.now() + this.workSliceMs
     for (const record of records) {
-      if (archived.has(record.header.id)) continue
+      if (!includeArchived && archived.has(record.header.id)) continue
       signal?.throwIfAborted()
       const live = this.ctx.sessions.get(record.header.id)
       if (live !== undefined) {
@@ -201,9 +202,10 @@ export class ApiSessionList {
    * Search current visible message content without activating any matching Session.
    * @param query - literal message-content query.
    * @param signal - cancellation for list and search reads.
+   * @param archivedFilter - which archived Sessions may contribute results.
    * @returns authorized bounded Session search results.
    */
-  async search(query: string, signal: AbortSignal): Promise<SessionSearchValue> {
+  async search(query: string, signal: AbortSignal, archivedFilter: 'default' | 'show' | 'only' = 'default'): Promise<SessionSearchValue> {
     const normalizedQuery = normalizeSearchQuery(query)
     signal.throwIfAborted()
     const provider = this.ctx.get('sessionQuery')
@@ -219,7 +221,8 @@ export class ApiSessionList {
       signal.throwIfAborted()
       const archived = new Set(this.ctx.get('workspaceRegistry')?.archivedSessionIds ?? [])
       const visibleIds = new Set(visible
-        .filter(record => record.header.cwd !== undefined && !archived.has(record.header.id))
+        .filter(record => record.header.cwd !== undefined && (archivedFilter === 'show'
+          || (archivedFilter === 'only' ? archived.has(record.header.id) : !archived.has(record.header.id))))
         .map(record => record.header.id))
       if (visibleIds.size === 0) return { items: [], hasMore: false }
       const authorized: SessionSearchItem[] = []

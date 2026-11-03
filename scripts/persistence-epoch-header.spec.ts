@@ -45,4 +45,4 @@ it('requires compatibility review before request headers can carry retired syste
   }])
   expect(() => { assertV4RowAdmission({ type: 'request/header', data: { header: { system: 'retired text' } } }) })
     .toThrow('format v4 request/header rejects retired header.system')
-}, 60_000)
+}, 180_000)

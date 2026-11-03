@@ -172,7 +172,7 @@ export function AppFrame({
   }, [actions])
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
-  const phoneWeb = viewport <= 640
+  const phoneWeb = viewport <= 640 && !document.documentElement.hasAttribute('data-platform')
   useEffect(() => { if (!phoneWeb) setDrawerOpen(false) }, [phoneWeb])
   const mobileSection = layoutInfo.mobileSection
   // Fit the retained chat to the visible area when the phone keyboard opens.

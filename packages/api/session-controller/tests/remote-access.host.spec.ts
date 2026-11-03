@@ -203,6 +203,15 @@ describe('Session Controller access', () => {
     expect(owner.items.map(item => item.sessionId).sort()).toEqual([PRIVATE, SHARED].sort())
   })
 
+  it('filters archived list results by Session access even when explicitly requested', async () => {
+    const { ctx } = await harness()
+    ctx.provide('workspaceRegistry', { archivedSessionIds: [SHARED, PRIVATE] } as never)
+    await ctx.plugin(TypertGatewayService)
+    guestPolicy(ctx, LIST_CALLS, READS_SHARED)
+    const value = await guestCall(ctx, 'list', { _request: { includeArchived: true } }) as { readonly items: readonly { readonly sessionId: SessionId }[] }
+    expect(value.items.map(item => item.sessionId)).toEqual([SHARED])
+  })
+
   it('returns a non-owner only the session/search hits whose Session a Session role admits', async () => {
     const { ctx, as } = await harness()
     await ctx.plugin(TypertGatewayService)
@@ -213,6 +222,10 @@ describe('Session Controller access', () => {
     }
     vi.spyOn(ApiSessionList.prototype, 'search').mockResolvedValue(hits)
     await expect(guestCall(ctx, 'search', { request: { query: 'hit' } })).resolves.toEqual({
+      items: [{ sessionId: SHARED, snippet: 'shared hit' }],
+      hasMore: true,
+    })
+    await expect(guestCall(ctx, 'search', { request: { query: 'hit', archivedFilter: 'show' } })).resolves.toEqual({
       items: [{ sessionId: SHARED, snippet: 'shared hit' }],
       hasMore: true,
     })

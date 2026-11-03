@@ -1536,7 +1536,7 @@ describe('WorkspaceBrowser', () => {
 
       await act(async () => { await vi.advanceTimersByTimeAsync(250) })
 
-      expect(searchSessions).toHaveBeenCalledWith('waterfall token', expect.any(AbortSignal))
+      expect(searchSessions).toHaveBeenCalledWith('waterfall token', expect.any(AbortSignal), 'default')
       expect(screen.getByText('Research notes')).toBeTruthy()
       expect(screen.getByText('Research Workspace')).toBeTruthy()
       expect(screen.getByText('…the waterfall token appears here…')).toBeTruthy()
@@ -1742,7 +1742,7 @@ describe('WorkspaceBrowser', () => {
       expect(input.value).not.toContain('\0')
       await act(async () => { await vi.advanceTimersByTimeAsync(250) })
       expect(searchSessions).toHaveBeenCalledOnce()
-      expect(searchSessions).toHaveBeenCalledWith(expected, expect.any(AbortSignal))
+      expect(searchSessions).toHaveBeenCalledWith(expected, expect.any(AbortSignal), 'default')
     } finally {
       vi.useRealTimers()
     }

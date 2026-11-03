@@ -85,5 +85,10 @@ describe('summary blank = conversation not started', () => {
     const result = await remote.list({})
     expect(result).toMatchObject({ ok: true })
     if (result.ok) expect(result.value.items.map(item => item.sessionId)).toEqual([visible.id])
+    const includingArchived = await remote.list({ includeArchived: true })
+    expect(includingArchived).toMatchObject({ ok: true })
+    if (includingArchived.ok) {
+      expect(includingArchived.value.items.map(item => item.sessionId)).toEqual(expect.arrayContaining([visible.id, archived.id]))
+    }
   })
 })

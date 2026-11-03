@@ -9,7 +9,7 @@ import { agentPresetProjectionDefinition } from '@deepseek-ai/dsh-agent-preset-r
 import SessionStore, { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
-import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
+import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -17,6 +17,8 @@ import {
   ApiSessionCwdConflict,
   ApiSessionPresetConflict,
   ApiSessionSubagentOwnership,
+  ApiSessionNotFound,
+  inspectApiSession,
 } from '../src/agent.ts'
 import { foldModelSelection } from '@deepseek-ai/dsh-agent'
 import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
@@ -91,10 +93,21 @@ describe('ApiSession identity failures', () => {
       .toContain('records no cwd')
     expect(new ApiSessionCwdConflict(SessionId('wrong-cwd'), '/wanted', '/existing').message)
       .toContain('belongs to "/existing"')
+    expect(new ApiSessionPresetConflict(SessionId('no-preset'), 'wanted', undefined, true).message)
+      .toContain('runs agent preset "(none)"')
   })
 })
 
 describe('ApiSession Agent lookup and recovery', () => {
+  it('maps a missing durable observation without hiding other storage failures', async () => {
+    const { ctx } = await harness()
+    const observe = vi.spyOn(ctx.sessionQuery, 'observeSession')
+    observe.mockRejectedValueOnce(new SessionQueryError('missing', 'SESSION_QUERY_SESSION_NOT_FOUND'))
+    await expect(inspectApiSession(ctx, SessionId('absent'))).rejects.toBeInstanceOf(ApiSessionNotFound)
+    const failure = new Error('storage failed')
+    observe.mockRejectedValueOnce(failure)
+    await expect(inspectApiSession(ctx, SessionId('broken'))).rejects.toBe(failure)
+  })
   it('resumes directly from a retained observation and rejects an invalid observed header', async () => {
     const { ctx, agents } = await harness()
     const meta = header('observed-resume')
@@ -311,10 +324,33 @@ describe('ApiSession model selection', () => {
 
     const untouched = agent(ctx, header('uninstalled-model'))
     expect(agents.inspectSelectionFor(untouched)).toEqual({ provider: 'fixture', model: 'fixture-model' })
+    vi.spyOn(untouched.model, 'selected').mockReturnValue(undefined)
+    expect(agents.inspectSelectionFor(untouched)).toEqual({ provider: 'fixture', model: 'fixture-model' })
   })
 })
 
 describe('ApiSession create or adoption', () => {
+  it('creates a missing persisted identity but propagates storage and ownership errors', async () => {
+    const { ctx, agents } = await harness()
+    const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-missing-'))
+    tempDirs.push(cwd)
+    const id = SessionId('new-persisted-identity')
+    const created = agent(ctx, header(id, cwd))
+    const observe = vi.spyOn(ctx.sessionQuery, 'observeSession')
+    observe.mockRejectedValueOnce(new SessionQueryError('missing', 'SESSION_QUERY_SESSION_NOT_FOUND'))
+    const create = vi.spyOn(ctx.agents, 'create').mockResolvedValue({ agent: created, dispose: () => Promise.resolve() })
+    expect((await agents.adoptExactSession(id, cwd, true)).agent).toBe(created)
+    expect(create).toHaveBeenCalledOnce()
+
+    const failure = new SessionQueryError('storage failed', 'SESSION_QUERY_PERSISTENCE_FAILED')
+    observe.mockRejectedValueOnce(failure)
+    await expect(agents.adoptExactSession(SessionId('broken-identity'), cwd, true)).rejects.toBe(failure)
+
+    const childId = SessionId('persisted-child')
+    observe.mockResolvedValueOnce({ header: { ...header(childId, cwd), origin: 'subagent' },
+      [Symbol.dispose]: () => {} } as SessionObservation)
+    await expect(agents.adoptExactSession(childId, cwd, true)).rejects.toBeInstanceOf(ApiSessionSubagentOwnership)
+  })
   it('shares one in-flight creation between concurrent callers', async () => {
     const { ctx, agents } = await harness()
     const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-controller-concurrent-'))
@@ -572,6 +608,8 @@ describe('ApiSession create or adoption', () => {
     const file = join(parent, 'file')
     writeFileSync(file, 'not a directory')
     await expect(agents.adoptExactSession(SessionId('mkdir-failure'), join(file, 'child'), false))
+      .rejects.toThrow('failed to ensure project directory')
+    await expect(agents.createSession({ cwd: join(file, 'child'), reusable: () => false }))
       .rejects.toThrow('failed to ensure project directory')
   })
 })

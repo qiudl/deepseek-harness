@@ -53,12 +53,14 @@ describe('ACP model configuration control', () => {
     const { control, session, model } = await createControl(llmRuntime())
 
     expect(model.current()).toBeUndefined()
+    expect(control.snapshot()).toBeUndefined()
     await expect(control.options()).resolves.toEqual([])
     await expect(control.set('model', false)).rejects.toThrow(/requires a select value/)
     await expect(control.set('model', 'missing')).rejects.toThrow(/no model selection/)
 
     session.append('model/selection', { provider: 'mock', model: 'mock' })
     expect(model.current()).toEqual({ provider: 'mock', model: 'mock' })
+    expect(control.snapshot()).toEqual({ provider: 'mock', model: 'mock' })
   })
 
   it('synthesizes an unlisted current route and exposes reasoning descriptions', async () => {

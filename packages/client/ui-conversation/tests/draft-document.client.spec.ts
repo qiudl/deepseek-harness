@@ -622,7 +622,7 @@ describe('draft documents in the input shell', () => {
   })
 
   it.each(['message', 'attachment-only message'] as const)(
-    'blocks initialization but allows new attachments while a %s waits for the Host', async (kind) => {
+    'refuses draft initialization and attachments while a %s waits for the Host', async (kind) => {
       const outcome = Promise.withResolvers<SubmitOutcome>()
       const started = Promise.withResolvers<undefined>()
       const sink = vi.fn<SessionInputDeps['defaultSink']>(() => { started.resolve(undefined); return outcome.promise })
@@ -636,14 +636,14 @@ describe('draft documents in the input shell', () => {
         await started.promise
         expect(sink).toHaveBeenCalledOnce()
         expect(sink.mock.calls[0]?.[1]).toEqual(attachmentOnly ? [sentAttachment] : [])
-        expect(shell.snapshot.phase).toBe('plain')
-        expect(shell.addAttachments(['next-image' as DraftAttachmentId])).toBe(true)
+        expect(shell.snapshot.phase).toBe('sending')
+        expect(shell.addAttachments(['next-image' as DraftAttachmentId])).toBe(false)
         expect(shell.removeAttachment(sentAttachment)).toBe(false)
         expectInitializationBlocked(shell)
         outcome.resolve({ kind: 'error', text: 'flight rejected' })
         await vi.waitFor(() => { expect(shell.notices.getSnapshot()?.text).toBe('flight rejected') })
         expect(shell.snapshot).toMatchObject({
-          phase: 'plain', draft: attachmentOnly ? '' : 'outbound message', attachmentIds: attachmentOnly ? [sentAttachment, 'next-image'] : ['next-image'],
+          phase: 'plain', draft: attachmentOnly ? '' : 'outbound message', attachmentIds: attachmentOnly ? [sentAttachment] : [],
         })
         expect(shell.requestDraftInitialization({ prompt: 'after settlement', clearPreviousDraft: true })).toBe('applied')
       } finally {
@@ -668,7 +668,7 @@ describe('draft documents in the input shell', () => {
       shell.setDraft('accepted early')
       shell.submit()
       await vi.waitFor(() => { expect(accept).toBeDefined() })
-      expect(shell.snapshot.phase).toBe('plain')
+      expect(shell.snapshot.phase).toBe('sending')
       accept?.()
       // In the same call, so the editor has shrunk before the Session renders the echo.
       expect(shell.snapshot).toMatchObject({ phase: 'plain', draft: '', attachmentIds: [] })
@@ -724,28 +724,7 @@ describe('draft documents in the input shell', () => {
     expect(chips(shell)).toMatchObject([{ ref: file.ref, appearance: 'file' }])
   })
 
-  it('restores an atomic quote and its attachment after a detached send fails', async () => {
-    const outcome = Promise.withResolvers<SubmitOutcome>()
-    const sink = vi.fn<SessionInputDeps['defaultSink']>(() => outcome.promise)
-    const shell = makeShell({ defaultSink: sink })
-    const attachment = 'quoted-image' as DraftAttachmentId
-    shell.setDraft('context ')
-    expect(shell.insertQuote('selected source text')).toBe(true)
-    const draft = shell.draftSnapshot
-    expect(draft.quotes).toHaveLength(1)
-    shell.addAttachments([attachment])
-    shell.submit()
-    expect(shell.draftSnapshot).toEqual({ text: '', references: [] })
-    expect(shell.snapshot.attachmentIds).toEqual([])
-    outcome.resolve({ kind: 'error', text: 'rejected' })
-    await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual(draft) })
-    expect(shell.snapshot.attachmentIds).toEqual([attachment])
-    expect(shell.editor.getEditorState().read(() => $nodesOfType(QuoteNode).map(node => node.getQuoteText())))
-      .toEqual(['selected source text'])
-    shell.dispose()
-  })
-
-  it('restores and persists failed structured sends in submission order after reversed settlement', async () => {
+  it('keeps a structured message and its persisted draft until the Host accepts a retry', async () => {
     const first = Promise.withResolvers<SubmitOutcome>()
     const second = Promise.withResolvers<SubmitOutcome>()
     const provider = triggerProvider(createSnapshotStore<ReadonlyMap<'/' | '@', readonly string[]>>(new Map()))
@@ -754,25 +733,24 @@ describe('draft documents in the input shell', () => {
     const shell = makeShell({ inputTriggers: () => provider, defaultSink: sink })
     const write = vi.fn<(draft: DraftSnapshot) => void>()
     shell.bindDraftPersistence(write)
-    const firstDraft = documentOf('first 🙂 ', file)
-    const secondDraft = documentOf('second ', session)
+    const draft = documentOf('first 🙂 ', file, ' and ', session)
     try {
-      shell.setDraft(firstDraft)
+      shell.setDraft(draft)
       shell.submit()
       await vi.waitFor(() => { expect(sink).toHaveBeenCalledTimes(1) })
-      shell.setDraft(secondDraft)
+      expect(shell.draftSnapshot).toEqual(draft)
+      expect(write).toHaveBeenLastCalledWith(draft)
+      first.resolve({ kind: 'error', text: 'first rejected' })
+      await vi.waitFor(() => { expect(shell.snapshot.phase).toBe('plain') })
+      expect(shell.draftSnapshot).toEqual(draft)
+      expect(parseStoredDraft(JSON.parse(JSON.stringify(write.mock.calls.at(-1)?.[0])))).toEqual(draft)
+      expect(chips(shell)).toMatchObject([{ ref: file.ref }, { ref: session.ref }])
+
       shell.submit()
       await vi.waitFor(() => { expect(sink).toHaveBeenCalledTimes(2) })
-      expect(shell.draftSnapshot).toEqual({ text: '', references: [] })
-      second.resolve({ kind: 'error', text: 'second rejected' })
-      await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual(secondDraft) })
-      expect(write).toHaveBeenLastCalledWith(secondDraft)
-      first.resolve({ kind: 'error', text: 'first rejected' })
-      const expected = documentOf('first 🙂 ', file, '\n\nsecond ', session)
-      await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual(expected) })
-      expect(write).toHaveBeenLastCalledWith(expected)
-      expect(parseStoredDraft(JSON.parse(JSON.stringify(write.mock.calls.at(-1)?.[0])))).toEqual(expected)
-      expect(chips(shell)).toMatchObject([{ ref: file.ref }, { ref: session.ref }])
+      second.resolve({ kind: 'success' })
+      await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual({ text: '', references: [] }) })
+      expect(write).toHaveBeenLastCalledWith({ text: '', references: [] })
       expect(shell.requestDraftInitialization({ prompt: 'next', clearPreviousDraft: true })).toBe('applied')
     } finally {
       shell.dispose()
@@ -806,7 +784,7 @@ describe('draft documents in the input shell', () => {
         shell.submit()
         const signal = await started.promise
         expect(signal.aborted).toBe(false)
-        expect(shell.snapshot.phase).toBe('plain')
+        expect(shell.snapshot.phase).toBe('sending')
         expectInitializationBlocked(shell)
         shell.bindDraftPersistence(write)
 

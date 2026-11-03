@@ -1197,7 +1197,7 @@ export function WorkspaceBrowser({
       hasMore: false,
     })
     const timer = window.setTimeout(() => {
-      searchSessions(normalizedQuery, controller.signal).then((result) => {
+      searchSessions(normalizedQuery, controller.signal, archivedFilter).then((result) => {
         if (controller.signal.aborted) return
         setRemoteSearch({
           query: normalizedQuery,
@@ -1219,7 +1219,7 @@ export function WorkspaceBrowser({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [normalizedQuery, searchSessions])
+  }, [normalizedQuery, searchSessions, archivedFilter])
 
   // Rename dialog (browser-owned so it outlives row unmounts during collapse).
   // The stored title decides whether confirming is a real rename; the draft is

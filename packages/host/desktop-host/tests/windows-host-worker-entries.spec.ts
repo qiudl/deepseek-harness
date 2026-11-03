@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
+  vi.unstubAllGlobals()
   vi.doUnmock('node:worker_threads')
   vi.doUnmock('../src/windows-host-client-worker-main.ts')
   vi.doUnmock('../src/windows-host-pipe-worker-main.ts')
@@ -25,6 +26,20 @@ function mockSlotMain() {
 }
 
 describe('Windows Host Worker runtime entries', () => {
+  it.each(['client', 'pipe'] as const)('surfaces a failed %s worker to its parent instead of silently stopping', async (kind) => {
+    const port = parentPort()
+    const error = new Error('worker startup failed')
+    const scheduled: Array<() => void> = []
+    vi.stubGlobal('setImmediate', (callback: () => void) => { scheduled.push(callback) })
+    vi.doMock('node:worker_threads', () => ({ parentPort: port, workerData: {} }))
+    vi.doMock('../src/windows-host-client-worker-main.ts', () => ({ runWindowsHostClientWorkerMain: () => Promise.reject(error) }))
+    vi.doMock('../src/windows-host-pipe-worker-main.ts', () => ({ runWindowsHostPipeWorkerMain: () => Promise.reject(error) }))
+    mockSlotMain()
+    if (kind === 'client') await import('../src/windows-host-client-worker-entry.ts')
+    else await import('../src/windows-host-pipe-worker-entry.ts')
+    await vi.waitFor(() => { expect(scheduled).toHaveLength(1) })
+    expect(scheduled[0]).toThrow(error)
+  })
   it('adapts the real client Worker parent port into the composition root', async () => {
     const port = parentPort()
     const workerData = { boot: 'client' }

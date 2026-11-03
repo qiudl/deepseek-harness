@@ -1785,7 +1785,7 @@ it('bounds default and explicitly selected standard Windows fork coverage', () =
   expect(job.env.DSH_COVERAGE_TEST_TIMEOUT_MS).toBe('90000')
 })
 
-it.each(['node-24', 'node-24-coverage', 'node-24-consumers'])(
+it.each(['node-24', 'node-24-coverage', 'node-24-consumers', 'node-24-lint'])(
   '%s uses available GitHub runners for the Slark fork without changing upstream defaults', (name) => {
     const job = workflowJob(loadWorkflow(name.startsWith('windows-') ? '.github/workflows/ci-windows.yml' : '.github/workflows/ci.yml'), name)
     const evaluate = (repository: string, mode: string) => evaluateRunsOn(job['runs-on'], {

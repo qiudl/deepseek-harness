@@ -84,9 +84,10 @@ export class SessionCommandAuthority {
    * Execute one write after preceding writes for the same Profile+Session settle.
    * @param input - Profile, Session, command, and immutable payload identity.
    * @param execute - operation invoked after the durable started record.
-   * @returns durable committed outcome, or rejects after recording failure.
+   * @param unknownOnError - retain the started record when an error cannot rule out execution.
+   * @returns durable committed outcome, or rejects with a failed or unknown outcome recorded.
    */
-  run(input: CommandInput, execute: () => Promise<unknown>): Promise<CommandOutcome> {
+  run(input: CommandInput, execute: () => Promise<unknown>, unknownOnError = false): Promise<CommandOutcome> {
     if (!/^[0-9a-f]{64}$/.test(input.payloadHash)) return Promise.reject(new HostAuthorityError('invalid_input'))
     const commandKey = `${input.profileId}\0${input.commandId}`
     const active = this.pending.get(commandKey)
@@ -110,8 +111,8 @@ export class SessionCommandAuthority {
         this.outcomes.set(commandKey, { payloadHash: input.payloadHash, outcome })
         return outcome
       } catch (error) {
-        this.journal.append({ kind: 'command_failed', ...input, at: this.clock.now() })
-        this.outcomes.set(commandKey, { payloadHash: input.payloadHash, outcome: { status: 'failed' } })
+        if (!unknownOnError) this.journal.append({ kind: 'command_failed', ...input, at: this.clock.now() })
+        this.outcomes.set(commandKey, { payloadHash: input.payloadHash, outcome: { status: unknownOnError ? 'unknown' : 'failed' } })
         throw error
       }
     })
@@ -147,7 +148,8 @@ export async function executeRemoteSessionCommand(input: {
     sessionId,
     commandId: input.command.command_id,
     payloadHash: createHash('sha256').update(JSON.stringify(input.command)).digest('hex'),
-  }, () => input.workers.remoteSession(input.profileId, input.command, input.signal))
+  }, () => input.workers.remoteSession(input.profileId, input.command, input.signal),
+  input.command.operation === 'terminal.apply' && (input.command.request.method === 'write' || input.command.request.method === 'resize'))
   if (outcome.status !== 'committed') throw new HostAuthorityError('unavailable')
   return outcome.value as HostRemoteSessionJson
 }

@@ -419,11 +419,7 @@ export class ApiSessionAgentController {
     checkPersistedIdentity: boolean,
     presetId: string | undefined,
   ): Promise<Agent> {
-    const attached = this.ctx.sessions.get(sessionId)
-    const live = this.ctx.agents.get(sessionId)
-    if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
-      throw new ApiSessionSubagentOwnership(sessionId)
-    }
+    const live = this.unownedLiveAgent(sessionId)
     if (live !== undefined) return live
 
     if (checkPersistedIdentity) {
@@ -455,15 +451,7 @@ export class ApiSessionAgentController {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
     const composition = await this.composeAgent(presetId)
-    return (await this.ctx.agents.create({
-      sessionId,
-      agentOptions: this.agentOptions(),
-      meta: {
-        cwd,
-        ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
-      },
-      setup: composition.setup,
-    })).agent
+    return this.createPreparedAgent(sessionId, cwd, composition)
   }
 
   private async inOrder<Value>(sessionId: SessionId, operation: () => Promise<Value>): Promise<Value> {
@@ -479,11 +467,7 @@ export class ApiSessionAgentController {
 
   /** @returns the reused Session, a new Session under `sessionId` when none is stored, or a new Session under a minted identity. */
   private async claim(sessionId: SessionId, request: ApiSessionCreateRequest): Promise<Agent> {
-    const attached = this.ctx.sessions.get(sessionId)
-    const live = this.ctx.agents.get(sessionId)
-    if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
-      throw new ApiSessionSubagentOwnership(sessionId)
-    }
+    const live = this.unownedLiveAgent(sessionId)
     if (live !== undefined) {
       if (live.session.header.cwd !== request.cwd) {
         throw new ApiSessionCwdConflict(live.id, request.cwd, live.session.header.cwd)
@@ -588,6 +572,19 @@ export class ApiSessionAgentController {
     } catch (error: unknown) {
       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
     }
+    return this.createPreparedAgent(sessionId, cwd, composition)
+  }
+
+  private unownedLiveAgent(sessionId: SessionId): Agent | undefined {
+    const attached = this.ctx.sessions.get(sessionId)
+    const live = this.ctx.agents.get(sessionId)
+    if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
+      throw new ApiSessionSubagentOwnership(sessionId)
+    }
+    return live
+  }
+
+  private async createPreparedAgent(sessionId: SessionId, cwd: string, composition: ApiSessionComposition): Promise<Agent> {
     return (await this.ctx.agents.create({
       sessionId,
       agentOptions: this.agentOptions(),
