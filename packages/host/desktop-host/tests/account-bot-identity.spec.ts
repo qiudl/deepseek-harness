@@ -1,0 +1,126 @@
+import { randomUUID } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { expect, it, onTestFinished, vi } from 'vitest'
+import { resolveAccountBotIdentity } from '../src/account-bot-identity.ts'
+import { DesktopHost } from '../src/desktop-host.ts'
+import { ProfileRegistry } from '../src/profile-registry.ts'
+import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import { registryFileFixture } from './registry-file-fixture.ts'
+
+async function fixture() {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-account-bot-identity-'))
+  onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+  const clock = { now: () => 1000 }
+  const registry = new ProfileRegistry({ root, deviceIndexKey: Buffer.alloc(32, 7), clock, ...registryFileFixture() })
+  const binding = { authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:bot', authorityBindingVersion: 1 }
+  const account = { ...binding, issuer: 'https://accounts.example.test', subject: randomUUID(),
+    keyHandle: 'keychain:bot', unlockMaterial: Buffer.alloc(32, 9).toString('base64url') }
+  await registry.registerAccount(account)
+  const host = new DesktopHost({ registry, clock, runtimeGeneration: 5, ensureProfileWorker: async () => undefined,
+    verifyAccountAccessToken: (token) => {
+      if (token !== 'valid-token') throw Error('invalid')
+      return { issuer: account.issuer, subject: account.subject }
+    } })
+  const ownerId = randomUUID()
+  const proof = { ...binding, ownerId, issuer: account.issuer, subject: account.subject }
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const workers = { resolveBotIdentity: vi.fn(async () => bot) }
+  const grant = () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid-token' })
+  return { host, workers, ownerId, proof, bot, grant }
+}
+
+it('resolves only after this connection verifies the current Account binding', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  await expect(resolveAccountBotIdentity(f.host, f.workers, f.proof, 'bot_1', signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.workers.resolveBotIdentity).not.toHaveBeenCalled()
+  await f.grant()
+  expect(await resolveAccountBotIdentity(f.host, f.workers, f.proof, 'bot_1', signal)).toEqual(f.bot)
+  expect(f.workers.resolveBotIdentity).toHaveBeenCalledWith(expect.any(String), 'bot_1', signal)
+})
+
+it('refuses another Account, old binding and grant revoked during a pending worker read', async () => {
+  const f = await fixture(); await f.grant()
+  const signal = new AbortController().signal
+  for (const change of [{ subject: randomUUID() }, { issuer: 'https://other.example.test' },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(resolveAccountBotIdentity(f.host, f.workers, { ...f.proof, ...change }, 'bot_1', signal)).rejects.toThrow()
+  }
+  let release!: () => void
+  f.workers.resolveBotIdentity.mockImplementationOnce(() => new Promise((resolve) => {
+    release = () => { resolve(f.bot) }
+  }))
+  const pending = resolveAccountBotIdentity(f.host, f.workers, f.proof, 'bot_1', signal)
+  await vi.waitFor(() => { expect(release).toBeTypeOf('function') })
+  f.host.revokeOwner(f.ownerId)
+  release()
+  await expect(pending).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('discards Bot identity returned by a replaced Profile worker', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => { release = resolve })
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    resolveBotIdentity: async () => { await pending; return bot },
+  }))
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  await workers.start(input)
+  const read = workers.resolveBotIdentity(input.profileId, bot.bot_id, new AbortController().signal)
+  const assertion = expect(read).rejects.toMatchObject({ code: 'stale' })
+  await workers.dispose(input.profileId)
+  await workers.start(input)
+  release()
+  await assertion
+  await workers.disposeAll()
+})
+
+it('keeps Bot identity reads bound to the live worker and requested Bot', async () => {
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const signal = new AbortController().signal
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  let answer: typeof bot | null = bot
+  const resolveBotIdentity = vi.fn(async () => answer)
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(), resolveBotIdentity,
+  }))
+  onTestFinished(() => workers.disposeAll())
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(input)
+  expect(await workers.resolveBotIdentity(input.profileId, bot.bot_id, signal)).toEqual(bot)
+  answer = null
+  expect(await workers.resolveBotIdentity(input.profileId, bot.bot_id, signal)).toBeNull()
+  answer = { ...bot, bot_id: 'bot_2' }
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, AbortSignal.abort())).rejects.toThrow()
+  await workers.disposeAll()
+  await expect(workers.resolveBotIdentity(input.profileId, bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(resolveBotIdentity).toHaveBeenCalledWith(bot.bot_id, signal)
+})
+
+it('rejects Bot identity reads from workers without Bot support', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(() => workers.disposeAll())
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  await workers.start(input)
+  await expect(workers.resolveBotIdentity(input.profileId, 'bot_1', new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('rejects a Profile selection that changes during the Bot read', async () => {
+  const f = await fixture()
+  await f.grant()
+  const first = f.host.authorizeAccountModelText(f.proof)
+  let current = first
+  const authority = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { resolveBotIdentity: async () => { current = `${first}-replaced` as typeof first; return f.bot } }
+  await expect(resolveAccountBotIdentity(authority, workers, f.proof,
+    f.bot.bot_id, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+})

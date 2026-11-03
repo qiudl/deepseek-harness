@@ -57,7 +57,8 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 } })
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
-  fenceValue: typeof groupValue = groupValue) {
+  fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
+  botGroupReply: unknown = { state: 'missing' }) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -79,6 +80,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-collaboration-archive-transition': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-capture': 'DSH_PROFILE_REFERENCE_TOKEN',
       '/internal/desktop-collaboration-reference-content': 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -115,6 +118,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : input.action === 'inspect_root_attempt' ? { value: ${JSON.stringify(planning)} }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
+          : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
+          : url.pathname.endsWith('bot-group') ? ${JSON.stringify(botGroupReply)}
           : url.pathname.endsWith('model-selection') ? { ...input, provider: 'deepseek', model: 'chat' }
           : url.pathname.endsWith('archive-state') ? { archive_phase: 'archived' }
           : url.pathname.endsWith('archive-intent') ? { archive_phase: 'prepared', archive_token: ${JSON.stringify(archiveTarget.archive_token)} }
@@ -149,18 +154,63 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant,
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
-    installGroupInputFence } = worker
+    installGroupInputFence, resolveBotIdentity, operateBotGroup } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
-    || !installGroupInputFence)
+    || !installGroupInputFence || !resolveBotIdentity || !operateBotGroup)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
-    transitionCollaborationArchive, installGroupInputFence }
+    transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, operateBotGroup }
 }
+
+it('uses the private Bot group token, validates the receipt and fences a stopped worker', async () => {
+  const command = { operation: 'receipt' as const,
+    deliveryId: '10000000-0000-4000-8000-000000000001',
+    groupId: '20000000-0000-4000-8000-000000000002',
+    botId: 'writer', memberCycle: 2 }
+  const signal = new AbortController().signal
+  const h = await harness()
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-group`, {
+    method: 'POST', body: JSON.stringify(command) })).status).toBe(403)
+  expect(await h.operateBotGroup(command, signal)).toEqual({ state: 'missing' })
+  h.worker.abort()
+  await expect(h.operateBotGroup(command, signal)).rejects.toMatchObject({ code: 'unavailable' })
+
+  const mismatch = await harness(undefined, 'staged', groupValue, null, {
+    state: 'accepted', deliveryId: command.deliveryId, groupId: '30000000-0000-4000-8000-000000000003',
+    botId: command.botId, memberCycle: command.memberCycle, payloadDigest: 'a'.repeat(64),
+    sessionId: 'bot-session' })
+  await expect(mismatch.operateBotGroup(command, signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+
+  const paged = await harness(undefined, 'staged', groupValue, null,
+    { state: 'ok', results: [], next: 0 })
+  expect(await paged.operateBotGroup({ operation: 'result_page',
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    after: 0, limit: 1 }, signal)).toEqual({ state: 'ok', results: [], next: 0 })
+})
+
+it('reads Bot identity through the parent-only source token and checks the requested Bot', async () => {
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const h = await harness(undefined, 'staged', groupValue, bot)
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-identity`, {
+    method: 'POST', body: JSON.stringify({ bot_id: bot.bot_id }),
+  })).status).toBe(403)
+  expect(await h.resolveBotIdentity(bot.bot_id, signal)).toEqual(bot)
+  await expect(h.resolveBotIdentity('bot_2', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  h.worker.abort()
+  await expect(h.resolveBotIdentity(bot.bot_id, signal)).rejects.toThrow('unavailable')
+})
+
+it('accepts an absent Bot identity from the Profile worker', async () => {
+  const h = await harness()
+  expect(await h.resolveBotIdentity('bot_1', new AbortController().signal)).toBeNull()
+})
 
 it('routes account-bound archive inspection and every transition through separate worker tokens', async () => {
   const h = await harness(), signal = new AbortController().signal
@@ -231,7 +281,8 @@ it('authenticates each original-Profile route and refuses private operations aft
   const selection = { workspace_id: target.workspace_id, session_id: target.session_id }
   expect(await h.inspectWorkspaceModelSelection(selection, signal)).toEqual({ ...selection, provider: 'deepseek', model: 'chat' })
   h.worker.abort()
-  for (const run of [() => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
+  for (const run of [() => h.resolveBotIdentity('bot_1', signal),
+    () => h.inspectCollaborationSource(target, signal), () => h.readCollaborationSourceSnapshot(target, signal),
     () => h.collaborationAnalysis(command, signal), () => h.receiveCollaborationDelivery(capsule, signal),
     () => h.readCollaborationReferenceGrant(target, digest, signal),
     () => h.captureCollaborationReferenceSelection(command, signal),

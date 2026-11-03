@@ -1,5 +1,7 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, randomUUID } from 'node:crypto'
+import { parseHostBotGroupPublicKeyring,
+  type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
 } from 'node:fs'
@@ -110,6 +112,8 @@ export interface Config {
   readonly deviceIndexKeyPath: string
   readonly accountKeyringPath: string
   readonly accountKeyringSha256: string
+  /** Public assertion keys projected from the embedding's signed Slark environment profile. */
+  readonly botGroupPublicKeyringsJson?: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -150,6 +154,7 @@ export const Config: z<Config> = z.object({
   deviceIndexKeyPath: z.string().required(),
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
+  botGroupPublicKeyringsJson: z.string(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -186,6 +191,20 @@ export interface DesktopHostApplication {
   readonly workers: ProfileWorkerSupervisor
   readonly commandAuthority: SessionCommandAuthority
   close(): Promise<void>
+}
+
+function trustedBotGroupKeyrings(raw?: string): readonly HostBotGroupPublicKeyring[] {
+  if (!raw) return []
+  if (Buffer.byteLength(raw, 'utf8') > 32 * 1024) throw new HostAuthorityError('invalid_input')
+  try {
+    const value: unknown = JSON.parse(raw)
+    if (!Array.isArray(value) || value.length < 1 || value.length > 4)
+      throw Error('invalid')
+    const keyrings = value.map(parseHostBotGroupPublicKeyring)
+    if (new Set(keyrings.map(item => item.environmentId)).size !== keyrings.length)
+      throw Error('invalid')
+    return keyrings
+  } catch { throw new HostAuthorityError('invalid_input') }
 }
 
 /**
@@ -732,6 +751,9 @@ export async function startDesktopHostApplication(
         runtimeGeneration: config.runtimeGeneration, schemaGeneration: config.schemaGeneration,
       },
       host,
+      resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
+      operateBotGroup: workers.operateBotGroup.bind(workers),
+      trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),

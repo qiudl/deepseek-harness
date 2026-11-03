@@ -66,6 +66,12 @@ kind: "package-reference"
 
 `profile.collaboration_registration` 在核验同一连接的 Account 绑定后，签署服务器登记请求/challenge ID、规范 nonce、有效期、HTTPS audience、environment UUID 和 Account issuer/subject。证明包含安装 UUID/公钥及当前 Host instance/process nonce。Ed25519 签名正文是 UTF-8 域 `dsh-collaboration-host-registration/v2`、NUL 与固定顺序 JSON 元组，不包含签名本身。解析器冻结精确字段并拒绝凭据。挑战须仍有效，且在五分钟内过期。服务器须另行信任安装公钥、持久保存并消费挑战、提交登记回执；此签名不授权 Source 或任务。
 
+`profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
+
+`HostBotGroupCommand` 和 `HostBotGroupResponse` 校验 Profile worker 私有 Bot 群投递、回执、单条结果补读、结果确认及成员周期撤权。命令把投递或结果绑定到群 UUID、准确的 Bot ID 和成员周期；投递还包含消息序号、载荷摘要及最多 16,000 字符的正文。结果分页每次至多返回一条有界结果及稳定序号游标。响应必须匹配请求作用域，投递响应还须匹配摘要。worker 路由要求私有令牌；这些类型本身不授予 Slark 群权限。
+
+`profile.bot_group_deliver` 仅接受投递命令和短时 Slark 签名凭据。Host 启动时固定 Desktop 签名环境配置中的公钥环，请求不能替换。Host 核验当前 Account 和安装身份、准确的投递与摘要，并向 Slark 实时确认成员资格后，才转发到当前 Profile worker。未固定公钥环时不公布该能力。其他私有 Bot 群命令尚无公开控制方法。
+
 `profile.workspace_authority` 仅在授权 Profile 读取器确认归属后，签署服务器 nonce、Account/environment 及注册表工作区/Session 目标。读取后再次核验 Account 授权和五分钟有效期。独立签名域 `dsh-collaboration-workspace-authority/v1` 绑定完整目标及当前安装/进程，登记签名不能替代。此证明仅说明读取时的归属，不证明 Source 内容、journal 持久性或 prepared 模型配置。服务器必须认证其挑战，并在重新核验当前 Host/Account 的同一事务中消费。
 
 REQ-20261020-0010 增加 `profile.group_input_fence`。挑战将原 Workspace/Session、准备中群的 UUID 与正整数版本绑定到当前账号和环境。只有当前 Profile worker 确认完全匹配的持久输入栅栏后，Host 才签署 `dsh-group-input-fence/v1`。客户端核验完整挑战、当前安装/进程、有效期及签名。Slark 须先认证并消费挑战，再把群从 preparing 切换为 active；此协议方法不执行云端转移。

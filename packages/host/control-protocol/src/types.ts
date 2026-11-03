@@ -565,6 +565,90 @@ export interface ProfileCollaborationRegistrationResult {
   readonly result: HostCollaborationRegistrationAssertion
 }
 
+/** Account-bound read of one Bot in the selected Profile; no private chat fields. */
+export interface ProfileBotIdentityRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+    readonly bot_id: string
+  }
+}
+
+/** Bounded Bot identity or explicit absence from an exclusive-writer Profile. */
+export interface ProfileBotIdentityResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_identity'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
+}
+
+/** Account-bound delivery from a signed Slark group to the current Bot Profile. */
+export interface ProfileBotGroupDeliverRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly params: HostAuthorizedParams & {
+    readonly authority_environment_id: HostAuthorityEnvironmentId
+    readonly account_binding_handle: HostAccountBindingHandle
+    readonly authority_binding_version: number
+    readonly account_issuer: string
+    readonly account_subject: string
+  } & import('./bot-group.ts').HostBotGroupDeliveryInput
+}
+
+/** Durable worker receipt; a transport failure leaves the original delivery uncertain. */
+export interface ProfileBotGroupDeliverResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_deliver'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
+/** Read a Bot result only while the original Slark delivery remains authorized. */
+export interface ProfileBotGroupResultPageRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly after: number }
+}
+/** Host result frame carrying a verified Bot result and optional proof. */
+export interface ProfileBotGroupResultPageResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_page'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse
+    readonly proof: import('./bot-group-result-proof.ts').HostBotGroupResultProof | null }
+}
+
+/** Acknowledge one already persisted Slark result under its original live delivery. */
+export interface ProfileBotGroupResultAckRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly params: ProfileBotGroupDeliverRequest['params'] & { readonly result_id: string }
+}
+/** Host result frame after the Profile worker acknowledges one Bot result. */
+export interface ProfileBotGroupResultAckResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bot_group_result_ack'
+  readonly result: { readonly reply: import('./bot-group.ts').HostBotGroupResponse }
+}
+
 /** Server nonce bound to Account and one registry workspace/ordinary Session. */
 export interface HostWorkspaceAuthorityChallenge extends HostWorkspaceModelSelectionTarget {
   readonly request_id: HostControlRequestId
@@ -1861,6 +1945,14 @@ export type HostControlFrame =
   | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationRequest
   | ProfileCollaborationRegistrationResult
+  | ProfileBotIdentityRequest
+  | ProfileBotIdentityResult
+  | ProfileBotGroupDeliverRequest
+  | ProfileBotGroupDeliverResult
+  | ProfileBotGroupResultPageRequest
+  | ProfileBotGroupResultPageResult
+  | ProfileBotGroupResultAckRequest
+  | ProfileBotGroupResultAckResult
   | ProfileWorkspaceAuthorityRequest
   | ProfileWorkspaceAuthorityResult
   | ProfileCollaborationArchiveStateRequest

@@ -2,7 +2,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
 import type { GroupMessageReply } from './collaboration-group-input.ts'
+import { GroupMemberDock } from './GroupMemberDock.tsx'
 import css from './GroupChatDock.module.css'
 
 type Host = NonNullable<Window['__DSH_DESKTOP_HOST__']>
@@ -11,12 +13,14 @@ type RecordedPending = { requestId: string; digest: string }
 type Snapshot = {
   state: 'missing' | 'preparing' | 'active' | 'unavailable'
   workspaceId: string | undefined
+  groupId: string | undefined
   items: readonly Message[]
   hasMore: boolean
   loading: boolean
   readFailed: boolean
 }
-const empty: Snapshot = { state: 'missing', workspaceId: undefined, items: [], hasMore: false, loading: false, readFailed: false }
+const empty: Snapshot = { state: 'missing', workspaceId: undefined, groupId: undefined,
+  items: [], hasMore: false, loading: false, readFailed: false }
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const sha256 = /^[a-f0-9]{64}$/u
 type Props = PropsRuntime<'conversation.input.dock'> & PropsLocale<'slarkAgent'> & {
@@ -32,18 +36,25 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
   const [snapshot, setSnapshot] = useState<Snapshot>(empty)
   const [recordedPending, setRecordedPending] = useState<RecordedPending | null>(null)
   const [recovering, setRecovering] = useState(false)
+  const [activating, setActivating] = useState(false)
+  const [activationFailed, setActivationFailed] = useState(false)
   const loadMore = useRef<(() => void) | null>(null)
   const recoverPending = useRef<((pending: RecordedPending) => Promise<void>) | null>(null)
+  const activate = useRef<(() => Promise<void>) | null>(null)
   useEffect(() => {
     setSnapshot(empty)
     setRecordedPending(null)
     setRecovering(false)
-    let disposed = false, groupId: string | undefined, cursor = 0, hasMore = false, busy = false
+    setActivating(false)
+    setActivationFailed(false)
+    let disposed = false, groupId: string | undefined, preparedGroupId: string | undefined
+    let activationRequestId: string | undefined, activationBusy = false, cursor = 0, hasMore = false, busy = false
     let items: readonly Message[] = []
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host && workspaceId() === selectedWorkspace
       && !!selectedWorkspace
     const publish = (state: Snapshot['state'], loading = false, readFailed = false) => {
-      if (current()) setSnapshot({ state, workspaceId: selectedWorkspace, items, hasMore, loading, readFailed })
+      if (current()) setSnapshot({ state, workspaceId: selectedWorkspace, groupId,
+        items, hasMore, loading, readFailed })
     }
     const checkPending = async () => {
       const workspace = workspaceId(), expectedGroupId = groupId
@@ -107,9 +118,22 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         const result = await host.collaborationGroupPreparation({ operation: 'lookup',
           workspace_id: workspace, session_id: sessionId })
         if (!current() || workspaceId() !== workspace) return
-        if (result.state === 'missing') { groupId = undefined; items = []; publish('missing'); return }
-        if (result.state === 'preparing') { groupId = undefined; cursor = 0; items = []; publish('preparing'); return }
+        if (result.state === 'missing') {
+          groupId = undefined; preparedGroupId = undefined; activationRequestId = undefined
+          setActivationFailed(false)
+          items = []; publish('missing'); return
+        }
+        if (result.state === 'preparing') {
+          if (preparedGroupId !== result.group_id) {
+            activationRequestId = undefined
+            setActivationFailed(false)
+          }
+          groupId = undefined; preparedGroupId = result.group_id; cursor = 0; items = []
+          publish('preparing'); return
+        }
         if (result.state !== 'group_active') { publish('unavailable'); return }
+        preparedGroupId = undefined
+        setActivationFailed(false)
         if (groupId !== result.group_id) {
           groupId = result.group_id; cursor = 0; hasMore = true; items = []
           setRecordedPending(null)
@@ -118,6 +142,24 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         } else if (!hasMore) await page()
         await checkPending()
       } catch { publish('unavailable') }
+    }
+    activate.current = async () => {
+      const workspace = workspaceId(), expectedGroupId = preparedGroupId
+      if (!current() || !workspace || !expectedGroupId || !host.collaborationGroupActivation || activationBusy) return
+      activationRequestId ??= randomUUID()
+      activationBusy = true
+      setActivating(true)
+      setActivationFailed(false)
+      try {
+        const result = await host.collaborationGroupActivation({ request_id: activationRequestId,
+          workspace_id: workspace, session_id: sessionId })
+        if (!current() || preparedGroupId !== expectedGroupId) return
+        if (result.state !== 'group_active' || result.group_id !== expectedGroupId) {
+          setActivationFailed(true); return
+        }
+        await refresh()
+      } catch { if (current() && preparedGroupId === expectedGroupId) setActivationFailed(true) }
+      finally { activationBusy = false; if (current()) setActivating(false) }
     }
     const onRecorded = (event: Event) => {
       const detail: unknown = (event as CustomEvent).detail
@@ -140,9 +182,16 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
     window.__DSH_DESKTOP_HOST__ !== host) return null
   return <section className={css.panel} aria-label={t('group.title')}>
     <strong>{t('group.title')}</strong>
-    {snapshot.state === 'preparing' && <p role="status">{t('group.preparing')}</p>}
+    {snapshot.state === 'preparing' && <>
+      <p role="status">{t('group.preparing')}</p>
+      {host.collaborationGroupActivation && <button type="button" disabled={activating}
+        onClick={() => { void activate.current?.() }}>{t('group.activate')}</button>}
+      {activationFailed && <p role="status">{t('group.activationFailed')}</p>}
+    </>}
     {snapshot.state === 'unavailable' && <p role="status">{t('group.readUnavailable')}</p>}
     {snapshot.state === 'active' && <>
+      {snapshot.workspaceId && snapshot.groupId && <GroupMemberDock host={host}
+        workspaceId={snapshot.workspaceId} sessionId={sessionId} groupId={snapshot.groupId} t={t} />}
       {recordedPending && <div className={css.recovery} role="status">
         <p>{t('group.pendingRecorded')}</p>
         <button type="button" disabled={recovering}

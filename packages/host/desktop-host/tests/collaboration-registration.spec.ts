@@ -1,16 +1,19 @@
-import { generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
-import { encodeHostCollaborationRegistrationSignaturePayload } from '@deepseek-ai/dsh-host-control-protocol'
+import { expect, it, onTestFinished, vi } from 'vitest'
+import { encodeHostCollaborationRegistrationSignaturePayload,
+  encodeHostBotGroupResultProofPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
+import { botGroupHostRegistryId } from '../src/bot-group-ticket.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 import { HostControlAuthority, UnixHostClient } from '../src/unix-transport.ts'
 
-async function fixture() {
+async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKeys = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
   const time = { value: 1000 }
@@ -29,7 +32,27 @@ async function fixture() {
   const publicKey = (keys.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
   const identity = { hostInstanceId: randomUUID(), installationId: randomUUID(), installationPublicKey: publicKey,
     installationPrivateKey: keys.privateKey, processNonce: 'A'.repeat(43), executableSignatureDigest: '1'.repeat(64), runtimeGeneration: 5, schemaGeneration: 1 }
-  const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now })
+  const bot = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const botGroupSigner = generateKeyPairSync('ed25519')
+  const botGroupNow = Date.now()
+  const botGroupKeyring = { version: 1 as const, environmentId: binding.authorityEnvironmentId,
+    issuer: 'https://slark.example.test', keys: [{ kid: 'dsh-assertion-bot-test',
+      publicKeyPem: botGroupSigner.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+      validFrom: botGroupNow - 1000, validUntil: botGroupNow + 120_000 }] }
+  let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
+  const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
+    _signal: AbortSignal): Promise<HostBotGroupResponse> => {
+    if (command.operation !== 'deliver') throw Error('invalid command')
+    return { state: 'accepted', deliveryId: command.deliveryId, groupId: command.groupId,
+      botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' }
+  })
+  const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
+    ...(supportBot ? {
+      resolveBotIdentity: (profileId: string, botId: string, signal: AbortSignal) => resolveBot(profileId, botId, signal),
+    } : {}),
+    ...(supportDelivery ? { operateBotGroup,
+      ...(pinDeliveryKeys ? { trustedBotGroupKeyrings: [botGroupKeyring] } : {}) } : {}) })
   const ownerId = randomUUID(), lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const seen: HostControlFrame[] = []
@@ -45,8 +68,295 @@ async function fixture() {
   const input = { ...binding, challenge }
   const grant = () => host.ensureAccountProfile({ ...account, accountAccessToken: 'valid-token', ownerId })
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
+    bot, botGroupSigner, botGroupKeyring, operateBotGroup,
+    setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('resolves an exact Bot only in the currently verified Account Profile', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: 'bot_1' }
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.resolveBotIdentity(input)).toEqual(f.bot)
+  for (const change of [{ issuer: 'https://other.example.test' }, { subject: randomUUID() },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.resolveBotIdentity({ ...input, ...change })).rejects.toThrow()
+  }
+  expect(await f.client.resolveBotIdentity({ ...input, botId: 'missing' })).toBeNull()
+})
+
+it('refuses a revoked Account, missing capability and mismatched worker identity', async () => {
+  const f = await fixture(); await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: 'bot_1' }
+  f.setBotResolver(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  f.setBotResolver(async () => ({ ...f.bot, bot_id: 'other', actor_ref: 'deepseek-bot:other' }))
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.setBotResolver(async () => f.bot)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_identity'
+    ? { ...frame, result: { identity: { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' } } } : frame)
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  const capabilities = f.client.inspection.capabilities.filter(value => value !== 'profile.bot_identity')
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  const before = f.seen.length
+  await expect(f.client.resolveBotIdentity(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+})
+
+it('rejects a Bot lookup if the Host authority has no Bot resolver', async () => {
+  const f = await fixture(false); await f.grant()
+  const capabilities = [...f.client.inspection.capabilities, 'profile.bot_identity']
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+it('rejects a mismatched Bot identity even after the transport accepts its reply', async () => {
+  const f = await fixture(); await f.grant()
+  const wrongBot = { ...f.bot, bot_id: 'bot_2', actor_ref: 'deepseek-bot:bot_2' }
+  let replyUsed = false
+  expect(Reflect.set(f.client, 'call', async () => {
+    replyUsed = true
+    return { type: 'result', method: 'profile.bot_identity', result: { identity: wrongBot } }
+  })).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(replyUsed).toBe(true)
+  expect(Reflect.set(f.client, 'call', async () => ({ type: 'result', method: 'profile.other' }))).toBe(true)
+  await expect(f.client.resolveBotIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: 'bot_1' })).rejects.toMatchObject({ code: 'unavailable' })
+  expect(Reflect.deleteProperty(f.client, 'call')).toBe(true)
+})
+
+it('delivers through the Host only after signed Slark and current membership confirmation', async () => {
+  const f = await fixture(true, true); await f.grant()
+  const now = Date.now()
+  const origin = 'https://slark.example.test'
+  const messageId = randomUUID()
+  const command = { operation: 'deliver' as const, schemaVersion: 1 as const,
+    deliveryId: randomUUID(), groupId: randomUUID(), botId: 'bot_1',
+    memberCycle: 2, messageSeq: 7, text: 'hello group',
+    payloadDigest: '' }
+  command.payloadDigest = createHash('sha256').update(JSON.stringify(['slark_bot_group_v1',
+    messageId, command.groupId, `deepseek-bot:${command.botId}`, command.memberCycle,
+    command.messageSeq, command.text])).digest('hex')
+  const claims = { schema_version: 1, issuer: origin,
+    audience: 'urn:slark:dsh-bot-group-delivery:v1', slark_audience: origin,
+    environment_id: f.account.authorityEnvironmentId,
+    owner_user_id: f.ownerId, computer_id: 'desktop-1',
+    account_issuer: f.account.issuer, account_subject: f.account.subject,
+    account_binding_epoch: f.account.authorityBindingVersion,
+    host_registry_id: botGroupHostRegistryId({ ownerUserId: f.ownerId,
+      accountIssuer: f.account.issuer, accountSubject: f.account.subject,
+      environmentId: f.account.authorityEnvironmentId,
+      installationId: f.identity.installationId,
+      accountBindingHandle: f.account.accountBindingHandle,
+      accountBindingEpoch: f.account.authorityBindingVersion }),
+    group_id: command.groupId, workspace_id: randomUUID(), session_id: 'original',
+    delivery_id: command.deliveryId, message_id: messageId,
+    message_seq: command.messageSeq, bot_id: command.botId,
+    member_cycle: command.memberCycle, payload_digest: command.payloadDigest,
+    token_id: randomUUID(), issued_at: now, expires_at: now + 60_000 }
+  const header = Buffer.from(JSON.stringify({ alg: 'EdDSA', typ: 'SLARK-DSH-BOT-GROUP',
+    version: 1, kid: f.botGroupKeyring.keys[0]!.kid })).toString('base64url')
+  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url')
+  const data = `${header}.${payload}`
+  const ticket = `${data}.${sign(null, Buffer.from(data, 'ascii'),
+    f.botGroupSigner.privateKey).toString('base64url')}`
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ ok: true,
+    value: { state: 'active', delivery_id: command.deliveryId, expires_at: claims.expires_at } }))
+  onTestFinished(() => { fetchMock.mockRestore() })
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    computerId: 'desktop-1', slarkAudience: origin, ticket, command }
+  const result = await f.client.deliverBotGroup(input)
+  expect(result).toMatchObject({ state: 'accepted', deliveryId: command.deliveryId,
+    payloadDigest: command.payloadDigest })
+  expect(fetchMock).toHaveBeenCalledWith(origin +
+    '/api/v1/dsh/collaboration-v2/group-messages/delivery-confirm',
+  expect.objectContaining({ method: 'POST', redirect: 'error', credentials: 'omit' }))
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(1)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 1, status: 'completed', text: 'done',
+  }], next: 1 })
+  const page = await f.client.readBotGroupResultPage({ ...input, after: 0 })
+  expect(page.reply).toMatchObject({ state: 'ok', next: 1, results: [{ text: 'done' }] })
+  expect(page.proof).not.toBeNull()
+  const signedProof = page.proof
+  if (!signedProof) throw Error('missing result proof')
+  const { signature, ...unsigned } = signedProof
+  expect(verify(null, encodeHostBotGroupResultProofPayload(unsigned), f.keys.publicKey,
+    Buffer.from(signature, 'base64url'))).toBe(true)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
+  expect(await f.client.acknowledgeBotGroupResult({ ...input,
+    resultId: `${command.deliveryId}:final` })).toEqual({ state: 'acknowledged' })
+  expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
+    { operation: 'ack_result', groupId: command.groupId, botId: command.botId,
+      memberCycle: command.memberCycle, deliveryId: command.deliveryId,
+      resultId: `${command.deliveryId}:final` }, expect.any(AbortSignal))
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { ...frame.result, proof: { ...signedProof, signature: 'A'.repeat(86) } } }
+    : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 1, status: 'completed', text: 'done',
+  }], next: 1 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
+    { operation: 'result_page', groupId: command.groupId, botId: command.botId,
+      memberCycle: command.memberCycle, after: 0, limit: 1 }, expect.any(AbortSignal))
+  fetchMock.mockResolvedValueOnce(Response.json({ ok: false }, { status: 409 }))
+  await expect(f.client.deliverBotGroup(input)).rejects.toThrow()
+  expect(f.operateBotGroup).toHaveBeenCalledTimes(4)
+
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
+  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .toMatchObject({ reply: { state: 'ok', results: [], next: 0 }, proof: null })
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'invalid' })
+  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .toMatchObject({ reply: { state: 'invalid' }, proof: null })
+
+  const otherDeliveryId = randomUUID()
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${otherDeliveryId}:final`, deliveryId: otherDeliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 2, status: 'completed', text: 'older result',
+  }], next: 2 })
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 3, status: 'completed', text: 'this result',
+  }], next: 3 })
+  expect(await f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .toMatchObject({ reply: { state: 'ok', next: 3,
+      results: [{ deliveryId: command.deliveryId }] } })
+  expect(f.operateBotGroup).toHaveBeenLastCalledWith(expect.any(String),
+    expect.objectContaining({ operation: 'result_page', after: 2 }), expect.any(AbortSignal))
+
+  await expect(f.client.readBotGroupResultPage({ ...input, after: -1 }))
+    .rejects.toMatchObject({ code: 'invalid_input' })
+  await expect(f.client.acknowledgeBotGroupResult({ ...input, resultId: 'wrong' }))
+    .rejects.toMatchObject({ code: 'invalid_input' })
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'conflict' })
+  await expect(f.client.acknowledgeBotGroupResult({ ...input,
+    resultId: `${command.deliveryId}:final` }))
+    .rejects.toMatchObject({ code: 'stale' })
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'accepted', deliveryId: randomUUID(),
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' })
+  await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'stale' })
+
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, method: 'profile.bot_group_deliver' } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(undefined)
+
+  const capabilities = f.client.inspection.capabilities
+  for (const capability of ['profile.bot_group_deliver', 'profile.bot_group_result_page',
+    'profile.bot_group_result_ack']) {
+    expect(Reflect.set(f.client.inspection, 'capabilities',
+      capabilities.filter(value => value !== capability))).toBe(true)
+    const call = capability === 'profile.bot_group_deliver'
+      ? f.client.deliverBotGroup(input)
+      : capability === 'profile.bot_group_result_page'
+        ? f.client.readBotGroupResultPage({ ...input, after: 0 })
+        : f.client.acknowledgeBotGroupResult({ ...input, resultId: `${command.deliveryId}:final` })
+    await expect(call).rejects.toMatchObject({ code: capability === 'profile.bot_group_result_ack'
+      ? 'invalid_input' : 'upgrade_required' })
+  }
+  expect(Reflect.set(f.client.inspection, 'capabilities', capabilities)).toBe(true)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
+    ? { ...frame, method: 'profile.bot_group_result_ack' } : frame)
+  await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'unavailable' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_deliver'
+    ? { ...frame, result: { reply: { state: 'accepted', deliveryId: command.deliveryId,
+      groupId: randomUUID(), botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' } } } : frame)
+  await expect(f.client.deliverBotGroup(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_ack'
+    ? { ...frame, result: { reply: { state: 'accepted', deliveryId: command.deliveryId,
+      groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+      payloadDigest: command.payloadDigest, sessionId: 'isolated-bot-session' } } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'acknowledged' })
+  await expect(f.client.acknowledgeBotGroupResult({ ...input,
+    resultId: `${command.deliveryId}:final` })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { reply: { state: 'ok', results: [{
+      id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+      groupId: randomUUID(), botId: command.botId, memberCycle: command.memberCycle,
+      seq: 1, status: 'completed', text: 'done',
+    }], next: 1 }, proof: null } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [], next: 0 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { ...frame.result, proof: null } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 4, status: 'completed', text: 'done',
+  }], next: 4 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(frame => frame.type === 'result' && frame.method === 'profile.bot_group_result_page'
+    ? { ...frame, result: { ...frame.result, proof: { ...signedProof,
+      account_subject: randomUUID() } } } : frame)
+  f.operateBotGroup.mockResolvedValueOnce({ state: 'ok', results: [{
+    id: `${command.deliveryId}:final`, deliveryId: command.deliveryId,
+    groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+    seq: 1, status: 'completed', text: 'done',
+  }], next: 1 })
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  f.alter(undefined)
+
+  const unrelated = randomUUID()
+  f.operateBotGroup.mockImplementation(async (_profileId, query) => {
+    if (query.operation !== 'result_page') throw Error('unexpected command')
+    const seq = query.after + 1
+    return { state: 'ok', results: [{ id: `${unrelated}:final`, deliveryId: unrelated,
+      groupId: command.groupId, botId: command.botId, memberCycle: command.memberCycle,
+      seq, status: 'completed', text: 'unrelated' }], next: seq }
+  })
+  const beforeScan = f.operateBotGroup.mock.calls.length
+  await expect(f.client.readBotGroupResultPage({ ...input, after: 0 }))
+    .rejects.toMatchObject({ code: 'unavailable' })
+  expect(f.operateBotGroup.mock.calls.length - beforeScan).toBe(1000)
+}, 30_000)
+
+it('does not advertise Bot delivery without startup-pinned Slark keys', async () => {
+  const f = await fixture(true, true, false); await f.grant()
+  expect(f.client.inspection.capabilities).not.toContain('profile.bot_group_deliver')
+  const before = f.seen.length
+  await expect(f.client.deliverBotGroup({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, computerId: 'desktop-1',
+    slarkAudience: 'https://slark.example.test', ticket: 'aaa.bbb.ccc',
+    command: { operation: 'deliver', schemaVersion: 1, deliveryId: randomUUID(),
+      groupId: randomUUID(), botId: 'bot_1', memberCycle: 1, messageSeq: 1,
+      payloadDigest: 'a'.repeat(64), text: 'hello' },
+  })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(f.seen.length).toBe(before)
+  expect(f.operateBotGroup).not.toHaveBeenCalled()
+  expect(Reflect.set(f.client.inspection, 'capabilities', [
+    ...f.client.inspection.capabilities, 'profile.bot_group_deliver' ])).toBe(true)
+  await expect(f.client.deliverBotGroup({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, computerId: 'desktop-1',
+    slarkAudience: 'https://slark.example.test', ticket: 'aaa.bbb.ccc',
+    command: { operation: 'deliver', schemaVersion: 1, deliveryId: randomUUID(),
+      groupId: randomUUID(), botId: 'bot_1', memberCycle: 1, messageSeq: 1,
+      payloadDigest: 'a'.repeat(64), text: 'hello' },
+  })).rejects.toMatchObject({ code: 'upgrade_required' })
+})
 
 it('signs a server challenge with installation identity only after Account verification on this connection', async () => {
   const f = await fixture()
