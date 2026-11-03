@@ -68,6 +68,16 @@ describe('ACP prompt lifecycle', () => {
     harness = undefined
   })
 
+  it('admits a prompt without a snapshot when no route was selected at admission', async () => {
+    harness = await makeBridgeHarness({ script: [textResponse('completed')] })
+    const sessionId = await newSession(harness)
+    const agent = harness.ctx.agents.get(SessionId(sessionId))!
+    vi.spyOn(agent.model, 'selected').mockReturnValueOnce(undefined)
+    const result = await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] })
+    expect(result.stopReason).toBe('end_turn')
+    await vi.waitFor(() => { expect(messageText(harness!)).toBe('completed') })
+  })
+
   it('reports a max-token turn without losing its committed text', async () => {
     harness = await makeBridgeHarness({ script: [maxTokensResponse('cut off')] })
     const sessionId = await newSession(harness)

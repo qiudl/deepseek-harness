@@ -339,6 +339,20 @@ describe('WorkspaceController commands', () => {
 })
 
 describe('WorkspaceController follow', () => {
+  it('preserves an older baseline without the optional dedicated Session list', async () => {
+    const { controller } = await harness()
+    const baseline = { items: [], archivedSessionIds: [], pinnedSessionIds: [] }
+    const read = vi.spyOn(WorkspaceFeed.prototype, 'baseline').mockReturnValue(baseline)
+    const abort = new AbortController()
+    const iterator = controller.follow(abort.signal)[Symbol.asyncIterator]()
+    try {
+      await expect(nextFrame(iterator)).resolves.toEqual({ type: 'baseline', value: baseline })
+    } finally {
+      abort.abort()
+      await iterator.return?.()
+      read.mockRestore()
+    }
+  })
   it('seeds a new feed from existing rows and rejects an inconsistent registry commit', async () => {
     const { ctx, root } = await harness()
     const existing = await ctx.workspaceRegistry.create(stageDir(root, 'existing'))

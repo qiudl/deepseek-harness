@@ -116,6 +116,23 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it.each(['session', 'ui'] as const)('registers only the enabled private Desktop %s routes', async (enabled) => {
+    vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', '')
+    vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', enabled === 'session' ? 'A'.repeat(43) : '')
+    vi.stubEnv('DSH_PROFILE_REMOTE_UI_TOKEN', enabled === 'ui' ? 'A'.repeat(43) : '')
+    stageDist()
+    const ctx = new Context(), gatewayCtx = new Context()
+    onTestFinished(async () => { await ctx.fiber.dispose(); await gatewayCtx.fiber.dispose() })
+    const { server, routes } = fakeHttpServer()
+    ctx.provide('webServer', server)
+    provideConnection(ctx)
+    ctx.provide('typertGateway', new TypertGatewayService(gatewayCtx, {}))
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
+    await ctx.fiber.await()
+    expect([...routes.keys()].sort()).toEqual(enabled === 'session'
+      ? ['/internal/desktop-remote-session']
+      : ['/internal/desktop-remote-ui', '/internal/desktop-remote-ui-stream'])
+  })
   it('binds private group capture and Source output reads to the current Session controller', async () => {
     vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', 'B'.repeat(43))
     stageDist()

@@ -447,6 +447,30 @@ describe('session.create reuse of a live blank Session', () => {
     expect('existingPreset' in response.error.details).toBe(false)
     expect(response.error.message).toBe('the deployment composes no agent preset roster, so session "s7" cannot run preset "standard"')
   })
+
+  it('does not invent a previous preset when exact adoption conflicts with a preset-less Session', async () => {
+    const id = SessionId('presetless-stored')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-session-preset-stored-')))
+    tempDirs.push(cwd)
+    const { remote } = await harness({ presets: ['standard'],
+      stored: new Map([[id, { header: storedHeader(id, cwd), events: [] }]]) })
+    const response = await remote.create({ sessionId: id, cwd, exactAdopt: true, agentPreset: 'standard' })
+    expect(response).toMatchObject({ ok: false, error: { code: 'agent-preset/conflict',
+      details: { sessionId: id, requestedPreset: 'standard' } } })
+    if (response.ok) throw new Error('expected preset conflict')
+    expect('existingPreset' in response.error.details).toBe(false)
+  })
+
+  it('includes the previous preset when exact adoption names a different one', async () => {
+    const id = SessionId('preset-stored')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-session-preset-stored-')))
+    tempDirs.push(cwd)
+    const { remote } = await harness({ presets: ['standard', 'other'],
+      stored: new Map([[id, { header: storedHeader(id, cwd, { agentPreset: 'standard' }), events: [] }]]) })
+    const response = await remote.create({ sessionId: id, cwd, exactAdopt: true, agentPreset: 'other' })
+    expect(response).toMatchObject({ ok: false, error: { code: 'agent-preset/conflict',
+      details: { sessionId: id, requestedPreset: 'other', existingPreset: 'standard' } } })
+  })
 })
 
 describe('session.create reuse of a stored blank Session', () => {
@@ -545,6 +569,8 @@ describe('session.create reuse of a stored blank Session', () => {
       held: new Set([draft]),
     })
 
+    const exact = await remote.create({ sessionId: draft, cwd, exactAdopt: true })
+    expect(exact).toMatchObject({ ok: false, error: { code: 'session/writer-held', details: { sessionId: draft } } })
     const created = await remote.create({ sessionId: draft, cwd })
 
     if (!created.ok) throw new Error(`create failed: ${created.error.message}`)
