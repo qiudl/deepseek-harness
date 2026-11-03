@@ -25,6 +25,7 @@ import type {
   HostCollaborationDeliveryCapsule, HostCollaborationDeliveryReceipt, ProfileCollaborationDeliveryRequest,
   HostExtensionCommand, HostExtensionResponse, HostExtensionKind, HostRemoteSessionCommand,
   HostRemoteSessionJson, ProfileExtensionsRequest, ProfileRemoteSessionRequest,
+  ProfileMemoryQueryRequest, ProfileMemoryQueryResult,
   ProfileRemoteUiReadRequest, ProfileRemoteUiStreamRequest, ProfileRemoteUiStreamResult,
   ProfileModelClaimInventoryRequest,
   ProfileModelClaimRecoveryInventoryRequest,
@@ -123,6 +124,11 @@ import type {
   ProfileViewLeaseId,
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import type { MemoryDirectiveVerifier } from './memory-directive-verifier.ts'
+import type { HostMemoryProfileReader } from './memory-evidence-index.ts'
+import { HostMemoryReadController } from './memory-read-controller.ts'
+import { projectHostMemoryToWorker, searchHostMemoryWithWorker,
+  type MemoryWorkerLink, type MemoryWorkerStamp } from './memory-worker-session.ts'
 import { DesktopModelWorkerError } from './dsh-web-profile-worker.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import { hostStepRejection, type HostDiagnostics } from './host-diagnostics.ts'
@@ -237,6 +243,12 @@ export interface UnixHostServerOptions {
   readonly attestPeer: UnixPeerAttestor
   readonly identity: HostIdentity
   readonly host: DesktopHost
+  /** Present only when the embedding pins Slark's public memory signing keys. */
+  readonly memoryDirectiveVerifier?: MemoryDirectiveVerifier
+  /** Capture the current Account worker generation without exposing raw Sessions to Desktop. */
+  readonly memoryProfileReader?: (profileId: string) => HostMemoryProfileReader
+  /** Open an attested, process-owned semantic worker for one current Host index. */
+  readonly openMemoryWorker?: (stamp: MemoryWorkerStamp, signal: AbortSignal) => Promise<MemoryWorkerLink>
   /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
   readonly diagnostics?: HostDiagnostics
   /** Read effective choice only in the Account-authorized Profile worker. */
@@ -501,6 +513,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'remoteUiStream' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'memoryDirectiveVerifier' | 'memoryProfileReader' | 'openMemoryWorker'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -893,6 +906,9 @@ class FrameChannel implements HostClientFrameTransport {
 
   close(): void { this.socket.destroy() }
 
+  /** Wait for every frame already received on this transport to settle. */
+  drain(): Promise<void> { return this.requestTail }
+
   call(frame: HostControlFrame, signal?: AbortSignal): Promise<HostControlFrame> {
     if (this.failed) return Promise.reject(this.failed)
     const id = frame.request_id
@@ -949,11 +965,29 @@ class FrameChannel implements HostClientFrameTransport {
 /** Shared post-attestation authority used identically by Unix and Windows carriers. */
 export class HostControlAuthority {
   private readonly deliveryUploads = new CollaborationDeliveryUploads()
+  private readonly memoryWorkers = new Set<MemoryWorkerLink>()
+  private readonly memoryWorkerFailures = new Set<unknown>()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
+    let memorySlot: { key: string
+      controller: HostMemoryReadController
+      worker?: MemoryWorkerLink
+      stamp?: MemoryWorkerStamp } | undefined
+    let memoryBusy = false
+    const clearMemorySlot = async (): Promise<void> => {
+      const slot = memorySlot
+      memorySlot = undefined
+      slot?.controller.clear()
+      if (slot?.worker) {
+        try { await slot.worker.close() }
+        catch (error) { this.memoryWorkerFailures.add(error); throw error }
+        finally { this.memoryWorkers.delete(slot.worker) }
+      }
+    }
+    signal.addEventListener('abort', () => { void clearMemorySlot().catch(() => undefined) }, { once: true })
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
       readonly profileId: string
@@ -1035,6 +1069,87 @@ export class HostControlAuthority {
       ),
       dispatchAuthorized: async (frame, context, respond) => {
         const channel = { send: respond }
+        if (frame.method === 'profile.memory_query') {
+          const verifier = this.options.memoryDirectiveVerifier
+          const readerFor = this.options.memoryProfileReader
+          if (!verifier || !readerFor) throw new HostAuthorityError('upgrade_required')
+          if (memoryBusy) throw new HostAuthorityError('busy')
+          memoryBusy = true
+          try {
+            const params: ProfileMemoryQueryRequest['params'] = frame.params
+            const key = JSON.stringify([params.authority_environment_id, params.account_binding_handle,
+              params.authority_binding_version, params.account_issuer, params.account_subject,
+              params.owner_user_id, params.computer_id])
+            if (memorySlot?.key !== key) {
+              await clearMemorySlot()
+              const current = () => {
+                context.signal.throwIfAborted()
+                const account = { authorityEnvironmentId: params.authority_environment_id,
+                  accountBindingHandle: params.account_binding_handle,
+                  authorityBindingVersion: params.authority_binding_version, ownerId,
+                  issuer: params.account_issuer, subject: params.account_subject }
+                this.options.host.authorizeCollaborationRegistration(account)
+                const profileId = this.options.host.authorizeAccountModelText(account)
+                return { environmentId: params.authority_environment_id,
+                  ownerUserId: params.owner_user_id, computerId: params.computer_id,
+                  installationId: this.options.identity.installationId, profileId,
+                  hostInstanceId: this.options.identity.hostInstanceId,
+                  processNonce: this.options.identity.processNonce, reader: readerFor(profileId) }
+              }
+              memorySlot = { key, controller: new HostMemoryReadController(verifier, current) }
+            }
+            const controller = memorySlot.controller
+            let result: ProfileMemoryQueryResult['result']
+            if (params.command.action === 'warm') {
+              if (this.options.openMemoryWorker) {
+                if (memorySlot.worker) await clearMemorySlot()
+                const slot: NonNullable<typeof memorySlot> = { key, controller }
+                memorySlot = slot
+                const started = await projectHostMemoryToWorker(controller,
+                  this.options.openMemoryWorker, context.signal)
+                /* v8 ignore next 4 -- transport abort can race the final projection check and this continuation. */
+                if (memorySlot !== slot || context.signal.aborted) {
+                  await started.worker.close()
+                  throw new HostAuthorityError('stale')
+                }
+                slot.worker = started.worker
+                slot.stamp = started.stamp
+                this.memoryWorkers.add(started.worker)
+                void started.worker.done.then(() => {
+                  if (memorySlot === slot) { slot.controller.clear(); memorySlot = undefined }
+                  this.memoryWorkers.delete(started.worker)
+                }, (error: unknown) => {
+                  if (memorySlot === slot) { slot.controller.clear(); memorySlot = undefined }
+                  this.memoryWorkers.delete(started.worker)
+                  this.memoryWorkerFailures.add(error)
+                })
+              } else await controller.warm(context.signal)
+              result = { action: 'warm', state: 'ready' }
+            } else if (params.command.action === 'search') {
+              let found: { generation: number; items: readonly unknown[] }
+              if (this.options.openMemoryWorker) {
+                if (!memorySlot.worker || !memorySlot.stamp) throw new HostAuthorityError('stale')
+                found = await searchHostMemoryWithWorker(controller, memorySlot.worker, memorySlot.stamp,
+                  params.command.directive, params.command.query, params.command.limit, context.signal)
+              } else {
+                found = await controller.search(params.command.directive, params.command.query,
+                  params.command.limit, context.signal)
+              }
+              result = { action: 'search', generation: found.generation, items: found.items as never }
+            } else {
+              const chunk = await controller.evidenceChunk(params.command.directive,
+                params.command.source_ref, params.command.offset, context.signal)
+              result = chunk === null ? { action: 'evidence_chunk', state: 'missing' }
+                : { action: 'evidence_chunk', state: 'ready', chunk: chunk as never }
+            }
+            channel.send(decodeHostControlFrame(encodeHostControlFrame({ version: 1, type: 'result',
+              request_id: frame.request_id, method: frame.method, result })))
+          } catch (error) {
+            if (this.options.openMemoryWorker) await clearMemorySlot()
+            throw error
+          } finally { memoryBusy = false }
+          return
+        }
         const accountClaimView = (viewLeaseId: string, leaseGeneration: number, runtimeGeneration: number) => {
           context.signal.throwIfAborted()
           return this.options.host.authorizeAccountModelClaimView({
@@ -2159,9 +2274,23 @@ export class HostControlAuthority {
         }
       },
       errorResponse: (frame, error) => safeError(authorityCode(error), frame),
-      revokeOwner: (connectionOwnerId) => { this.options.host.revokeOwner(connectionOwnerId) },
+      revokeOwner: (connectionOwnerId) => {
+        void clearMemorySlot().catch(() => undefined)
+        this.options.host.revokeOwner(connectionOwnerId)
+      },
     })
     return session
+  }
+
+  /** Stop every accepted semantic worker before Host shutdown reports completion. */
+  async closeMemoryWorkers(): Promise<void> {
+    const workers = [...this.memoryWorkers]
+    const results = await Promise.allSettled(workers.map(worker => worker.close()))
+    for (const worker of workers) this.memoryWorkers.delete(worker)
+    const errors = new Set<unknown>(this.memoryWorkerFailures)
+    for (const result of results) if (result.status === 'rejected') errors.add(result.reason)
+    this.memoryWorkerFailures.clear()
+    if (errors.size > 0) throw new AggregateError([...errors], 'HY worker shutdown failed')
   }
 
   private inspect(
@@ -2190,6 +2319,8 @@ export class HostControlAuthority {
           ...capabilities,
           'profile.collaboration_registration',
           ...(this.options.generateModelText ? ['profile.model_text'] : []),
+          ...(this.options.memoryDirectiveVerifier && this.options.memoryProfileReader
+            ? ['profile.memory_query'] : []),
           ...(this.options.rootJournal ? ['profile.root_journal'] : []),
           ...(this.options.inspectCollaborationRoot ? ['profile.root_authority'] : []),
           ...(this.options.inspectRootPlanningAttempt ? ['profile.root_planning_attempt_authority'] : []),
@@ -2264,6 +2395,7 @@ export class UnixHostServer {
   private server: Server | undefined
   private socketIdentity?: { dev: number; ino: number }
   private readonly connections = new Set<Socket>()
+  private readonly channels = new Set<FrameChannel>()
   private readonly authority: HostControlAuthority
   constructor(private readonly options: UnixHostServerOptions) {
     this.authority = new HostControlAuthority(options)
@@ -2308,14 +2440,22 @@ export class UnixHostServer {
     const server = this.server
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
-    await this.options.extensions?.operations.dispose()
+    const failures: unknown[] = []
+    try { await Promise.all([...this.channels].map(channel => channel.drain())) }
+    catch (error) { failures.push(error) }
+    try { await this.authority.closeMemoryWorkers() }
+    catch (error) { failures.push(error) }
+    try { await this.options.extensions?.operations.dispose() }
+    catch (error) { failures.push(error) }
     if (server) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error)
-          else resolve()
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error)
+            else resolve()
+          })
         })
-      })
+      } catch (error) { failures.push(error) }
     }
     try {
       const stat = lstatSync(this.options.socketPath)
@@ -2324,8 +2464,10 @@ export class UnixHostServer {
         unlinkSync(this.options.socketPath)
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') failures.push(error)
     }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Unix Host shutdown failed')
   }
 
   private async accept(socket: Socket): Promise<void> {
@@ -2344,9 +2486,14 @@ export class UnixHostServer {
         throw new HostAuthorityError('unauthorized')
       }
     } catch { socket.destroy(); return }
+    if (socket.destroyed || !this.server) { socket.destroy(); return }
     const session = this.authority.openSession(ownerId, transportLifetime.signal)
     const channel = new FrameChannel(socket, async (frame) => {
       channel.send(await session.handleRequest(frame))
+    })
+    this.channels.add(channel)
+    socket.once('close', () => {
+      void channel.drain().then(() => { this.channels.delete(channel) })
     })
     socket.resume()
   }
@@ -3663,6 +3810,32 @@ export class UnixHostClient {
     return this.remoteProfileValue(request, input.signal)
   }
 
+  /** Read only redacted Account memory through a capability-advertised Host.
+   * @param input - Current Account binding and signed memory command.
+   * @returns The Host's bounded memory result.
+   */
+  async memoryQuery(input: AccountBindingInput & {
+    readonly issuer: string
+    readonly subject: string
+    readonly ownerUserId: string
+    readonly computerId: string
+    readonly command: ProfileMemoryQueryRequest['params']['command']
+    readonly signal?: AbortSignal
+  }): Promise<ProfileMemoryQueryResult['result']> {
+    if (!this.inspection.capabilities.includes('profile.memory_query' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileMemoryQueryRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.memory_query',
+      params: { ...this.collaborationAccountRequestParams(input),
+        owner_user_id: input.ownerUserId, computer_id: input.computerId, command: input.command },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    return frame.result
+  }
+
   /**
    * Execute one bounded read through the lease-selected Profile worker.
    * @param input - Live view lease, exact read endpoint, arguments, and cancellation.
@@ -4396,7 +4569,7 @@ export class UnixHostClient {
 
   private async call(
     request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
-      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
+      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileMemoryQueryRequest | ProfileRemoteUiReadRequest
       | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
       | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
       | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest

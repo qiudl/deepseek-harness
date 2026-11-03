@@ -8,7 +8,7 @@ import { encodeHostControlFrame } from '@deepseek-ai/dsh-host-control-protocol'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { DesktopHost } from '../src/desktop-host.ts'
 import type { SingleHostLock } from '../src/single-instance.ts'
-import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
+import { HostControlAuthority, UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
 
 const uid = process.getuid!()
 const keys = generateKeyPairSync('ed25519')
@@ -131,6 +131,45 @@ describe('Unix Host server resource ownership', () => {
     onTestFinished(() => { chmodSync(blocked, 0o700); rmSync(root, { recursive: true, force: true }) })
     const server = new UnixHostServer(options(join(blocked, 'host.sock')))
     await expect(server.close()).rejects.toMatchObject({ code: 'EACCES' })
+  })
+
+  it('finishes socket cleanup after request, worker and extension shutdown failures', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-unix-server-multi-failure-'))
+    const socketPath = join(root, 'host.sock')
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const settings = options(socketPath)
+    const server = new UnixHostServer(settings)
+    const failures = [new Error('request drain'), new Error('worker close'), new Error('extension dispose')]
+    const channels = Reflect.get(server, 'channels') as Set<{ drain(): Promise<void> }>
+    channels.add({ drain: async () => { throw failures[0] } })
+    const authority = Reflect.get(server, 'authority') as HostControlAuthority
+    vi.spyOn(authority, 'closeMemoryWorkers').mockRejectedValue(failures[1])
+    Reflect.set(settings, 'extensions', { operations: { dispose: async () => { throw failures[2] } } })
+    await server.start()
+    await expect(server.close()).rejects.toMatchObject({ errors: failures })
+    expect(existsSync(socketPath)).toBe(false)
+  })
+
+  it('refuses a peer whose attestation finishes after the Unix listener closes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-unix-server-attest-close-'))
+    const socketPath = join(root, 'host.sock')
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const entered = Promise.withResolvers<undefined>()
+    const released = Promise.withResolvers<{ uid: number; executableSignatureDigest: string }>()
+    const server = new UnixHostServer(options(socketPath, {
+      attestPeer: async () => { entered.resolve(undefined); return released.promise },
+    }))
+    await server.start()
+    const socket = createConnection(socketPath)
+    socket.on('error', () => undefined)
+    await once(socket, 'connect')
+    await entered.promise
+    const closing = server.close()
+    released.resolve({ uid, executableSignatureDigest: allowedDigest })
+    await closing
+    if (!socket.destroyed) await once(socket, 'close')
+    expect(socket.destroyed).toBe(true)
+    expect(existsSync(socketPath)).toBe(false)
   })
 
   it('rejects each invalid peer fact before opening a control session', async () => {
