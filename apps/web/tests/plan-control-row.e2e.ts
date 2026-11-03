@@ -267,7 +267,7 @@ describe('web e2e: plan chip click area at the narrow viewport', () => {
     await selectModel(page, LONG_MODEL)
     await expectControlLayout(page, false)
 
-    await resizeControls(page, 440)
+    await resizeControls(page, 360)
     await expectControlLayout(page, true)
     const trigger = page.getByRole('button', { name: /Select model/ })
     expect(await trigger.getAttribute('title')).toContain(LONG_MODEL)

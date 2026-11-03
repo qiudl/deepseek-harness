@@ -435,7 +435,12 @@ it('reads original-root collaboration history from the built Trajectory tab with
   await act(async () => { fireEvent.click(start) })
   await waitFor(() => { expect(remote.mock.log.calls('session/collaborationSources').length).toBeGreaterThan(0) })
   await screen.findByText('Check the recorded file operation', {}, { timeout: 10_000 })
-  fireEvent.click(await screen.findByRole('tab', { name: 'Trajectory' }, { timeout: 10_000 }))
+  const trajectory = screen.queryByRole('tab', { name: 'Trajectory' })
+  if (trajectory) fireEvent.click(trajectory)
+  else {
+    fireEvent.click(screen.getByRole('button', { name: 'More conversation views' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Trajectory' }))
+  }
   const panel = await screen.findByTestId('slark-collaboration-trajectory', {}, { timeout: 10_000 })
   fireEvent.click(within(panel).getByTestId('slark-trace-load'))
   await within(panel).findByText(root.root_trace_id)
