@@ -166,7 +166,7 @@ export class WindowsHostWorkerParentSupervisor {
 
   private acceptReadyIfPresent(): void {
     if (this.readySettled) return
-    const handle = this.bridge.cancellationThreadHandle
+    const handle = this.bridge.cancellationThreadHandles[0]
     if (handle === undefined) return
     this.readySettled = true
     this.supervisorState = 'ready'
@@ -218,12 +218,12 @@ export class WindowsHostWorkerParentSupervisor {
     const bridgeStop = this.bridge.requestStop()
     const cleanup = this.observeCleanup(bridgeStop)
 
-    const handle = this.bridge.cancellationThreadHandle
-    const worker = handle === undefined
+    const handles = this.bridge.cancellationThreadHandles
+    const worker = handles.length === 0
       ? await this.stopWithoutCancellationHandle()
       : await stopWindowsBlockingWorker({
         flag: this.options.stopFlag,
-        threadHandle: handle,
+        threadHandles: () => this.bridge.cancellationThreadHandles,
         cancellation: this.options.cancellation,
         workerDone: this.options.workerDone,
         maxCancelAttempts: this.options.maxCancelAttempts,
@@ -237,30 +237,33 @@ export class WindowsHostWorkerParentSupervisor {
     }
     this.completedStop = result
     this.supervisorState = result.state
-    if (result.state === 'still_running' && handle !== undefined) {
-      this.releaseRetainedHandleAfterExit(handle, result)
+    if (result.state === 'still_running' && handles.length > 0) {
+      this.releaseRetainedHandlesAfterExit(result)
     }
     return result
   }
 
-  private releaseRetainedHandleAfterExit(
-    handle: bigint,
+  private releaseRetainedHandlesAfterExit(
     prior: WindowsHostWorkerSupervisorStopResult,
   ): void {
     void this.options.workerDone.then(
-      () => { this.confirmLateExit(handle, prior) },
+      () => { this.confirmLateExit(prior) },
       (error: unknown) => {
         this.reportFailure(asError(error))
-        this.confirmLateExit(handle, prior)
+        this.confirmLateExit(prior)
       },
     )
   }
 
-  private confirmLateExit(handle: bigint, prior: WindowsHostWorkerSupervisorStopResult): void {
-    try { this.options.cancellation.close(handle) } catch (error) {
-      this.reportFailure(asError(error))
-      return
+  private confirmLateExit(prior: WindowsHostWorkerSupervisorStopResult): void {
+    let failed = false
+    for (const handle of this.bridge.cancellationThreadHandles) {
+      try { this.options.cancellation.close(handle) } catch (error) {
+        failed = true
+        this.reportFailure(asError(error))
+      }
     }
+    if (failed) return
     /* v8 ignore next -- one cached stop operation owns the sole retained-handle callback. */
     if (this.completedStop !== prior) return
     this.completedStop = { ...prior, state: 'stopped' }

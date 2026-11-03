@@ -6,7 +6,8 @@ import type {
 /** Explicit caller-owned retry budget for stopping one blocking Windows Worker. */
 export interface StopWindowsBlockingWorkerOptions {
   readonly flag: WindowsWorkerStopFlag
-  readonly threadHandle: bigint
+  /** Live snapshot of every announced blocking thread handle; late handles join later rounds. */
+  readonly threadHandles: () => readonly bigint[]
   readonly cancellation: WindowsWorkerIoCancellation
   readonly workerDone: Promise<void>
   readonly maxCancelAttempts: number
@@ -19,10 +20,12 @@ export type StopWindowsBlockingWorkerResult =
   | { readonly state: 'still_running'; readonly cancelAttempts: number; readonly lastCancellationError?: Error }
 
 /**
- * Stop one Worker without closing the only handle that can cancel a TOCTOU-late native call.
- * The caller supplies the retry clock and finite attempt budget. A bounded failure retains
- * handle ownership so the Host supervisor can escalate to its process-level fallback.
- * @param options - shared flag, real thread handle, Worker completion, and retry policy.
+ * Stop one Worker without closing the handles that can cancel a TOCTOU-late native call.
+ * Each retry round cancels every announced blocking thread (acceptor plus per-connection
+ * server slots); cancelling a thread without pending I/O is a documented no-op. The caller
+ * supplies the retry clock and finite attempt budget. A bounded failure retains handle
+ * ownership so the Host supervisor can escalate to its process-level fallback.
+ * @param options - shared flag, real thread handles, Worker completion, and retry policy.
  * @returns confirmed stopped state or an explicit still-running escalation state.
  */
 export async function stopWindowsBlockingWorker(
@@ -47,14 +50,17 @@ export async function stopWindowsBlockingWorker(
   let lastCancellationError: Error | undefined
   while (workerOutcome === undefined && cancelAttempts < options.maxCancelAttempts) {
     cancelAttempts += 1
-    try {
-      options.cancellation.cancel(options.threadHandle)
-      lastCancellationError = undefined
-    } catch (error) {
-      lastCancellationError = error instanceof Error
-        ? error
-        : new Error('Unknown Windows Worker cancellation failure')
+    let roundFailure: Error | undefined
+    for (const threadHandle of options.threadHandles()) {
+      try {
+        options.cancellation.cancel(threadHandle)
+      } catch (error) {
+        roundFailure ??= error instanceof Error
+          ? error
+          : new Error('Unknown Windows Worker cancellation failure')
+      }
     }
+    lastCancellationError = roundFailure
     await Promise.race([observedDone, options.waitForRetry()])
     await Promise.resolve()
   }
@@ -67,10 +73,12 @@ export async function stopWindowsBlockingWorker(
     }
   }
   let closeFailure: Error | undefined
-  try { options.cancellation.close(options.threadHandle) } catch (error) {
-    closeFailure = error instanceof Error
-      ? error
-      : new Error('Unknown Windows Worker cancellation-handle cleanup failure')
+  for (const threadHandle of options.threadHandles()) {
+    try { options.cancellation.close(threadHandle) } catch (error) {
+      closeFailure ??= error instanceof Error
+        ? error
+        : new Error('Unknown Windows Worker cancellation-handle cleanup failure')
+    }
   }
   if (workerOutcome.error !== undefined) throw workerOutcome.error
   if (closeFailure !== undefined) throw closeFailure

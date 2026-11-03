@@ -10,6 +10,17 @@ export interface WindowsLegacySourcePresence {
 }
 
 /**
+ * Owners proving the home belongs to the machine's own account model: the user itself, or the
+ * stock-Windows state where the profile service leaves the profile directory owned by SYSTEM
+ * or the local Administrators group. Any other owner means a foreign home.
+ */
+const TRUSTED_HOME_OWNERS: ReadonlySet<string> = new Set(['S-1-5-18', 'S-1-5-32-544'])
+
+function trustedHomeOwner(ownerSid: string, userSid: string): boolean {
+  return ownerSid === userSid || TRUSTED_HOME_OWNERS.has(ownerSid)
+}
+
+/**
  * Observe only the OS-selected user's .dsh directory and its ancestors, without content reads.
  * Existing empty directories remain present. Missing ancestors, failed native checks, and foreign
  * user-home ownership remain unknown. Handles close between reads: this is not a stable-tree
@@ -39,12 +50,13 @@ export function probeWindowsLegacySourcePresence(input: {
     for (const ancestor of ancestors) {
       const evidence = inspect.call(input.bindings, ancestor)
       if (evidence.kind !== 'directory' || evidence.reparsePoint
-        || (ancestor === path && evidence.ownerSid !== input.userSid)) return unknown
+        || (ancestor === path && !trustedHomeOwner(evidence.ownerSid, input.userSid))) return unknown
     }
   } catch { return unknown }
   try {
     const evidence = inspect.call(input.bindings, win32.join(path, '.dsh'))
-    if (evidence.kind !== 'directory' || evidence.reparsePoint || evidence.ownerSid !== input.userSid) return unknown
+    if (evidence.kind !== 'directory' || evidence.reparsePoint
+      || !trustedHomeOwner(evidence.ownerSid, input.userSid)) return unknown
     return { observedState: 'present', migrationAdmitted: false }
   } catch (error) {
     if (error instanceof WindowsHostRegistrationNativeError

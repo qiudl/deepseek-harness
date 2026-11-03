@@ -37,6 +37,7 @@ function inspection(request: HostInspectRequest): HostInspectResult {
       installation_id: installationId as never, installation_public_key: publicKey as never,
       runtime_generation: 5, schema_generation: 1,
       process_nonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q' as never,
+      boot_nonce: 'A'.repeat(43) as never,
       capabilities, challenge_signature: 'A'.repeat(86) as never, executable_signature_digest: digest as never,
     },
   }

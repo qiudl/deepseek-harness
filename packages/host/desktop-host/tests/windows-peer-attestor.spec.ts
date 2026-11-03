@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
+import { createHostDiagnostics, type HostDiagnostics } from '../src/host-diagnostics.ts'
 import { HostAuthorityError } from '../src/index.ts'
 import { createWindowsPeerAttestor } from '../src/windows-peer-attestor.ts'
 
@@ -7,6 +8,7 @@ const daemonBytes = Buffer.from('signed Slark daemon fixture')
 const daemonDigest = createHash('sha256').update(daemonBytes).digest('hex')
 const publisher = 'A'.repeat(64)
 const ownerSid = 'S-1-5-21-1000-2000-3000-1001'
+const daemonPath = String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`
 
 function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor>[0]['bindings']> = {}) {
   return {
@@ -15,13 +17,18 @@ function bindings(overrides: Partial<Parameters<typeof createWindowsPeerAttestor
     processOwnerSid: vi.fn((_processHandle: bigint) => ownerSid),
     openProcessExecutable: vi.fn((_processHandle: bigint) => ({
       handle: 202n,
-      path: String.raw`C:\Program Files\Slark\slark-daemon-windows-x64.exe`,
+      path: daemonPath,
     })),
     verifyAuthenticodePublisher: vi.fn((_executableHandle: bigint) => publisher),
     digestExecutable: vi.fn((_executableHandle: bigint) => daemonDigest),
     closeHandle: vi.fn(),
     ...overrides,
   }
+}
+
+function diagnosticsSink() {
+  const record = vi.fn<HostDiagnostics['record']>()
+  return { diagnostics: { record }, record }
 }
 
 describe('Windows named-pipe peer attestation', () => {
@@ -262,5 +269,112 @@ describe('Windows named-pipe peer attestation', () => {
     finishOwnerQuery?.(ownerSid)
     await expect(pending).rejects.toBeInstanceOf(HostAuthorityError)
     expect(pendingBindings.closeHandle).toHaveBeenCalledWith(101n)
+  })
+
+  it('records a stable reason for every rejected attestation step while still rejecting unauthorized', async () => {
+    const rejections: readonly {
+      readonly reason: string
+      readonly bindings?: Partial<Parameters<typeof createWindowsPeerAttestor>[0]['bindings']>
+      readonly pipeHandle?: bigint
+    }[] = [
+      { reason: 'pipe_handle_invalid', pipeHandle: 0n },
+      {
+        reason: 'process_binding_failed',
+        bindings: { openClientProcess: vi.fn(() => { throw new Error('kernel query failed') }) },
+      },
+      { reason: 'process_identity_invalid', bindings: { openClientProcess: vi.fn(() => ({ pid: 0, handle: 101n })) } },
+      { reason: 'process_identity_invalid', bindings: { openClientProcess: vi.fn(() => ({ pid: 42, handle: 91n })) } },
+      { reason: 'owner_sid_unavailable', bindings: { currentUserSid: vi.fn(() => { throw new Error('token') }) } },
+      { reason: 'owner_sid_invalid', bindings: { processOwnerSid: vi.fn((_handle: bigint) => '') } },
+      { reason: 'owner_sid_mismatch', bindings: { processOwnerSid: vi.fn((_handle: bigint) => 'S-1-5-21-9-9-9-1002') } },
+      {
+        reason: 'executable_binding_failed',
+        bindings: { openProcessExecutable: vi.fn(() => { throw new Error('image unavailable') }) },
+      },
+      {
+        reason: 'executable_handle_invalid',
+        bindings: { openProcessExecutable: vi.fn(() => ({ handle: 101n, path: daemonPath })) },
+      },
+      {
+        reason: 'path_invalid',
+        bindings: { openProcessExecutable: vi.fn(() => ({ handle: 202n, path: String.raw`\\server\share\slark.exe` })) },
+      },
+      {
+        reason: 'publisher_unavailable',
+        bindings: { verifyAuthenticodePublisher: vi.fn(() => { throw new Error('signature unavailable') }) },
+      },
+      { reason: 'publisher_invalid', bindings: { verifyAuthenticodePublisher: vi.fn(() => '') } },
+      { reason: 'publisher_not_allowed', bindings: { verifyAuthenticodePublisher: vi.fn(() => 'B'.repeat(64)) } },
+      {
+        reason: 'digest_unavailable',
+        bindings: { digestExecutable: vi.fn(() => { throw new Error('read failed') }) },
+      },
+      { reason: 'digest_invalid', bindings: { digestExecutable: vi.fn(() => 'not-a-digest') } },
+      {
+        reason: 'digest_not_allowed',
+        bindings: { digestExecutable: vi.fn(() => createHash('sha256').update('attacker').digest('hex')) },
+      },
+      {
+        reason: 'cleanup_failed',
+        bindings: { closeHandle: vi.fn(() => { throw new Error('CloseHandle failed') }) },
+      },
+    ]
+    for (const rejection of rejections) {
+      const sink = diagnosticsSink()
+      const attest = createWindowsPeerAttestor({
+        allowedPublisherThumbprints: new Set([publisher]),
+        allowedExecutableDigests: new Set([daemonDigest]),
+        bindings: bindings(rejection.bindings ?? {}),
+        diagnostics: sink.diagnostics,
+      })
+      await expect(attest(rejection.pipeHandle ?? 91n)).rejects.toMatchObject({ code: 'unauthorized' })
+      expect(sink.record).toHaveBeenCalledOnce()
+      expect(sink.record).toHaveBeenCalledWith({ event: 'peer-attest', reason: rejection.reason })
+    }
+  })
+
+  it('records nothing when the accepted peer proves every native fact', async () => {
+    const sink = diagnosticsSink()
+    const attest = createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: bindings(),
+      diagnostics: sink.diagnostics,
+    })
+
+    await expect(attest(91n)).resolves.toMatchObject({ pid: 42, executablePath: daemonPath })
+    expect(sink.record).not.toHaveBeenCalled()
+  })
+
+  it('writes only the reason code, never the rejected executable path', async () => {
+    const appended: Buffer[] = []
+    const attest = createWindowsPeerAttestor({
+      allowedPublisherThumbprints: new Set([publisher]),
+      allowedExecutableDigests: new Set([daemonDigest]),
+      bindings: bindings({ verifyAuthenticodePublisher: vi.fn(() => 'B'.repeat(64)) }),
+      diagnostics: {
+        record: (sink) => {
+          createHostDiagnostics({
+            root: String.raw`C:\Slark\env`,
+            now: () => 0,
+            fileOperations: {
+              ensureDirectory: () => undefined,
+              append: (_path, contents) => { appended.push(contents) },
+              length: () => undefined,
+              replace: () => undefined,
+            },
+          }).record(sink)
+        },
+      },
+    })
+
+    await expect(attest(91n)).rejects.toMatchObject({ code: 'unauthorized' })
+    const written = Buffer.concat(appended).toString('utf8')
+    expect(written).toContain('"event":"peer-attest"')
+    expect(written).toContain('"reason":"publisher_not_allowed"')
+    expect(written).not.toContain('Slark')
+    expect(written).not.toContain('slark-daemon')
+    expect(written).not.toContain('\\')
+    expect(written).not.toContain(ownerSid)
   })
 })

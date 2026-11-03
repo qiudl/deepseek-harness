@@ -74,6 +74,17 @@ it('binds the parent pending key to the selected Agent refs and preserves them o
   expect(sends[1]).toEqual(sends[0])
 })
 
+it('rejects an oversized structured Agent target before acquiring a parent request key', async () => {
+  const { bridge, commands } = parent()
+  const ref = `slark-agent:${'a'.repeat(64)}`
+  expect(await sendGroupText({ bridge, workspaceId, sessionId, groupId,
+    body: '@Agent review', mentionRefs: [ref], mentionSpans: [{ mention_id: requestId,
+      actor_ref: ref, start: 0, end: 6, agent_name: 'Agent',
+      project_name: 'x'.repeat(25_000), capability_snapshot: 'b'.repeat(64) }] }))
+    .toEqual({ state: 'retry_required' })
+  expect(commands).toHaveLength(0)
+})
+
 it('holds a recorded tombstone until the composer confirms its draft cleared', async () => {
   vi.stubGlobal('crypto', webcrypto)
   const { bridge, commands, setReceipt } = parent()

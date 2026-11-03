@@ -14,6 +14,7 @@ interface WorkerMessageBase {
 
 export type WindowsHostWorkerMessage =
   | (WorkerMessageBase & { readonly type: 'ready'; readonly threadHandle: bigint })
+  | (WorkerMessageBase & { readonly type: 'thread_handle'; readonly threadHandle: bigint })
   | (WorkerMessageBase & { readonly type: 'connected'; readonly connectionId: string })
   | (WorkerMessageBase & {
     readonly type: 'request'
@@ -119,7 +120,7 @@ export function decodeWindowsHostWorkerMessage(
   const message = record(input)
   if (typeof message.type !== 'string') reject()
   common(message, generation)
-  if (message.type === 'ready') {
+  if (message.type === 'ready' || message.type === 'thread_handle') {
     exactKeys(message, ['version', 'type', 'generation', 'threadHandle'])
     if (!validHandle(message.threadHandle)) reject()
   } else if (message.type === 'connected') {
@@ -149,14 +150,17 @@ function correlated(response: HostControlFrame, request: HostControlFrame): bool
 }
 
 /**
- * Enforce the Worker startup handshake and map one pipe connection to one shared Host session.
- * Only canonical control frames cross the thread boundary. Requests are strictly sequential,
- * generation-bound, and connection-bound; disconnect aborts and revokes the matching session.
+ * Enforce the Worker startup handshake and map each pipe connection to its own Host session.
+ * Only canonical control frames cross the thread boundary. Requests are strictly sequential
+ * per connection, generation-bound, and connection-bound; concurrent connections never share
+ * a response waiter. Disconnect aborts and revokes only the matching session, while stop
+ * aborts every session. Every announced blocking thread handle is retained so the supervisor
+ * can cancel accept and serve I/O for the whole generation.
  */
 export class WindowsHostWorkerBridge {
   private bridgeState: BridgeState = 'awaiting_ready'
-  private threadHandle: bigint | undefined
-  private active: ActiveSession | undefined
+  private readonly threadHandles = new Set<bigint>()
+  private readonly sessions = new Map<string, ActiveSession>()
   private cleanup: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: WindowsHostWorkerBridgeOptions) {
@@ -164,10 +168,10 @@ export class WindowsHostWorkerBridge {
   }
 
   get state(): BridgeState { return this.bridgeState }
-  get cancellationThreadHandle(): bigint | undefined { return this.threadHandle }
+  get cancellationThreadHandles(): readonly bigint[] { return [...this.threadHandles] }
   get sessionCleanup(): Promise<void> { return this.cleanup }
 
-  /** Abort the current Host session, then wake either JS response wait or native I/O. */
+  /** Abort every Host session, then wake either JS response waits or native I/O. */
   async requestStop(): Promise<void> {
     if (this.bridgeState === 'failed') {
       this.options.requestStopFlag()
@@ -178,18 +182,16 @@ export class WindowsHostWorkerBridge {
       return
     }
     if (this.bridgeState === 'stopped' || this.bridgeState === 'stopping') return reject()
+    const sessions = [...this.sessions.values()]
+    this.sessions.clear()
     try { this.options.requestStopFlag() } catch (error) {
-      const active = this.active
-      this.active = undefined
       this.bridgeState = 'failed'
-      active?.abort.abort()
-      if (active !== undefined) {
+      for (const active of sessions) active.abort.abort()
+      for (const active of sessions) {
         try { await active.session.close() } catch { /* preserve the stop-flag failure */ }
       }
       throw error
     }
-    const active = this.active
-    this.active = undefined
     this.bridgeState = 'stopping'
     let delivery: Promise<void>
     try {
@@ -199,7 +201,7 @@ export class WindowsHostWorkerBridge {
         generation: this.options.generation,
       }))
     } catch (error) { delivery = Promise.reject(errorReason(error)) }
-    this.cleanup = active === undefined ? Promise.resolve() : this.beginCleanup(active)
+    this.cleanup = this.beginCleanup(sessions)
     const [delivered, closed] = await Promise.allSettled([delivery, this.cleanup])
     if (delivered.status === 'rejected') {
       this.bridgeState = 'failed'
@@ -217,11 +219,11 @@ export class WindowsHostWorkerBridge {
     try {
       await this.receiveChecked(input)
     } catch (error) {
-      const active = this.active
-      this.active = undefined
+      const sessions = [...this.sessions.values()]
+      this.sessions.clear()
       this.bridgeState = 'failed'
-      if (active !== undefined) {
-        this.cleanup = this.beginCleanup(active)
+      if (sessions.length > 0) {
+        this.cleanup = this.beginCleanup(sessions)
       }
       throw error
     }
@@ -231,30 +233,43 @@ export class WindowsHostWorkerBridge {
     const message = decodeWindowsHostWorkerMessage(input, this.options.generation)
     if (message.type === 'ready') {
       if (this.bridgeState !== 'awaiting_ready') reject()
-      this.threadHandle = message.threadHandle
+      this.threadHandles.add(message.threadHandle)
       this.bridgeState = 'ready'
+      return
+    }
+    if (message.type === 'thread_handle') {
+      // A slot may finish bootstrapping while a stop is already unwinding; its handle
+      // must still reach the cancellation set so the accept cannot outlive the stop.
+      if (this.bridgeState !== 'ready' && this.bridgeState !== 'connected'
+        && this.bridgeState !== 'stopping') reject()
+      if (this.threadHandles.has(message.threadHandle)) reject()
+      this.threadHandles.add(message.threadHandle)
       return
     }
     if (message.type === 'stopped') {
       if (this.bridgeState === 'stopped') reject()
-      if (this.active !== undefined) await this.closeActive(this.active)
+      const sessions = [...this.sessions.values()]
+      this.sessions.clear()
+      if (this.bridgeState === 'connected') this.bridgeState = 'ready'
+      this.cleanup = this.beginCleanup(sessions)
+      await this.cleanup
       this.bridgeState = 'stopped'
       return
     }
     if (this.bridgeState === 'awaiting_ready' || this.bridgeState === 'stopping'
       || this.bridgeState === 'stopped') reject()
     if (message.type === 'connected') {
-      if (this.active !== undefined || this.bridgeState !== 'ready') reject()
+      if (this.sessions.has(message.connectionId)) reject()
       const abort = new AbortController()
       const session = this.options.openSession(message.connectionId, abort.signal)
-      this.active = {
+      this.sessions.set(message.connectionId, {
         connectionId: message.connectionId,
         abort,
         session,
         nextSequence: 1,
         responsesSent: 0,
         requestPending: false,
-      }
+      })
       this.bridgeState = 'connected'
       return
     }
@@ -263,16 +278,16 @@ export class WindowsHostWorkerBridge {
       return
     }
     if (message.type === 'disconnected') {
-      const active = this.matchActive(message.connectionId)
+      const active = this.matchSession(message.connectionId)
       if (message.requestsHandled !== active.responsesSent) reject()
-      await this.closeActive(active)
+      await this.closeSession(active)
       return
     }
     reject()
   }
 
   private async receiveRequest(message: Extract<WindowsHostWorkerMessage, { type: 'request' }>): Promise<void> {
-    const active = this.matchActive(message.connectionId)
+    const active = this.matchSession(message.connectionId)
     if (message.sequence !== active.nextSequence || active.requestPending) reject()
     const request = canonicalFrame(message.frame)
     if (request.type !== 'request') reject()
@@ -280,7 +295,7 @@ export class WindowsHostWorkerBridge {
     try {
       const response = await active.session.handleRequest(request, active.abort.signal)
       if (!correlated(response, request)) reject()
-      if (this.active !== active || active.abort.signal.aborted) return
+      if (this.sessions.get(active.connectionId) !== active || active.abort.signal.aborted) return
       await this.options.send({
         version: 1,
         type: 'response',
@@ -296,26 +311,38 @@ export class WindowsHostWorkerBridge {
     }
   }
 
-  private matchActive(connectionId: unknown): ActiveSession {
-    if (!validConnectionId(connectionId) || this.active?.connectionId !== connectionId) return reject()
-    return this.active
+  private matchSession(connectionId: unknown): ActiveSession {
+    /* v8 ignore next -- the message decoder already UUID-validates connectionId. */
+    const session: ActiveSession | undefined = validConnectionId(connectionId)
+      ? this.sessions.get(connectionId)
+      : undefined
+    if (session === undefined) return reject()
+    return session
   }
 
-  private async closeActive(active: ActiveSession): Promise<void> {
-    /* v8 ignore next -- callers pass the current active session without awaiting before this guard. */
-    if (this.active !== active) reject()
-    this.active = undefined
-    this.bridgeState = 'ready'
-    this.cleanup = this.beginCleanup(active)
+  private async closeSession(active: ActiveSession): Promise<void> {
+    /* v8 ignore next -- callers pass a live session without awaiting before this guard. */
+    if (this.sessions.get(active.connectionId) !== active) reject()
+    this.sessions.delete(active.connectionId)
+    this.bridgeState = this.sessions.size > 0 ? 'connected' : 'ready'
+    this.cleanup = this.beginCleanup([active])
     await this.cleanup
   }
 
-  private beginCleanup(active: ActiveSession): Promise<void> {
-    active.abort.abort()
-    let cleanup: Promise<void>
-    try { cleanup = Promise.resolve(active.session.close()) } catch (error) {
-      cleanup = Promise.reject(errorReason(error))
-    }
+  private beginCleanup(sessions: readonly ActiveSession[]): Promise<void> {
+    for (const active of sessions) active.abort.abort()
+    const cleanups = sessions.map((active) => {
+      let cleanup: Promise<void>
+      try { cleanup = Promise.resolve(active.session.close()) } catch (error) {
+        cleanup = Promise.reject(errorReason(error))
+      }
+      return cleanup
+    })
+    // Keep the empty and single-session hops identical to the former single-session bridge.
+    const single = cleanups.length === 1 ? cleanups[0] : undefined
+    const cleanup = cleanups.length === 0
+      ? Promise.resolve()
+      : single ?? Promise.all(cleanups).then(() => undefined)
     // Cleanup is intentionally detached on protocol failure so native cancellation can proceed.
     void cleanup.catch(() => undefined)
     return cleanup

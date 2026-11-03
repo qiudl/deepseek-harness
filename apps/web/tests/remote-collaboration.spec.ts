@@ -62,6 +62,7 @@ function bridge(): {
   collaborationGroupMembers?(value: unknown): Promise<unknown>
   collaborationGroupPreparation?(value: unknown): Promise<unknown>
   collaborationGroupActivation?(value: unknown): Promise<unknown>
+  collaborationNativeRoomPump?(value: unknown): Promise<unknown>
   collaborationArchive?(value: unknown): Promise<unknown> } {
   const host: unknown = Reflect.get(window, '__DSH_DESKTOP_HOST__')
   if (typeof host !== 'object' || host === null || !('collaborationWorkspace' in host)) throw Error('bridge is missing')
@@ -337,6 +338,47 @@ it('REQ-20261020-0010: a group message capability preserves older scope and requ
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })
+it('REQ-20261023-0013: native room pump accepts only exact Agent member coordinates', async () => {
+  const command = { workspace_id: workspace, session_id: 'session-1',
+    member_id: '33333333-3333-4333-8333-333333333333' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200,
+      value: { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'nativeRoomPump'] } }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'processed', room_id: 'room_1',
+      through_seq: 3, user_messages: 1, bot_messages: 1, has_more: false }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationNativeRoomPump?.(command)).toMatchObject({ state: 'processed', through_seq: 3 })
+  expect(requests[0]?.method).toBe('collaboration/nativeRoomPump')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationNativeRoomPump?.({ ...command, room_id: 'forged' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261023-0013: native room preparation preserves the Host returned bridge coordinates', async () => {
+  const command = { operation: 'native_room', room_id: 'room_1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200,
+      value: { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupPreparation'] } }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'preparing',
+      group_id: '22222222-2222-4222-8222-222222222222', room_id: command.room_id,
+      workspace_id: workspace, session_id: 'bridge-session', version: 1 }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupPreparation?.(command)).toMatchObject({
+    state: 'preparing', room_id: command.room_id, session_id: 'bridge-session' })
+  expect(requests[0]?.method).toBe('collaboration/groupPreparation')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupPreparation?.({ ...command, workspace_id: workspace }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
 it('REQ-20261020-0010: Root planning receives only committed group message coordinates', async () => {
   const advertised = { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupWork'] }
   const command = { workspace_id: workspace, session_id: 'session-1',
@@ -419,7 +461,7 @@ it('REQ-20261020-0010: a member capability keeps the remote bridge installed and
       group_id: '22222222-2222-4222-8222-222222222222', membership_version: 1,
       last_seq: 0, members: [{ member_id: '33333333-3333-4333-8333-333333333333',
         actor_kind: 'human', actor_ref: 'owner', role: 'owner', cycle: 1,
-        joined_seq: 0, sources: [] }] }) }
+        joined_seq: 0, sources: [], agent: null }] }) }
   }, true)
   await installRemoteCollaboration(h.fetch)
   expect(bridge().collaborationScopeAvailable).toBe(true)
@@ -428,6 +470,28 @@ it('REQ-20261020-0010: a member capability keeps the remote bridge installed and
   expect(requests[0]?.method).toBe('collaboration/groupMembers')
   expect(requests[0]?.payload.args.request).toEqual(command)
   expect(await bridge().collaborationGroupMembers?.({ ...command, owner: 'forged' }))
+    .toEqual({ state: 'retry_required' })
+  expect(requests).toHaveLength(1)
+})
+it('REQ-20261023-0013: project-qualified Agent join crosses the group member bridge', async () => {
+  const command = { operation: 'agent_join', workspace_id: workspace, session_id: 'session-1',
+    request_id: '55555555-5555-4555-8555-555555555555', expected_membership_version: 1,
+    project_id: 'project-1', agent_id: 'agent-1' }
+  const requests: Rpc[] = []
+  const h = harness((path, rpc) => {
+    if (path === '/__collaboration_v2__') return { status: 200,
+      value: { schema: 'dsh-remote-collaboration/v2', methods: ['workspace', 'groupMembers'] } }
+    if (!rpc) throw Error('missing RPC')
+    requests.push(rpc)
+    return { status: 200, value: envelope(rpc, { state: 'recorded', operation: 'agent_join',
+      member_id: '33333333-3333-4333-8333-333333333333', membership_version: 2, seq: 0 }) }
+  }, true)
+  await installRemoteCollaboration(h.fetch)
+  expect(await bridge().collaborationGroupMembers?.(command)).toMatchObject({
+    state: 'recorded', operation: 'agent_join' })
+  expect(requests[0]?.method).toBe('collaboration/groupMembers')
+  expect(requests[0]?.payload.args.request).toEqual(command)
+  expect(await bridge().collaborationGroupMembers?.({ ...command, actor_ref: 'forged' }))
     .toEqual({ state: 'retry_required' })
   expect(requests).toHaveLength(1)
 })

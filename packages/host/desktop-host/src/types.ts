@@ -61,8 +61,16 @@ export type HostAuthorityErrorCode =
 
 /** Typed failure that Desktop maps onto the Host control protocol vocabulary. */
 export class HostAuthorityError extends Error {
-  /** @param code - Stable code safe for the local broker. */
-  constructor(readonly code: HostAuthorityErrorCode) {
+  /**
+   * @param code - Stable code safe for the local broker.
+   * @param diagnosticReason - Optional finer stable reason (for example which local-restore step
+   *   rejected the request). Local diagnostics only: it never crosses the control protocol, so the
+   *   broker still receives `code`.
+   */
+  constructor(
+    readonly code: HostAuthorityErrorCode,
+    readonly diagnosticReason?: string,
+  ) {
     super(`DSH Host authority rejected operation: ${code}`)
     this.name = 'HostAuthorityError'
   }
@@ -108,6 +116,14 @@ export interface ProfileWorkerHandle {
   /** Page public Bot identities only from the selected exclusive-writer Profile. */
   readonly listBotRoster?: (afterBotId: string, limit: number, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null>
+  /** Prepare a native room's bridge Source in the selected Profile writer. */
+  readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>
+  /** Run one native room member or message operation in the selected Profile writer. */
+  readonly operateNativeRoom?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomReply>
   /** Send or reconcile one Bot group event through the private Profile service. */
   readonly operateBotGroup?: (
     command: import('@deepseek-ai/dsh-host-control-protocol').HostBotGroupCommand,

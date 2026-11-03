@@ -17,8 +17,18 @@ describe('Windows Host registration native filesystem', () => {
 
   it('creates and inspects the exact directory through a non-reparse stable handle', async () => {
     let observedSddl = sddl
+    let convertedSid = ''
     const calls: Array<{ readonly name: string; readonly args: readonly unknown[] }> = []
     const functions: Record<string, (...args: unknown[]) => unknown> = {
+      ConvertStringSidToSidW: (token, output) => {
+        if (!Buffer.isBuffer(output)) throw new Error('expected SID pointer slot')
+        convertedSid = String(token)
+        output.writeBigUInt64LE(31n); return 1
+      },
+      ConvertSidToStringSidW: (_sid, output) => {
+        if (!Buffer.isBuffer(output)) throw new Error('expected SID text pointer slot')
+        output.writeBigUInt64LE(32n); return 1
+      },
       ConvertStringSecurityDescriptorToSecurityDescriptorW: (_text, _revision, output) => {
         if (!Buffer.isBuffer(output)) throw new Error('expected security descriptor buffer')
         output.writeBigUInt64LE(11n); return 1
@@ -67,6 +77,9 @@ describe('Windows Host registration native filesystem', () => {
       }),
       alloc: vi.fn(() => Buffer.alloc(8)),
       decode: vi.fn((value: unknown, type: unknown) => {
+        if (Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 32n && type === 'str16') {
+          return ({ SY: 'S-1-5-18', BA: 'S-1-5-32-544', LA: 'S-1-5-21-1000-2000-3000-500' } as Record<string, string>)[convertedSid]
+        }
         if (Buffer.isBuffer(value) && value.length === 8 && value.readBigUInt64LE() === 23n && type === 'str16') return observedSddl
         return value
       }),

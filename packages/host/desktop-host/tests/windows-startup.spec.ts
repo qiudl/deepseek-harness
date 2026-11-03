@@ -9,11 +9,12 @@ import { join } from 'node:path'
 import { BundledPluginCatalog } from '../src/bundled-plugins.ts'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
-import { parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
+import { parseHostCollaborationRegistrationChallenge, parseHostCollaborationSourceTarget, parseHostSourceAuthorityChallenge,
   parseHostCollaborationDeliveryCapsule } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfileWorkerFactory } from '../src/types.ts'
 import type { WindowsHostRegistrationFileBindings } from '../src/windows-host-registration.ts'
 import {
+  readDshAppVersion,
   startWindowsDesktopHostApplication,
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type StartWindowsDesktopHostApplicationDependencies,
@@ -154,7 +155,8 @@ function fixture() {
     loadWorkerIoCancellation,
     createProfileWorkerFactory,
     startTransport,
-  } as unknown as StartWindowsDesktopHostApplicationDependencies
+    readDshRuntimeVersion: () => '0.2.1-alpha.2',
+  } satisfies StartWindowsDesktopHostApplicationDependencies
   const deadline = (signal: AbortSignal) => new Promise<void>((resolve) => {
     signal.addEventListener('abort', () => { resolve() }, { once: true })
   })
@@ -246,6 +248,18 @@ describe('Windows Desktop Host startup', () => {
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
     await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
+    expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    const registrationChallenge = parseHostCollaborationRegistrationChallenge({
+      registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
+      expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,
+      account_issuer: issuer, account_subject: accountId,
+    })
+    await expect(client.attestCollaborationRegistration({ ...account, challenge: registrationChallenge }))
+      .resolves.toMatchObject({ challenge: registrationChallenge,
+        installation_id: state.options.installationId, host_instance_id: state.options.hostInstanceId })
+    await expect(client.attestCollaborationRegistration({
+      ...account, authorityBindingVersion: 2, challenge: registrationChallenge,
+    })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.inspectWorkspaceModelSelection(selection))
       .resolves.toEqual({ workspace_id: target.workspace_id, session_id: target.session_id, provider: 'deepseek', model: 'chat' })
     expect(await client.collaborationAnalysis({ ...account, command: { action: 'root_feedback', operation: { action: 'read' } } })).toEqual({ kind: 'root_feedback', record: null })
@@ -299,6 +313,10 @@ describe('Windows Desktop Host startup', () => {
       expect(client.inspection.capabilities).toContain('profile.extensions')
       const local = await client.bootstrapLocalProfile({ keyHandle: 'windows-credential:local', unlockMaterial })
       const lease = await client.openLocalProfile({ profileSelector: local.profileSelector })
+      await expect(client.currentSkillHubPackage({ profileSelector: local.profileSelector,
+        packageId: 'fixture-package', challengeId: randomUUID() }))
+        .rejects.toMatchObject({ code: 'unavailable' })
+      expect(state.loadRegistrationFileBindings).toHaveBeenCalledOnce()
       await expect(client.remoteSession({ ...lease, command: { operation: 'session.list', command_id: randomUUID() as never } }))
         .rejects.toMatchObject({ code: 'unavailable' })
       await expect(client.remoteUiRead({ ...lease, endpoint: 'boot/injections', payload: { args: {} } }))
@@ -611,7 +629,7 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   const acknowledge = vi.spyOn(pluginRuntime, 'waitForPluginRuntime').mockResolvedValue(undefined)
   vi.spyOn(fs, 'existsSync').mockReturnValue(true)
   vi.spyOn(appBoot, 'loadOverlayPatches').mockReturnValue([])
-  vi.spyOn(appBoot, 'loadProfileDirectory').mockReturnValue({
+  const loadProfile = vi.spyOn(appBoot, 'loadProfileDirectory').mockReturnValue({
     name: 'web', dir: 'web', patchPath: 'patch', patches: [], skippedBundles: [],
     layers: [{ packageName: 'fixture', packageDir: 'fixture', patchPaths: [], patches: [{ insert: [{ id: 'fixture', name: 'fixture' }] }] }],
   })
@@ -662,6 +680,16 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   expect(acknowledge.mock.lastCall?.slice(1)).toEqual([plan.expected, context.signal, [], plan.disabled])
   await callbacks.acknowledge(local.profileId, 'fixture', context)
   expect(acknowledge.mock.lastCall?.[1]).toEqual([{ entryId: 'include:fixture', moduleName: 'fixture' }])
+  loadProfile.mockImplementationOnce(() => { throw new Error('plugin_bundle_missing') })
+  await callbacks.acknowledge(local.profileId, 'fixture', context)
+  loadProfile.mockImplementationOnce(() => { throw new Error('unexpected') })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toThrow('unexpected')
+  loadProfile.mockImplementationOnce(() => { throw 'invalid composition' })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toBe('invalid composition')
+  const clock = vi.spyOn(Date, 'now').mockReturnValueOnce(1_000).mockReturnValue(301_000)
+  loadProfile.mockImplementationOnce(() => { throw new Error('plugin_bundle_missing') })
+  await expect(callbacks.acknowledge(local.profileId, 'fixture', context)).rejects.toThrow('plugin_bundle_missing')
+  clock.mockRestore()
   await application.close()
   catalogLookup.mockReturnValue(undefined)
   callbacks = undefined
@@ -675,4 +703,64 @@ it('wires Windows plugin commands, catalog lookup, and worker acknowledgement un
   expect(noCatalogOptions.bundledPlugin).toBeUndefined()
   await noCatalogOptions.install(profile, 'fixture@1.0.0', context)
   expect(invoke.mock.lastCall?.[0]).not.toHaveProperty('archivePath')
+})
+
+it('normalizes SDDL alias SIDs to numeric form through the evidence canonicalizer', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  const canonicalize = (token: string): string =>
+    ({ LA: 'S-1-5-21-1-2-3-500', SY: 'S-1-5-18', BA: 'S-1-5-32-544' })[token] ?? token
+  const decoded = decodeEvidenceSddl(
+    'O:LAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)',
+    canonicalize,
+  )
+  expect(decoded.ownerSid).toBe('S-1-5-21-1-2-3-500')
+  expect(decoded.daclProtected).toBe(true)
+  expect(decoded.access.map(entry => entry.sid)).toEqual([
+    'S-1-5-18',
+    'S-1-5-32-544',
+    'S-1-5-21-1-2-3-500',
+  ])
+  const passthrough = decodeEvidenceSddl('O:LAD:P(A;;FA;;;LA)')
+  expect(passthrough.ownerSid).toBe('LA')
+})
+
+it('decodes the stock drive-root DACL mixing directory-service and file rights strings', async () => {
+  const { decodeEvidenceSddl } = await import('../src/windows-host-registration-native.ts')
+  // The stock C:\ DACL grants LC (FILE_APPEND_DATA / ADS list) to authenticated users.
+  const decoded = decodeEvidenceSddl(
+    'O:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    + 'G:S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+    + 'D:PAI(A;;LC;;;AU)(A;OICIIO;SDGXGWGR;;;AU)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)',
+  )
+  expect(decoded.access.map(entry => [entry.sid, entry.mask])).toEqual([
+    ['AU', 0x4],
+    ['AU', (0x10000 | 0x20000000 | 0x40000000 | 0x80000000) >>> 0],
+    ['SY', 0x1f01ff],
+    ['BA', 0x1f01ff],
+    ['BU', 0x1200a9],
+  ])
+})
+
+describe('readDshAppVersion', () => {
+  it('reads the dsh package version beside the entrypoint and rejects manifests without one', () => {
+    const read = vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-alpha.2' }))
+    expect(readDshAppVersion(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\lib\bin.js`)).toBe('0.2.1-alpha.2')
+    expect(read).toHaveBeenCalledWith(String.raw`C:\runtime\app\node_modules\@deepseek-ai\dsh\package.json`, 'utf8')
+    read.mockReturnValue(JSON.stringify({ name: '@deepseek-ai/dsh' }))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`))
+      .toThrow(String.raw`dsh package manifest C:\runtime\dsh\package.json must hold a non-empty version string`)
+    read.mockReturnValue(JSON.stringify(['not-an-object']))
+    expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`)).toThrow('must hold a non-empty version string')
+    for (const invalid of [null, 'invalid', { version: '' }, { version: '   ' }, { version: 1 }]) {
+      read.mockReturnValue(JSON.stringify(invalid))
+      expect(() => readDshAppVersion(String.raw`C:\runtime\dsh\lib\bin.js`)).toThrow('must hold a non-empty version string')
+    }
+  })
+})
+
+it('starts with the default runtime-version reader when none is injected', async () => {
+  const state = fixture()
+  const { readDshRuntimeVersion: _read, ...dependencies } = state.dependencies
+  const application = await startWindowsDesktopHostApplication(state.options, undefined, dependencies)
+  await application.close()
 })

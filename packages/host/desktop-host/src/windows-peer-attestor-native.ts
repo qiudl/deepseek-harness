@@ -1,6 +1,7 @@
 import { isMainThread } from 'node:worker_threads'
 import { loadWindowsAuthenticodeVerifier } from './windows-authenticode-native.ts'
 import { loadWindowsExecutableDigest } from './windows-executable-digest.ts'
+import type { HostDiagnostics } from './host-diagnostics.ts'
 import {
   createWindowsPeerAttestor,
 } from './windows-peer-attestor.ts'
@@ -21,7 +22,7 @@ interface WindowsNativeWorkerRuntime {
   readonly isMainThread: boolean
 }
 
-/** Trust anchors and runtime facts for the complete Windows peer attestor. */
+/** Trust anchors, runtime facts, and an optional failure sink for the complete Windows peer attestor. */
 export interface WindowsNativePeerAttestorOptions {
   readonly allowedPublisherThumbprints: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
@@ -30,6 +31,8 @@ export interface WindowsNativePeerAttestorOptions {
   readonly platform?: string
   readonly arch?: string
   readonly isMainThread?: boolean
+  /** Host diagnostics sink; omission keeps attestation silent. */
+  readonly diagnostics?: HostDiagnostics
 }
 
 /** Injectable loader seams used to prove that no native trust component is optional. */
@@ -83,5 +86,6 @@ export async function loadWindowsPeerAttestor(
     allowedPublisherThumbprints: options.allowedPublisherThumbprints,
     allowedExecutableDigests: options.allowedExecutableDigests,
     bindings,
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
   })
 }

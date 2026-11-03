@@ -280,7 +280,7 @@ class WindowsHostClientWorkerTransport implements HostClientFrameTransport {
     this.stopStarted = true
     void stopWindowsBlockingWorker({
       flag: this.stopFlag,
-      threadHandle: handle,
+      threadHandles: () => [handle],
       cancellation: this.options.cancellation,
       workerDone: this.workerDone,
       maxCancelAttempts: this.options.maxCancelAttempts,

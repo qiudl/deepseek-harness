@@ -13,6 +13,7 @@ const nativeModule = Object.freeze({
   path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
   sha256: 'c'.repeat(64),
 })
+const diagnosticsRoot = String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`
 const policy = resolveWindowsNamedPipePolicy({
   installationId: 'installation-1',
   endpointRegistrationId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3122',
@@ -29,6 +30,7 @@ describe('Windows Host pipe Worker boot data', () => {
       allowedPublisherThumbprints: new Set([publisher]),
       allowedExecutableDigests: new Set([digest]),
       nativeModule,
+      diagnosticsRoot,
     })).toEqual({
       version: 1,
       generation: 7,
@@ -37,6 +39,7 @@ describe('Windows Host pipe Worker boot data', () => {
       allowedPublisherThumbprints: [publisher],
       allowedExecutableDigests: [digest],
       nativeModule,
+      diagnosticsRoot,
     })
   })
 
@@ -48,6 +51,7 @@ describe('Windows Host pipe Worker boot data', () => {
       allowedPublisherThumbprints: new Set([publisher]),
       allowedExecutableDigests: new Set([digest]),
       nativeModule,
+      diagnosticsRoot,
     })
     for (const invalid of [
       null,
@@ -71,6 +75,11 @@ describe('Windows Host pipe Worker boot data', () => {
       { ...valid, policy: { ...policy, path: String.raw`\\.\pipe\other` } },
       { ...valid, policy: { ...policy, securityDescriptor: 'D:(A;;GA;;;WD)' } },
       { ...valid, policy: { ...policy, securityDescriptor: 42 } },
+      { ...valid, diagnosticsRoot: String.raw`\Slark\env` },
+      { ...valid, diagnosticsRoot: '/var/lib/slark' },
+      { ...valid, diagnosticsRoot: String.raw`C:\Slark\env:stream` },
+      { ...valid, diagnosticsRoot: String.raw`C:\Slark\env\..\other` },
+      { ...valid, diagnosticsRoot: 42 },
     ]) {
       expect(() => decodeWindowsHostPipeWorkerBootData(invalid)).toThrow('Invalid Windows Host Worker boot data')
     }
@@ -84,6 +93,7 @@ describe('Windows Host pipe Worker boot data', () => {
       allowedPublisherThumbprints: new Set([publisher]),
       allowedExecutableDigests: new Set([digest]),
       nativeModule,
+      diagnosticsRoot,
     })).toThrow(HostAuthorityError)
   })
 })

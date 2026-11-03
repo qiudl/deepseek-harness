@@ -5,6 +5,10 @@ import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomSource, parseHostNativeRoomTarget,
+  type HostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
+import { matchesHostNativeRoomReply, parseHostNativeRoomCommand, parseHostNativeRoomReply,
+  type HostNativeRoomCommand, type HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostBotGroupResponse, parseHostBotGroupCommand,
   parseHostBotGroupResponse, type HostBotGroupCommand, type HostBotGroupResponse,
 } from '@deepseek-ai/dsh-host-control-protocol'
@@ -290,6 +294,10 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
         viewOrigin, sourceToken, afterBotId, limit, signal, () => requestedStop || settled),
+      prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
+        viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled),
+      operateNativeRoom: (command, signal) => this.operateNativeRoom(
+        viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       operateBotGroup: (command, signal) => this.operateBotGroup(
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       generateText: async (text, signal) => {
@@ -478,23 +486,32 @@ export class DshWebProfileWorkerFactory {
     }, 'await')
   }
 
-  private async resolveBotIdentity(
-    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
-  ): Promise<HostBotIdentity | null> {
+  private async postPrivateProfileResource<T>(
+    viewOrigin: string, token: string, route: string, target: unknown,
+    timeoutMs: number, maxBytes: number, signal: AbortSignal, stopped: () => boolean,
+    parse: (bytes: Buffer) => T,
+  ): Promise<T> {
     signal.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const active = AbortSignal.any([signal, AbortSignal.timeout(10_000)])
-    const target = parseHostBotIdentityTarget({ bot_id: botId })
-    const response = await fetch(`${viewOrigin}/internal/desktop-bot-identity`, {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+    const response = await fetch(`${viewOrigin}${route}`, {
       method: 'POST', redirect: 'error',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, 2048, (bytes) => {
-      const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
-      if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
-      return identity
-    }, 'await')
+    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+  }
+
+  private async resolveBotIdentity(
+    viewOrigin: string, token: string, botId: string, signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotIdentity | null> {
+    const target = parseHostBotIdentityTarget({ bot_id: botId })
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bot-identity',
+      target, 10_000, 2048, signal, stopped, (bytes) => {
+        const identity = parseHostBotIdentity(JSON.parse(bytes.toString('utf8')))
+        if (identity !== null && identity.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
+        return identity
+      })
   }
 
   private async listBotRoster(
@@ -518,6 +535,20 @@ export class DshWebProfileWorkerFactory {
     }, 'await')
   }
 
+  private async prepareNativeRoom(
+    viewOrigin: string, token: string, roomId: string,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostNativeRoomSource | null> {
+    const target = parseHostNativeRoomTarget({ room_id: roomId })
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-native-room',
+      target, 30_000, 2048, signal, stopped, (bytes) => {
+        const value: unknown = JSON.parse(bytes.toString('utf8'))
+        const binding = value === null ? null : parseHostNativeRoomSource(value)
+        if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
+        return binding
+      })
+  }
+
   private async operateBotGroup(
     viewOrigin: string, token: string, command: HostBotGroupCommand,
     signal: AbortSignal, stopped: () => boolean,
@@ -536,6 +567,27 @@ export class DshWebProfileWorkerFactory {
         const result = parseHostBotGroupResponse(JSON.parse(bytes.toString('utf8')))
         if (!matchesHostBotGroupResponse(result, target)) throw new HostAuthorityError('profile_mismatch')
         return result
+      }, 'await')
+  }
+
+  private async operateNativeRoom(
+    viewOrigin: string, token: string, command: HostNativeRoomCommand,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostNativeRoomReply> {
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    const active = AbortSignal.any([signal, AbortSignal.timeout(35_000)])
+    const target = parseHostNativeRoomCommand(command)
+    const response = await fetch(`${viewOrigin}/internal/desktop-native-room-operations`, {
+      method: 'POST', redirect: 'error',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(target), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped,
+      target.operation === 'messages' ? 1024 * 1024 : 2048, (bytes) => {
+        const reply = parseHostNativeRoomReply(JSON.parse(bytes.toString('utf8')))
+        if (!matchesHostNativeRoomReply(reply, target)) throw new HostAuthorityError('profile_mismatch')
+        return reply
       }, 'await')
   }
 

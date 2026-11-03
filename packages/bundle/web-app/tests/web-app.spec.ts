@@ -114,6 +114,49 @@ interface BashContribution {
 }
 
 describe('web-app runtime glue', () => {
+  it('binds private group capture and Source output reads to the current Session controller', async () => {
+    vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', 'B'.repeat(43))
+    stageDist()
+    const ctx = new Context(), { server, routes } = fakeHttpServer()
+    onTestFinished(() => ctx.fiber.dispose())
+    const readSource = vi.fn(async () => { throw Error('membership') })
+    const captureGroupRoot = vi.fn(async () => { throw Error('group_session_inactive') })
+    ctx.provide('webServer', server)
+    ctx.provide('sessionController', {
+      readCollaborationSourceSnapshot: readSource,
+      captureCollaborationGroupRoot: captureGroupRoot,
+    } as never)
+    apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
+    await ctx.fiber.await()
+    expect(routes.has('/internal/desktop-collaboration-analysis')).toBe(true)
+    const http = createServer((req, res) => {
+      void routes.get('/internal/desktop-collaboration-analysis')!.handler(req, res)
+    })
+    onTestFinished(async () => {
+      http.closeAllConnections()
+      await new Promise<void>((resolve) => { http.close(() => { resolve() }) })
+    })
+    await new Promise<void>((resolve) => { http.listen(0, '127.0.0.1', resolve) })
+    const address = http.address()
+    if (!address || typeof address === 'string') throw Error('missing fixture port')
+    const post = (body: unknown) => fetch(`http://127.0.0.1:${address.port}/internal/desktop-collaboration-analysis`, {
+      method: 'POST', headers: { authorization: `Bearer ${'B'.repeat(43)}` }, body: JSON.stringify(body),
+    })
+    const source = { workspace_id: '33333333-3333-4333-8333-333333333333', session_id: 'source-session',
+      source_message_id: 'message-1', source_revision: '1', original_message: '@Guide please investigate',
+      active_mentions: [{ mention_id: 'mention-1', source_span: { source_message_id: 'message-1',
+        source_revision: '1', start: 0, end: 6 }, display_snapshot: { agent_name: 'Guide', project_name: 'Project A' },
+      binding: { kind: 'resolved', target: { project_id: '212', agent_id: 'guide' },
+        capability_snapshot: 'a'.repeat(64) } }] }
+    const { original_message: _message, active_mentions: _mentions, ...target } = source
+    const output = await post({ action: 'read_source_output', binding_key: 'b'.repeat(64), target })
+    expect(output.status).toBe(422)
+    expect(readSource).toHaveBeenCalledOnce()
+    const group = await post({ action: 'capture_group_root', binding_key: 'b'.repeat(64),
+      input: { source, namespace_id: `n2_${'a'.repeat(64)}`, continuation_policy: 'follow_authorized_plan' } })
+    expect(group.status).toBe(422)
+    expect(captureGroupRoot).toHaveBeenCalledOnce()
+  })
   it.each(['', 'invalid', 'A'.repeat(43)])('registers private Desktop routes only for valid tokens (%s)', async (token) => {
     for (const name of ['DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) {
       vi.stubEnv(name, token)

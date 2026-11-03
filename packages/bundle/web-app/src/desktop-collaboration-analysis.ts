@@ -52,6 +52,7 @@ type Pending = {
   controller: AbortController
   reply?: Captured
   capturedRoot?: Captured
+  captureMode?: 'legacy' | 'group'
   captureCompletion?: Promise<void>
   record?: CollaborationAnalysisJournalRecord
   root?: HostRootSubmissionDescriptor
@@ -221,6 +222,7 @@ export class DesktopCollaborationAnalysis {
       && p.root.source_descriptor.source_message_id === source.source_message_id
       && p.root.source_descriptor.source_revision === source.source_revision)
     if (existing) {
+      if (existing.captureMode !== mode) throw Error('collaboration_root_capture_mode_mismatch')
       const recovered = await this.recoverRoot(input, active, true)
       this.pendingCapture(recovered.root, binding)
       return Object.freeze({ ...recovered, kind: 'captured' as const })
@@ -240,7 +242,7 @@ export class DesktopCollaborationAnalysis {
         root_trace_id: captured.submission.root_trace_id, payload_digest: captured.submission.payload_digest,
         source_descriptor: descriptor })
       p.root = root; p.sourceDigest = descriptor.snapshot_digest
-      if (captured.kind === 'captured') p.capturedRoot = captured
+      if (captured.kind === 'captured') { p.capturedRoot = captured; p.captureMode = mode }
       return Object.freeze({ kind: captured.kind, descriptor, root })
     } catch (error) { p.controller.abort(error); throw error }
     finally {

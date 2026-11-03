@@ -98,6 +98,22 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       : null,
     ...groupOperations,
   } as never)
+  const nativeRoom = {
+    prepare: vi.fn(async () => ({ room_id: 'room_1', source: {
+      workspace_id: target.workspace_id, session_id: 'bridge_1',
+      source_message_id: 'source_1', source_revision: '1',
+    } })),
+    joinAgent: vi.fn(async () => ({ state: 'joined', joined_room_seq: 1 })),
+    roomMessages: vi.fn(async () => ({ state: 'ok', room_id: 'room_1', next_seq: 2, last_seq: 2, messages: [] })),
+    roomTurns: vi.fn(async () => ({ state: 'turns', room_id: 'room_1', group_id: '11111111-1111-4111-8111-111111111111',
+      member_id: '22222222-2222-4222-8222-222222222222', cycle: 1, next_seq: 2, turns: [] })),
+    acknowledgeTurns: vi.fn(async () => ({ state: 'turns_acknowledged', turn_ids: ['33333333-3333-5333-8333-333333333333'] })),
+    acknowledgeMessages: vi.fn(async () => ({ state: 'acknowledged', through_seq: 2 })),
+    appendAgentResultChunk: vi.fn(async () => ({ state: 'recorded',
+      turn_id: '33333333-3333-5333-8333-333333333333', chunk_index: 0, room_seq: 3 })),
+    leaveAgent: vi.fn(async () => ({ state: 'left', left_room_seq: 4 })),
+  }
+  const disposeNativeRoom = ctx.provide('dsBotSlarkNativeRoom' as never, nativeRoom as never)
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
   const archiveMethods = {
@@ -200,6 +216,49 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     version: 3, stopInFlight: true })).status).toBe(200)
   expect(groupOperations.revokeCycle).toHaveBeenCalledWith({ ...baseGroup,
     version: 3, stopInFlight: true })
+  const nativeRoot = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-native-room`
+  const postNative = (path: string, body: object) => fetch(`${nativeRoot}${path}`, { method: 'POST',
+    headers: { authorization: `Bearer ${token}` }, body: JSON.stringify(body) })
+  expect((await postNative('', { room_id: 'room_1' })).status).toBe(200)
+  expect(nativeRoom.prepare).toHaveBeenCalledWith({ roomId: 'room_1' })
+  const roomBase = { room_id: 'room_1', member_id: '22222222-2222-4222-8222-222222222222', cycle: 1 }
+  const groupId = '11111111-1111-4111-8111-111111111111'
+  const turnId = '33333333-3333-5333-8333-333333333333'
+  const roomCommand = async (body: object) => {
+    const reply = await postNative('-operations', body)
+    expect(reply.status).toBe(200)
+  }
+  await roomCommand({ operation: 'join', ...roomBase, group_id: groupId,
+    project_id: 'project', agent_id: 'agent', name: 'Agent' })
+  expect(nativeRoom.joinAgent).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, groupId, projectId: 'project', agentId: 'agent', name: 'Agent' })
+  await roomCommand({ operation: 'messages', ...roomBase, after_seq: 1, limit: 2 })
+  expect(nativeRoom.roomMessages).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, afterSeq: 1, limit: 2 })
+  await roomCommand({ operation: 'turns', ...roomBase, after_seq: 1, limit: 2 })
+  expect(nativeRoom.roomTurns).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, afterSeq: 1, limit: 2 })
+  await roomCommand({ operation: 'turn-ack', ...roomBase, turn_ids: [turnId] })
+  expect(nativeRoom.acknowledgeTurns).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, turnIds: [turnId] })
+  await roomCommand({ operation: 'ack', ...roomBase, through_seq: 2 })
+  expect(nativeRoom.acknowledgeMessages).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, throughSeq: 2 })
+  await roomCommand({ operation: 'agent-result-chunk', ...roomBase, group_id: groupId,
+    turn_id: turnId, turn_order: 1, trigger_room_seq: 2,
+    project_id: 'project', agent_id: 'agent', reply_message_id: 'reply_1',
+    status: 'completed', result_digest: 'a'.repeat(64), chunk_index: 0, chunk_count: 1,
+    chunk_text: 'Hello', chunk_digest: 'b'.repeat(64) })
+  expect(nativeRoom.appendAgentResultChunk).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id,
+    cycle: 1, groupId, turnId, turnOrder: 1, triggerRoomSeq: 2,
+    projectId: 'project', agentId: 'agent', replyMessageId: 'reply_1', status: 'completed',
+    resultDigest: 'a'.repeat(64), chunkIndex: 0, chunkCount: 1, chunkText: 'Hello', chunkDigest: 'b'.repeat(64) })
+  await roomCommand({ operation: 'leave', ...roomBase })
+  expect(nativeRoom.leaveAgent).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id, cycle: 1 })
+  disposeNativeRoom()
+  expect((await postNative('', { room_id: 'room_1' })).status).toBe(422)
+  expect((await postNative('-operations', { operation: 'messages', ...roomBase,
+    after_seq: 1, limit: 2 })).status).toBe(422)
   disposeBotService()
   expect((await postGroup(deliver)).status).toBe(422)
   const unavailableBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {

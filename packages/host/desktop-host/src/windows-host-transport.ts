@@ -33,6 +33,8 @@ export interface StartWindowsHostTransportOptions extends Omit<
   readonly allowedPublisherThumbprints: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
+  /** Environment root forwarded to the pipe Worker for its redacted failure log. */
+  readonly diagnosticsRoot: string
   readonly maxCancelAttempts: number
   readonly waitForCancelRetry: () => Promise<void>
   readonly startupDeadline: (signal: AbortSignal) => Promise<void>
@@ -145,6 +147,7 @@ export async function startWindowsHostTransport(
         allowedPublisherThumbprints: options.allowedPublisherThumbprints,
         allowedExecutableDigests: options.allowedExecutableDigests,
         nativeModule: options.nativeModule,
+        diagnosticsRoot: options.diagnosticsRoot,
         cancellation,
         maxCancelAttempts: options.maxCancelAttempts,
         waitForCancelRetry: options.waitForCancelRetry,

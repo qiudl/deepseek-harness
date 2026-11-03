@@ -218,7 +218,9 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         const group = workByMessage.get(item.id)
         return <article key={item.id} className={css.message} data-group-message-id={item.id}>
           <header className={css.messageHeader}>
-            <strong>{item.actor_kind === 'human' ? t('group.human') : item.actor_ref}</strong>
+            <strong>{item.actor_kind === 'human' ? t('group.human')
+              : item.actor_kind === 'system' && item.actor_ref === 'slark-agent-result'
+                ? t('group.agentStatus') : item.actor_ref}</strong>
             {time && <time dateTime={time.toISOString()}>{time.toLocaleString()}</time>}
           </header>
           <p>{item.body}</p>

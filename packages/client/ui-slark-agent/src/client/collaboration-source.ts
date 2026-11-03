@@ -259,8 +259,8 @@ export function createScopedCollaborationSource(ctx: Context, t: (key: keyof typ
           const mentionRefs = await Promise.all(mentions.map(({ r }) => groupAgentRef(r)))
           if (new Set(mentionRefs).size !== mentionRefs.length) throw Error(t('submit.unavailable'))
           const mentionSpans = mentions.map(({ r, mentionId, start, end }, index) => {
-            const actorRef = mentionRefs[index]
-            if (!actorRef) throw Error(t('submit.unavailable'))
+            // Promise.all preserves the input order and length; every entry is a resolved Agent ref.
+            const actorRef = mentionRefs[index] as string
             return { mention_id: mentionId, actor_ref: actorRef, start, end,
               agent_name: r.agent_name, project_name: r.project_name,
               capability_snapshot: r.capability_snapshot }
