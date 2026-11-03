@@ -1420,6 +1420,8 @@ describe('Typert Remote streams', () => {
     source.push(pending.dispatch)
     await vi.waitFor(() => { expect(deliveredInvocation(client)).toBeDefined() })
     const frame = deliveredInvocation(client)!
+    expect(() => { ctx.typertGateway.respondRemoteEvent({ clientId: randomUUID() as RemoteEventClientId, eventId: frame.eventId,
+      outcome: { kind: 'result', value: 'forged' } }) }).toThrow(/no active event stream/)
     const eventResult = vi.fn(() => { throw new Error('browser admission must not run') })
     const unregisterAdmission = ctx.typertGateway.registerBrowserAdmission({ invoke() {}, eventResult })
     ctx.typertGateway.respondRemoteEvent({ clientId: client.clientId, eventId: frame.eventId,

@@ -58,8 +58,9 @@ it('keeps the automation title intact before moving New to another line', async 
             facts.push(`${language} ${width}px: title and New single-line, New beside the title; contained; New retains focus`)
           }
           if (language === 'en') {
-            // 509px collapses the left sidebar to its rail; expanding it leaves the
-            // page column narrow enough (measured 172px) to force the wrap.
+            // A narrow desktop window can still expand its sidebar, leaving a
+            // page column narrow enough to force the wrap.
+            await page.evaluate(() => { document.documentElement.dataset.platform = 'linux' })
             await page.setViewportSize({ width: 509, height: 1000 })
             await page.getByRole('button', { name: 'Open sidebar', exact: true }).first().click()
             await expect.poll(() => header.evaluate((element) => {

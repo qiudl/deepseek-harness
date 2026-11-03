@@ -13,9 +13,11 @@ export interface BundledPlugin {
 }
 
 const packageName = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
-const version = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u
+// Prerelease pins are exact (the catalog also pins sha256), so the strict core triplet plus an
+// optional prerelease suffix is accepted; build metadata stays rejected.
+const version = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
 const bundledSpec = new RegExp('^bundled:((?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*)@'
-  + '((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*))$', 'u')
+  + '((?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?)$', 'u')
 const archiveName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tgz$/u
 const sha256 = /^[0-9a-f]{64}$/u
 const entryId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u

@@ -172,7 +172,7 @@ describe('QuoteNode composer lifecycle', () => {
     expect(sink).toHaveBeenCalledWith('> first\n\n> second', [], 'queue', expect.any(AbortSignal), expect.any(Function))
   })
 
-  it('restores the complete rich document when a send fails', async () => {
+  it('keeps the complete rich document in the editor when a send fails', async () => {
     let settle!: (outcome: { kind: 'error'; text: string }) => void
     const { shell, sink } = bench()
     sink.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
@@ -181,16 +181,17 @@ describe('QuoteNode composer lifecycle', () => {
     const submitted = shell.draftSnapshot
 
     shell.submit('queue')
-    expect(shell.snapshot.phase).toBe('plain')
-    expect(shell.draftSnapshot).toEqual({ text: '', references: [] })
+    expect(shell.snapshot.phase).toBe('sending')
+    expect(shell.draftSnapshot).toEqual(submitted)
     settle({ kind: 'error', text: 'retry' })
 
-    await vi.waitFor(() => { expect(shell.draftSnapshot).toEqual(submitted) })
+    await vi.waitFor(() => { expect(shell.snapshot.phase).toBe('plain') })
+    expect(shell.draftSnapshot).toEqual(submitted)
     expect(quoteKeys(shell)).toHaveLength(1)
     expect(shell.notices.getSnapshot()).toMatchObject({ level: 'error', text: 'retry' })
   })
 
-  it('mirrors the cleared draft while the Host accepts it', async () => {
+  it('mirrors the cleared draft through the Session lifetime once the Host accepts it', async () => {
     let settle!: (outcome: { kind: 'success' }) => void
     const { shell, sink } = bench()
     sink.mockImplementationOnce(() => new Promise((resolve) => { settle = resolve }))
@@ -199,8 +200,7 @@ describe('QuoteNode composer lifecycle', () => {
     shell.insertQuote(quote)
     const submitted = shell.draftSnapshot
     shell.submit('queue')
-    expect(mirrored).toContainEqual(submitted)
-    expect(mirrored.at(-1)).toEqual({ text: '', references: [] })
+    expect(mirrored.at(-1)).toEqual(submitted)
     settle({ kind: 'success' })
     await vi.waitFor(() => { expect(mirrored.at(-1)).toEqual({ text: '', references: [] }) })
   })

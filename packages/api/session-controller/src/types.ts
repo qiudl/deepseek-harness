@@ -297,6 +297,8 @@ export interface ProfileSkillCatalogValue {
 /** Session list request. */
 export interface SessionListRequest {
   readonly cursor?: string
+  /** Include archived Sessions; authorization still applies to every result. */
+  readonly includeArchived?: boolean
 }
 
 /** Session list response value. */
@@ -358,6 +360,8 @@ export interface SessionCollaborationSourcesValue {
 /** Session search request. */
 export interface SessionSearchRequest {
   readonly query: string
+  /** Choose which authorized Sessions participate in content search. */
+  readonly archivedFilter?: 'default' | 'show' | 'only'
 }
 
 /** Session search response value. */

@@ -394,13 +394,15 @@ export class ClientSessions implements ISessions {
    * request-local; the list snapshot remains the metadata authority.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for a superseded search.
+   * @param archivedFilter - which archived Sessions may contribute results.
    * @returns bounded results or a business/transport error.
    */
   search(
     query: string,
     signal: AbortSignal,
+    archivedFilter?: 'default' | 'show' | 'only',
   ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>> {
-    return this.manager.search(query, signal)
+    return this.manager.search(query, signal, archivedFilter)
   }
 
   /**

@@ -136,8 +136,10 @@ export function apply(ctx: Context): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en, ja, es, fr, de, ru, pt }), 'ui-workspace: dictionaries')
   const shortcutControls = createWorkspaceShortcutControls()
 
-  const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
-    const result = await sessions.search(query, signal)
+  const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal, archivedFilter) => {
+    const result = archivedFilter === undefined
+      ? await sessions.search(query, signal)
+      : await sessions.search(query, signal, archivedFilter)
     if (!result.ok) throw new Error(result.error.message)
     const dedicated = new Set(workspaces.list.getSnapshot().dedicatedCollaborationSessionIds)
     return { ...result.value, items: result.value.items.filter(item => !dedicated.has(item.sessionId)) }

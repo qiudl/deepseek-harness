@@ -76,22 +76,20 @@ describe('submit-machine: plain × enter', () => {
     expect(m.state.phase).toBe('plain')
   })
 
-  it('detaches ordinary sends with their snapshots so another send can start', () => {
+  it('non-command text is sent with the draft and mode and stays until the Host accepts it', () => {
     const m = new SubmitMachine()
     const attachmentIds = [attachmentId('image-1')]
     const fx = m.dispatch({ type: 'enter', mode: 'queue', draft: 'hello', occurrences: [], quotes: [], attachmentIds })
-    expect(fx).toHaveLength(2)
-    expect(effectAt(fx, 1, 'commit-draft').retainSuffixOf).toBe('hello')
+    expect(fx).toHaveLength(1)
     const sink = effectAt(fx, 0, 'default-sink')
     expect(sink.draft).toBe('hello')
     expect(sink.mode).toBe('queue')
     expect(sink.attempt).toMatchObject({ draftSnapshot: 'hello', attachmentIds })
-    expect(m.state.phase).toBe('plain')
-    const second = effectAt(m.dispatch({ type: 'enter', mode: 'queue', draft: 'again', occurrences: [], quotes: [], attachmentIds: [] }), 0, 'default-sink')
-    expect(second.attempt.seq).not.toBe(sink.attempt.seq)
+    expect(m.state.phase).toBe('sending')
+    expect(m.dispatch({ type: 'enter', mode: 'queue', draft: 'again', occurrences: [], quotes: [], attachmentIds: [] })).toEqual([])
 
     const accepted = m.dispatch({ type: 'sink-settled', attempt: sink.attempt, ok: true, outcome: { kind: 'success' } })
-    expect(accepted).toEqual([])
+    expect(effectAt(accepted, 0, 'commit-draft').retainSuffixOf).toBeNull()
     expect(m.state.phase).toBe('plain')
   })
 
@@ -109,7 +107,7 @@ describe('submit-machine: plain × enter', () => {
     const informed = effectAt(m.dispatch({ type: 'enter', mode: 'queue', draft: 'sent', occurrences: [], quotes: [], attachmentIds: [] }), 0, 'default-sink')
     expect(m.dispatch({
       type: 'sink-settled', attempt: informed.attempt, ok: true, outcome: { kind: 'success', text: 'queued' },
-    })).toEqual([{ type: 'notice', level: 'info', text: 'queued' }])
+    })).toEqual([{ type: 'commit-draft', retainSuffixOf: null }, { type: 'notice', level: 'info', text: 'queued' }])
     expect(m.dispatch({ type: 'sink-settled', attempt: informed.attempt, ok: true })).toEqual([])
   })
 
@@ -118,7 +116,7 @@ describe('submit-machine: plain × enter', () => {
     const attachmentIds = [attachmentId('image-only')]
     const fx = m.dispatch({ type: 'enter', mode: 'queue', draft: '  ', occurrences: [], quotes: [], attachmentIds })
     expect(effectAt(fx, 0, 'default-sink').attempt.attachmentIds).toEqual(attachmentIds)
-    expect(m.state.phase).toBe('plain')
+    expect(m.state.phase).toBe('sending')
   })
 
   it('retains an explicit steer mode on the default sink effect', () => {
@@ -192,12 +190,11 @@ describe('submit-machine: adjudication outcomes', () => {
     const attempt = enterAdjudicating(m, '/unknown thing', 'steer')
     const fx = m.dispatch({ type: 'adjudicated', attempt, outcome: undefined })
     const sink = effectAt(fx, 0, 'default-sink')
-    expect(fx).toHaveLength(2)
-    expect(effectAt(fx, 1, 'commit-draft').retainSuffixOf).toBe('/unknown thing')
+    expect(fx).toHaveLength(1)
     expect(sink.draft).toBe('/unknown thing')
     expect(sink.mode).toBe('steer')
     expect(sink.attempt).toBe(attempt)
-    expect(m.state.phase).toBe('plain')
+    expect(m.state.phase).toBe('sending')
   })
 
   it("'handled' lands plain with zero effects (popup shell path)", () => {
@@ -421,7 +418,7 @@ describe('submit-machine: per-session isolation', () => {
     expect(effectAt(fx, 0, 'default-sink').draft).toBe('hello')
     a.dispatch({ type: 'submit-settled', attempt, ok: true, command: undefined })
     expect(a.state.phase).toBe('plain')
-    expect(b.state.phase).toBe('plain')
+    expect(b.state.phase).toBe('sending')
   })
 })
 

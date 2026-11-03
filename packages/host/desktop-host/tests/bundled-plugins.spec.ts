@@ -46,7 +46,10 @@ it('parses only exact bundled identities and treats them as pinned sources', () 
   expect(parseBundledPluginSpec('bundled:dsh-duet@0.3.0')).toEqual({ name: 'dsh-duet', version: '0.3.0' })
   expect(parseBundledPluginSpec('bundled:@deepseek-ai/dsh-client-ui-voice@0.3.0'))
     .toEqual({ name: '@deepseek-ai/dsh-client-ui-voice', version: '0.3.0' })
-  for (const spec of ['bundled:dsh-duet', 'bundled:dsh-duet@^0.3.0', 'bundled:dsh-duet@0.3.0-rc.1', 'bundled:../x@1.0.0',
+  // Prerelease pins stay exact: the catalog pairs them with an archive sha256.
+  expect(parseBundledPluginSpec('bundled:dsh-worktable@0.5.2-local.2'))
+    .toEqual({ name: 'dsh-worktable', version: '0.5.2-local.2' })
+  for (const spec of ['bundled:dsh-duet', 'bundled:dsh-duet@^0.3.0', 'bundled:dsh-duet@0.3.0+b1', 'bundled:../x@1.0.0',
     'file:/tmp/dsh-duet.tgz', 'dsh-duet@0.3.0', `bundled:${'a'.repeat(260)}@1.0.0`]) {
     expect(parseBundledPluginSpec(spec)).toBeUndefined()
   }

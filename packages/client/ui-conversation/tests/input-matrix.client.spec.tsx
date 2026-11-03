@@ -149,13 +149,14 @@ describe('matrix row: plain', () => {
     expect(unsubscribe).toHaveBeenCalledOnce()
   })
 
-  it('enter sends the message and immediately clears the editable draft', async () => {
+  it('enter falls to the default sink; no claim on the currency; the draft clears once accepted', async () => {
     const { textarea, shell, sink } = bench()
     act(() => { shell.setDraft('普通消息') })
     expect(shell.snapshot.claim).toBeUndefined()
     fireEvent.keyDown(textarea, { key: 'Enter' })
     expect(sink).toHaveBeenCalledWith('普通消息', [], 'queue', expect.any(AbortSignal), expect.any(Function))
-    expect(shell.snapshot).toMatchObject({ phase: 'plain', draft: '' })
+    // The composer holds the message, read-only, until the Host accepts it.
+    expect(shell.snapshot).toMatchObject({ phase: 'sending', draft: '普通消息' })
     await vi.waitFor(() => { expect(shell.snapshot.phase).toBe('plain') })
     expect(shell.snapshot.draft).toBe('')
     expect(shell.snapshot.claim).toBeUndefined()

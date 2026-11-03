@@ -672,14 +672,18 @@ export function resolveBundleDir(
  * @param binName - the diagnostic prefix on thrown errors.
  * @param dir - absolute profile package directory.
  * @param installAnchor - absolute path of the owning dsh app's package.json.
- * @param options - `userLayer: false` skips reading `cordis.patch.yml`.
+ * @param options - `userLayer: false` skips reading `cordis.patch.yml`;
+ * `runtimeVersion` checks bundle dsh peers against that exact dsh version instead
+ * of this app-boot package's own manifest. Hosts whose code does not sit in a
+ * package directory (for example a verified module imported from bytes) must
+ * pass it, because the default reads `../package.json` next to this module.
  * @returns the successfully loaded bundle layers and optional user patch layer.
  */
 export function loadProfileDirectory(
   binName: string,
   dir: string,
   installAnchor: string,
-  options: { userLayer?: boolean } = {},
+  options: { userLayer?: boolean; runtimeVersion?: string } = {},
 ): Profile {
   const manifest = dropRetiredBundles(dir, readProfileManifest(binName, dir))
   const bundles = manifest.dsh?.profile?.bundles ?? []
@@ -696,7 +700,7 @@ export function loadProfileDirectory(
       }
       assertBundlePlatform(bundle.platforms, process.platform)
       // A bundle is not a plugin row, so row admission never reads its own dsh requirements.
-      const issue = evaluatePluginCompatibility(bundleManifest, exemptions)
+      const issue = evaluatePluginCompatibility(bundleManifest, exemptions, options.runtimeVersion)
       if (issue !== undefined && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue))
       const patchPaths = bundlePatchPaths(packageDir, bundle)
       const patches = patchPaths.flatMap(patchPath => loadOverlayPatches(binName, patchPath))

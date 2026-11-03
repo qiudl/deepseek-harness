@@ -94,6 +94,21 @@ function installSearchQuery(
 }
 
 describe('session.search', () => {
+  it('applies the requested archive filter before bounding content results', async () => {
+    const ctx = await baseContext()
+    for (const id of ['ordinary', 'archived']) ctx.sessions.create(sid(id), { meta: header(id) })
+    ctx.provide('workspaceRegistry', { archivedSessionIds: [sid('archived')] } as never)
+    installSearchQuery(ctx, async () => ({ items: [hit('ordinary'), hit('archived')], hasMore: false }))
+    const remote = await createSessionTestRemote(ctx, defaults)
+    const signal = new AbortController().signal
+    for (const [archivedFilter, expected] of [[undefined, ['ordinary']], ['show', ['ordinary', 'archived']],
+      ['only', ['archived']]] as const) {
+      const result = await remote.search({ query: 'match', ...(archivedFilter === undefined ? {} : { archivedFilter }) }, signal)
+      expect(result.ok).toBe(true)
+      if (result.ok) expect(result.value.items.map(item => item.sessionId)).toEqual(expected)
+    }
+    await ctx.fiber.dispose()
+  })
   it('rejects search when the query service is absent', async () => {
     const ctx = await baseContext()
     ctx.provide('attachments', { imageLimits: TEST_IMAGE_LIMITS } as never)

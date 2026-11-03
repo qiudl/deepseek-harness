@@ -219,7 +219,7 @@ export function probeFreePort(): Promise<number> {
  */
 export async function connectFreshWorkspace(page: Page, root: string, name = 'workspace'): Promise<void> {
   mkdirSync(join(root, name), { recursive: true })
-  await page.getByRole('button', { name: 'Add workspace', exact: true }).click()
+  await page.locator('[data-composer-input]').first().click()
   const dialog = page.getByRole('dialog', { name: 'Select Workspace Directory' })
   await dialog.waitFor({ timeout: 10_000 })
   await dialog.getByRole('button', { name: 'Edit path' }).click()
@@ -346,6 +346,12 @@ export function conversationContextKey(kind: string, id: string): string {
  */
 export async function openSettings(page: Page, locale: 'en' | 'zh' | 'ja'): Promise<void> {
   const labels = { en: ['Account menu', 'Settings'], zh: ['账号菜单', '设置'], ja: ['アカウントメニュー', '設定'] } as const
+  const mobileLabels = { en: ['Open navigation', 'Conversations'], zh: ['打开导航', '会话'], ja: ['ナビゲーションを開く', '会話'] } as const
+  const navigation = page.getByRole('button', { name: mobileLabels[locale][0], exact: true })
+  if (await navigation.isVisible()) {
+    await navigation.click()
+    await page.getByRole('button', { name: mobileLabels[locale][1], exact: true }).click()
+  }
   await page.getByRole('button', { name: labels[locale][0], exact: true }).click()
   await page.getByRole('menuitem', { name: labels[locale][1], exact: true }).click()
 }

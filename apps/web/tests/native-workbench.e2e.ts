@@ -6,6 +6,7 @@ import { DesktopRemoteSessionExecutor } from '../../../packages/bundle/web-app/s
 import { DesktopSessionControl } from '../../../packages/bundle/web-app/src/desktop-session-control.ts'
 import type { WorkbenchTerminalRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteUiStreamExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-ui-stream.ts'
+import { DesktopRemoteUiExecutor } from '../../../packages/bundle/web-app/src/desktop-remote-ui.ts'
 import { createWebConnectionRpc } from '@deepseek-ai/dsh-client-connection/src/client/rpc.ts'
 import type {} from '@deepseek-ai/dsh-api-gateway'
 import type { SessionId } from '@deepseek-ai/dsh-session'
@@ -177,7 +178,8 @@ it('mounts shared mobile controls from real Host injections without parent acces
       await page.screenshot({ path: join(screenshotDirectory, 'failure.png') })
     }
   })
-  await frame.getByRole('button', { name: '继续', exact: true }).click({ timeout: 60000 })
+  await frame.getByRole('dialog', { name: '开始使用', exact: true }).getByRole('button', { name: '添加 API Key', exact: true }).click({ timeout: 60000 })
+  await frame.getByRole('dialog', { name: '添加一个 API Key 开始使用' }).getByRole('button', { name: '稍后配置' }).click()
   await frame.getByRole('button', { name: '打开导航', exact: true }).click()
   await frame.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
   await frame.getByRole('treeitem').filter({ has: frame.getByText('iPhone 验收', { exact: true }) }).click()
@@ -300,7 +302,7 @@ it('follows real Host file changes and releases the watcher on page cancellation
   await writeFile(path, 'before')
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)])
-  const executor = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway)
+  const executor = new DesktopRemoteUiStreamExecutor(bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer))
   const stream = await executor.open('workspaceFiles/changes', {
     args: { workspaceFileScopeId: sessionId, path: 'native-watch.txt' },
   }, signal)
@@ -321,8 +323,9 @@ it('operates a real Host shell with controlled input, streamed output and attach
   const proof = { controller_id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const credential = { kind: owner.kind, id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const terminalStreams = new DesktopRemoteTerminalStreams(control)
-  const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
-  const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
+  const gateway = bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer)
+  const actions = new DesktopRemoteSessionExecutor(gateway, undefined, control, terminalStreams)
+  const streams = new DesktopRemoteUiStreamExecutor(gateway, undefined, undefined, terminalStreams)
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
   const renewal = setInterval(() => {
@@ -376,3 +379,19 @@ it('operates a real Host shell with controlled input, streamed output and attach
     await scaffold.ctx.typertGateway.invoke({ namespace: 'terminal', method: 'close', args: { agentId: sessionId, id: terminalId }, peer: nativePeer, signal: new AbortController().signal })
   }
 }, 70000)
+
+it('lists archived Sessions only on an explicit native Host request', async () => {
+  await scaffold.ctx.workspaceRegistry.archiveSession(otherSessionId)
+  const executor = new DesktopRemoteUiExecutor(bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer), () => [])
+  const signal = new AbortController().signal
+  const list = async (includeArchived: boolean) => {
+    const result = await executor.execute('session/list', { args: { _request: { includeArchived } } }, signal)
+    if (!result || typeof result !== 'object' || !('items' in result) || !Array.isArray(result.items)) throw new Error('missing Session list')
+    const items: unknown[] = result.items
+    return items
+  }
+  const matches = (item: unknown) => item !== null && typeof item === 'object'
+    && 'sessionId' in item && item.sessionId === otherSessionId
+  expect((await list(false)).some(matches)).toBe(false)
+  expect((await list(true)).some(matches)).toBe(true)
+})
