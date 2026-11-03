@@ -177,7 +177,8 @@ it('mounts shared mobile controls from real Host injections without parent acces
       await page.screenshot({ path: join(screenshotDirectory, 'failure.png') })
     }
   })
-  await frame.getByRole('button', { name: '继续', exact: true }).click({ timeout: 60000 })
+  await frame.getByRole('dialog', { name: '开始使用', exact: true }).getByRole('button', { name: '添加 API Key', exact: true }).click({ timeout: 60000 })
+  await frame.getByRole('dialog', { name: '添加一个 API Key 开始使用' }).getByRole('button', { name: '稍后配置' }).click()
   await frame.getByRole('button', { name: '打开导航', exact: true }).click()
   await frame.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
   await frame.getByRole('treeitem').filter({ has: frame.getByText('iPhone 验收', { exact: true }) }).click()
@@ -300,7 +301,7 @@ it('follows real Host file changes and releases the watcher on page cancellation
   await writeFile(path, 'before')
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)])
-  const executor = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway)
+  const executor = new DesktopRemoteUiStreamExecutor(bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer))
   const stream = await executor.open('workspaceFiles/changes', {
     args: { workspaceFileScopeId: sessionId, path: 'native-watch.txt' },
   }, signal)
@@ -321,8 +322,9 @@ it('operates a real Host shell with controlled input, streamed output and attach
   const proof = { controller_id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const credential = { kind: owner.kind, id: owner.id, generation: state.claim.generation, epoch: state.claim.epoch }
   const terminalStreams = new DesktopRemoteTerminalStreams(control)
-  const actions = new DesktopRemoteSessionExecutor(scaffold.ctx.typertGateway, undefined, control, terminalStreams)
-  const streams = new DesktopRemoteUiStreamExecutor(scaffold.ctx.typertGateway, undefined, undefined, terminalStreams)
+  const gateway = bindDesktopRemoteGateway(scaffold.ctx.typertGateway, nativePeer)
+  const actions = new DesktopRemoteSessionExecutor(gateway, undefined, control, terminalStreams)
+  const streams = new DesktopRemoteUiStreamExecutor(gateway, undefined, undefined, terminalStreams)
   const controller = new AbortController()
   const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000)])
   const renewal = setInterval(() => {
