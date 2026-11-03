@@ -250,7 +250,7 @@ it('rejects oversized metadata before extracting an archive', async () => {
     .rejects.toMatchObject({ code: 'runtime_incompatible' })
 })
 
-it.each(['null', '{', JSON.stringify({ name: 'fixture-plugin', version: '1.0.0-beta' })])(
+it.each(['null', '{', JSON.stringify({ name: 'fixture-plugin', version: '1.0.0+build' })])(
   'rejects invalid historical package identity', async (manifest) => {
     const value = await bundledFixture(undefined, { ...bundledFiles, 'package.json': manifest })
     await expect(verifyProfileRollbackArchive(value.web, bundledDependencySpec(value.digest), 'fixture-plugin', uid))
