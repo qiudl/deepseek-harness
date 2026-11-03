@@ -1,6 +1,7 @@
 /** Isolated worker that seeds the synthetic corpus or measures one Session-controller operation over it. */
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -127,7 +128,7 @@ async function memory(): Promise<CorpusMemory> {
   return {
     heapUsedMb: megabytes(usage.heapUsed),
     rssMb: megabytes(usage.rss),
-    peakRssMb: Math.round(process.resourceUsage().maxRSS / 102.4) / 10,
+    peakRssMb: megabytes(peakResidentSetBytes()),
   }
 }
 

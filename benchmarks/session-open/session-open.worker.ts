@@ -1,6 +1,7 @@
 /** Isolated worker for cold Session phase, first-history, and Agent-resume benchmarks. */
 
 import { performance } from 'node:perf_hooks'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { scheduler } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -103,7 +104,7 @@ function memorySnapshot(): BenchmarkMemorySnapshot {
     externalMb: megabytes(memory.external),
     arrayBuffersMb: megabytes(memory.arrayBuffers),
     rssMb: megabytes(memory.rss),
-    peakRssMb: Math.round(process.resourceUsage().maxRSS / 102.4) / 10,
+    peakRssMb: Math.round(peakResidentSetBytes() / 104_857.6) / 10,
   }
 }
 

@@ -1,6 +1,7 @@
 /** Plain-Node measurements of active request history and cold tool-heavy continuation. */
 
 import { performance } from 'node:perf_hooks'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { scheduler } from 'node:timers/promises'
 import { Context } from '@deepseek-ai/cordis'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -117,7 +118,7 @@ async function measure(root: string, scenario: string): Promise<ContinuationRepo
     return {
       totalMs: end - start, resumeMs: resumed - start, turnsMs: turnsDone - resumed, flushMs: end - turnsDone,
       cpuUserMs: cpu.user / 1_000, cpuSystemMs: cpu.system / 1_000,
-      retainedHeapMb, peakRssMb: process.resourceUsage().maxRSS / 1_024,
+      retainedHeapMb, peakRssMb: peakResidentSetBytes() / 1_048_576,
       requests: adapter.requests, toolCalls, events: handle.agent.session.seq,
     }
   } finally {

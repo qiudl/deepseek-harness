@@ -1,6 +1,7 @@
 /** Compiled worker for Client history folding and live tool preparation. */
 
 import { performance } from 'node:perf_hooks'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { AssistantStreamAccumulator } from '@deepseek-ai/dsh-llm/assistant-stream'
 import { LlmAttemptId, ToolCallId } from '@deepseek-ai/dsh-llm/brand'
@@ -251,7 +252,7 @@ function preparingTool(tool: 'write' | 'bash', characters: number, definitions: 
   const group = groups?.entries.find(reference => reference.kind === 'group')
   return {
     tool, characters: args.stringLength(tool === 'write' ? 'content' : 'command'), fragments: chunks.length,
-    elapsedMs, retainedMb, maxRssMb: process.resourceUsage().maxRSS / 1024,
+    elapsedMs, retainedMb, maxRssMb: peakResidentSetBytes() / 1_048_576,
     rowReads, progressKb, filePath,
     detail: group === undefined ? undefined : groups?.groupSource(group.key).getSnapshot()?.data.summary.runningDetail,
   }
