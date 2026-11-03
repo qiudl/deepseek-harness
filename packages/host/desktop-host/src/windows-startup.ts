@@ -1,6 +1,6 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { loadProfileDirectory, loadOverlayPatches } from '@deepseek-ai/dsh-app-boot'
 import { DshAccountAccessTokenVerifier } from './account-access-token.ts'
@@ -29,6 +29,7 @@ import { ProfileClaimMarker, WindowsProfileClaimMarkerFiles } from './legacy-cla
 import { executeRemoteSessionCommand, SessionCommandAuthority } from './session-command.ts'
 import type { HostClock, PersonProfileRecord, ProfileWorkerFactory } from './types.ts'
 import { HostAuthorityError } from './types.ts'
+import { createHostDiagnostics } from './host-diagnostics.ts'
 import { HostControlAuthority } from './unix-transport.ts'
 import type { HostExtensionKind } from '@deepseek-ai/dsh-host-control-protocol'
 import { loadWindowsCurrentUserSid } from './windows-current-user-native.ts'
@@ -65,10 +66,54 @@ const SHA256 = /^[0-9a-f]{64}$/u
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f]/u
 const DRIVE_ROOTED_PATH = /^[A-Za-z]:\\/u
 
+/**
+ * Read the running dsh app's version from the manifest beside its entrypoint.
+ * `dshEntrypointPath` is `<...>/app/node_modules/@deepseek-ai/dsh/lib/bin.js`.
+ * @param dshEntrypointPath - absolute dsh app entrypoint path.
+ * @returns the dsh package version string.
+ */
+export function readDshAppVersion(dshEntrypointPath: string): string {
+  const manifestPath = win32.join(win32.dirname(win32.dirname(dshEntrypointPath)), 'package.json')
+  const manifest: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  const version = typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)
+    ? (manifest as { version?: unknown }).version
+    : undefined
+  if (typeof version !== 'string' || version.trim() === '') {
+    throw new Error(`dsh package manifest ${manifestPath} must hold a non-empty version string`)
+  }
+  return version
+}
+
+/**
+ * REQ-20261028-0021: bundled plugins declare the DSH platform packages as peerDependencies
+ * (dsh-duet is self-contained, but ds-bot imports @deepseek-ai/dsh-llm etc. directly). pnpm cannot
+ * resolve those internal packages from a registry, so a bundled install leaves the Profile
+ * node_modules without them and the plugin host entry fails ERR_MODULE_NOT_FOUND on reload
+ * (executor_failed). The runtime already ships them, so expose them to the Profile by junction
+ * instead of duplicating bytes. `dshEntrypointPath` is `<...>/app/node_modules/@deepseek-ai/dsh/lib/bin.js`.
+ */
+export function linkBundledPluginPeerPackages(webRootPath: string, dshEntrypointPath: string): void {
+  const appNodeModules = win32.dirname(win32.dirname(
+    win32.dirname(win32.dirname(dshEntrypointPath))))
+  const destination = win32.join(webRootPath, 'node_modules', '@deepseek-ai')
+  for (const name of ['dsh-llm', 'dsh-tools', 'dsh-web'] as const) {
+    // A missing runtime package or an already-linked destination is a no-op, never a reason to
+    // fail the plugin install itself (self-contained plugins ignore the links).
+    try {
+      const source = win32.join(appNodeModules, '@deepseek-ai', name)
+      if (!lstatSync(source).isDirectory()) continue
+      const link = win32.join(destination, name)
+      if (existsSync(link)) continue
+      mkdirSync(destination, { recursive: true, mode: 0o700 })
+      symlinkSync(source, link, 'junction')
+    } catch { /* best effort */ }
+  }
+}
+
 /** Non-secret, embedding-pinned inputs for the private Windows Host composition. */
 export interface WindowsDesktopHostBaseConfig extends Omit<
   StartWindowsHostTransportOptions,
-  'allowedExecutableDigests' | 'initializeOwnedResources' | 'openSession' | 'quiesceOwnedResources'
+  'allowedExecutableDigests' | 'diagnosticsRoot' | 'initializeOwnedResources' | 'openSession' | 'quiesceOwnedResources'
 > {
   readonly root: string
   readonly nodeExecutablePath: string
@@ -128,6 +173,8 @@ export interface StartWindowsDesktopHostApplicationDependencies {
   readonly loadWorkerIoCancellation?: typeof loadWindowsWorkerIoCancellation
   readonly createProfileWorkerFactory?: (options: DshWebProfileWorkerFactoryOptions) => ProfileWorkerFactory
   readonly startTransport?: StartTransport
+  /** Reads the running dsh app's version for bundle peer checks; defaults to {@link readDshAppVersion}. */
+  readonly readDshRuntimeVersion?: (dshEntrypointPath: string) => string
 }
 
 function positive(value: number): boolean {
@@ -292,6 +339,8 @@ async function startWindowsDesktopHostApplicationWithTrust(
   clock: HostClock,
   dependencies: StartWindowsDesktopHostApplicationDependencies,
 ): Promise<WindowsDesktopHostApplication> {
+  const diagnostics = createHostDiagnostics({ root: config.root })
+  const readRuntimeVersion = dependencies.readDshRuntimeVersion ?? readDshAppVersion
   let pinnedNative: ReturnType<typeof loadPinnedWindowsVaultNativeModule> | undefined
   /* v8 ignore next 3 -- the signed native addon loader is exercised by the Windows platform lane. */
   const loadKoffi = () => Promise.resolve(
@@ -353,6 +402,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     processNonce: config.processNonce,
     workerEntry: config.workerEntry,
     workerGeneration: config.workerGeneration,
+    diagnosticsRoot: config.root,
     allowedPublisherThumbprints: config.allowedPublisherThumbprints,
     allowedExecutableDigests: config.allowedDesktopExecutableDigests,
     nativeModule: config.nativeModule,
@@ -445,8 +495,14 @@ async function startWindowsDesktopHostApplicationWithTrust(
         }
         const controlRoot = win32.join(config.root, 'control')
         const webRoot = (root: string): string => win32.join(root, 'profiles', 'web')
+        // REQ-20261028-0021: this startup runs from verified bytes staged outside any package
+        // directory, so the app-boot default that resolves `../package.json` from its own module
+        // URL finds no manifest and every bundle peer check fails. Read the running dsh app's
+        // version from its own manifest next to the entrypoint and pass it explicitly.
+        const dshRuntimeVersion = readRuntimeVersion(config.dshEntrypointPath)
         const loadComposition = (root: string) => {
-          const loaded = loadProfileDirectory('dsh', webRoot(root), config.dshEntrypointPath)
+          const loaded = loadProfileDirectory('dsh', webRoot(root), config.dshEntrypointPath,
+            { runtimeVersion: dshRuntimeVersion })
           const homePatch = win32.join(root, 'cordis.patch.yml')
           /* v8 ignore next -- ensureWorker materializes homePatch before any authorized extension operation. */
           const overlays = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []
@@ -514,11 +570,32 @@ async function startWindowsDesktopHostApplicationWithTrust(
               return composedEntryIds(loaded.layers, [...loaded.patches, ...overlays])
             },
           }),
-          install: (root, spec, context) => runPlugin(root, spec, context),
+          install: async (root, spec, context) => {
+            await runPlugin(root, spec, context)
+            linkBundledPluginPeerPackages(webRoot(root), config.dshEntrypointPath)
+          },
           acknowledge: async (profileId, packageName, context) => {
-            context.guard(); context.signal.throwIfAborted()
-            const { loaded, overlays } = loadComposition(profileRoot(profileId))
-            const expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+            // REQ-20261028-0021: the worker's plugin manager rewrites the Profile manifest while
+            // it settles after an install, so the composition can momentarily lack the package the
+            // manifest check just confirmed. Only the composition read retries — re-running the
+            // worker reactivation would kill the worker before it can settle.
+            // REQ-20261028-0021: the worker's plugin manager drops bundles it cannot resolve while
+            // it relinks node_modules, so on a cold machine the composition can stay incomplete
+            // for minutes. Wait within the operation's own lifetime instead of failing the
+            // install at 90 seconds.
+            const deadline = Date.now() + 300_000
+            let expected: Parameters<typeof reactivatePlugin>[1] | undefined
+            for (;;) {
+              context.guard(); context.signal.throwIfAborted()
+              try {
+                const { loaded, overlays } = loadComposition(profileRoot(profileId))
+                expected = pluginBundleEntries(loaded.layers, [...loaded.patches, ...overlays], packageName)
+                break
+              } catch (error) {
+                if (!(error instanceof Error && error.message === 'plugin_bundle_missing') || Date.now() >= deadline) throw error
+                await new Promise<void>((resolve) => { setTimeout(resolve, 200) })
+              }
+            }
             await reactivatePlugin(profileId, expected, context)
           },
         })
@@ -552,6 +629,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
             packagesRoot, windowsHostPrivateSecurityDescriptor(userSid)), 'directory', userSid)
           return packagesRoot
         }),
+        diagnostics,
         ...collaborationWorkerReaders(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,

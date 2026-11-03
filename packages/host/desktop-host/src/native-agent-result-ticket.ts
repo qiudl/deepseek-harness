@@ -4,6 +4,7 @@ import { botGroupHostRegistryId, decoded, issuerOrigin,
   type BotGroupPublicKeyring } from './bot-group-ticket.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+const SLARK_USER = /^[\x21-\x7e]{1,256}$/u
 const DIGEST = /^[0-9a-f]{64}$/u
 const OPAQUE = /^[\x21-\x7e]{1,256}$/u
 const AUDIENCE = 'urn:slark:dsh-native-agent-result:v1'
@@ -30,7 +31,6 @@ function origin(value: unknown): value is string {
 }
 
 export interface NativeAgentResultExpected {
-  readonly ownerUserId: string
   readonly computerId: string
   readonly accountIssuer: string
   readonly accountSubject: string
@@ -88,12 +88,13 @@ export function verifyNativeAgentResultTicket(token: string, keyring: BotGroupPu
         issuerOrigin(keyring.issuer) !== expected.slarkAudience ||
         !UUID.test(keyring.environmentId) || claims.environment_id !== keyring.environmentId ||
         claims.environment_id !== expected.environmentId ||
-        claims.owner_user_id !== expected.ownerUserId ||
+        typeof claims.owner_user_id !== 'string' || !SLARK_USER.test(claims.owner_user_id) ||
         claims.computer_id !== expected.computerId ||
         claims.account_issuer !== expected.accountIssuer || !origin(expected.accountIssuer) ||
         claims.account_subject !== expected.accountSubject || !UUID.test(expected.accountSubject) ||
         claims.account_binding_epoch !== expected.accountBindingEpoch ||
-        claims.host_registry_id !== botGroupHostRegistryId(expected) ||
+        claims.host_registry_id !== botGroupHostRegistryId({ ...expected,
+          ownerUserId: claims.owner_user_id }) ||
         claims.group_id !== expected.groupId || !UUID.test(expected.groupId) ||
         claims.workspace_id !== expected.workspaceId || !UUID.test(expected.workspaceId) ||
         claims.session_id !== expected.sessionId || !coordinate(expected.sessionId) ||

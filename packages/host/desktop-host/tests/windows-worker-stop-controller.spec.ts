@@ -22,7 +22,7 @@ describe('Windows blocking Worker stop controller', () => {
     }
     await expect(stopWindowsBlockingWorker({
       flag,
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation,
       workerDone,
       maxCancelAttempts: 3,
@@ -41,7 +41,7 @@ describe('Windows blocking Worker stop controller', () => {
     }
     const outcome = await stopWindowsBlockingWorker({
       flag,
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation,
       workerDone: new Promise<void>(() => undefined),
       maxCancelAttempts: 2,
@@ -63,7 +63,7 @@ describe('Windows blocking Worker stop controller', () => {
     }
     await expect(stopWindowsBlockingWorker({
       flag,
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation,
       workerDone: Promise.reject(workerFailure),
       maxCancelAttempts: 1,
@@ -77,7 +77,7 @@ describe('Windows blocking Worker stop controller', () => {
       const flag = createWindowsWorkerStopFlag()
       await expect(stopWindowsBlockingWorker({
         flag,
-        threadHandle: 901n,
+        threadHandles: () => [901n],
         cancellation: {
           cancel: vi.fn(() => 'cancelled' as const),
           close: vi.fn(),
@@ -104,7 +104,7 @@ describe('Windows blocking Worker stop controller', () => {
     }
     await expect(stopWindowsBlockingWorker({
       flag: createWindowsWorkerStopFlag(),
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation,
       workerDone: new Promise<void>(() => undefined),
       maxCancelAttempts: 1,
@@ -129,7 +129,7 @@ describe('Windows blocking Worker stop controller', () => {
       abandonUnhandedThreadHandle: vi.fn(),
     }
     await expect(stopWindowsBlockingWorker({
-      flag: createWindowsWorkerStopFlag(), threadHandle: 901n, cancellation, workerDone,
+      flag: createWindowsWorkerStopFlag(), threadHandles: () => [901n], cancellation, workerDone,
       maxCancelAttempts: 2, waitForRetry: async () => undefined,
     })).resolves.toEqual({ state: 'stopped', cancelAttempts: 2 })
   })
@@ -140,7 +140,7 @@ describe('Windows blocking Worker stop controller', () => {
   ] as const)('reports cancellation-handle cleanup failure: %s', async (failure, message) => {
     await expect(stopWindowsBlockingWorker({
       flag: createWindowsWorkerStopFlag(),
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation: {
         cancel: vi.fn(() => 'cancelled' as const),
         close: vi.fn(() => { throw failure }),
@@ -157,7 +157,7 @@ describe('Windows blocking Worker stop controller', () => {
     const workerDone = vi.fn<() => Promise<void>>().mockRejectedValue('worker failed')()
     await expect(stopWindowsBlockingWorker({
       flag: createWindowsWorkerStopFlag(),
-      threadHandle: 901n,
+      threadHandles: () => [901n],
       cancellation: {
         cancel: vi.fn(() => 'cancelled' as const), close: vi.fn(),
         openCurrentThreadHandle: vi.fn(() => 0n), abandonUnhandedThreadHandle: vi.fn(),
@@ -166,5 +166,60 @@ describe('Windows blocking Worker stop controller', () => {
       maxCancelAttempts: 1,
       waitForRetry: async () => undefined,
     })).rejects.toThrow('Unknown Windows Worker shutdown failure')
+  })
+
+  it('cancels every announced blocking thread each round and closes them all after exit', async () => {
+    const flag = createWindowsWorkerStopFlag()
+    let finish!: () => void
+    const workerDone = new Promise<void>((resolve) => { finish = resolve })
+    const cancelled: bigint[] = []
+    const closed: bigint[] = []
+    await expect(stopWindowsBlockingWorker({
+      flag,
+      threadHandles: () => [901n, 902n, 903n],
+      cancellation: {
+        cancel: vi.fn((handle: bigint) => {
+          cancelled.push(handle)
+          if (cancelled.length === 3) finish()
+          return 'cancelled' as const
+        }),
+        close: vi.fn((handle: bigint) => { closed.push(handle) }),
+        openCurrentThreadHandle: vi.fn(() => 0n),
+        abandonUnhandedThreadHandle: vi.fn(),
+      },
+      workerDone,
+      maxCancelAttempts: 2,
+      waitForRetry: async () => undefined,
+    })).resolves.toEqual({ state: 'stopped', cancelAttempts: 1 })
+    expect(cancelled).toEqual([901n, 902n, 903n])
+    expect(closed).toEqual([901n, 902n, 903n])
+  })
+
+  it('keeps cancelling a failing handle while still covering the rest of the round', async () => {
+    const flag = createWindowsWorkerStopFlag()
+    const cancelled: bigint[] = []
+    const outcome = await stopWindowsBlockingWorker({
+      flag,
+      threadHandles: () => [901n, 902n],
+      cancellation: {
+        cancel: vi.fn((handle: bigint) => {
+          cancelled.push(handle)
+          if (handle === 901n) throw new Error('cancel failed')
+          return 'cancelled' as const
+        }),
+        close: vi.fn(),
+        openCurrentThreadHandle: vi.fn(() => 0n),
+        abandonUnhandedThreadHandle: vi.fn(),
+      },
+      workerDone: new Promise<void>(() => undefined),
+      maxCancelAttempts: 1,
+      waitForRetry: async () => undefined,
+    })
+    expect(outcome).toMatchObject({
+      state: 'still_running',
+      cancelAttempts: 1,
+      lastCancellationError: { message: 'cancel failed' },
+    })
+    expect(cancelled).toEqual([901n, 902n])
   })
 })

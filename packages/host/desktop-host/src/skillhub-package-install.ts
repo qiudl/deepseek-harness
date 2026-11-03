@@ -315,6 +315,7 @@ export async function createSkillHubPackageInstallationStore(root: string, profi
     const { base, plan } = await fixedPlan(receipt)
     for (const directory of [base, join(base, 'files')]) {
       const info = await lstat(directory)
+      /* v8 ignore next -- the privateMode false arm requires POSIX mode bits. */
       if (!info.isDirectory() || info.isSymbolicLink() || !privateMode(info.mode)) fail()
     }
     const manifest = await storedJson<StoredFile[]>(join(base, 'manifest.json'))

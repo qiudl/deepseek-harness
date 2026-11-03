@@ -82,10 +82,8 @@ function pointerFromSlot(slot: Buffer, api: string): bigint {
   return value
 }
 
-function normalizedSid(value: string): string {
-  if (value === 'SY') return 'S-1-5-18'
-  if (value === 'BA') return 'S-1-5-32-544'
-  return value
+function normalizedSid(value: string, canonicalize: (token: string) => string): string {
+  return canonicalize(value)
 }
 
 function section(sddl: string, name: 'O' | 'D'): string | undefined {
@@ -99,12 +97,16 @@ function section(sddl: string, name: 'O' | 'D'): string | undefined {
 }
 
 // Preserve generic rights as unsigned bits; private-file admission requires exact file rights.
+// The CC/DC/LC/SW/RP/WP/DT/LO/CR strings are the directory-service names for the same bit values
+// files carry (Sddl.h, https://learn.microsoft.com/windows/win32/secauthz/ace-strings); a stock
+// drive root grants `LC` to authenticated users, so inspecting `C:\` needs them.
 function decodeFileRights(rights: string): number {
   if (/^0x[0-9a-f]{1,8}$/iu.test(rights)) return Number.parseInt(rights.slice(2), 16)
   const tokens: Readonly<Record<string, number>> = {
     GA: 0x10000000, GR: 0x80000000, GW: 0x40000000, GX: 0x20000000,
     RC: 0x20000, SD: 0x10000, WD: 0x40000, WO: 0x80000,
     FA: FULL_CONTROL, FR: 0x120089, FW: 0x120116, FX: 0x1200a0,
+    CC: 0x1, DC: 0x2, LC: 0x4, SW: 0x8, RP: 0x10, WP: 0x20, DT: 0x40, LO: 0x80, CR: 0x100,
   }
   let mask = 0
   for (let offset = 0; offset < rights.length; offset += 2) {
@@ -120,7 +122,10 @@ function decodeFileRights(rights: string): number {
   return mask
 }
 
-function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> {
+export function decodeEvidenceSddl(
+  sddl: string,
+  canonicalize: (token: string) => string = token => token,
+): Pick<WindowsHostPrivatePathEvidence, 'ownerSid' | 'daclProtected' | 'access'> {
   const owner = section(sddl, 'O')
   const dacl = section(sddl, 'D')
   if (owner === undefined || dacl === undefined) {
@@ -145,7 +150,7 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
     const decodedAceFlags = aceFlags as string
     const mask = decodeFileRights(decodedRights)
     access.push({
-      sid: normalizedSid(sid),
+      sid: normalizedSid(sid, canonicalize),
       type: type === 'A' ? 'allow' : 'deny',
       mask,
       inherited: decodedAceFlags.includes('ID'),
@@ -153,7 +158,7 @@ function decodeEvidenceSddl(sddl: string): Pick<WindowsHostPrivatePathEvidence, 
       containerInherit: decodedAceFlags.includes('CI'),
     })
   }
-  return { ownerSid: normalizedSid(owner), daclProtected: flags.includes('P'), access }
+  return { ownerSid: normalizedSid(owner, canonicalize), daclProtected: flags.includes('P'), access }
 }
 
 /**
@@ -180,6 +185,11 @@ export async function loadWindowsHostRegistrationFileBindings(
   const convertDescriptor = bind(advapi32, 'ConvertSecurityDescriptorToStringSecurityDescriptorW', 'int', [
     pointer, 'uint32', 'uint32', pointerPointer, uint32Pointer,
   ])
+  // SDDL renders well-known SIDs as aliases (LA, DA, SY, ...); ConvertStringSidToSid resolves
+  // domain-relative aliases like LA against this machine, and ConvertSidToStringSid renders the
+  // canonical numeric form both the user SID loader and the evidence checks expect.
+  const convertStringSidToSid = bind(advapi32, 'ConvertStringSidToSidW', 'int', ['str16', pointerPointer])
+  const convertSidToStringSid = bind(advapi32, 'ConvertSidToStringSidW', 'int', [pointer, pointerPointer])
   const createDirectory = bind(kernel32, 'CreateDirectoryW', 'int', ['str16', koffi.pointer(securityAttributes)])
   const createFile = bind(kernel32, 'CreateFileW', pointer, [
     'str16', 'uint32', 'uint32', koffi.pointer(securityAttributes), 'uint32', 'uint32', pointer,
@@ -222,6 +232,24 @@ export async function loadWindowsHostRegistrationFileBindings(
   const checkedFree = (allocation: bigint, detail: string): void => {
     const remainder = localFree(allocation) as NativePointer
     if (remainder !== null && remainder !== 0n) lastError(detail)
+  }
+  const canonicalSid = (token: string): string => {
+    if (token.startsWith('S-')) return token
+    const slot = Buffer.alloc(8)
+    if (Number(convertStringSidToSid(token, slot)) === 0) lastError('ConvertStringSidToSidW')
+    const sid = pointerFromSlot(slot, 'ConvertStringSidToSidW')
+    try {
+      const textSlot = Buffer.alloc(8)
+      if (Number(convertSidToStringSid(sid, textSlot)) === 0) lastError('ConvertSidToStringSidW')
+      const text = pointerFromSlot(textSlot, 'ConvertSidToStringSidW')
+      try {
+        const value = koffi.decode(textSlot, 'str16')
+        if (typeof value !== 'string') invalidData('ConvertSidToStringSidW')
+        const numeric = value as string
+        if (!numeric.startsWith('S-')) invalidData('ConvertSidToStringSidW')
+        return numeric
+      } finally { checkedFree(text, 'LocalFree') }
+    } finally { checkedFree(sid, 'LocalFree') }
   }
   function securityDescriptor<Result>(sddl: string, operation: (descriptor: bigint) => Result): Result {
     const slot = Buffer.alloc(8)
@@ -284,7 +312,7 @@ export async function loadWindowsHostRegistrationFileBindings(
         // Decode the LPWSTR output slot, retaining text only for LocalFree.
         const value = koffi.decode(textSlot, 'str16')
         if (typeof value !== 'string') invalidData('ConvertSecurityDescriptorToStringSecurityDescriptorW')
-        decoded = decodeEvidenceSddl(value as string)
+        decoded = decodeEvidenceSddl(value as string, canonicalSid)
       } finally { checkedFree(text, 'LocalFree') }
     } catch (error) { failure = error }
     try { checkedFree(descriptor, 'LocalFree') } catch (error) { failure ??= error }

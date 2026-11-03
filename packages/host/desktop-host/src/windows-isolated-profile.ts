@@ -42,8 +42,12 @@ const BUILTIN_ADMINISTRATORS_SID = 'S-1-5-32-544'
 export function assertWindowsWorkerMutableFileEvidence(
   evidence: WindowsHostPrivatePathEvidence, userSid: string,
 ): void {
+  // Worker and pnpm rewrites inherit the OS default owner. On hosts where members of
+  // Administrators create objects owned by the group (the server default), that owner is
+  // BUILTIN\Administrators — the Windows analogue of the POSIX root tolerance below.
   if (evidence.kind !== 'file' || evidence.reparsePoint || evidence.linkCount !== 1
-    || evidence.ownerSid !== userSid || evidence.access.length !== 3) {
+    || (evidence.ownerSid !== userSid && evidence.ownerSid !== BUILTIN_ADMINISTRATORS_SID)
+    || evidence.access.length !== 3) {
     throw new HostAuthorityError('unavailable')
   }
   const expected = new Set([userSid, LOCAL_SYSTEM_SID, BUILTIN_ADMINISTRATORS_SID])

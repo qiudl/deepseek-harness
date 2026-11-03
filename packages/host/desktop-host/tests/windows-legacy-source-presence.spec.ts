@@ -49,6 +49,26 @@ it('does not treat redirection, foreign ownership, or arbitrary error objects as
   } })).toEqual({ observedState: 'unknown', migrationAdmitted: false })
 })
 
+it('accepts the stock-Windows SYSTEM or Administrators owned home while refusing foreign users', () => {
+  for (const ownerSid of ['S-1-5-18', 'S-1-5-32-544']) {
+    const home = { ...evidence, ownerSid }
+    expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+      inspectExistingDirectory: (path) => {
+        if (path === userProfile || path === root) return home
+        return { ...evidence, ownerSid: 'S-1-5-18' }
+      },
+    } }).observedState).toBe('present')
+  }
+  for (const ownerSid of ['S-1-5-21-1000-2000-3000-2002', 'S-1-5-21-1000-2000-3000-3003']) {
+    expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+      inspectExistingDirectory: path => path === userProfile ? { ...evidence, ownerSid } : evidence,
+    } }).observedState).toBe('unknown')
+    expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+      inspectExistingDirectory: path => path === root ? { ...evidence, ownerSid } : evidence,
+    } }).observedState).toBe('unknown')
+  }
+})
+
 it('rejects noncanonical roots and missing bindings before native inspection', () => {
   const inspectExistingDirectory = vi.fn(() => evidence)
   for (const path of ['relative', 'C:\\Users\\..\\alice', '\\\\server\\share', 'C:\\Users\\alice.',

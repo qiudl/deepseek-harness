@@ -37,6 +37,8 @@ export interface StartWindowsHostWorkerThreadOptions {
   readonly allowedPublisherThumbprints: ReadonlySet<string>
   readonly allowedExecutableDigests: ReadonlySet<string>
   readonly nativeModule: WindowsVaultNativeModulePin
+  /** Environment root forwarded to the Worker so attestation failures are recorded. */
+  readonly diagnosticsRoot: string
   readonly cancellation: WindowsWorkerIoCancellation
   readonly maxCancelAttempts: number
   readonly waitForCancelRetry: () => Promise<void>

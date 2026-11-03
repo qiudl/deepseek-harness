@@ -71,6 +71,7 @@ function fixture() {
       path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
       sha256: 'c'.repeat(64),
     },
+    diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
     cancellation,
     maxCancelAttempts: 2,
     waitForCancelRetry: async () => undefined,
@@ -251,6 +252,7 @@ function fixtureOptionsForInvalidEntry() {
       path: String.raw`C:\Program Files\Slark\resources\dsh\native\win32-x64\koffi.node`,
       sha256: 'c'.repeat(64),
     },
+    diagnosticsRoot: String.raw`C:\Users\alice\AppData\Local\Slark\dsh-host`,
     cancellation: {
       openCurrentThreadHandle: () => 0n,
       abandonUnhandedThreadHandle: () => undefined,
