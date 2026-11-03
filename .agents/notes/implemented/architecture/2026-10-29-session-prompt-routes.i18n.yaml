@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-10-29-session-prompt-routes.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-10-29-session-prompt-routes.md
+/agent-note-session-prompt-sender-ownership:
+  en: 1a9ae8e7b093ec0b
+  zh: 8b6d55ecc0368aaa
+/agent-note-session-prompt-sender-ownership/problem:
+  en: c40b2a07c4a87799
+  zh: defa2d6f3deda6e3
+/agent-note-session-prompt-sender-ownership/decision:
+  en: a272c5c3bb77471a
+  zh: 843c85a91d9f0344
+/agent-note-session-prompt-sender-ownership/alternatives-considered:
+  en: c3edfd99065cef8a
+  zh: a0a3348eab606b6b
+/agent-note-session-prompt-sender-ownership/consequences:
+  en: a7837312fb35c100
+  zh: c00ed62310aad9df
+/agent-note-session-prompt-sender-ownership/testing:
+  en: 08dfb547cbd3cc99
+  zh: e761ffbf9e52d4bf

@@ -171,7 +171,8 @@ class UiWorkspaceService extends Service implements UiWorkspace {
    * @param workspaces - pure Workspace Controller.
    * @param sessions - pure Session Controller.
    * @param view - the browser's viewing-store write set (one instance shared with its registration).
-   * @param notify - show one notice through the Workspace notice channel.
+   * @param notify - Show one notice through the Workspace notice channel.
+   * @param restoreInitial - Restore or create a local landing Session; remote carriers own their landing selection.
    */
   constructor(
     ctx: Context,
@@ -180,6 +181,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     private readonly sessions: ISessions,
     private readonly view: Pick<WorkspaceViewStoreActions, 'pinSessionOrder'>,
     private readonly notify: (toast: RowToast) => void,
+    private readonly restoreInitial = true,
   ) {
     super(ctx, 'uiWorkspace')
     ctx.effect(() => {
@@ -384,7 +386,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }
 
   private watchNavigation(): () => void {
-    let initial: 'waiting' | 'connecting' | 'done' = 'waiting'
+    let initial: 'waiting' | 'connecting' | 'done' = this.restoreInitial ? 'waiting' : 'done'
     const reconcile = (): void => {
       if (this.lifetime.signal.aborted) return
       if (this.clearArchivedCurrent()) return

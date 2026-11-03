@@ -17,6 +17,7 @@ import type {
   SessionAssistantStreamBaseline,
   SessionProjectionBaseline,
   SessionRequestId,
+  SessionPromptRequest,
 } from '../../types.ts'
 import type {
   BeginSubmissionInput, PendingSubmissionRetirement, SessionFace, SubmissionHandle,
@@ -69,6 +70,8 @@ interface PendingHistory {
 
 /** Manager-owned observers of a Session object's local state edges. */
 export interface SessionOptions {
+  /** Manager-owned ordinary prompt routing; absent for standalone Session construction. */
+  prompt?: (request: SessionPromptRequest, signal?: AbortSignal) => Promise<RemoteResult<{ accepted: true }>>
   /** Catalog-discovered address selecting non-activating subagent transport. */
   address?: SubagentAddress
   /** Whether the exact direct parent Agent is available in Host summaries; absent until known. */
@@ -268,13 +271,16 @@ export class Session implements SessionFace {
     let result: RemoteResult<{ accepted: true }>
     if (this.address === undefined) {
       const clientTimeZone = resolvedClientTimeZone()
-      result = await this.remote.session.prompt({
+      const request: SessionPromptRequest = {
         requestId: requestId ?? randomUUID() as SessionRequestId,
         sessionId: this.sessionId,
         mode,
         content,
         clientTimeZone,
-      }, signal)
+      }
+      result = this.options.prompt === undefined
+        ? await this.remote.session.prompt(request, signal)
+        : await this.options.prompt(request, signal)
     } else if (content.some(part => part.type === 'file')) {
       result = {
         ok: false,

@@ -23,7 +23,7 @@ import { flattenLineage } from './lineage.ts'
 import type {} from '@deepseek-ai/dsh-session-title/client'
 import { Notifier } from './notifier.ts'
 import { ProjectionValueStore } from './projection-store.ts'
-import { Session } from './session.ts'
+import { Session, type SessionOptions } from './session.ts'
 import type { SessionRemotes } from './remotes.ts'
 import type { SessionTarget } from '../contract/sessions.ts'
 
@@ -122,8 +122,11 @@ export class SessionManager {
     this.listSnapshotCache = this.buildListSnapshot()
   })
 
-  /** @param remote - generated Remote namespaces used by catalog and history readers. */
-  constructor(private readonly remote: SessionRemotes) {
+  /**
+   * @param remote - Generated Remote namespaces for catalog and history.
+   * @param prompt - Owner-provided ordinary prompt routing, when assembled by ClientSessions.
+   */
+  constructor(private readonly remote: SessionRemotes, private readonly prompt?: SessionOptions['prompt']) {
     this.listSnapshotCache = this.buildListSnapshot()
   }
 
@@ -275,6 +278,7 @@ export class SessionManager {
       ? undefined
       : this.agentAvailable(address.parentSessionId)
     return new Session(sessionId, this.remote, {
+      ...(this.prompt === undefined ? {} : { prompt: this.prompt }),
       ...(address === undefined ? {} : {
         address,
         ...parentAvailable === undefined ? {} : { parentAvailable },

@@ -48,6 +48,8 @@ HTTPS cookie 名称与签名 audience 包含 `https:` scheme，因此即使 host
 
 通过认证的共享 HTTP 请求在传输请求体之前经过 `connection/request` waterfall。监听器可以拒绝新请求，或等待 `next()` 直到响应完成；释放所属 fiber 会移除准入行为。Desktop 使用此扩展点，在已批准的安装期间锁住新的 API 工作，而不取消已接纳的工作。客户端断开会中止处理函数的信号；桥接器停止写入 socket，并排空剩余响应块。WebSocket 流仍由 API Gateway 负责。
 
+`ctx.connection.isRemoteHost` 将传输层的 `remoteHost` 标志作为展示信息公开。远程组合用它把本地启动恢复交给首页所有者。该信息不授予读写能力；Host 与原生传输层仍逐项授权操作。
+
 <a id="connection-generation"></a>
 ## Connection generation
 

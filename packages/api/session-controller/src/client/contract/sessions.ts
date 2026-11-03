@@ -7,7 +7,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { SessionRequestId, SessionCollaborationSourceItem } from '../../types.ts'
+import type { SessionPromptRequest, SessionPromptValue, SessionRequestId, SessionCollaborationSourceItem } from '../../types.ts'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type { RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import type { AgentContext } from '../scope.ts'
@@ -46,8 +46,19 @@ export interface SessionRetainInfo {
   readonly retainedBy: Readonly<Partial<Record<SessionReferenceSource, number>>>
 }
 
+/** Domain-owned prompt transport for an explicitly bound ordinary Session. */
+export type SessionPromptRoute = (request: SessionPromptRequest, signal: AbortSignal) => Promise<RemoteResult<SessionPromptValue>>
+
 /** The sessions-service face injected as `ctx.sessions`. */
 export interface ISessions {
+  /**
+   * Bind an ordinary Session to its domain sender before opening the view.
+   * Withdrawal cancels in-flight delivery and fences this identity from generic prompt fallback.
+   * @param sessionId - Exact Session owned by the domain.
+   * @param send - Sender using the original submission identity and caller cancellation.
+   * @returns The owner disposer; a subsequent registration may replace a withdrawn sender.
+   */
+  registerPromptRoute(sessionId: SessionId, send: SessionPromptRoute): () => void
   /**
    * Derive ordinary-prompt retry identity without submitting or authorizing a Source.
    * @param source - Exact original coordinates whose discussion route the caller verified.

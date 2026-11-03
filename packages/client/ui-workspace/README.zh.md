@@ -24,6 +24,8 @@ kind: "package-reference"
 
 -----
 
+使用远程 Host 传输时，启动阶段不恢复保存的会话，也不创建空会话。远程首页所有者通过 `openSession` 选择初始身份；用户仍可从列表主动导航。普通本地启动保留原有恢复行为。
+
 <a id="use-this-package"></a>
 ## 使用本包
 

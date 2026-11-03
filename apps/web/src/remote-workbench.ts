@@ -27,10 +27,10 @@ export async function installRemoteWorkbench(fetch: TunnelFetch): Promise<void> 
     window.removeEventListener('pagehide', onHide)
   }
   window.addEventListener('pagehide', onHide, { once: true })
-  const request = async (path: string, input?: object): Promise<unknown> => {
+  const request = async (path: string, input?: object, caller?: AbortSignal): Promise<unknown> => {
     const timeout = new AbortController()
-    const timer = setTimeout(() => { timeout.abort() }, input ? 60_000 : 5000)
-    const signal = AbortSignal.any([lifetime.signal, timeout.signal])
+    const timer = setTimeout(() => { timeout.abort() }, path === '/__native_dictation__' ? 75_000 : input ? 60_000 : 5000)
+    const signal = AbortSignal.any([lifetime.signal, timeout.signal, ...(caller ? [caller] : [])])
     try {
       signal.throwIfAborted()
       const body = input && JSON.stringify(input)
@@ -47,11 +47,23 @@ export async function installRemoteWorkbench(fetch: TunnelFetch): Promise<void> 
   try {
     let capabilities: unknown
     try { capabilities = await request('/__native_workbench__') } catch { return }
-    if (!exact(capabilities, ['schema', 'duet', 'draft']) || capabilities.schema !== 'dsh-native-workbench/v1'
+    if (!row(capabilities) || Object.keys(capabilities).some(key => !['schema', 'duet', 'draft', 'personalInbox', 'botPending', 'dictation'].includes(key))
+      || capabilities.schema !== 'dsh-native-workbench/v1'
       || typeof capabilities.duet !== 'boolean' || typeof capabilities.draft !== 'boolean'
+      || ['personalInbox', 'botPending', 'dictation'].some(key => key in capabilities && typeof capabilities[key] !== 'boolean')
       || lifetime.signal.aborted) return
     if (Reflect.get(window, '__DSH_NATIVE_WORKBENCH__') !== undefined) throw new NativeWorkbenchFailure('invalid')
     const bridge = {
+      ...(capabilities.dictation === true ? {
+        async dictate(sessionId: string, signal: AbortSignal): Promise<string | null> {
+          if (!session(sessionId)) throw new NativeWorkbenchFailure('invalid')
+          const result = await request('/__native_dictation__', { sessionId }, signal)
+          if (!exact(result, ['ok', 'value']) || result.ok !== true || !exact(result.value, ['text']) ||
+            result.value.text !== null && (typeof result.value.text !== 'string' || new TextEncoder().encode(result.value.text).length > 16_384))
+            throw new NativeWorkbenchFailure('unavailable')
+          return result.value.text
+        },
+      } : {}),
       ...(capabilities.duet ? {
         async duetStart(sessionId: string): Promise<void> {
           if (!session(sessionId)) throw new NativeWorkbenchFailure('invalid')

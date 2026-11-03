@@ -67,6 +67,7 @@ export function ConversationSessionHeader({
   return (
     <>
       <div className={css.titleRow}>
+        {hideChrome && renderSlot('conversation.session.header.title', { lineageSessionId: sessionId, displayTitle: '' }, { fallback: null })}
         {!hideChrome && (
           <>
             <div className={css.titleCluster}>
@@ -110,7 +111,7 @@ export function ConversationSessionHeader({
                           )
                           : (
                             <>
-                              {title}
+                              {renderSlot('conversation.session.header.title', lineageOwner, { fallback: title })}
                               {renderSlot(
                                 'conversation.session.header.lineage',
                                 lineageOwner,

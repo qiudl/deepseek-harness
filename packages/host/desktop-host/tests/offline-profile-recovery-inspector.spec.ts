@@ -2,11 +2,14 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rm
 import { tmpdir } from 'node:os'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { create as createArchive, Header } from 'tar'
 import { gzipSync } from 'node:zlib'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import { verifyCopiedBundledPlugin } from '../src/bundled-plugin-recovery.ts'
+import { readBundledPluginPatch, verifyCopiedBundledPlugin, verifyProfileRollbackArchive } from '../src/bundled-plugin-recovery.ts'
+import { prepareBundledPluginUpgrade } from '../src/plugin-upgrade-plan.ts'
+import { pluginBundleEntries } from '../src/plugin-bundle-entries.ts'
+import { parseDocument } from 'yaml'
 
 const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -117,7 +120,7 @@ const bundledFiles = {
   'node_modules/nested/index.js': 'export const nested = true\n',
 }
 
-async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withNewerVersion = false) {
+async function bundledFixture(archiveBytes?: Buffer, files: Record<string, string> = bundledFiles, withNewerVersion = false) {
   const value = await fixture()
   const installed = join(value.web, 'node_modules', 'fixture-plugin')
   await unlink(installed)
@@ -163,6 +166,107 @@ async function bundledFixture(archiveBytes?: Buffer, files = bundledFiles, withN
 function verifyBundle(value: Awaited<ReturnType<typeof bundledFixture>>) {
   return verifyCopiedBundledPlugin(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!, value.web, uid)
 }
+
+it('verifies a Profile-owned historical archive without installing it', async () => {
+  const value = await bundledFixture()
+  const dependency = bundledDependencySpec(value.digest)
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid))
+    .resolves.toEqual({ spec: 'bundled:fixture-plugin@1.0.0', digest: value.digest })
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid, true))
+    .resolves.toEqual({ spec: 'bundled:fixture-plugin@1.0.0', digest: value.digest })
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid, true, value.installed))
+    .resolves.toEqual({ spec: 'bundled:fixture-plugin@1.0.0', digest: value.digest })
+  await writeFile(join(value.installed, 'index.js'), 'local modification')
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid, true))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'other', uid)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  await expect(verifyProfileRollbackArchive(value.web, 'file:../other.tgz', 'fixture-plugin', uid)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  await writeFile(join(value.web, '.bundled-plugins', `${value.digest}.tgz`), 'changed')
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
+
+it('reads a verified bundled patch without installing or extracting it', async () => {
+  const patch = '- insert:\n    - id: bot\n      name: fixture\n'
+  const value = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    'cordis.patch.yml': patch })
+  const plugin = value.catalog.get('fixture-plugin', '1.0.0')!
+  expect(await readBundledPluginPatch(value.catalog, plugin)).toBe(patch)
+  await writeFile(value.archive, 'changed archive')
+  await expect(readBundledPluginPatch(value.catalog, plugin)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
+
+it('plans preservation from the verified target archive before changing the Profile', async () => {
+  const patch = '- insert:\n    - id: bot\n      name: fixture-plugin\n'
+  const value = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    'cordis.patch.yml': patch })
+  const plugin = value.catalog.get('fixture-plugin', '1.0.0')!
+  const layers = [
+    { packageName: 'base', patches: [{ insert: [{ id: 'web', name: 'web', config: { searchProvider: 'official' } }] }] },
+    { packageName: 'fixture-plugin', patches: [{ insert: [{ id: 'bot', name: 'fixture-plugin' }] }, { id: 'web', config: { searchProvider: 'auto' } }] },
+  ]
+  const before = await readFile(join(value.web, 'package.json'), 'utf8')
+  const result = await prepareBundledPluginUpgrade(value.catalog, plugin, layers, '[]\n', [])
+  expect(result.patch).toContain('searchProvider: auto')
+  const nextLayers = layers.map(layer => layer.packageName === plugin.name ? { ...layer, patches: result.patches } : layer)
+  const parsedPatch = parseDocument(result.patch).toJSON() as Parameters<typeof pluginBundleEntries>[1]
+  expect(pluginBundleEntries(nextLayers, parsedPatch, plugin.name)).toEqual([
+    { entryId: 'include:bot', moduleName: 'fixture-plugin' },
+  ])
+  expect(await readFile(join(value.web, 'package.json'), 'utf8')).toBe(before)
+})
+
+it('rejects bundled metadata missing a patch or declaring a different identity', async () => {
+  const missing = await bundledFixture()
+  await expect(readBundledPluginPatch(missing.catalog, missing.catalog.get('fixture-plugin', '1.0.0')!))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  const wrong = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify({ name: 'other', version: '1.0.0' }), 'cordis.patch.yml': '[]\n' })
+  await expect(readBundledPluginPatch(wrong.catalog, wrong.catalog.get('fixture-plugin', '1.0.0')!))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  const differentPatch = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dsh: { bundle: { patch: 'other.yml' } } }),
+    'cordis.patch.yml': '[]\n' })
+  await expect(readBundledPluginPatch(differentPatch.catalog, differentPatch.catalog.get('fixture-plugin', '1.0.0')!))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
+
+it.each([
+  { name: 'fixture-plugin', version: '1.0.0' },
+  { name: 'fixture-plugin', version: '1.0.0', dsh: {} },
+])('rejects target archives without a valid bundle declaration', async (identity) => {
+  const value = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify(identity), 'cordis.patch.yml': '[]\n' })
+  await expect(readBundledPluginPatch(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
+
+it('rejects oversized metadata before extracting an archive', async () => {
+  const value = await bundledFixture(undefined, { ...bundledFiles,
+    'package.json': JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+    'cordis.patch.yml': randomBytes(800_000).toString('base64') })
+  await expect(readBundledPluginPatch(value.catalog, value.catalog.get('fixture-plugin', '1.0.0')!))
+    .rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
+
+it.each(['null', '{', JSON.stringify({ name: 'fixture-plugin', version: '1.0.0-beta' })])(
+  'rejects invalid historical package identity', async (manifest) => {
+    const value = await bundledFixture(undefined, { ...bundledFiles, 'package.json': manifest })
+    await expect(verifyProfileRollbackArchive(value.web, bundledDependencySpec(value.digest), 'fixture-plugin', uid))
+      .rejects.toMatchObject({ code: 'runtime_incompatible' })
+  },
+)
+
+it('rejects an unsafe historical archive directory and missing archive', async () => {
+  const value = await bundledFixture(); const directory = join(value.web, '.bundled-plugins')
+  const dependency = bundledDependencySpec(value.digest)
+  await chmod(directory, 0o777)
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  await chmod(directory, 0o700)
+  await unlink(join(directory, `${value.digest}.tgz`))
+  await expect(verifyProfileRollbackArchive(value.web, dependency, 'fixture-plugin', uid)).rejects.toMatchObject({ code: 'runtime_incompatible' })
+})
 
 function unsafeArchive(path: string, type: 'File' | 'SymbolicLink' | 'CharacterDevice' | 'ExtendedHeader' = 'File', size = 1, includeBase = true): Buffer {
   const valid: Buffer[] = []

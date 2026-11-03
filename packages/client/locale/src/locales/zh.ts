@@ -32,6 +32,8 @@ export const zh = {
   'expand': '展开',
   'back': '返回',
   'brand.localBuild': 'DSH 本地构建',
+  'mobile.openNavigation': '打开导航',
+  'mobile.closeNavigation': '关闭导航',
   'mobile.navigation': '手机导航',
   'mobile.conversations': '会话',
   'mobile.chat': '聊天',

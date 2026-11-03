@@ -6,6 +6,11 @@ export const NS = 'slarkAgent'
 /** Simplified Chinese copy. */
 export const zh = {
   'duet.start': 'Duet 语音对话',
+  'voice.menu': '语音输入',
+  'voice.call': '快聊',
+  'voice.dictation': '语音转写',
+  'dictation.unavailable': '转写暂不可用，请检查系统权限或通话状态。',
+  'dictation.changed': '输入内容已变化，转写保留在下方，可复制后编辑。',
   'duet.uncertain': '暂未确认通话连接，请查看悬浮通话状态。',
   'trace.executionDetails': '查看执行明细',
   'trace.providerBoundary': '仅展示执行器可观测事件，Provider 内部过程不可见；时间为记录的毫秒时间戳',
@@ -247,6 +252,11 @@ export const zh = {
 /** English copy. */
 export const en = {
   'duet.start': 'Duet voice conversation',
+  'voice.menu': 'Voice input',
+  'voice.call': 'Quick chat',
+  'voice.dictation': 'Dictate',
+  'dictation.unavailable': 'Dictation is unavailable. Check system permissions or the active call.',
+  'dictation.changed': 'The draft changed. Your transcript is kept below for you to copy and edit.',
   'duet.uncertain': 'The call connection is not confirmed. Check the floating call status.',
   'trace.executionDetails': 'View execution details',
   'trace.providerBoundary': 'Executor observations only; provider internals are unavailable. Times are recorded millisecond timestamps.',

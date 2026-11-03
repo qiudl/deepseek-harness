@@ -22,10 +22,13 @@ it('keeps settings and expanded plugin dialogs clear of the Windows caption acro
         document.documentElement.style.setProperty('--dsh-windows-titlebar-height', '40px')
       })
       const reopenSidebar = page.getByRole('button', { name: '打开侧边栏', exact: true })
-      const mobileNavigation = page.getByRole('navigation', { name: '手机导航' })
-      if (await mobileNavigation.isVisible()) {
-        await mobileNavigation.getByRole('button', { name: '会话', exact: true }).click()
+      const showMobileList = async () => {
+        const menu = page.getByRole('button', { name: '打开导航', exact: true })
+        if (!await menu.isVisible()) return
+        await menu.click()
+        await page.getByRole('dialog', { name: '手机导航' }).getByRole('button', { name: '会话', exact: true }).click()
       }
+      await showMobileList()
       if (await reopenSidebar.isVisible()) await reopenSidebar.click()
       await openSettings(page, 'zh')
       const settings = page.getByRole('dialog', { name: '设置', exact: true })
@@ -88,9 +91,7 @@ it('keeps settings and expanded plugin dialogs clear of the Windows caption acro
           if (value === 'darwin') document.documentElement.setAttribute('data-platform', value)
           else document.documentElement.removeAttribute('data-platform')
         }, platform)
-        if (await mobileNavigation.isVisible()) {
-          await mobileNavigation.getByRole('button', { name: '会话', exact: true }).click()
-        }
+        await showMobileList()
         if (await reopenSidebar.isVisible()) await reopenSidebar.click()
         await openSettings(page, 'zh')
         await expect.poll(async () => (await settings.boundingBox())?.y).toBe(platform === 'darwin' ? 68 : 24)

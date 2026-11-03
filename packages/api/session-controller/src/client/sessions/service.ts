@@ -14,7 +14,7 @@ import type { RemoteFailure, RemoteResult } from '@deepseek-ai/dsh-typert-protoc
 import type { SessionEventSource } from '../contract/events.ts'
 import type { SessionFace } from '../contract/session.ts'
 import type {
-  AgentContext, ISessions, SessionReference, SessionRetainInfo, SessionRetainOptions, SessionTarget,
+  AgentContext, ISessions, SessionPromptRoute, SessionReference, SessionRetainInfo, SessionRetainOptions, SessionTarget,
 } from '../contract/sessions.ts'
 import type { SessionReferenceSource } from '../index.ts'
 import { createScope, scopeIdentityOf, scopeOf as scopeTagOf } from '../scope.ts'
@@ -233,6 +233,7 @@ class ClientSessionReference implements SessionReference {
 
 /** Host catalog and local reference allocator; view selection remains outside the Controller. */
 export class ClientSessions implements ISessions {
+  private readonly promptRoutes = new Map<SessionId, { send: SessionPromptRoute; lifetime: AbortController } | null>()
   /** Stable ordinary-prompt identity for a coordinator-confirmed original discussion; no transport or Agent effect. */
   readonly discussionRequestId = collaborationDiscussionRequestId
   /**
@@ -252,6 +253,17 @@ export class ClientSessions implements ISessions {
   private readonly scopeDrops = new Set<Promise<void>>()
   private closed = false
 
+  registerPromptRoute(sessionId: SessionId, send: SessionPromptRoute): () => void {
+    if (this.closed || this.promptRoutes.get(sessionId)) throw new Error('Session prompt sender is already owned')
+    const owner = { send, lifetime: new AbortController() }
+    this.promptRoutes.set(sessionId, owner)
+    return () => {
+      if (this.promptRoutes.get(sessionId) !== owner) return
+      this.promptRoutes.set(sessionId, null)
+      owner.lifetime.abort()
+    }
+  }
+
   /**
    * @param ctx - client root context (scope fibers mount under it).
    * @param remote - generated Remote namespaces shared with every Session.
@@ -260,13 +272,26 @@ export class ClientSessions implements ISessions {
     private readonly rootCtx: Context,
     remote: SessionRemotes,
   ) {
-    this.manager = new SessionManager(remote)
+    this.manager = new SessionManager(remote, async (request, signal) => {
+      if (this.closed) throw new Error('Session prompt owner is closed')
+      const owner = this.promptRoutes.get(request.sessionId)
+      if (owner === undefined) return remote.session.prompt(request, signal)
+      if (owner === null) throw new Error('Session prompt sender is unavailable')
+      const active = AbortSignal.any([owner.lifetime.signal, ...(signal ? [signal] : [])])
+      active.throwIfAborted()
+      const result = await owner.send(request, active)
+      active.throwIfAborted()
+      if (this.promptRoutes.get(request.sessionId) !== owner) throw new Error('Session prompt sender changed')
+      return result
+    })
     this.list = createSnapshotStore<SessionListState>({
       ids: [], byId: {}, phase: 'pending', projectionsBySession: {},
     })
     const disposeManagerProjection = this.manager.subscribe(() => { this.projectList() })
     rootCtx.effect(() => async () => {
       this.closed = true
+      for (const owner of this.promptRoutes.values()) owner?.lifetime.abort()
+      this.promptRoutes.clear()
       disposeManagerProjection()
       const scopes = [...this.scopes]
       this.scopes.clear()

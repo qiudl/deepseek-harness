@@ -108,6 +108,8 @@ Two independent Escape presses in the focused Chat or Composer stop its current 
 
 Session-scoped extensions contribute compact controls beside the workspace and Agent preset through `conversation.input.toolbar`. This row stays above the composer in blank conversations and, when an extension contributes a toolbar entry, active conversations; larger status content remains in `conversation.input.dock`.
 
+The current ordinary Session title has one optional `conversation.session.header.title` slot. A domain may occupy it with an identity switcher; the default title remains the fallback. This replaces only that title, retaining the shared actions, utilities and View tabs. Ancestor and subagent lineage keep their own existing slot. Before the first message, this slot is still available with an empty `displayTitle` and no fallback; a domain switcher can remain visible while ordinary blank-Session chrome stays hidden.
+
 <a id="temporary-composer-entries"></a>
 ## Temporary composer entries
 

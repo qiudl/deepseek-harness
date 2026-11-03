@@ -13,6 +13,13 @@ it('leaves native controls absent when the parent does not advertise them', asyn
   await installRemoteWorkbench(async () => new Response(null, { status: 403 }))
   expect(Reflect.get(window, '__DSH_NATIVE_WORKBENCH__')).toBeUndefined()
 })
+it('keeps Duet and drafts when the carrier adds known account and recovery capabilities', async () => {
+  await installRemoteWorkbench(async () => Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: true,
+    personalInbox: true, botPending: true, dictation: false }))
+  const bridge = Reflect.get(window, '__DSH_NATIVE_WORKBENCH__') as { duetStart?: unknown; conversationDraft?: unknown }
+  expect(typeof bridge?.duetStart).toBe('function')
+  expect(typeof bridge?.conversationDraft).toBe('function')
+})
 it('installs only advertised native calls and carries the original Session draft', async () => {
   const calls: { path: string; body: unknown }[] = []
   const fetch: TunnelFetch = async (path, init) => {
@@ -43,4 +50,26 @@ it('rejects malformed capabilities and refuses to replace an installed bridge', 
   expect(Reflect.get(window, '__DSH_NATIVE_WORKBENCH__')).toBeUndefined()
   Reflect.set(window, '__DSH_NATIVE_WORKBENCH__', {})
   await expect(installRemoteWorkbench(async () => Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: false }))).rejects.toThrow()
+})
+it('installs cancellable dictation only when advertised and preserves null cancellation', async () => {
+  const calls: unknown[] = []
+  await installRemoteWorkbench(async (path, init) => {
+    if (path === '/__native_workbench__') return Response.json({ schema: 'dsh-native-workbench/v1', duet: false, draft: false, dictation: true })
+    calls.push(JSON.parse(typeof init?.body === 'string' ? init.body : ''))
+    return Response.json({ ok: true, value: { text: calls.length === 1 ? '可编辑文字' : null } })
+  })
+  const bridge = Reflect.get(window, '__DSH_NATIVE_WORKBENCH__') as { dictate(id: string, signal: AbortSignal): Promise<string | null> }
+  await expect(bridge.dictate('original', new AbortController().signal)).resolves.toBe('可编辑文字')
+  await expect(bridge.dictate('original', new AbortController().signal)).resolves.toBeNull()
+  expect(calls).toEqual([{ sessionId: 'original' }, { sessionId: 'original' }])
+  await expect(bridge.dictate('../other', new AbortController().signal)).rejects.toThrow()
+})
+it('rejects malformed optional discovery and oversized transcript results', async () => {
+  await installRemoteWorkbench(async () => Response.json({ schema: 'dsh-native-workbench/v1', duet: true, draft: true, dictation: 'yes' }))
+  expect(Reflect.get(window, '__DSH_NATIVE_WORKBENCH__')).toBeUndefined()
+  await installRemoteWorkbench(async path => Response.json(path === '/__native_workbench__'
+    ? { schema: 'dsh-native-workbench/v1', duet: false, draft: false, dictation: true }
+    : { ok: true, value: { text: '中'.repeat(6000) } }))
+  const bridge = Reflect.get(window, '__DSH_NATIVE_WORKBENCH__') as { dictate(id: string, signal: AbortSignal): Promise<string | null> }
+  await expect(bridge.dictate('original', new AbortController().signal)).rejects.toThrow()
 })

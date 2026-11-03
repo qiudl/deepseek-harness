@@ -146,6 +146,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
         hideChrome: boolean
       }
     }
+    /** Optional current ordinary-Session title supplied by its domain owner. */
+    'conversation.session.header.title': {
+      kind: 'single'
+      scope: 'session'
+      owner: ConversationHeaderLineageOwnerProps
+    }
     /** Optional replacement for one Session breadcrumb title. */
     'conversation.session.header.lineage': {
       kind: 'single'
@@ -507,6 +513,7 @@ export type ConversationSessionHeaderSlotProps =
   PropsRuntime<'conversation.session.header'>
   & PropsRenderSlots<
     'conversation.session.header.lineage'
+    | 'conversation.session.header.title'
     | 'conversation.session.header.actions'
     | 'conversation.session.header.utilities'
     | 'conversation.session.header.corner'

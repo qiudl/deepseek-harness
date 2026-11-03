@@ -48,6 +48,8 @@ Every admitted request speaks for one Peer, the operator. `ctx.connection.operat
 
 Authenticated shared HTTP requests pass through the `connection/request` waterfall before body transfer. A listener may refuse new requests or await `next()` through response completion; removing its owning fiber removes admission behavior. Desktop uses this hook to lock new API work during an approved installation without canceling already-admitted work. Client disconnection aborts the handler signal; the bridge stops socket writes and drains any remaining response chunks. WebSocket stream ownership remains with API Gateway.
 
+`ctx.connection.isRemoteHost` exposes the carrier's `remoteHost` flag as a presentation fact. Remote compositions use it to defer local startup restoration to their home owner. It grants no read or write capability; the Host and native carrier still authorize every operation.
+
 <a id="connection-generation"></a>
 ## Connection generation
 

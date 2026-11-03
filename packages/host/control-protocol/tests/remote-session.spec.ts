@@ -15,6 +15,19 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips fixed Bot commands and rejects proof omissions, mismatched Sessions and extra authority', () => {
+    const request = { botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' }
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const send = { operation: 'bot.chat.send', command_id: randomUUID(), session_id: request.sessionId, control, request }
+    const receipt = { operation: 'bot.chat.receipt', command_id: randomUUID(), request }
+    for (const command of [send, receipt]) {
+      const decoded = decode(frame(command))
+      expect(decodeHostControlFrame(encodeHostControlFrame(decoded))).toEqual(decoded)
+    }
+    for (const command of [{ ...send, control: undefined }, { ...send, session_id: 'other' },
+      { ...send, request: { ...request, profileId: 'other' } }, { ...receipt, session_id: request.sessionId },
+      { ...send, request: { ...request, submissionId: '' } }]) expect(() => decode(frame(command))).toThrow()
+  })
   it('rejects terminal proof omissions and cross-Session arguments before dispatch', () => {
     const command = { operation: 'terminal.apply', command_id: randomUUID(), session_id: 's1',
       control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
@@ -172,6 +185,15 @@ describe('Profile remote UI read wire commands', () => {
     version: 1, type: 'request', request_id: randomUUID(), method: 'profile.remote_ui_read',
     params: { ...auth(), view_lease_id: randomUUID(), lease_generation: 1, runtime_generation: 1,
       endpoint, payload },
+  })
+  it('round-trips only the fixed Bot chat selector and refuses Session or authority injection', () => {
+    for (const botId of [null, 'bot_1']) {
+      const input = readFrame('bot/chat', { args: { botId } })
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    }
+    for (const args of [{}, { botId: 'bot\n' }, { botId: null, profile: 'other' }, { botId: null, sessionId: 's' }])
+      expect(() => decode(readFrame('bot/chat', { args }))).toThrow()
+    expect(() => decode(readFrame('bot', { args: { endpoint: 'state' } }))).toThrow()
   })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -10,6 +11,8 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionStore from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
+import TypertGateway from '@deepseek-ai/dsh-api-gateway'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import * as WebApp from '../src/index.ts'
 import { createSessionTestController } from '../../../api/session-controller/tests/test-remote.ts'
@@ -70,10 +73,11 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   vi.stubEnv('DSH_PROFILE_SOURCE_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', token)
   vi.stubEnv('DSH_PROFILE_MODEL_TOKEN', '')
-  vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', '')
-  vi.stubEnv('DSH_PROFILE_REMOTE_UI_TOKEN', '')
+  vi.stubEnv('DSH_PROFILE_REMOTE_SESSION_TOKEN', token)
+  vi.stubEnv('DSH_PROFILE_REMOTE_UI_TOKEN', token)
   ctx.provide('webServer', {
     host: '127.0.0.1', port: 0,
+    collectIndexInjections: () => [],
     register: (route: { path: string; handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> }) => {
       routes.set(route.path, route.handler)
       return () => { routes.delete(route.path) }
@@ -90,14 +94,25 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       ({ state: 'requested', deliveryId, requestId })),
     revokeCycle: vi.fn(async () => ({ state: 'revoked' })),
   }
-  const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, {
+  const chat = { revision: 4, defaultBotId: 'bot_1', bot: { botId: 'bot_1', actorRef: 'deepseek-bot:bot_1',
+    displayName: 'My Bot', sessionId: target.session_id } }
+  const readLocalBotChat = vi.fn(async (_botId: string | null): Promise<unknown> => chat)
+  const botService = {
     resolveLocalBot: async (botId: string) => botId === 'bot_1'
       ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
     listLocalBots: async ({ afterBotId }: { afterBotId: string; limit: number }) => afterBotId === ''
       ? { bots: [{ botId: 'bot_1', actorRef: 'deepseek-bot:bot_1', displayName: 'My Bot' }], nextCursor: null }
       : null,
     ...groupOperations,
-  } as never)
+    readLocalBotChat,
+    sendLocalBotChat: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
+      botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotChatReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
+      botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
+    })),
+  }
+  const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const nativeRoom = {
     prepare: vi.fn(async () => ({ room_id: 'room_1', source: {
       workspace_id: target.workspace_id, session_id: 'bridge_1',
@@ -116,6 +131,8 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   const disposeNativeRoom = ctx.provide('dsBotSlarkNativeRoom' as never, nativeRoom as never)
   await ctx.plugin(SessionStore)
   await ctx.plugin(AgentRegistry)
+  await ctx.plugin(TypertRegistry)
+  await ctx.plugin(TypertGateway)
   const archiveMethods = {
     installGroupInputFence: vi.fn(async (input: { workspaceId: string
       sessionId: string
@@ -169,6 +186,53 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(session.seq).toBe(seq)
   expect(ctx.agents.get(target.session_id)).toBeUndefined()
   expect(resume).not.toHaveBeenCalled()
+  const chatUrl = `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-remote-ui`
+  const postChat = (args: object, authorization = `Bearer ${token}`) => fetch(chatUrl, {
+    method: 'POST', headers: { authorization, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint: 'bot/chat', payload: { args } }),
+  })
+  const chatResponse = await postChat({ botId: null })
+  expect(chatResponse.status).toBe(200)
+  expect(await chatResponse.json()).toEqual({ value: chat })
+  expect(readLocalBotChat).toHaveBeenCalledWith(null)
+  expect(session.seq).toBe(seq)
+  expect(resume).not.toHaveBeenCalled()
+  expect((await postChat({ botId: null }, '')).status).toBe(403)
+  expect((await postChat({ botId: null, sessionId: 'other' })).status).toBe(422)
+  expect(readLocalBotChat).toHaveBeenCalledOnce()
+  Reflect.deleteProperty(botService, 'readLocalBotChat')
+  expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
+  Object.assign(botService, { readLocalBotChat })
+  expect(await (await postChat({ botId: 'bot_1' })).json()).toEqual({ value: chat })
+  const remoteUrl = chatUrl.replace('desktop-remote-ui', 'desktop-remote-session')
+  const postRemote = (command: object, auth = `Bearer ${token}`) => fetch(remoteUrl, { method: 'POST',
+    headers: { authorization: auth }, body: JSON.stringify(command) })
+  const request = { botId: 'bot_1', sessionId: target.session_id, submissionId: randomUUID(), text: 'Hello' }
+  const controllerId = randomUUID()
+  const receiptCommand = { operation: 'bot.chat.receipt', command_id: randomUUID(), request }
+  expect((await postRemote(receiptCommand, '')).status).toBe(403)
+  expect(await (await postRemote(receiptCommand)).json()).toEqual({ value: {
+    botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
+  } })
+  const acquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: target.session_id, controller_id: controllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const control = { controller_id: controllerId, generation: acquired.value.claim.generation, epoch: acquired.value.claim.epoch }
+  const sendCommand = { operation: 'bot.chat.send', command_id: randomUUID(), session_id: target.session_id, control, request }
+  expect((await postRemote({ ...sendCommand, control: { ...control, epoch: control.epoch + 1 } })).status).toBe(409)
+  expect(botService.sendLocalBotChat).not.toHaveBeenCalled()
+  expect(await (await postRemote(sendCommand)).json()).toEqual({ value: {
+    botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'accepted',
+  } })
+  expect(botService.sendLocalBotChat).toHaveBeenCalledWith(request, expect.any(AbortSignal))
+  expect(botService.readLocalBotChatReceipt).toHaveBeenCalledWith(request, expect.any(AbortSignal))
+  expect(session.seq).toBe(seq)
+  expect(resume).not.toHaveBeenCalled()
+  const sender = botService.sendLocalBotChat
+  Reflect.deleteProperty(botService, 'sendLocalBotChat')
+  expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { sendLocalBotChat: sender })
   const botResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })
@@ -260,6 +324,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect((await postNative('-operations', { operation: 'messages', ...roomBase,
     after_seq: 1, limit: 2 })).status).toBe(422)
   disposeBotService()
+  expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   expect((await postGroup(deliver)).status).toBe(422)
   const unavailableBotResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
@@ -267,6 +332,13 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(unavailableBotResponse.status).toBe(200)
   expect(await unavailableBotResponse.json()).toBeNull()
   expect(await (await postRoster('')).json()).toBeNull()
+  const disposeRestoredBot = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
+  try {
+    expect(await (await postChat({ botId: null })).json()).toEqual({ value: chat })
+  } finally {
+    disposeRestoredBot()
+  }
+  expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   const archiveIdentity = { ...target, archive_token: '70000000-0000-4000-8000-000000000007',
     environment_id: '20000000-0000-4000-8000-000000000002',
     account_issuer: 'https://accounts.example.test',

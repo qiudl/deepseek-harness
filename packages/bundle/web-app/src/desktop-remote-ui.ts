@@ -3,10 +3,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { parseWorkbenchTerminalRequest, parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -20,7 +21,8 @@ function record(value: unknown): value is Record<string, unknown> {
 /** Invoke bounded Session reads and collect the current Profile's Web boot rows. */
 export class DesktopRemoteUiExecutor {
   constructor(private readonly gateway: TypertGateway,
-    private readonly bootInjections: () => IndexInjection[]) {}
+    private readonly bootInjections: () => IndexInjection[],
+    private readonly readBotChat?: (botId: string | null, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -35,6 +37,14 @@ export class DesktopRemoteUiExecutor {
     }
     if (!record(payload) || Object.keys(payload).length !== 1 || !record(payload.args)) {
       throw new Error('desktop remote UI: invalid payload')
+    }
+    if (endpoint === 'bot/chat') {
+      const request = parseHostBotChatRequest(payload.args)
+      if (!this.readBotChat) throw Error('desktop remote UI: Bot chat reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotChat(request.botId, signal)
+      signal.throwIfAborted()
+      return parseHostBotChat(value, request)
     }
     if (endpoint === 'boot/injections') {
       if (Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
