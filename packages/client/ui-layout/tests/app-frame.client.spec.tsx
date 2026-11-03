@@ -185,6 +185,13 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it.each(['darwin', 'win32', 'linux'])('keeps desktop navigation at phone widths on %s', (platform) => {
+    document.documentElement.dataset.platform = platform
+    const { frame, queryByRole } = mountFrame(390)
+    resize(390)
+    expect(frame.dataset.phoneWeb).toBeUndefined()
+    expect(queryByRole('button', { name: 'mobile.openNavigation' })).toBeNull()
+  })
   for (const width of [320, 390, 430]) it(`opens and closes a left drawer without replacing retained chat at ${width}px`, () => {
     const { frame, instance, sidebarOwner, getByRole, queryByRole } = mountFrame(width)
     resize(width)
