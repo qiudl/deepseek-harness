@@ -399,14 +399,15 @@ describe('composer focus handoff', () => {
     let settle!: (outcome: SubmitOutcome) => void
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { settle = resolve }))
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(textarea.getAttribute('contenteditable')).toBe('true')
-    const expectedFocus = mobile ? view.container.querySelector('[data-composer-card]') : textarea
-    expect(document.activeElement).toBe(expectedFocus)
+    expect(textarea.getAttribute('contenteditable')).toBe('false')
+    // A browser moves the keyboard to the body once the focused box stops being editable; jsdom does not.
+    act(() => { textarea.blur() })
+    expect(document.activeElement).toBe(document.body)
 
     await act(async () => { settle(outcome) })
 
     expect(textarea.getAttribute('contenteditable')).toBe('true')
-    expect(document.activeElement).toBe(expectedFocus)
+    expect(document.activeElement).toBe(mobile ? view.container.querySelector('[data-composer-card]') : textarea)
   })
 
   it('leaves the keyboard with a control the user moved to while a message was sending', async () => {
@@ -703,9 +704,12 @@ describe('image draft rail', () => {
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { settle = resolve }))
     fireEvent.keyDown(textarea, { key: 'Enter' })
     expect(sink).toHaveBeenCalledWith('', ['draft-1'], 'queue', expect.any(AbortSignal), expect.any(Function))
-    // The submitted image leaves the draft while the Host handles it.
-    expect(attachmentOwner(result.slotCalls).attachments).toEqual([])
-    expect(textarea.getAttribute('contenteditable')).toBe('true')
+    // The rail keeps the sent image, and Send shows progress, until the Host accepts the message.
+    expect(attachmentOwner(result.slotCalls).attachments).toEqual([attachments[0]])
+    const sending = view.getByRole('button', { name: '正在发送消息' }) as HTMLButtonElement
+    expect(sending.disabled).toBe(true)
+    expect(sending.getAttribute('aria-busy')).toBe('true')
+    expect(sending.hasAttribute('data-sending')).toBe(true)
     await act(async () => { settle({ kind: 'success' }) })
     expect(attachmentOwner(result.slotCalls).attachments).toEqual([])
     expect(view.getByRole('button', { name: '发送消息' }).getAttribute('aria-busy')).toBe('false')
@@ -721,7 +725,7 @@ describe('image draft rail', () => {
     let fail!: (outcome: SubmitOutcome) => void
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { fail = resolve }))
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(attachmentOwner(result.slotCalls).attachments).toEqual([])
+    expect(attachmentOwner(result.slotCalls).attachments).toEqual([attachments[0]])
     await act(async () => { fail({ kind: 'error', text: '图片发送失败' }) })
     await vi.waitFor(() => {
       expect(attachmentOwner(result.slotCalls).attachments).toEqual([attachments[0]])
@@ -1108,7 +1112,8 @@ describe('running and lock semantics', () => {
     let settle!: (outcome: SubmitOutcome) => void
     sink.mockImplementationOnce(() => new Promise<SubmitOutcome>((resolve) => { settle = resolve }))
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(textarea.getAttribute('contenteditable')).toBe('true')
+    const sending = view.getByRole('button', { name: '正在发送消息' }) as HTMLButtonElement
+    expect(sending.disabled).toBe(true)
     fireEvent.click(view.getByRole('button', { name: '停止生成' }))
     expect(stop).toHaveBeenCalledTimes(1)
 

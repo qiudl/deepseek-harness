@@ -386,8 +386,9 @@ describe('Conversation inject API', () => {
 
     actions.setDraft('hello')
     actions.submit()
-    // The draft detaches while the Host accepts the prompt.
-    expect(state.getSnapshot()).toMatchObject({ phase: 'plain', draft: '' })
+    // The draft stays, read-only, until the Host accepts the prompt that
+    // follows the paint-yield inside the send pipeline.
+    expect(state.getSnapshot()).toMatchObject({ phase: 'sending', draft: 'hello' })
     await vi.waitFor(() => {
       expect(b.sessionFake.prompt).toHaveBeenCalledWith(
         [{ type: 'text', text: 'hello' }], 'queue', expect.any(AbortSignal), expect.any(String),
@@ -586,7 +587,7 @@ describe('Conversation inject API', () => {
     await b.runtime.dispose()
   })
 
-  it('moves a new draft while the previous message is still being sent', async () => {
+  it('leaves a draft whose message is still being sent with its Session', async () => {
     const b = await bench()
     const pending = Promise.withResolvers<Awaited<ReturnType<ISession['prompt']>>>()
     b.sessionFake.prompt.mockReturnValueOnce(pending.promise)
@@ -594,18 +595,16 @@ describe('Conversation inject API', () => {
     actions.setDraft('in flight')
     actions.submit()
     await vi.waitFor(() => { expect(b.sessionFake.prompt).toHaveBeenCalledOnce() })
-    expect(state.getSnapshot()).toMatchObject({ phase: 'plain', draft: '' })
-    actions.setDraft('next message')
+    expect(state.getSnapshot().phase).toBe('sending')
     const other = 'sending-target' as SessionId
     await b.runtime.sessions.add({ id: other, session: {} })
     b.connectWorkspace.mockResolvedValueOnce(other)
     await b.residentApi(ROOT).selectWorkspace('workspace-sending' as WorkspaceId)
     expect(b.opened).toHaveBeenCalledWith(other)
-    expect(b.inputApi(other).state.getSnapshot().draft).toBe('next message')
-    expect(state.getSnapshot().draft).toBe('')
+    expect(b.inputApi(other).state.getSnapshot().draft).toBe('')
+    expect(state.getSnapshot().draft).toBe('in flight')
     pending.resolve({ ok: true, value: { accepted: true } })
     await vi.waitFor(() => { expect(state.getSnapshot()).toMatchObject({ phase: 'plain', draft: '' }) })
-    expect(b.inputApi(other).state.getSnapshot().draft).toBe('next message')
     await b.runtime.dispose()
   })
 

@@ -189,7 +189,8 @@ describe('reference submission', () => {
     shell.dispose()
     expect(signal?.aborted).toBe(true)
     expect(shell.snapshot.phase).toBe('plain')
-    expect(shell.snapshot.draft).toBe('')
+    // The Host never accepted the message, so the composer still holds it.
+    expect(shell.snapshot.draft).toBe('send this')
   })
 
   it('retains a rejected default message without duplicating its prompt error notice', async () => {
@@ -207,22 +208,24 @@ describe('reference submission', () => {
     expect(shell.notices.getSnapshot()).toBeNull()
   })
 
-  it('allows concurrent sends and restores failed drafts in submission order', async () => {
+  it('sends one message at a time and ignores Enter while the Host decides', async () => {
     const settlements: Array<(outcome: SubmitOutcome) => void> = []
     const sink = vi.fn(() => new Promise<SubmitOutcome>((resolve) => { settlements.push(resolve) }))
-    const shell = new SessionInputShell({ actx: {} as Context, defaultSink: sink, commandAttachments })
+    const shell = new SessionInputShell({
+      actx: {} as Context,
+      defaultSink: sink,
+      commandAttachments,
+    })
     shell.setDraft('first')
     shell.submit()
-    shell.setDraft('second')
     shell.submit()
-    expect(sink).toHaveBeenCalledTimes(2)
-    expect(shell.snapshot).toMatchObject({ phase: 'plain', draft: '' })
+    expect(sink).toHaveBeenCalledTimes(1)
+    expect(shell.snapshot).toMatchObject({ phase: 'sending', draft: 'first' })
     expect(shell.requestDraftInitialization({ prompt: 'replacement', clearPreviousDraft: true })).toBe('blocked')
-    settlements[1]?.({ kind: 'error' })
-    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('second') })
+
     settlements[0]?.({ kind: 'error' })
-    await vi.waitFor(() => { expect(shell.snapshot.draft).toBe('first\n\nsecond') })
-    shell.dispose()
+    await vi.waitFor(() => { expect(shell.snapshot.phase).toBe('plain') })
+    expect(shell.snapshot.draft).toBe('first')
   })
 })
 
