@@ -152,8 +152,9 @@ it('reports an unreachable host as a network failure, a failed local command as 
   // Git that cannot answer `git --version` within the deadline cannot run.
   const other = repository('t2', { 'README.md': 'x' })
   const timedOut = cache()
-  vi.spyOn(timedOut as unknown as { run: () => Promise<Buffer> }, 'run').mockRejectedValueOnce(new Error('timed out'))
+  const run = vi.spyOn(Object.getPrototypeOf(timedOut), 'run').mockRejectedValueOnce(new Error('timed out'))
   await expectRejection(timedOut.read(other.url, other.commit, 'README.md', 100, signal), { reason: 'git-unavailable' }, 'timed out')
+  run.mockRestore()
   vi.stubEnv('PATH', join(root, 'no-git'))
   const missing = cache().read(other.url, other.commit, 'README.md', 100, signal)
   await expectRejection(missing, { reason: 'git-unavailable' }, 'git --version')
