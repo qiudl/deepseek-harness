@@ -1,6 +1,7 @@
 /** Plain-Node Session-list measurements with large persisted projections and small wire summaries. */
 
 import assert from 'node:assert/strict'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -216,7 +217,7 @@ async function memory(): Promise<Memory> {
   await scheduler.yield()
   gc()
   const usage = process.memoryUsage()
-  return { heapUsedBytes: usage.heapUsed, rssBytes: usage.rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }
+  return { heapUsedBytes: usage.heapUsed, rssBytes: usage.rss, peakRssBytes: peakResidentSetBytes() }
 }
 
 async function measure(controller: SessionController, observation: ViewObservation, sessions: number, baseline: Memory, fullProbe = false): Promise<ListSample> {
