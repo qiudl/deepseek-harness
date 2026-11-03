@@ -7,6 +7,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { parseHostBotChatSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
+import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
 import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
 import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 
@@ -22,6 +23,28 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('routes terminal writes and resizes through the stream under the live control claim', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'session-1')
+    const streams = new DesktopRemoteTerminalStreams(control)
+    const send = vi.spyOn(streams, 'send').mockResolvedValue(undefined)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control, streams)
+    const signal = new AbortController().signal
+    const base = { operation: 'terminal.apply' as const, command_id: randomUUID() as never,
+      session_id: 'session-1', control: proof }
+    const write = { ...base, request: { sessionId: 'session-1', method: 'write' as const,
+      args: { agentId: 'session-1', id: 't-1', data: 'hello' } } }
+    const resize = { ...base, request: { sessionId: 'session-1', method: 'resize' as const,
+      args: { agentId: 'session-1', id: 't-1', cols: 80, rows: 24 } } }
+    for (const command of [write, resize]) {
+      await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true })
+      expect(send).toHaveBeenCalledWith(command, signal)
+    }
+    await expect(executor.execute({ ...write, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(invoke).not.toHaveBeenCalled()
+  })
   it('uses the Bot provider under the original Session claim and reconciles without obtaining write control', async () => {
     const request = parseHostBotChatSubmission({ botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' })
     const result = { botId: 'bot_1', sessionId: 'own-2', submissionId: request.submissionId, state: 'accepted' }
