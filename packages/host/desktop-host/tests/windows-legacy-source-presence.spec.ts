@@ -59,3 +59,22 @@ it('rejects noncanonical roots and missing bindings before native inspection', (
   expect(inspectExistingDirectory).not.toHaveBeenCalled()
   expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {} }).observedState).toBe('unknown')
 })
+
+// Stock Windows creates user homes through the profile service, so the owner is SYSTEM.
+it('accepts a profile or .dsh directory owned by SYSTEM or Administrators', () => {
+  for (const ownerSid of ['S-1-5-18', 'S-1-5-32-544']) {
+    for (const owned of [userProfile, root]) {
+      expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+        inspectExistingDirectory: path => (path === owned ? { ...evidence, ownerSid } : evidence),
+      } })).toEqual({ observedState: 'present', migrationAdmitted: false })
+    }
+  }
+})
+
+it('still rejects another user owning the profile or .dsh directory', () => {
+  for (const owned of [userProfile, root]) {
+    expect(probeWindowsLegacySourcePresence({ userProfile, userSid, bindings: {
+      inspectExistingDirectory: path => (path === owned ? { ...evidence, ownerSid: 'S-1-5-21-1000-2000-3000-2002' } : evidence),
+    } })).toEqual({ observedState: 'unknown', migrationAdmitted: false })
+  }
+})

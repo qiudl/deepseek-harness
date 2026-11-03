@@ -9,6 +9,18 @@ export interface WindowsLegacySourcePresence {
   readonly migrationAdmitted: false
 }
 
+const LOCAL_SYSTEM_SID = 'S-1-5-18'
+const BUILTIN_ADMINISTRATORS_SID = 'S-1-5-32-544'
+
+/**
+ * Stock Windows creates user homes through the profile service, so their owner is SYSTEM rather
+ * than the user; administrators can own them too. Accept the same owners the registration
+ * bindings trust, otherwise every stock machine reads as foreign ownership.
+ */
+function trustedOwner(ownerSid: string, userSid: string): boolean {
+  return ownerSid === userSid || ownerSid === LOCAL_SYSTEM_SID || ownerSid === BUILTIN_ADMINISTRATORS_SID
+}
+
 /**
  * Observe only the OS-selected user's .dsh directory and its ancestors, without content reads.
  * Existing empty directories remain present. Missing ancestors, failed native checks, and foreign
@@ -39,12 +51,13 @@ export function probeWindowsLegacySourcePresence(input: {
     for (const ancestor of ancestors) {
       const evidence = inspect.call(input.bindings, ancestor)
       if (evidence.kind !== 'directory' || evidence.reparsePoint
-        || (ancestor === path && evidence.ownerSid !== input.userSid)) return unknown
+        || (ancestor === path && !trustedOwner(evidence.ownerSid, input.userSid))) return unknown
     }
   } catch { return unknown }
   try {
     const evidence = inspect.call(input.bindings, win32.join(path, '.dsh'))
-    if (evidence.kind !== 'directory' || evidence.reparsePoint || evidence.ownerSid !== input.userSid) return unknown
+    if (evidence.kind !== 'directory' || evidence.reparsePoint
+      || !trustedOwner(evidence.ownerSid, input.userSid)) return unknown
     return { observedState: 'present', migrationAdmitted: false }
   } catch (error) {
     if (error instanceof WindowsHostRegistrationNativeError
