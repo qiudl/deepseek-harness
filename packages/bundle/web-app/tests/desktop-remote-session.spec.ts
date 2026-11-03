@@ -58,10 +58,10 @@ describe('Desktop remote Session bridge', () => {
     const signal = new AbortController().signal
     const command = { operation: 'terminal.apply' as const,
       command_id: '123e4567-e89b-42d3-a456-426614174000' as never, session_id: 'session-1', control: proof,
-      request: { sessionId: 'session-1', method: 'write' as const,
-        args: { agentId: 'session-1', id: 't-1', attachmentId: 'a-1', data: 'hello\n' } } }
+      request: { sessionId: 'session-1', method: 'rename' as const,
+        args: { agentId: 'session-1', id: 't-1', title: 'Terminal' } } }
     await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true })
-    expect(invoke).toHaveBeenCalledExactlyOnceWith({ namespace: 'terminal', method: 'write', args: command.request.args, signal })
+    expect(invoke).toHaveBeenCalledExactlyOnceWith({ namespace: 'terminal', method: 'rename', args: command.request.args, signal })
     invoke.mockResolvedValueOnce({ id: 't-1' })
     await expect(executor.execute(command, signal)).resolves.toEqual({ ok: true, value: { id: 't-1' } })
     for (const [code, details] of [['terminal/unavailable', {}],
