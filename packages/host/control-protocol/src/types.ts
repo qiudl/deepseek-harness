@@ -221,6 +221,16 @@ export interface ProfileEnsureRequest {
     readonly account_subject: string
     readonly profile_key_handle: string
     readonly profile_unlock_material: string
+    /** REQ-20261022-0022: present only for the distinct Slark federation verifier. */
+    readonly slark_expected?: {
+      readonly slark_user_id: string
+      readonly environment_id: string
+      readonly person_profile_id: string
+      readonly device_id: string
+      readonly device_key_thumbprint: string
+      readonly login_epoch: number
+      readonly binding_epoch: number
+    }
   }
 }
 

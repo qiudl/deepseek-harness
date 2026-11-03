@@ -21,13 +21,14 @@ describe('standalone Host control client artifact', () => {
     const target = join(root, 'host-control-client.mjs')
     copyFileSync('packages/host/desktop-host/lib/host-control-client.js', target)
     const loaded = await import(pathToFileURL(target).href) as {
-      readonly UnixHostClient?: unknown
+      readonly UnixHostClient?: typeof import('../src/unix-transport.ts').UnixHostClient
       readonly discoverUnixHost?: unknown
       readonly discoverWindowsHost?: unknown
       readonly loadWindowsHostClientWorkerCancellation?: unknown
       readonly createWindowsLocalProfileStorage?: unknown
     }
     expect(loaded.UnixHostClient).toBeTypeOf('function')
+    expect(typeof loaded.UnixHostClient?.prototype.ensureSlarkAccountProfile).toBe('function')
     expect(loaded.discoverUnixHost).toBeTypeOf('function')
     expect(loaded.discoverWindowsHost).toBeTypeOf('function')
     expect(loaded.loadWindowsHostClientWorkerCancellation).toBeTypeOf('function')
