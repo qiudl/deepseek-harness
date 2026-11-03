@@ -58,6 +58,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
     writeFileSync(config, JSON.stringify([
       { id: 'typert', name: '@deepseek-ai/dsh-typert-registry' },
       { id: 'projection', name: '@deepseek-ai/dsh-session-projection' },
+      { id: 'agents', name: '@deepseek-ai/dsh-agent' },
       { id: 'skills', name: '@deepseek-ai/dsh-skill' },
       { id: 'presets', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'fixture' } },
       { id: 'fixture', name: new URL('../../../preset/agent-preset/lib/index.js', import.meta.url).href, config: {
@@ -66,6 +67,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
             config: { dshHome: home(id), agentsHome: join(root, 'isolated-agents'), watch: false } },
         ],
       } },
+      { id: 'remote-access', name: '@deepseek-ai/dsh-api-remote-access' },
       { id: 'gateway', name: '@deepseek-ai/dsh-api-gateway' },
     ]))
     loaded = await boot('skill-wire', config, [], undefined, new URL('../../../api/session-controller/', import.meta.url).href)

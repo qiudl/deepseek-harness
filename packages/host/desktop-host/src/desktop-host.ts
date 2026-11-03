@@ -187,17 +187,12 @@ export class DesktopHost {
     readonly keyHandle: string
     readonly unlockMaterial: string
     readonly ownerId: string
-  }, scope?: string, requireScopedBinding = false): Promise<{
+  }, scope?: string, options: { readonly requireScopedBinding?: string } = {}): Promise<{
     readonly profileId: PersonProfileId
     readonly bindingGeneration: number
   }> {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
-    let options: { readonly requireScopedBinding?: string } = {}
-    if (requireScopedBinding) {
-      if (scope === undefined) throw new HostAuthorityError('invalid_input')
-      options = { requireScopedBinding: scope }
-    }
     const profile = await this.options.registry.provisionAccount({
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
       authorityEnvironmentId: input.authorityEnvironmentId,
@@ -237,7 +232,7 @@ export class DesktopHost {
       || input.accountBindingHandle !== `slark:${account.bindingScope}`) {
       throw new HostAuthorityError('profile_mismatch')
     }
-    return this.provisionVerifiedAccount(input, account.bindingScope, true)
+    return this.provisionVerifiedAccount(input, account.bindingScope, { requireScopedBinding: account.bindingScope })
   }
 
   /**
