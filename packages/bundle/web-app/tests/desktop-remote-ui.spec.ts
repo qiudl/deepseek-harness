@@ -639,6 +639,9 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('session/list', { args: { _request: {} } }, signal))
       .resolves.toEqual({ items: [] })
     expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: {} }, signal })
+    await expect(executor.execute('session/list', { args: { _request: { includeArchived: true } } }, signal))
+      .resolves.toEqual({ items: [] })
+    expect(invoke).toHaveBeenCalledWith({ namespace: 'session', method: 'list', args: { _request: { includeArchived: true } }, signal })
     for (const endpoint of ['settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
       'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits', 'llm/listProviders', 'llm/listConfigurableProviders']) {
       const args = endpoint === 'credentials/describe' ? { refs: ['OPENAI_API_KEY'] } : {}
@@ -657,7 +660,7 @@ describe('Desktop remote UI read-only bridge', () => {
     }
     await expect(executor.execute('dynamicCordisRunner/syncInspectManifest', { args: {} }, signal))
       .rejects.toThrow('endpoint denied')
-    expect(invoke).toHaveBeenCalledTimes(9)
+    expect(invoke).toHaveBeenCalledTimes(10)
   })
   it('REQ-20261011-0002 validates membership replies before passing them to Main', async () => {
     const entry = { workspaceId: '11111111-1111-4111-8111-111111111111', sessionId: 'session-1' }

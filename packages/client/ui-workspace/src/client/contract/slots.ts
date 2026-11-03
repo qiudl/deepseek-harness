@@ -265,6 +265,7 @@ export type WorkspaceBrowserInjected = {
   searchSessions: (
     query: string,
     signal: AbortSignal,
+    archivedFilter?: 'default' | 'show' | 'only',
   ) => Promise<{ items: readonly SessionSearchResultItem[]; hasMore: boolean }>
   /** Maximum number of merged rows rendered for one search. */
   searchResultLimit: number

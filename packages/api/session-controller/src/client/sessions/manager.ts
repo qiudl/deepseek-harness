@@ -429,7 +429,7 @@ export class SessionManager {
     this.notifier.markDirty()
     this.listInflight = (async () => {
       try {
-        const result = await this.remote.session.list({})
+        const result = await this.remote.session.list({ includeArchived: true })
         if (this.listMutations !== mutations) return
         if (result.ok) {
           const baseline: SessionSummary[] = this.listPhase === 'pending'
@@ -490,13 +490,15 @@ export class SessionManager {
    * state to the list snapshot.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for superseded UI queries.
+   * @param archivedFilter - which archived Sessions may contribute results.
    * @returns the Host result or a folded transport error.
    */
   async search(
     query: string,
     signal: AbortSignal,
+    archivedFilter?: 'default' | 'show' | 'only',
   ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>> {
-    const result = await this.remote.session.search({ query }, signal)
+    const result = await this.remote.session.search({ query, ...(archivedFilter === undefined ? {} : { archivedFilter }) }, signal)
     if (!result.ok) return result
     return {
       ok: true,

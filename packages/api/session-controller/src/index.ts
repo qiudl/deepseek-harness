@@ -1490,7 +1490,7 @@ export class SessionController extends TypertRemoteService {
         }
       }
     }
-    const items = await this.listState.list(owned)
+    const items = await this.listState.list(owned, _request.includeArchived === true)
     return { items: items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
@@ -1529,7 +1529,7 @@ export class SessionController extends TypertRemoteService {
    */
   @Remote('search')
   async search(request: SessionSearchRequest, signal: AbortSignal): Promise<SessionSearchValue> {
-    const result = await this.listState.search(request.query, signal)
+    const result = await this.listState.search(request.query, signal, request.archivedFilter)
     return { ...result, items: result.items.filter(item => this.ctx.remoteAccess.allows({ kind: 'session', id: item.sessionId })) }
   }
 
