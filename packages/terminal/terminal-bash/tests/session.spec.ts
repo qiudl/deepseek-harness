@@ -169,12 +169,14 @@ describe('LocalPtySession readiness and output', () => {
       inspector.pgid = 789
       inspector.waiting = true
       await vi.advanceTimersByTimeAsync(20)
-      expect((await operation.done).waitReason).toBe('stdin_read')
+      const settled = await operation.done
+      expect(settled.waitReason).toBe('stdin_read')
 
       // Kernel readiness and PTY delivery are independent: place output after
       // settlement explicitly instead of depending on scheduler contention.
       terminal.emitData('WAITING\r\n')
       await vi.advanceTimersByTimeAsync(1)
+      expect(settled.viewport).not.toContain('WAITING')
       expect(operation.readOutput().delta).toBe('')
       expect(session.read({ offset: 0, count: 10 }).text).toContain('WAITING')
     } finally {
