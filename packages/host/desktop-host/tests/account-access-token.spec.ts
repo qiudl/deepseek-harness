@@ -85,8 +85,10 @@ describe('DSH Account Host access token', () => {
     ]) expect(() => verifier.verify(token(overrides))).toThrow(/Account access token/u)
   })
 
-  it('verifies a Slark scoped credential only against the expected environment, profile and device', () => {
-    const verifier = new DshAccountAccessTokenVerifier(rawKeyring, { now: () => NOW })
+  it.each([ISSUER, CN_ISSUER])('verifies a Slark scoped credential only against the expected environment, profile and device (%s)', (issuer) => {
+    const keyring = JSON.stringify({ version: 2, issuer,
+      keys: [{ kid: 'identity-2026-09', publicJwk }] })
+    const verifier = new DshAccountAccessTokenVerifier(keyring, { now: () => NOW })
     const expected = {
       slarkUserId: '-slark-user',
       environmentId: '10000000-0000-4000-8000-000000000001',
@@ -100,7 +102,7 @@ describe('DSH Account Host access token', () => {
       'slark-dsh-binding-scope-v1', expected.environmentId, expected.slarkUserId,
     ])).digest('hex')
     const federatedClaims = {
-      typ: 'dsh-slark-access+jwt', slark_user_id: expected.slarkUserId,
+      iss: issuer, typ: 'dsh-slark-access+jwt', slark_user_id: expected.slarkUserId,
       environment_id: expected.environmentId, profile_id: expected.profileId,
       device_id: expected.deviceId, device_key_thumbprint: expected.deviceKeyThumbprint,
       binding_scope: bindingScope, login_epoch: expected.loginEpoch,
@@ -110,6 +112,11 @@ describe('DSH Account Host access token', () => {
     const federated = token(federatedClaims, { typ: 'dsh-slark-access+jwt' })
     expect(() => verifier.verify(federated)).toThrow(/Account access token/u)
     expect(verifier.verifySlarkFederated(federated, expected).bindingScope).toBe(bindingScope)
+    for (const otherIssuer of [ISSUER, STAGING_ISSUER, CN_ISSUER].filter(value => value !== issuer)) {
+      expect(() => verifier.verifySlarkFederated(token({
+        ...federatedClaims, iss: otherIssuer,
+      }, { typ: 'dsh-slark-access+jwt' }), expected)).toThrow(/Account access token/u)
+    }
     for (const changed of [
       { deviceId: SESSION },
       { slarkUserId: '_other' },
