@@ -26,7 +26,7 @@ const SSH_SPEC = `git+ssh://git@git.example/team/sub/plugin.git#${'a'.repeat(40)
 
 async function fixture() {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-git-transport-'))
-  onTestFinished(() => rm(dir, { recursive: true, force: true }))
+  onTestFinished(() => rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }))
   const config = join(dir, 'git.config')
   await writeFile(config, '')
   const env = { GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: '1' }
