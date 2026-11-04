@@ -2,9 +2,11 @@
 
 English | [中文](testing.zh.md)
 
-How this repo tests, tier by tier, and the rules that keep a green suite meaningful. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
+How this repo tests and the rules that keep a green suite meaningful. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
 
 ## Tiers
+
+[Peak RSS](../benchmarks/support/peak-memory.ts) excludes parent peaks; cold requests and terminal readiness run exclusively.
 
 - **Unit** (`pnpm run test`): vitest over package and example specs under their `tests/**` directories plus repository script specs under `scripts/**/*.spec.ts`; tests stay with the code area they exercise. Every registry gets an HMR-safety test (dispose the contributing fiber, assert cleanup). Prefer edge cases, error paths, event ordering, concurrency races, and permanent tests for contract regressions (see `packages/core/agent-loop/tests/contract-regressions.spec.ts`).
 - **Coverage gate** (`pnpm run test:coverage`): per-file 100% on `packages/*/*/src`. Uncovered lines often indicate dead code; coverage proves execution, not shipped behavior. The `packages/shell/pwsh-local/src` gate needs real `pwsh`: hosts without it skip those tests and the file, while CI provides `pwsh`. Persistence tests read `docs/persistence-schema.json`; the static `verify-persistence-changes` gate regenerates it from source.

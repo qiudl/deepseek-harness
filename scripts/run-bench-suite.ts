@@ -5,7 +5,8 @@ import { runPnpmCommand } from './compile-referenced-projects.ts'
 /**
  * Cases whose wall-clock endpoints cannot absorb a sibling: they drive a
  * browser page, compare animation frames or paced streams, or spawn fresh
- * children and budget their startup. Corpus cases tolerate a sibling.
+ * children and budget their startup, measure cold Host requests, or await
+ * terminal idle-readiness timers.
  */
 export const SERIAL_BENCH_FILES = [
   'benchmarks/long-session-browser/long-session.bench.ts',
@@ -18,6 +19,10 @@ export const SERIAL_BENCH_FILES = [
   // Request-history budgets 297 ms against a 212 ms healthy median; a sibling
   // pushed it to 342 ms.
   'benchmarks/agent-continuation/agent-continuation.bench.ts',
+  // Cold list+JSON budgets 125 ms; corpus preparation pushed 86 ms to 136 ms.
+  'benchmarks/session-corpus/projection-list.bench.ts',
+  // Completion includes inferred-idle timers, not just synchronous ingestion.
+  'benchmarks/terminal-io/terminal-io.bench.ts',
 ] as const
 
 const CONFIG = ['--config', 'vitest.bench.config.ts'] as const
@@ -26,7 +31,7 @@ const CONFIG = ['--config', 'vitest.bench.config.ts'] as const
  * Run one phase of the suite.
  * @param root - Repository root containing the Vitest configuration.
  * @param phase - `first` clears the report and runs the CPU cases two at a time;
- *   `last` runs the browser cases one at a time and renders the report.
+ *   `last` runs latency-sensitive cases one at a time and renders the report.
  * @throws If the phase fails.
  */
 export function runBenchPhase(root: string, phase: 'first' | 'last'): void {

@@ -23,6 +23,7 @@ import { WindowsHostTransport, type StartWindowsHostTransportOptions } from '../
 import { WindowsHostCarrier } from '../src/windows-host-carrier.ts'
 import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
 import { UnixHostClient } from '../src/unix-transport.ts'
+import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
 
 vi.mock('node:fs', async (load) => {
   const actual = await load<typeof import('node:fs')>()
@@ -212,6 +213,16 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('wires Slark federation verification through Windows startup', async () => {
+    const state = fixture(), now = 1_780_000_000_000
+    const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)
+    onTestFinished(async () => { await application.close() })
+    await expectSlarkStartupAdmission(application.host, {
+      key: state.accountPrivateKey, kid: 'identity-2026-09', issuer, subject: accountId,
+      deviceId: state.options.installationId, now,
+    })
+  })
+
   it('wires Account-authorized collaboration readers and refuses an uncertified worker delivery commit', async () => {
     const state = fixture(), now = 1_780_000_000_000
     const target = parseHostCollaborationSourceTarget({ workspace_id: randomUUID(), session_id: 'original',

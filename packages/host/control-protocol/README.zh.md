@@ -32,6 +32,8 @@ kind: "package-reference"
 - capability 是排序、去重的点分 token，且必须包含 `host.inspect`；未协商方法显式拒绝。
 - 错误只暴露稳定 code、是否可重试和 correlation id；异常文本和本地路径不得进入帧。
 
+`profile.ensure` 仅在携带 Account access token 且没有调用方提供的绑定作用域时接受 `slark_expected`。该字段要求准确的当前用户、环境、Profile、设备、设备密钥及代际；Host 从已签名的 Slark 令牌校验作用域。旧 Account 载荷保留原有字段集。
+
 协商后的 `profile.extensions` 方法携带 Main 持有的租约，以及清单、准备、提交、状态或取消命令。准备载荷上限为 32,768 个 UTF-8 字节；结果仅包含计划、有界元数据或持久回执状态。插件继续执行的操作类型必须为字面字符串 `install`、`update` 或 `remove`；数组和对象直接拒绝，不做强制转换。种类支持由 Host 执行器决定，能够解析某种类不代表安装能力可用。 技能清单可包含布尔字段 `skill_archives`；缺失时调用方不能认定支持资源包。资源包计划在同一载荷上限内携带 URL 和摘要元数据，不携带 ZIP 字节。
 
 `profile.remote_session` 把封闭的 Session 与审批命令集合绑定到 Main 持有的一个视图租约。每条命令另带一个 UUID 幂等键；命令不能选择 HTTP 路径、Profile 根目录、凭据、cookie、启动 token 或任意方法。提示文本、标识符、标题、等待间隔、游标、JSON 深度、节点数、字符串和完整帧均有上限。能够解码该方法不代表功能可用；Host 只有在安装受租约授权的 worker 执行器后才能发布对应 capability。

@@ -580,6 +580,7 @@ export async function startDesktopHostApplication(
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
       verifyAccountAccessToken: token => accountAccessVerifier.verify(token),
+      verifySlarkAccountAccessToken: (token, expected) => accountAccessVerifier.verifySlarkFederated(token, expected),
       activateProfileView: async (profileId) => {
         claimWorkerGate.assertOpen(profileId)
         const view = await workers.activate(profileId)

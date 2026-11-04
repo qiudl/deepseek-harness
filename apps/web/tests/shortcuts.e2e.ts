@@ -240,9 +240,9 @@ describe('web e2e: shortcut reference', () => {
         return event.defaultPrevented
       }), key)).toEqual(Array<boolean>(6).fill(false))
       await page.setViewportSize({ width: 1440, height: 1000 })
-      // The responsive sidebar commits after the viewport resize resolves.
-      await page.getByRole('button', { name: locale === 'zh-CN' ? '打开导航' : 'Open navigation', exact: true })
-        .waitFor({ state: 'hidden' })
+      await page.getByRole('button', {
+        name: locale === 'zh-CN' ? '打开导航' : 'Open navigation', exact: true,
+      }).waitFor({ state: 'hidden' })
       await openSettings(page, locale === 'zh-CN' ? 'zh' : 'en')
       const viewButton = page.getByRole('button', { name: view, exact: true })
       const viewHint = `${locale === 'zh-CN' ? '全局唤起查看' : 'Open from anywhere'} ${key === 'Meta' ? '⌘ /' : 'Ctrl + /'}`
