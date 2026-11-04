@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-10-31-upstream-fork-merge.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-10-31-upstream-fork-merge.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-10-31-upstream-fork-merge:
+  en: e6ac94ebcad3dda5
+  zh: 7236a0c427e4cd93
+/2026-10-31-upstream-fork-merge/summary:
+  en: 0e6be1d4776ee3cd
+  zh: 250cbfcc0f4b83b7
+/2026-10-31-upstream-fork-merge/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-10-31-upstream-fork-merge/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-10-31-upstream-fork-merge/compatibility:
+  en: 05f8c7bbc3c3c3db
+  zh: dfdb3f2b9758c7f7
+/2026-10-31-upstream-fork-merge/verification:
+  en: 4d6ef99446337ed0
+  zh: 3143cb366e19f134
+/2026-10-31-upstream-fork-merge/dev-note:
+  en: b75c8458928b72b9
+  zh: 2eb6c49ce58a850d

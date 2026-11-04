@@ -97,15 +97,19 @@ export interface ISessions {
    */
   readonly searchResultLimit: number
   /**
-   * Create or adopt a Session on the Host.
-   * @param opts - target workspace, directory, and optional preallocated identity.
-   * @returns the catalogued identity; retain it before borrowing its binding.
+   * Create a Session for a new conversation on the Host. The Host reuses the
+   * named blank Session while it is reusable and otherwise creates another; the
+   * Session runs the named preset, or the Host default when none is named.
+   * @param opts - target workspace or directory, an optional blank Session to reuse, and an optional Agent preset.
+   * @returns the catalogued identity the Host created or reused; retain it before borrowing its binding.
    */
   create(opts?: {
     workspaceId?: WorkspaceId
     cwd?: string
     sessionId?: SessionId
     dedicatedCollaboration?: true
+    agentPreset?: string
+    exactAdopt?: true
   }): Promise<SessionId>
   /**
    * Resolve an already discovered direct-parent address without opening it.
@@ -131,11 +135,13 @@ export interface ISessions {
    * request-local; the list snapshot remains the metadata authority.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for a superseded search.
+   * @param archivedFilter - which archived Sessions may contribute results.
    * @returns bounded results, or a business/transport error.
    */
   search(
     query: string,
     signal: AbortSignal,
+    archivedFilter?: 'default' | 'show' | 'only',
   ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>>
   /**
    * Fork a session from an exact inclusive prefix of the source; on

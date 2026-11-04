@@ -25,11 +25,12 @@ export function dockRuntime(sessionId = 'session'): PropsRuntime<'conversation.i
       openState: 'open', openError: null, hasMore: false, loadingOlder: false, promptError: null,
       blank: false, lastAgentError: null, promptAttempted: false, awaitingFirstTurn: false },
     input: { draft: '', attachmentIds: [], draftRev: 0, phase: 'plain', occurrences: [], queue: [] },
-    inputActions: { captureInsertion: unused, insertText: unused, setDraft: unused, addAttachments: unused,
+    inputActions: { insertQuote: unused, captureInsertion: unused, insertText: unused, setDraft: unused, addAttachments: unused,
       removeAttachment: unused, pruneAttachments: unused, persistDraft: unused, submit: unused },
     useSessions: unused, useSessionStatus: unused, useSessionRetainInfo: unused, useSession: unused,
     useProjection: unused, useConversation: unused, useInput: unused, useChat: unused,
     useTrajectory: unused, useWorkspaces: unused, useResource: unused, usePanelInfo: unused,
+    useAccess: unused, useRemoteAccess: unused, useSessionAccess: unused, useWorkspaceAccess: unused,
   }
 }
 

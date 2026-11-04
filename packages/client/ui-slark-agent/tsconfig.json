@@ -45,7 +45,7 @@
       "path": "../connection/tsconfig.client.json"
     },
     {
-      "path": "../ui-trajectory"
+      "path": "../ui-trajectory/tsconfig.client.json"
     },
     {
       "path": "../ui-workspace"

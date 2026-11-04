@@ -5,7 +5,7 @@
 .identity strong { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .identity small { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
 .settings { display: grid; place-items: center; flex: none; width: 30px; height: 30px; margin-left: auto; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
-.settings:hover { background: var(--dsw-alias-interactive-bg-hover); }
+@media (hover: hover) { .settings:hover { background: var(--dsw-alias-interactive-bg-hover); } }
 .settings:focus-visible { outline: 2px solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
 .row[data-collapsed='true'] { padding: 0; justify-content: center; }
 .row[data-collapsed='true'] .settings { margin: 0; width: 36px; height: 36px; }

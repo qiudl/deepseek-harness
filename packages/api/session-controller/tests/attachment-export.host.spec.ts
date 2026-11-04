@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { Context } from '@deepseek-ai/cordis'
 import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
+import { HostConnectionService, Peer } from '@deepseek-ai/dsh-client-connection'
 import type { BrowserAuth } from '@deepseek-ai/dsh-client-connection/src/browser-auth.ts'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
@@ -41,6 +41,7 @@ async function mounted() {
   })
   ctx.provide('attachments', { readImage, readFileStream } as never)
   const connection = new HostConnectionService(ctx, [], {} as BrowserAuth)
+  const peer = new Peer(ctx, { principal: { kind: 'owner' } })
   const session = ctx.sessions.create(undefined, { meta: { cwd: '/workspace' } })
   const observeSession = vi.fn(async () => ({
     header: session.header,
@@ -63,7 +64,7 @@ async function mounted() {
     readImage,
     readFileStream,
     observeSession,
-    fetch: (request: Request) => connection.createSharedFetchHandler('/api').fetch(request),
+    fetch: (request: Request) => connection.createSharedFetchHandler('/api').fetch(request, peer),
   }
 }
 

@@ -7,11 +7,11 @@ import { fileURLToPath } from 'node:url'
 import {
   initProfile,
   PROFILE_PATCH_FILENAME,
-  PROFILE_TEMPLATES,
   readProfileManifest,
   resolveProfileDir,
   writeProfileManifest,
 } from '@deepseek-ai/dsh-app-boot'
+import { PROFILE_TEMPLATES } from '@deepseek-ai/dsh-official-bundles'
 import { describe, expect, it } from 'vitest'
 import { execa } from 'execa'
 import { initializeProfileFromDefault } from '../src/profile-boot.ts'
@@ -113,12 +113,25 @@ describe('initializeProfileFromDefault', () => {
     })
   })
 
+  it('rejects a case variant of a shipped profile without changing it', () => {
+    withHome((home) => {
+      const dir = resolveProfileDir('web', home)
+      initProfile(dir, ['existing-bundle'])
+      const before = readFileSync(join(dir, 'package.json'))
+
+      expect(() => {
+        initializeProfileFromDefault('Web', 'headless', home)
+      }).toThrow('profile "Web" names shipped profile "web"')
+      expect(readFileSync(join(dir, 'package.json'))).toEqual(before)
+    })
+  })
+
   it.each(Object.keys(PROFILE_TEMPLATES))('rejects shipped target name %s without creating it', (name) => {
     withHome((home) => {
       expect(() => {
         initializeProfileFromDefault(name, 'web', home)
       })
-        .toThrow(`profile ${JSON.stringify(name)} is shipped`)
+        .toThrow(`names shipped profile ${JSON.stringify(name)}`)
       expect(existsSync(resolveProfileDir(name, home))).toBe(false)
     })
   })

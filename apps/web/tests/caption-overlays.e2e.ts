@@ -21,7 +21,7 @@ it('keeps settings and expanded plugin dialogs clear of the Windows caption acro
         document.documentElement.setAttribute('data-windows-titlebar', '')
         document.documentElement.style.setProperty('--dsh-windows-titlebar-height', '40px')
       })
-      const reopenSidebar = page.getByRole('button', { name: '打开侧边栏', exact: true })
+      const reopenSidebar = page.getByRole('button', { name: '打开侧边栏', exact: true }).first()
       const showMobileList = async () => {
         const menu = page.getByRole('button', { name: '打开导航', exact: true })
         if (!await menu.isVisible()) return
@@ -33,6 +33,10 @@ it('keeps settings and expanded plugin dialogs clear of the Windows caption acro
       await openSettings(page, 'zh')
       const settings = page.getByRole('dialog', { name: '设置', exact: true })
       const settingsMask = settings.locator('..').locator(':scope > [aria-hidden="true"]')
+      const permissionText = settings.getByText('权限', { exact: true }).locator('..')
+      expect(await permissionText.evaluate(el => getComputedStyle(el).paddingRight)).toBe('48px')
+      const cubes = settings.getByRole('button', { name: /浅色|深色|跟随系统/ })
+      expect(await cubes.first().evaluate(el => getComputedStyle(el).flexBasis)).toBe('180px')
       for (const fullscreen of [false, true, false]) {
         await page.evaluate(value => document.documentElement.toggleAttribute('data-fullscreen', value), fullscreen)
         const margin = fullscreen ? 24 : 60
@@ -91,11 +95,22 @@ it('keeps settings and expanded plugin dialogs clear of the Windows caption acro
           if (value === 'darwin') document.documentElement.setAttribute('data-platform', value)
           else document.documentElement.removeAttribute('data-platform')
         }, platform)
+        // Platform is normally fixed by preload before mount. This test changes
+        // it in place, so trigger a frame measurement to apply the new mode.
+        await page.setViewportSize({ width: 521, height: 600 })
+        await page.evaluate(() => new Promise<void>((resolve) => {
+          requestAnimationFrame(() => { requestAnimationFrame(() => { resolve() }) })
+        }))
+        await page.setViewportSize({ width: 520, height: 600 })
+        await expect.poll(() => page.locator('[class*="frame"]').getAttribute('data-phone-web'))
+          .toBe(platform === 'browser' ? 'true' : null)
         await showMobileList()
-        if (await reopenSidebar.isVisible()) await reopenSidebar.click()
+        if (platform === 'darwin') await page.getByRole('button', { name: '打开侧边栏', exact: true }).last().click()
         await openSettings(page, 'zh')
-        await expect.poll(async () => (await settings.boundingBox())?.y).toBe(platform === 'darwin' ? 68 : 24)
+        await expect.poll(async () => (await settings.boundingBox())?.y).toBe(platform === 'darwin' ? 68 : 0)
         expect((await settingsMask.boundingBox())?.y).toBe(0)
+        expect(await permissionText.evaluate(el => getComputedStyle(el).paddingRight)).toBe(platform === 'darwin' ? '48px' : '16px')
+        expect(await cubes.first().evaluate(el => getComputedStyle(el).flexBasis)).toBe(platform === 'darwin' ? '180px' : '0px')
         await page.keyboard.press('Escape')
         await settings.waitFor({ state: 'hidden' })
       }

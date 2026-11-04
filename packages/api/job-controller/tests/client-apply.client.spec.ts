@@ -22,6 +22,8 @@ async function mount(): Promise<{ ctx: Context; observeCalls: unknown[]; rowsCal
   const killCalls: unknown[] = []
   const connection: ConnectionHandle = {
     isRemoteHost: false,
+    interactions: 'answer',
+    openWebSocket: () => { throw new Error('unexpected WebSocket') },
     isLoopback: true,
     generation: { getSnapshot: () => ({ id: 1, host: { home: '/home/fixture' } }), subscribe: () => () => {} },
     state: { getSnapshot: () => 'connected' as const, subscribe: () => () => {} },

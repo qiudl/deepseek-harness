@@ -4,9 +4,15 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { basename, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { JSON_SCHEMA, load } from 'js-yaml'
-import { canonicalizeSchema, reachableSchemaTypes, schemaDigest } from './persistence-schema-model.ts'
+import {
+  SCHEMA_NODE_KEY_LENGTH, canonicalizeSchema, encodePersistenceSnapshot, renderPersistenceSnapshot,
+  schemaChildren, schemaDigest, schemaTableEntry, serializeSchemaNode,
+} from './persistence-schema-model.ts'
 import { matchingSourceCompatibility, sourceKindGroups, validSourceCompatibility } from './persistence-source-policy.ts'
-import type { CanonicalSchema, PersistenceRoot, PersistenceSchemaInventory, SchemaNode, SchemaTupleElement } from './persistence-schema-model.ts'
+import type {
+  CanonicalSchema, PersistenceRoot, PersistenceSchemaInventory, PersistenceType,
+  SchemaNode, SchemaProperty, SchemaTupleElement, SourceCompatibility,
+} from './persistence-schema-model.ts'
 import { extractPersistenceSchema } from './persistence-schema.ts'
 import { persistenceCatalogArtifacts } from './gen-persistence-catalog.ts'
 import { renderPersistencePair } from './persistence-artifacts.ts'
@@ -26,14 +32,18 @@ export type PersistenceDecision = 'same-version' | 'version-bump'
 /** One root's successor; null after values preserve a deletion in its history. */
 export interface PersistenceChange {
   readonly root: string
-  readonly previous: string | null
+  readonly previous: string | readonly string[] | null
   readonly after: string | null
   readonly decision: PersistenceDecision
 }
 
+function predecessorIds(previous: PersistenceChange['previous']): readonly (string | null)[] {
+  return typeof previous === 'string' || previous === null ? [previous] : previous
+}
+
 /** A document's machine record, independent of its translated prose. */
 export interface PersistenceChangeRecord {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 1 | 2
   readonly id: string
   readonly baseline: boolean
   readonly changes: readonly PersistenceChange[]
@@ -169,128 +179,138 @@ function digest(value: unknown, label: string): string {
   return result
 }
 
-function reference(value: unknown, count: number, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) >= count) throw new Error(`${label} references an unknown schema node`)
-  return value as number
+function parseNode(value: unknown, label: string, formatVersion: 1 | 2, ref: (value: unknown) => number): SchemaNode {
+  const node = record(value, label)
+  switch (node.kind) {
+    case 'primitive':
+      keys(node, ['kind', 'type'], label)
+      if (!['null', 'boolean', 'number', 'string', 'never'].includes(String(node.type))) throw new Error(`${label}: invalid primitive`)
+      return { kind: 'primitive', type: node.type as Extract<SchemaNode, { kind: 'primitive' }>['type'] }
+    case 'literal':
+      keys(node, ['kind', 'value'], label)
+      if (!['string', 'boolean', 'number'].includes(typeof node.value)
+        || typeof node.value === 'number' && !Number.isFinite(node.value)) throw new Error(`${label}: invalid literal`)
+      return { kind: 'literal', value: node.value as string | number | boolean }
+    case 'opaque':
+      keys(node, ['kind', 'reason'], label)
+      if (!['any', 'unknown'].includes(String(node.reason))) throw new Error(`${label}: invalid opaque reason`)
+      return { kind: 'opaque', reason: node.reason as 'any' | 'unknown' }
+    case 'array':
+      keys(node, ['kind', 'element'], label)
+      return { kind: 'array', element: ref(node.element) }
+    case 'tuple':
+      keys(node, ['kind', 'elements'], label)
+      return { kind: 'tuple', elements: array(node.elements, label).map((rawElement): SchemaTupleElement => {
+        const element = record(rawElement, label)
+        keys(element, ['type', 'optional', 'rest'], label)
+        return { type: ref(element.type), optional: bool(element.optional, label), rest: bool(element.rest, label) }
+      }) }
+    case 'object': {
+      keys(node, ['kind', 'properties', 'indices'], label)
+      const names = new Set<string>()
+      const properties = array(node.properties, label).map((rawProperty): SchemaProperty => {
+        const property = record(rawProperty, label)
+        keys(property, ['name', 'type', 'optional'], label, formatVersion === 2 ? ['compatibility'] : [])
+        if (typeof property.name !== 'string') throw new Error(`${label}: property name must be a string`)
+        const name = property.name
+        if (names.has(name)) throw new Error(`${label}: duplicate property ${name}`)
+        names.add(name)
+        return { name, type: ref(property.type), optional: bool(property.optional, label),
+          ...(property.compatibility === undefined ? {} : { compatibility: parseCompatibility(property.compatibility, label) }) }
+      })
+      const indices = array(node.indices, label).map((rawIndex) => {
+        const entry = record(rawIndex, label)
+        keys(entry, ['key', 'value'], label)
+        return { key: ref(entry.key), value: ref(entry.value) }
+      })
+      return { kind: 'object', properties, indices }
+    }
+    case 'union':
+      keys(node, ['kind', 'types'], label)
+      if (array(node.types, label).length === 0) throw new Error(`${label}: empty union`)
+      return { kind: 'union', types: (node.types as unknown[]).map(ref) }
+    default:
+      throw new Error(`${label}: unknown schema node kind ${String(node.kind)}`)
+  }
 }
 
-function parseSchema(value: unknown, label: string, formatVersion: 1 | 2): CanonicalSchema {
-  const input = record(value, label)
-  keys(input, ['root', 'nodes'], label)
-  if (input.root !== 0) throw new Error(`${label}.root must be zero`)
-  const nodes = array(input.nodes, `${label}.nodes`)
-  if (nodes.length === 0) throw new Error(`${label}.nodes must not be empty`)
-  const ref = (value: unknown): number => reference(value, nodes.length, label)
-  for (const [index, raw] of nodes.entries()) {
-    const node = record(raw, `${label}.nodes[${index}]`)
-    switch (node.kind) {
-      case 'primitive':
-        keys(node, ['kind', 'type'], label)
-        if (!['null', 'boolean', 'number', 'string', 'never'].includes(String(node.type))) throw new Error(`${label}: invalid primitive`)
-        break
-      case 'literal':
-        keys(node, ['kind', 'value'], label)
-        if (!['string', 'boolean', 'number'].includes(typeof node.value)
-          || typeof node.value === 'number' && !Number.isFinite(node.value)) throw new Error(`${label}: invalid literal`)
-        break
-      case 'opaque':
-        keys(node, ['kind', 'reason'], label)
-        if (!['any', 'unknown'].includes(String(node.reason))) throw new Error(`${label}: invalid opaque reason`)
-        break
-      case 'array':
-        keys(node, ['kind', 'element'], label)
-        ref(node.element)
-        break
-      case 'tuple':
-        keys(node, ['kind', 'elements'], label)
-        for (const rawElement of array(node.elements, label)) {
-          const element = record(rawElement, label)
-          keys(element, ['type', 'optional', 'rest'], label)
-          ref(element.type)
-          bool(element.optional, label)
-          bool(element.rest, label)
-        }
-        break
-      case 'object': {
-        keys(node, ['kind', 'properties', 'indices'], label)
-        const names = new Set<string>()
-        for (const rawProperty of array(node.properties, label)) {
-          const property = record(rawProperty, label)
-          keys(property, ['name', 'type', 'optional'], label, formatVersion === 2 ? ['compatibility'] : [])
-          if (property.compatibility !== undefined) {
-            const policy = record(property.compatibility, `${label} source compatibility`)
-            keys(policy, ['version', 'policy', 'binding', 'discriminator', 'unknownKinds', 'attributionKinds'], label)
-            if (policy.version !== 1 || policy.policy !== 'session-source-attribution'
-              || !['session.user-message.source', 'session.developer-message.source'].includes(String(policy.binding))
-              || policy.discriminator !== 'kind' || policy.unknownKinds !== 'preserve') {
-              throw new Error(`${label}: unsupported source compatibility policy`)
-            }
-            for (const kind of array(policy.attributionKinds, label)) textValue(kind, label)
-          }
-          if (typeof property.name !== 'string') throw new Error(`${label}: property name must be a string`)
-          const name = property.name
-          if (names.has(name)) throw new Error(`${label}: duplicate property ${name}`)
-          names.add(name)
-          ref(property.type)
-          bool(property.optional, label)
-        }
-        for (const rawIndex of array(node.indices, label)) {
-          const entry = record(rawIndex, label)
-          keys(entry, ['key', 'value'], label)
-          ref(entry.key)
-          ref(entry.value)
-        }
-        break
-      }
-      case 'union':
-        keys(node, ['kind', 'types'], label)
-        if (array(node.types, label).length === 0) throw new Error(`${label}: empty union`)
-        for (const item of node.types as unknown[]) ref(item)
-        break
-      default:
-        throw new Error(`${label}: unknown schema node kind ${String(node.kind)}`)
-    }
+function parseCompatibility(value: unknown, label: string): SourceCompatibility {
+  const policy = record(value, `${label} source compatibility`)
+  keys(policy, ['version', 'policy', 'binding', 'discriminator', 'unknownKinds', 'attributionKinds'], label)
+  if (policy.version !== 1 || policy.policy !== 'session-source-attribution'
+    || (policy.binding !== 'session.user-message.source' && policy.binding !== 'session.developer-message.source')
+    || policy.discriminator !== 'kind' || policy.unknownKinds !== 'preserve') {
+    throw new Error(`${label}: unsupported source compatibility policy`)
   }
-  const schema = input as unknown as CanonicalSchema
-  for (const node of schema.nodes) {
-    if (node.kind !== 'object') continue
-    for (const property of node.properties) {
-      if (property.compatibility !== undefined && !validSourceCompatibility(schema.nodes, node, property)) {
-        throw new Error(`${label}: invalid source compatibility binding or attribution kinds`)
-      }
-    }
-  }
-  const canonical = canonicalizeSchema(schema.nodes, schema.root)
-  if (JSON.stringify(canonical) !== JSON.stringify(schema)) throw new Error(`${label}: schema is not canonical`)
-  return schema
+  return { version: 1, policy: 'session-source-attribution', binding: policy.binding, discriminator: 'kind', unknownKinds: 'preserve',
+    attributionKinds: array(policy.attributionKinds, label).map(kind => textValue(kind, label)) }
 }
 
-/** Parse full or compact inventories, restoring type graphs and rejecting invalid digests.
- * @param value - JSON read from the current inventory or an enforced acknowledgement snapshot.
- * @returns the validated inventory.
+/** Parse the committed current inventory or an enforced acknowledgement snapshot.
+ * @param text - JSON text in the layout written by encodePersistenceSnapshot.
+ * @returns the validated inventory with canonical graphs.
  */
-export function parsePersistenceSnapshot(value: unknown): PersistenceSchemaInventory {
-  return parseSnapshot(value, false)
+export function parsePersistenceSnapshot(text: string): PersistenceSchemaInventory {
+  return parseSnapshot(text, false)
 }
 
 /** Parse a historical inventory with path-only source references and optional surface operations.
- * @param value - JSON captured from a historical source tree.
+ * @param text - JSON text captured from a historical source tree.
  * @returns the validated inventory; current acknowledgements use the strict parser.
  */
-export function parseHistoricalPersistenceSnapshot(value: unknown): PersistenceSchemaInventory {
-  return parseSnapshot(value, true)
+export function parseHistoricalPersistenceSnapshot(text: string): PersistenceSchemaInventory {
+  return parseSnapshot(text, true)
 }
 
-function parseSnapshot(value: unknown, historical: boolean): PersistenceSchemaInventory {
-  const input = record(value, 'schema inventory')
-  keys(input, ['formatVersion', 'roots', 'types'], 'schema inventory')
+function parseSnapshot(text: string, historical: boolean): PersistenceSchemaInventory {
+  const parsed: unknown = JSON.parse(text)
+  const input = record(parsed, 'schema inventory')
+  keys(input, ['formatVersion', 'roots', 'types', 'nodes'], 'schema inventory')
   const formatVersion = input.formatVersion
   if (formatVersion !== 1 && formatVersion !== 2) throw new Error('unsupported persistence schema normalization version')
+  const table = record(input.nodes, 'schema nodes')
+  const nodeKeys = Object.keys(table)
+  const positions = new Map(nodeKeys.map((key, index) => [key, index]))
+  const position = (value: unknown, label: string): number => {
+    const found = typeof value === 'string' ? positions.get(value) : undefined
+    if (found === undefined) throw new Error(`${label} references an unknown schema node`)
+    return found
+  }
+  const graph = nodeKeys.map(key =>
+    parseNode(table[key], `schema node ${key}`, formatVersion, value => position(value, `schema node ${key}`)))
+  for (const [index, key] of nodeKeys.entries()) {
+    const node = graph[index] as SchemaNode
+    if (node.kind === 'object') {
+      for (const property of node.properties) {
+        if (property.compatibility !== undefined && !validSourceCompatibility(graph, node, property)) {
+          throw new Error(`schema node ${key}: invalid source compatibility binding or attribution kinds`)
+        }
+      }
+    }
+    const [canonicalKey, canonical] = schemaTableEntry(graph, index)
+    if (canonicalKey !== key) throw new Error(`schema node ${key}: key does not match its subgraph digest`)
+    if (JSON.stringify(canonical) !== JSON.stringify(table[key])) throw new Error(`schema node ${key}: node is not canonical`)
+  }
+  const used = new Set<number>()
+  const graphOf = (graphDigest: string, label: string): CanonicalSchema => {
+    const prefix = graphDigest.slice(0, SCHEMA_NODE_KEY_LENGTH)
+    const index = positions.get(prefix)
+    if (index === undefined) throw new Error(`${label}: no schema node for digest prefix ${prefix}`)
+    const pending = [index]
+    while (pending.length > 0) {
+      const next = pending.pop() as number
+      if (used.has(next)) continue
+      used.add(next)
+      pending.push(...schemaChildren(graph[next] as SchemaNode))
+    }
+    const schema = canonicalizeSchema(graph, index)
+    if (graphDigest !== schemaDigest(schema)) throw new Error(`${label}: schema digest mismatch`)
+    return schema
+  }
   const names = new Set<string>()
-  const schemas: CanonicalSchema[] = []
-  for (const rawRoot of array(input.roots, 'schema roots')) {
+  const roots = array(input.roots, 'schema roots').map((rawRoot): PersistenceRoot => {
     const root = record(rawRoot, 'schema root')
-    keys(root, ['key', 'kind', 'digest', 'schema'], 'schema root', ['event', 'surface'])
+    keys(root, ['key', 'kind', 'digest'], 'schema root', ['event', 'surface'])
     const key = textValue(root.key, 'root key')
     if (names.has(key)) throw new Error(`duplicate schema root ${key}`)
     names.add(key)
@@ -300,26 +320,17 @@ function parseSnapshot(value: unknown, historical: boolean): PersistenceSchemaIn
     } else if ((root.kind !== 'header' || !['SessionHeader', 'JsonlHeaderLine'].includes(key))
       && (root.kind !== 'envelope' || key !== 'SessionEventEnvelope')) throw new Error(`invalid schema root ${key}`)
     if (root.kind !== 'event' && (root.event !== undefined || root.surface !== undefined)) throw new Error(`${key}: non-event metadata`)
-    const schema = parseSchema(root.schema, key, formatVersion)
+    const schema = graphOf(digest(root.digest, `${key} digest`), key)
     if (root.kind === 'event') validateEventMetadata(schema, String(root.event), root.surface === true, historical)
-    if (digest(root.digest, `${key} digest`) !== schemaDigest(schema)) throw new Error(`${key}: schema digest mismatch`)
-    schemas.push(schema)
-  }
-  let reachable: Map<string, CanonicalSchema> | undefined
-  const types = array(input.types, 'schema types').map((rawType) => {
+    return root.kind === 'event'
+      ? { key, kind: 'event', event: root.event as string, surface: root.surface as boolean, digest: root.digest as string, schema }
+      : { key, kind: root.kind, digest: root.digest as string, schema }
+  })
+  const types = array(input.types, 'schema types').map((rawType): PersistenceType => {
     const type = record(rawType, 'schema type')
-    keys(type, ['digest', 'names', 'sources'], 'schema type', ['schema'])
+    keys(type, ['digest', 'names', 'sources'], 'schema type')
     const typeDigest = digest(type.digest, 'shared digest')
-    let schema: CanonicalSchema
-    if ('schema' in type) {
-      schema = parseSchema(type.schema, 'shared schema', formatVersion)
-      if (typeDigest !== schemaDigest(schema)) throw new Error('shared schema digest mismatch')
-    } else {
-      reachable ??= reachableSchemaTypes(schemas)
-      const found = reachable.get(typeDigest)
-      if (found === undefined) throw new Error(`shared schema digest ${typeDigest} is not reachable from roots`)
-      schema = found
-    }
+    const schema = graphOf(typeDigest, `shared schema ${typeDigest}`)
     const typeNames = array(type.names, 'type names').map(name => textValue(name, 'type name'))
     const sources = array(type.sources, 'type sources').map((source) => {
       const location = textValue(source, 'type source')
@@ -330,7 +341,13 @@ function parseSnapshot(value: unknown, historical: boolean): PersistenceSchemaIn
     })
     return { digest: typeDigest, schema, names: typeNames, sources }
   })
-  return { ...input as unknown as PersistenceSchemaInventory, types }
+  const orphan = nodeKeys.find((_, index) => !used.has(index))
+  if (orphan !== undefined) throw new Error(`schema node ${orphan} is not reachable from any root or type`)
+  const inventory: PersistenceSchemaInventory = { formatVersion, roots, types }
+  const serialized = new Map(nodeKeys.map((key, index) =>
+    [key, serializeSchemaNode(graph[index] as SchemaNode, child => nodeKeys[child] as string)]))
+  if (renderPersistenceSnapshot(inventory, serialized) !== text) throw new Error('schema inventory is not in canonical layout')
+  return inventory
 }
 
 function validateEventMetadata(schema: CanonicalSchema, event: string, surface: boolean, historical: boolean): void {
@@ -534,7 +551,7 @@ function parseDocument(source: string, filename: string, allowIncomplete = false
   if (openings.length !== 1 || block === null) throw new Error(`${filename}: expected exactly one persistence-change block`)
   const input = record(load(block[1] as string, { schema: JSON_SCHEMA }), filename)
   keys(input, ['schemaVersion', 'id', 'baseline', 'changes'], filename)
-  if (input.schemaVersion !== 1) throw new Error(`${filename}: unsupported acknowledgement schema version`)
+  if (input.schemaVersion !== 1 && input.schemaVersion !== 2) throw new Error(`${filename}: unsupported acknowledgement schema version`)
   const id = identifier(input.id, filename)
   if (basename(filename) !== `${id}.md`) throw new Error(`${filename}: record id does not match filename`)
   bool(input.baseline, filename)
@@ -545,11 +562,17 @@ function parseDocument(source: string, filename: string, allowIncomplete = false
     const root = textValue(change.root, 'changed root')
     if (roots.has(root)) throw new Error(`${filename}: duplicate change for ${root}`)
     roots.add(root)
-    if (change.previous !== null) identifier(change.previous, 'previous record')
+    if (Array.isArray(change.previous)) {
+      if (input.schemaVersion !== 2) throw new Error(`${filename}: merge predecessors require schema version 2`)
+      const parents = change.previous.map(value => identifier(value, 'previous record'))
+      if (parents.length < 2 || new Set(parents).size !== parents.length) throw new Error(`${filename}: merge predecessors must be distinct`)
+      if (change.decision !== 'same-version') throw new Error(`${filename}: merge predecessors require same-version`)
+    } else if (change.previous !== null) identifier(change.previous, 'previous record')
     if (change.after !== null) digest(change.after, 'after digest')
     if (change.decision !== 'same-version' && change.decision !== 'version-bump') throw new Error(`${filename}: invalid compatibility decision`)
   }
   if (roots.size === 0) throw new Error(`${filename}: changes must not be empty`)
+  if (input.schemaVersion === 2 && (input.baseline === true || !array(input.changes, `${filename} changes`).some(value => Array.isArray(record(value, filename).previous)))) throw new Error(`${filename}: schema version 2 requires merge predecessors`)
   if (!allowIncomplete && (source.includes(EXPLANATION_PLACEHOLDER) || source.includes(EVIDENCE_PLACEHOLDER))) throw new Error(`${filename}: complete compatibility and verification prose`)
   return input as unknown as PersistenceChangeRecord
 }
@@ -573,6 +596,8 @@ export function validatePersistenceHistory(entries: readonly PersistenceHistoryE
   const records = new Map<string, PersistenceHistoryEntry>()
   for (const entry of entries) {
     if (records.has(entry.record.id)) throw new Error(`duplicate persistence record ${entry.record.id}`)
+    if (entry.record.schemaVersion === 1 && entry.record.changes.some(change => Array.isArray(change.previous))) throw new Error(`${entry.record.id}: merge predecessors require schema version 2`)
+    if (entry.record.schemaVersion === 2 && (entry.record.baseline || !entry.record.changes.some(change => Array.isArray(change.previous)))) throw new Error(`${entry.record.id}: schema version 2 requires merge predecessors`)
     records.set(entry.record.id, entry)
     const expected = entry.record.changes.filter(change => change.after !== null).map(change => change.root).sort()
     if (JSON.stringify(expected) !== JSON.stringify(entry.snapshot.roots.map(root => root.key).sort())) throw new Error(`${entry.record.id}: snapshot roots do not match acknowledged after schemas`)
@@ -583,14 +608,22 @@ export function validatePersistenceHistory(entries: readonly PersistenceHistoryE
     }
   }
   const states = new Map<string, 'visiting' | 'visited'>()
-  const successors = new Map<string, string>()
+  const successors = new Map<string, string[]>()
   const nodes = new Map<string, { entry: PersistenceHistoryEntry; change: PersistenceChange }>()
   const tips = new Map<string, Tip>()
   const nodeKey = (id: string | null, root: string): string => JSON.stringify([id, root])
   for (const entry of entries) for (const change of entry.record.changes) {
-    const parentKey = nodeKey(change.previous, change.root)
-    if (successors.has(parentKey)) throw new Error(`forked persistence history for ${change.root}: ${successors.get(parentKey)} and ${entry.record.id}`)
-    successors.set(parentKey, entry.record.id)
+    const parents = predecessorIds(change.previous)
+    if ((Array.isArray(change.previous) && parents.length < 2) || new Set(parents).size !== parents.length) throw new Error(`${entry.record.id}: invalid merge predecessors`)
+    if (parents.length > 1 && (entry.record.baseline || change.decision !== 'same-version' || parents.some(parent => parent === null))) {
+      throw new Error(`${entry.record.id}: merge predecessors require a same-version non-baseline record`)
+    }
+    for (const parent of parents) {
+      const key = nodeKey(parent, change.root)
+      const children = successors.get(key) ?? []
+      children.push(entry.record.id)
+      successors.set(key, children)
+    }
     nodes.set(nodeKey(entry.record.id, change.root), { entry, change })
   }
   function visit(id: string, root: string): PersistenceRoot | null {
@@ -601,30 +634,59 @@ export function validatePersistenceHistory(entries: readonly PersistenceHistoryE
     const after = found.entry.snapshot.roots.find(item => item.key === root) ?? null
     if (states.get(key) === 'visited') return after
     states.set(key, 'visiting')
-    const before = found.change.previous === null ? null : visit(found.change.previous, root)
-    if (!found.entry.record.baseline) {
-      const differences = classifyPersistenceChange(before, after)
-      if (differences.length === 0) throw new Error(`${id}: unchanged acknowledgement for ${root}`)
-      if (root === 'SessionHeader' && headerVersion(before) !== headerVersion(after) && found.change.decision !== 'version-bump') {
-        throw new PersistenceChangeFailure(`${id}: SessionHeader.version changes require an increasing version-bump transition`,
-          'version-transition-required', differences.map(change => ({ root, ...change })), [rootTransition(before, after)])
-      }
-      if (found.change.decision === 'version-bump') {
-        const header = found.entry.record.changes.find(change => change.root === 'SessionHeader')
-        const oldHeader = header?.previous === null || header === undefined ? null : visit(header.previous, 'SessionHeader')
-        const from = headerVersion(oldHeader)
-        const to = headerVersion(found.entry.snapshot.roots.find(item => item.key === 'SessionHeader') ?? null)
-        if (from === undefined || to === undefined || to <= from) {
-          throw new PersistenceChangeFailure(`${id}: version-bump requires this record's own increasing SessionHeader.version transition`,
+    const parents = predecessorIds(found.change.previous)
+    for (const parent of parents) {
+      const before = parent === null ? null : visit(parent, root)
+      if (!found.entry.record.baseline) {
+        const differences = classifyPersistenceChange(before, after)
+        if (differences.length === 0) throw new Error(`${id}: unchanged acknowledgement for ${root}`)
+        if (parents.length > 1 && differences.some(change => change.requiresCompatibilityReview)) {
+          throw new Error(`${id}: merge transition for ${root} requires compatibility review`)
+        }
+        if (root === 'SessionHeader' && headerVersion(before) !== headerVersion(after) && found.change.decision !== 'version-bump') {
+          throw new PersistenceChangeFailure(`${id}: SessionHeader.version changes require an increasing version-bump transition`,
             'version-transition-required', differences.map(change => ({ root, ...change })), [rootTransition(before, after)])
+        }
+        if (found.change.decision === 'version-bump') {
+          const header = found.entry.record.changes.find(change => change.root === 'SessionHeader')
+          const previous = header?.previous
+          if (previous !== null && previous !== undefined && typeof previous !== 'string') throw new Error(`${id}: version-bump cannot merge predecessors`)
+          const oldHeader = typeof previous === 'string' ? visit(previous, 'SessionHeader') : null
+          const from = headerVersion(oldHeader)
+          const to = headerVersion(found.entry.snapshot.roots.find(item => item.key === 'SessionHeader') ?? null)
+          if (from === undefined || to === undefined || to <= from) {
+            throw new PersistenceChangeFailure(`${id}: version-bump requires this record's own increasing SessionHeader.version transition`,
+              'version-transition-required', differences.map(change => ({ root, ...change })), [rootTransition(before, after)])
+          }
         }
       }
     }
     states.set(key, 'visited')
-    if (!successors.has(key)) tips.set(root, { id, root: after })
+    if (!successors.has(key)) {
+      if (tips.has(root)) throw new Error(`forked persistence history for ${root}: multiple unresolved tips`)
+      tips.set(root, { id, root: after })
+    }
     return after
   }
   for (const entry of entries) for (const change of entry.record.changes) visit(entry.record.id, change.root)
+  function ancestors(id: string, root: string, result = new Set<string>()): Set<string> {
+    if (result.has(id)) return result
+    result.add(id)
+    const previous = nodes.get(nodeKey(id, root))?.change.previous
+    const parents = previous === undefined ? [] : predecessorIds(previous)
+    for (const parent of parents) if (typeof parent === 'string') ancestors(parent, root, result)
+    return result
+  }
+  for (const entry of entries) for (const change of entry.record.changes) {
+    if (!Array.isArray(change.previous)) continue
+    const ids = predecessorIds(change.previous).filter((parent): parent is string => parent !== null)
+    const parents = ids.map(parent => ancestors(parent, change.root))
+    const first = parents[0]
+    const common = first !== undefined && [...first].some(id => parents.every(parent => parent.has(id)))
+    const redundant = ids.some((parent, index) =>
+      parents.some((other, otherIndex) => otherIndex !== index && other.has(parent)))
+    if (!common || redundant) throw new Error(`${entry.record.id}: merge predecessors must be distinct branches with a common ancestor`)
+  }
   const baseline = entries.find(entry => entry.record.baseline) as PersistenceHistoryEntry
   if (!baseline.snapshot.roots.some(root => root.key === 'SessionHeader')
     || !baseline.snapshot.roots.some(root => root.key === 'SessionEventEnvelope')
@@ -654,7 +716,7 @@ function readPersistenceEntries(root: string, allowIncompleteId?: string): Persi
     const change = parseDocument(source, filename, allowIncomplete)
     const snapshotName = `${change.id}.schema.json`
     if (!snapshots.delete(snapshotName)) throw new Error(`${filename}: missing schema snapshot ${snapshotName}`)
-    const snapshot = parsePersistenceSnapshot(JSON.parse(readFileSync(join(directory, snapshotName), 'utf8')))
+    const snapshot = parsePersistenceSnapshot(readFileSync(join(directory, snapshotName), 'utf8').replaceAll('\r\n', '\n'))
     const translatedName = `${change.id}.zh.md`
     if (!files.includes(translatedName)) throw new Error(`${filename}: missing Chinese counterpart`)
     const translated = readFileSync(join(directory, translatedName), 'utf8').replaceAll('\r\n', '\n')
@@ -705,8 +767,7 @@ export function verifyPersistenceChanges(root: string, current: PersistenceSchem
   if (!existsSync(committedPath)) {
     throw new PersistenceChangeFailure(`${CURRENT_SCHEMA} is missing; regenerate the persistence catalog`, 'generated-artifact-missing', differences, transitions)
   }
-  const committed = parsePersistenceSnapshot(JSON.parse(readFileSync(committedPath, 'utf8')))
-  if (JSON.stringify(committed) !== JSON.stringify(current)) {
+  if (readFileSync(committedPath, 'utf8') !== encodePersistenceSnapshot(current)) {
     throw new PersistenceChangeFailure(`${CURRENT_SCHEMA} is stale; regenerate the persistence catalog`, 'stale-artifacts', differences, transitions)
   }
   if (differences.length !== 0) {
@@ -733,7 +794,7 @@ function reportedDifferences(history: PersistenceHistory, current: PersistenceSc
 }
 
 function machineBlock(change: PersistenceChangeRecord): string {
-  return ['```yaml persistence-change', 'schemaVersion: 1', `id: ${change.id}`, `baseline: ${String(change.baseline)}`, 'changes:',
+  return ['```yaml persistence-change', `schemaVersion: ${String(change.schemaVersion)}`, `id: ${change.id}`, `baseline: ${String(change.baseline)}`, 'changes:',
     ...change.changes.flatMap(item => [`  - root: ${JSON.stringify(item.root)}`, `    previous: ${item.previous === null ? 'null' : JSON.stringify(item.previous)}`, `    after: ${item.after === null ? 'null' : JSON.stringify(item.after)}`, `    decision: ${item.decision}`]), '```'].join('\n')
 }
 
@@ -812,7 +873,7 @@ function executeCommand(
   const operation = commandOperation(args)
   if (operation === 'check' && values.prose !== undefined) throw new Error('--prose requires --baseline, --record, or --update')
   const prose = values.prose === undefined ? undefined : parsePersistenceProse(JSON.parse(readFileSync(resolve(root, values.prose), 'utf8')))
-  const current = parsePersistenceSnapshot(extract(root))
+  const current = parsePersistenceSnapshot(encodePersistenceSnapshot(extract(root)))
   if (operation === 'check') {
     const history = verifyPersistenceChanges(root, current)
     return { schemaVersion: 1, ok: true, operation,
@@ -831,7 +892,8 @@ function executeCommand(
   const existing = update ? entries.find(entry => entry.record.id === id) : undefined
   if (update && existing === undefined) throw new Error(`${id}: cannot update a missing acknowledgement`)
   if (existing?.record.baseline === true) throw new Error('cannot update the persistence baseline')
-  if (existing !== undefined && entries.some(entry => entry.record.changes.some(change => change.previous === id))) {
+  if (existing !== undefined && entries.some(entry => entry.record.changes.some(change =>
+    predecessorIds(change.previous).includes(id)))) {
     throw new Error(`${id}: cannot update an acknowledgement with successors`)
   }
   const prior = entries.filter(entry => entry !== existing)
@@ -867,7 +929,7 @@ function executeCommand(
   parseDocument(chinese, `${id}.md`, prose === undefined && existing === undefined)
   const recordFiles = [
     ...renderPersistencePair(root, `${HISTORY_DIRECTORY}/${id}.md`, english, chinese),
-    { path: `${HISTORY_DIRECTORY}/${id}.schema.json`, content: JSON.stringify(snapshot, null, 2) + '\n' },
+    { path: `${HISTORY_DIRECTORY}/${id}.schema.json`, content: encodePersistenceSnapshot(snapshot) },
   ]
   if (!update && recordFiles.some(file => existsSync(join(root, file.path)))) throw new Error(`${id}: acknowledgement file already exists`)
   const outputs = [...artifacts(root, current), ...recordFiles]

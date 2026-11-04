@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
 import { boot, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ModuleLoaderV2 } from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-tools'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { startHttpMcpFixture } from '../../../mcp/mcp-client/tests/http-fixture.ts'
@@ -40,19 +41,26 @@ it('installs MCP through the authenticated socket into the leased Profile and re
     writeFileSync(config, JSON.stringify([
       { id: 'prompt', name: '@deepseek-ai/dsh-system-prompt' },
       { id: 'tools', name: '@deepseek-ai/dsh-tools' },
+      { id: 'executor', name: '@deepseek-ai/dsh-tool-executor-native' },
     ]))
     loaded = await boot('host-wire-test', config, loadOptionalPatches('host-wire-test', join(home(id), 'profiles/web/cordis.patch.yml')),
       (context) => {
         // Resolve real plugins through Vitest so coverage needs no built lib tree.
         context.loader.internal = {
           version: 'v2',
+          loadCache: new Map() as ModuleLoaderV2['loadCache'],
+          register() { throw Error('unexpected Loader register') },
+          getOrCreateModuleJob() { throw Error('unexpected Loader module job') },
+          resolveSync() { throw Error('unexpected Loader resolve') },
+          load() { throw Error('unexpected Loader load') },
           async import(specifier: string) {
             if (specifier === '@deepseek-ai/dsh-system-prompt') return import('@deepseek-ai/dsh-system-prompt')
             if (specifier === '@deepseek-ai/dsh-tools') return import('@deepseek-ai/dsh-tools')
+            if (specifier === '@deepseek-ai/dsh-tool-executor-native') return import('@deepseek-ai/dsh-tool-executor-native')
             if (specifier === '@deepseek-ai/dsh-mcp-client') return import('@deepseek-ai/dsh-mcp-client')
             throw Error(`unexpected Loader import: ${specifier}`)
           },
-        } as unknown as NonNullable<typeof context.loader.internal>
+        }
       })
     for (const entry of entries) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeDefined()
     for (const entry of removed) expect(loaded.tools.get(`mcp__${entry.slice(4)}__ping`)).toBeUndefined()
@@ -94,10 +102,9 @@ it('installs MCP through the authenticated socket into the leased Profile and re
   await client.extensions({ ...lease, command })
   expect(reloads).toBe(1)
   if (!loaded) throw Error('MCP was not loaded')
-  const toolResult = await loaded.tools.execute({ signal: new AbortController().signal, callId: ToolCallId('wire-installed-ping'),
-    name: 'mcp__demo__ping', arguments: {} })
-  expect(toolResult.isError).toBe(false)
-  expect(toolResult.content).toContainEqual({ type: 'text', text: 'pong' })
+  const toolResult = await loaded.tools.execute({ signal: new AbortController().signal, calls: [{ type: 'tool-call', id: ToolCallId('wire-installed-ping'), name: 'mcp__demo__ping', arguments: '{}' }] })
+  expect(toolResult.results[0]!.result.isError).toBe(false)
+  expect(toolResult.results[0]!.result.content).toContainEqual({ type: 'text', text: 'pong' })
   expect(readFileSync(join(home(local.profileId), 'profiles/web/cordis.patch.yml'), 'utf8')).toContain('mcp-demo')
   const second = await UnixHostClient.connect(options); clients.push(second)
   await expect(second.extensions({ ...lease, command: { action: 'status', operation_id: operationId as never } })).rejects.toMatchObject({ code: 'stale' })

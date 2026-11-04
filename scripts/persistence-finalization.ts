@@ -140,14 +140,22 @@ export function loadPersistenceFinalization(root: string, history: Pick<Persiste
     if (selected.length === 0 || !selected.some(entry => entry.record.baseline)) throw new Error(`${file}: accepted records must include the persistence baseline`)
     const predecessors = new Set<string>()
     for (const entry of selected) for (const change of entry.record.changes) {
-      if (change.previous !== null) {
-        if (!Object.hasOwn(locked, change.previous)) throw new Error(`${file}: accepted history omits predecessor ${change.previous}`)
-        predecessors.add(JSON.stringify([change.previous, change.root]))
+      const previous = change.previous
+      const parents: readonly (string | null)[] = typeof previous === 'string' || previous === null ? [previous] : previous
+      for (const parent of parents) {
+        if (parent === null) continue
+        if (!Object.hasOwn(locked, parent)) throw new Error(`${file}: accepted history omits predecessor ${parent}`)
+        if (!entries.get(parent)?.record.changes.some(parentChange => parentChange.root === change.root)) throw new Error(`${file}: predecessor ${parent} omits root ${change.root}`)
+        predecessors.add(JSON.stringify([parent, change.root]))
       }
     }
     const tips = new Map<string, PersistenceRoot>()
+    const seenTips = new Set<string>()
     for (const entry of selected) for (const change of entry.record.changes) {
-      if (!predecessors.has(JSON.stringify([entry.record.id, change.root])) && change.after !== null) {
+      if (!predecessors.has(JSON.stringify([entry.record.id, change.root]))) {
+        if (seenTips.has(change.root)) throw new Error(`${file}: accepted history has unresolved branches for ${change.root}`)
+        seenTips.add(change.root)
+        if (change.after === null) continue
         const schema = entry.snapshot.roots.find(root => root.key === change.root)
         if (schema === undefined) throw new Error(`${file}: accepted history omits schema ${change.root}`)
         tips.set(change.root, schema)

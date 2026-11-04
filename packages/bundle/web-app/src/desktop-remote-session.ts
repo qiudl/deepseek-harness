@@ -1,9 +1,10 @@
+import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 /** Host-only bridge from the Desktop worker to the existing Session Remote surface. */
 import { createHash, randomUUID } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type {
-  RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId, TypertGateway,
+  RemoteEventClientId, RemoteEventDownlinkFrame, RemoteEventId,
 } from '@deepseek-ai/dsh-api-gateway'
 import { encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatSubmission, parseHostBotChatReceipt,
@@ -80,7 +81,7 @@ export class DesktopRemoteSessionExecutor {
   private readonly cursors = new Map<string, ApprovalCursor>()
   private readonly approvals = new Map<string, PendingApproval>()
 
-  constructor(private readonly gateway: TypertGateway,
+  constructor(private readonly gateway: DesktopRemoteGateway,
     private readonly remoteApprovals?: DesktopRemoteApprovalEvents,
     private readonly control = new DesktopSessionControl(),
     private readonly terminalStreams = new DesktopRemoteTerminalStreams(control),
@@ -174,6 +175,10 @@ export class DesktopRemoteSessionExecutor {
         if (command.request.sessionId !== command.session_id) throw new Error('desktop terminal: Session mismatch')
         if (command.request.method === 'follow' || command.request.method === 'retain') return { ok: true, value: this.terminalStreams.issue(command) }
         try {
+          if (command.request.method === 'write' || command.request.method === 'resize') {
+            await this.terminalStreams.send(command, signal)
+            return { ok: true }
+          }
           const value = await this.gateway.invoke({ namespace: 'terminal', method: command.request.method,
             args: command.request.args, signal })
           return value === undefined ? { ok: true } : { ok: true, value: value as HostRemoteSessionJson }
@@ -233,7 +238,7 @@ export class DesktopRemoteSessionExecutor {
         try {
           return await this.invoke('create', { request: {
             ...(command.workspace_id === undefined ? {} : { workspaceId: command.workspace_id }),
-            ...(command.session_id === undefined ? {} : { sessionId: command.session_id }),
+            ...(command.session_id === undefined ? {} : { sessionId: command.session_id, exactAdopt: true }),
           } }, signal)
         } catch (error) {
           // Keep the native UI's blank-session fallback tied to the actual Host refusal.

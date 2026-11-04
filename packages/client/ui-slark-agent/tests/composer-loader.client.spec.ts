@@ -747,7 +747,7 @@ it('serializes an ordinary inline reference once and leaves literal @ text in no
   composer.submit()
   await vi.waitFor(() => { expect(sink).toHaveBeenCalledTimes(1) })
   expect(serialize).toHaveBeenCalledTimes(1)
-  expect(sink).toHaveBeenCalledWith('正文 <file>local</file>', [], 'queue', expect.any(AbortSignal))
+  expect(sink).toHaveBeenCalledWith('正文 <file>local</file>', [], 'queue', expect.any(AbortSignal), expect.any(Function))
   composer.setDraft('正文 @Guide 只是文字')
   composer.submit()
   await vi.waitFor(() => { expect(sink).toHaveBeenCalledTimes(2) })
@@ -809,7 +809,7 @@ it('refuses multiple targets and attachments while retaining ordinary chat', asy
   composer.setDraft('普通聊天')
   composer.submit()
   await vi.waitFor(() => { expect(sink).toHaveBeenCalledTimes(1) })
-  expect(sink).toHaveBeenCalledWith('普通聊天', [], 'queue', expect.any(AbortSignal))
+  expect(sink).toHaveBeenCalledWith('普通聊天', [], 'queue', expect.any(AbortSignal), expect.any(Function))
 })
 
 it('removes the source on Loader disposal and refuses to serialize its orphaned chip', async () => {

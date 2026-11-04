@@ -40,6 +40,7 @@ function stubAgent(ctx: Context, rawId: string): Agent {
   const scope = ctx.plugin(() => {})
   const session = Session.create(id)
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id, options: {}, session, inbox: unsupportedInbox(),
     status: 'idle',
     ctx: scope.ctx,
@@ -61,10 +62,10 @@ async function harness(
   const ctx = new Context()
   provideWorkingDirectoryFixture(ctx)
   contexts.push(ctx)
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(TerminalSessionService)
   await ctx.plugin(PassthroughSandbox)
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: root })
   await ctx.plugin(LocalSubprocessRuntime)
   const fiber = await ctx.plugin(ptyLocal, {

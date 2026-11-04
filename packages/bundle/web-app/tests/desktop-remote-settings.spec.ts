@@ -4,6 +4,9 @@ import { readFile } from 'node:fs/promises'
 import { expect, it } from 'vitest'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import TypertGateway from '@deepseek-ai/dsh-api-gateway'
+import RemoteAccess from '@deepseek-ai/dsh-api-remote-access'
+import { Peer } from '@deepseek-ai/dsh-client-connection'
+import { bindDesktopRemoteGateway } from '../src/desktop-remote-gateway.ts'
 import SettingsController from '@deepseek-ai/dsh-api-settings-controller'
 import { configurationFixture } from '../../../settings/settings/tests/configuration-fixture.ts'
 import { DesktopRemoteSessionExecutor } from '../src/desktop-remote-session.ts'
@@ -11,9 +14,10 @@ import { DesktopRemoteSessionExecutor } from '../src/desktop-remote-session.ts'
 it('persists into the selected Profile, preserves optimistic conflicts and redacts secret settings', async () => {
   const { ctx, profile } = await configurationFixture()
   await ctx.plugin(TypertRegistry)
+  await ctx.plugin(RemoteAccess)
   await ctx.plugin(TypertGateway)
   await ctx.plugin(SettingsController)
-  const executor = new DesktopRemoteSessionExecutor(ctx.typertGateway)
+  const executor = new DesktopRemoteSessionExecutor(bindDesktopRemoteGateway(ctx.typertGateway, new Peer(ctx.root, { principal: { kind: 'owner' } })))
   const describe = ctx.settingsController.describe()
   const model = describe.namespaces.find(row => row.ns === 'default-model')!
   const command = { operation: 'settings.apply' as const, command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
@@ -36,10 +40,11 @@ it('persists into the selected Profile, preserves optimistic conflicts and redac
 it('sets and removes through the real credential provider with metadata-only results', async () => {
   const { ctx } = await configurationFixture()
   await ctx.plugin(TypertRegistry)
+  await ctx.plugin(RemoteAccess)
   await ctx.plugin(TypertGateway)
   await ctx.plugin(MemoryCredentials, {})
   await ctx.plugin(SettingsController)
-  const executor = new DesktopRemoteSessionExecutor(ctx.typertGateway)
+  const executor = new DesktopRemoteSessionExecutor(bindDesktopRemoteGateway(ctx.typertGateway, new Peer(ctx.root, { principal: { kind: 'owner' } })))
   const command_id = '123e4567-e89b-42d3-a456-426614174000' as never
   const signal = new AbortController().signal
   await expect(executor.execute({ operation: 'credentials.apply', command_id,

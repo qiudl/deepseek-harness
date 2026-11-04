@@ -84,7 +84,7 @@ async function harness(root?: string, existingCwd?: string, isolateDomain: boole
   const controllerContext = isolateDomain === 'owners' ? domainContext.isolate('sessionPersistence') : domainContext
   const removeDomain = isolateDomain === 'owners' ? controllerContext.provide('storageDomain', facility) : undefined
   const removePersistence = isolateDomain === 'owners' ? controllerContext.provide('sessionPersistence', ctx.get('sessionPersistence')) : undefined
-  const controller = createSessionTestController(controllerContext, {
+  const controller = await createSessionTestController(controllerContext, {
     defaultModelSelection: () => ({ provider: 'fixture', model: 'default' }), cwd,
   })
   const resume = vi.spyOn(controller, 'resolveAgent')
@@ -237,6 +237,9 @@ describe('Profile-owned collaboration Source capture', () => {
       expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [
         { workspaceId: h.workspace.id, sessionId: h.sessionId, owned: true, pinned: false, archived: false },
       ] })
+      const allows = vi.spyOn(h.ctx.remoteAccess, 'allows').mockReturnValue(false)
+      expect(await h.controller.collaborationMembership(request, signal)).toEqual({ entries: [] })
+      allows.mockRestore()
       await expect(h.controller.collaborationMembership({ ...request, owner: 'other' } as never, signal)).rejects.toThrow()
       await expect(h.controller.collaborationMembership({ entries: [request.entries[0]!, request.entries[0]!] }, signal)).rejects.toThrow()
       for (const invalid of [null, [], { entries: [] }, { entries: [null] },
@@ -1428,12 +1431,12 @@ it('refuses a different prepared reasoning choice even if the Session choice cha
   const h = await harness()
   h.adapter.defaultEffort = true
   const session = h.ctx.sessions.create(h.sessionId, { meta: { cwd: h.cwd } })
-  session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+  session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('max') })
   const prepare = h.controller.prepareWorkspaceModelSnapshot.bind(h.controller)
   vi.spyOn(h.controller, 'prepareWorkspaceModelSnapshot').mockImplementation(async (...args) => {
-    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'high' })
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('high') })
     const captured = await prepare(...args)
-    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: 'max' })
+    session.append('model/selection', { provider: 'fixture', model: 'selected', reasoningEffort: ReasoningEffortId('max') })
     return captured
   })
   try {
@@ -1929,7 +1932,7 @@ async function feedbackHarness(skipDelivery = false, isolateOwners = false, poli
   Object.assign(h.ctx.get('sessionPersistence')!, { flush })
   const inject = vi.fn((message: import('@deepseek-ai/dsh-llm').UserMessage) => { session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message] }) })
   const unexpected = () => { throw Error('unexpected agent operation in feedback unit fixture') }
-  const agent: import('@deepseek-ai/dsh-agent').Agent = { id: h.sessionId, session, ctx: h.ctx, get status() { return busy ? 'running' : 'idle' }, options: {},
+  const agent: import('@deepseek-ai/dsh-agent').Agent = { get model(): import('@deepseek-ai/dsh-agent').Agent['model'] { throw new Error('model selection is not used by this fixture') }, id: h.sessionId, session, ctx: h.ctx, get status() { return busy ? 'running' : 'idle' }, options: {},
     inbox: { nextTurn: [], nextStep: [], clear: unexpected, append: unexpected, prepend: unexpected,
       replace: unexpected, remove: unexpected, splice: unexpected }, inject,
     cancel: unexpected, whenIdle: unexpected, runMaintenance: unexpected, send: unexpected, followup: unexpected, steer: unexpected }

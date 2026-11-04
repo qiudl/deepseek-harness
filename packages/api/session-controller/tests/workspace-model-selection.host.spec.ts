@@ -4,7 +4,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import AgentRegistry from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { AgentModel, foldModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import SessionStore, { Session, SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -34,7 +34,7 @@ async function harness(events: readonly SessionEvent[] = [used, pending], adapte
   const archivedSessionIds: SessionId[] = []
   const workspace = { id: workspaceId, path: cwd, get sessionIds() { return member ? [sessionId] : [] } }
   ctx.provide('workspaceRegistry', { get: (id: WorkspaceId) => id === workspaceId ? workspace : undefined, archivedSessionIds } as never)
-  const controller = createSessionTestController(ctx, { defaultModelSelection: () => selection, cwd })
+  const controller = await createSessionTestController(ctx, { defaultModelSelection: () => selection, cwd })
   const inspect = vi.spyOn(controller, 'inspect').mockResolvedValue({ meta, events: [...events], inheritedEventCount: SessionLogOffset(0) })
   const resume = vi.spyOn(controller, 'resolveAgent')
   return {
@@ -102,7 +102,7 @@ describe('Host workspace prepared model snapshot', () => {
     const h = await harness([], new SnapshotAdapter())
     try {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
-      session.append('model/selection', { provider: 'next', model: 'model-next', reasoningEffort: 'max' })
+      session.append('model/selection', { provider: 'next', model: 'model-next', reasoningEffort: ReasoningEffortId('max') })
       const seq = session.seq
       const consumer = h.ctx.extend({})
       const call = await consumer.sessionController.prepareWorkspaceModelSnapshot(sessionId, workspaceId, new AbortController().signal)
@@ -212,7 +212,7 @@ describe('Host workspace model inspection', () => {
     try {
       h.inspect.mockRestore()
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
-      session.append('model/selection', { provider: 'attached', model: 'next', reasoningEffort: 'high' })
+      session.append('model/selection', { provider: 'attached', model: 'next', reasoningEffort: ReasoningEffortId('high') })
       const before = session.seq
       expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'attached', model: 'next', reasoningEffort: 'high' })
       expect(session.seq).toBe(before)
@@ -221,13 +221,13 @@ describe('Host workspace model inspection', () => {
     } finally { await h.dispose() }
   })
 
-  it('refuses an attached Session whose required model projection disappears without activating it', async () => {
+  it('reads the attached log even without an installed model projection', async () => {
     const h = await harness()
     try {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } }), before = session.seq
       vi.spyOn(h.ctx.sessionProjections, 'stateOf').mockReturnValueOnce(undefined)
       await expect(h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId))
-        .rejects.toThrow('required modelSelection projection')
+        .resolves.toMatchObject({ selection: { provider: 'default', model: 'model-default' } })
       expect(session.seq).toBe(before)
       expect(h.resume).not.toHaveBeenCalled()
     } finally { await h.dispose() }
@@ -239,6 +239,7 @@ describe('Host workspace model inspection', () => {
       const session = Session.create(sessionId, undefined, h.meta)
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(() => foldModelSelection(session.snapshotEvents()), session, {}),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }
@@ -254,7 +255,7 @@ describe('Host workspace model inspection', () => {
     const h = await harness()
     try {
       const source = Session.create(sessionId, undefined, h.meta)
-      source.append('model/selection', { provider: 'persisted', model: 'model-cold', reasoningEffort: 'max' })
+      source.append('model/selection', { provider: 'persisted', model: 'model-cold', reasoningEffort: ReasoningEffortId('max') })
       const persisted = { meta: source.header, events: source.snapshotEvents(), inheritedEventCount: SessionLogOffset(0) }
       const persistence = testSessionPersistence(h.ctx, {
         list: async () => [persisted.meta], inspect: async () => persisted,
@@ -287,6 +288,7 @@ describe('Host workspace model inspection', () => {
       session.append('model/selection', { provider: 'live', model: 'live-model' })
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(() => foldModelSelection(session.snapshotEvents()), session, {}),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }
@@ -299,7 +301,7 @@ describe('Host workspace model inspection', () => {
     } finally { await h.dispose() }
   })
 
-  it('reads an installed live choice, then strips an adapter default after consumption', async () => {
+  it('retains explicit pending effort when the request reports an adapter default', async () => {
     const adapter = new SnapshotAdapter()
     adapter.listModels = async provider => [{ provider, id: 'selected-model', name: 'Selected' }]
     const h = await harness([], adapter)
@@ -308,6 +310,7 @@ describe('Host workspace model inspection', () => {
       const session = h.ctx.sessions.create(sessionId, { meta: { cwd: h.cwd } })
       const agent: Agent = {
         id: sessionId, session, ctx: h.ctx, status: 'idle', options: {}, inbox: unsupportedInbox(),
+        model: new AgentModel(() => foldModelSelection(session.snapshotEvents()), session, {}),
         send: () => {}, followup: () => {}, steer: () => {}, inject: () => {}, cancel: () => {},
         runMaintenance: task => task(new AbortController().signal), whenIdle: () => Promise.resolve(),
       }
@@ -318,7 +321,7 @@ describe('Host workspace model inspection', () => {
       resolve.mockClear()
       expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model', reasoningEffort: 'high' })
       session.append('request/header', { header: { config: { provider: 'selected', model: 'selected-model', reasoningEffort: ReasoningEffortId('high') }, adapterDefaults: { reasoningEffort: true } }, reason: 'initial' })
-      expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model' })
+      expect((await h.controller.inspectWorkspaceModelSelection(sessionId, workspaceId)).selection).toEqual({ provider: 'selected', model: 'selected-model', reasoningEffort: 'high' })
       expect(resolve).not.toHaveBeenCalled()
       expect(h.resume).not.toHaveBeenCalled()
     } finally { await h.dispose() }

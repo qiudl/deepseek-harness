@@ -14,7 +14,6 @@ The repository's one file-extension to syntax-highlighting language table, share
 ## Table of Contents
 
 - [Language selection](#language-selection)
-- [Model Experience](#model-experience)
 - [Known Limitations and Deferred Work](#known-limitations-and-deferred-work)
 - [Dev Note](#dev-note)
 
@@ -29,12 +28,7 @@ The set is curated for common source, config, script, data, and markup extension
 
 -----
 
-<a id="model-experience"></a>
-## Model Experience
-
-Indirectly, through the read tool that renders a language hint for a file path.
-
-#### KV Cache effect
+## KV Cache effect
 
 The table does not change the request prefix; a consumer may include its hint in a tool result.
 
