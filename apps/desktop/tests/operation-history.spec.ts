@@ -32,6 +32,38 @@ it('collects recent complete records and reports malformed and incomplete entrie
   expect(result).toMatchObject({ invalidRecords: 1, truncated: true, cancelled: false, unavailableFiles: 0 })
 })
 
+it('keeps distinct segments when numeric file identities collide', async () => {
+  const path = await fixture()
+  const filenames = [join(path, 'operations.jsonl'), join(path, 'operations.previous.jsonl')]
+  await writeFile(filenames[0]!, line(1))
+  await writeFile(filenames[1]!, line(0))
+  const handles = []
+  for (const filename of filenames) {
+    const handle = await open(filename, 'r')
+    handles.push(handle)
+    onTestFinished(async () => { await handle.close() })
+  }
+  const identities = [9007199254740992n, 9007199254740993n]
+  expect(Number(identities[0])).toBe(Number(identities[1]))
+  const stats = await Promise.all(handles.map(async (handle, index) => {
+    const numeric = await handle.stat()
+    const exact = await handle.stat({ bigint: true })
+    numeric.ino = Number(identities[index])
+    exact.ino = identities[index]!
+    return vi.spyOn(handle, 'stat').mockImplementation(async options => options?.bigint ? exact : numeric)
+  }))
+  const opener = vi.mocked(open).mockClear()
+  for (const handle of handles) opener.mockResolvedValueOnce(handle)
+  try {
+    const result = await readOperationHistory(path, limits, new AbortController().signal)
+    expect(result.records).toEqual([record(1), record(0)])
+    expect(result).toMatchObject({ filesRead: 2, truncated: false, unavailableFiles: 0 })
+  } finally {
+    for (const stat of stats) stat.mockRestore()
+    opener.mockClear()
+  }
+})
+
 it('reads no more than its byte budget from a two GiB file and ignores unrelated history', async () => {
   const path = await fixture()
   await using large = await open(join(path, 'operations.jsonl'), 'w')
@@ -113,7 +145,7 @@ it('contains truncation between stat and read and still collects the previous se
   await writeFile(join(path, 'operations.previous.jsonl'), line(1))
   const handle = await open(filename, 'r+')
   onTestFinished(async () => { await handle.close() })
-  const originalStat = await handle.stat()
+  const originalStat = await handle.stat({ bigint: true })
   const stat = vi.spyOn(handle, 'stat').mockImplementationOnce(async () => {
     await handle.truncate(0)
     return originalStat

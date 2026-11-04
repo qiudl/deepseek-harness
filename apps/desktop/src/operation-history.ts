@@ -53,7 +53,7 @@ export async function readOperationHistory(
     try {
       await using handle = await open(join(directory, name), 'r')
       if (cancelled()) break
-      const fileStat = await handle.stat()
+      const fileStat = await handle.stat({ bigint: true })
       if (cancelled()) break
       if (!fileStat.isFile()) {
         unavailableFiles++
@@ -64,24 +64,25 @@ export async function readOperationHistory(
         truncated = true
         continue
       }
-      if (fileStat.size > 0 && (bytesRead >= limits.bytes || records.length >= limits.records)) {
+      if (fileStat.size > 0n && (bytesRead >= limits.bytes || records.length >= limits.records)) {
         truncated = true
         break
       }
 
-      const readLength = Math.min(fileStat.size, limits.bytes - bytesRead)
-      const readStart = fileStat.size - readLength
+      const availableBytes = BigInt(limits.bytes - bytesRead)
+      const readLength = Number(fileStat.size < availableBytes ? fileStat.size : availableBytes)
+      const readStart = fileStat.size - BigInt(readLength)
       const buffer = Buffer.alloc(readLength)
       let readOffset = 0
       while (readOffset < readLength && !cancelled()) {
-        const read = await handle.read(buffer, readOffset, Math.min(16 * 1024, readLength - readOffset), readStart + readOffset)
+        const read = await handle.read(buffer, readOffset, Math.min(16 * 1024, readLength - readOffset), readStart + BigInt(readOffset))
         bytesRead += read.bytesRead
         if (read.bytesRead === 0) break
         readOffset += read.bytesRead
       }
       if (readOffset > 0) seenFiles.add(identity)
       if (cancelled()) break
-      truncated ||= readStart > 0 || readOffset < readLength
+      truncated ||= readStart > 0n || readOffset < readLength
 
       // An unterminated last record can still be in flight; never parse it as a committed record.
       if (readOffset === 0) continue
@@ -91,7 +92,7 @@ export async function readOperationHistory(
         await setImmediate()
         if (cancelled()) break
         const previousLineEnd = lineEnd === 0 ? -1 : buffer.lastIndexOf(10, lineEnd - 1)
-        if (previousLineEnd < 0 && readStart > 0) {
+        if (previousLineEnd < 0 && readStart > 0n) {
           truncated = true
           break
         }
