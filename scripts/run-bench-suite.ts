@@ -5,7 +5,8 @@ import { runPnpmCommand } from './compile-referenced-projects.ts'
 /**
  * Cases whose wall-clock endpoints cannot absorb a sibling: they drive a
  * browser page, compare animation frames or paced streams, or spawn fresh
- * children and budget their startup, or measure cold Host requests.
+ * children and budget their startup, measure cold Host requests, or await
+ * terminal idle-readiness timers.
  */
 export const SERIAL_BENCH_FILES = [
   'benchmarks/long-session-browser/long-session.bench.ts',
@@ -20,6 +21,8 @@ export const SERIAL_BENCH_FILES = [
   'benchmarks/agent-continuation/agent-continuation.bench.ts',
   // Cold list+JSON budgets 125 ms; corpus preparation pushed 86 ms to 136 ms.
   'benchmarks/session-corpus/projection-list.bench.ts',
+  // Completion includes inferred-idle timers, not just synchronous ingestion.
+  'benchmarks/terminal-io/terminal-io.bench.ts',
 ] as const
 
 const CONFIG = ['--config', 'vitest.bench.config.ts'] as const
