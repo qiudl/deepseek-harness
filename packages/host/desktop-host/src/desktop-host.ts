@@ -18,12 +18,18 @@ import type {
 } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import type { ProfileRegistry } from './profile-registry.ts'
+import type { DshSlarkAccessExpected } from './account-access-token.ts'
 
 interface DesktopHostOptions {
   readonly registry: ProfileRegistry
   readonly clock: HostClock
   readonly runtimeGeneration: number
   readonly verifyAccountAccessToken?: (token: string) => { readonly issuer: string; readonly subject: string }
+  readonly verifySlarkAccountAccessToken?: (token: string, expected: DshSlarkAccessExpected) => {
+    readonly issuer: string
+    readonly subject: string
+    readonly bindingScope: string
+  }
   readonly viewLeaseTtlMs?: number
   readonly activateProfileView?: (profileId: PersonProfileId) => Promise<{
     readonly origin: string
@@ -169,17 +175,64 @@ export class DesktopHost {
     if (account.issuer !== input.issuer || account.subject !== input.subject) {
       throw new HostAuthorityError('profile_mismatch')
     }
+    return this.provisionVerifiedAccount(input, input.authorityBindingScope)
+  }
+
+  private async provisionVerifiedAccount(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly ownerId: string
+  }, scope?: string, options: { readonly requireScopedBinding?: string } = {}): Promise<{
+    readonly profileId: PersonProfileId
+    readonly bindingGeneration: number
+  }> {
     const ensureWorker = this.options.ensureProfileWorker
     if (!ensureWorker) throw new HostAuthorityError('unavailable')
     const profile = await this.options.registry.provisionAccount({
       issuer: input.issuer, subject: input.subject, accountBindingHandle: input.accountBindingHandle,
       authorityEnvironmentId: input.authorityEnvironmentId,
       authorityBindingVersion: input.authorityBindingVersion, keyHandle: input.keyHandle,
-      ...(input.authorityBindingScope === undefined ? {} : { authorityBindingScope: input.authorityBindingScope }),
+      ...(scope === undefined ? {} : { authorityBindingScope: scope }),
       unlockMaterial: input.unlockMaterial,
-    }, ensureWorker)
+    }, ensureWorker, options)
     this.grant(input.ownerId, profile.profileId, 'connected', undefined, true)
     return { profileId: profile.profileId, bindingGeneration: profile.bindingGeneration }
+  }
+
+  /**
+   * Admit a Slark-bound Account into its scoped Profile.
+   * @param input - Verified Account binding, local unlock material, and current Slark claims.
+   * @returns The Profile ID and binding generation admitted by Host.
+   */
+  async ensureSlarkAccountProfile(input: {
+    readonly issuer: string
+    readonly subject: string
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly accountAccessToken: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly ownerId: string
+    readonly expected: DshSlarkAccessExpected
+  }): Promise<{ readonly profileId: PersonProfileId; readonly bindingGeneration: number }> {
+    const verifyToken = this.options.verifySlarkAccountAccessToken
+    if (!verifyToken) throw new HostAuthorityError('unavailable')
+    if (input.expected.environmentId !== input.authorityEnvironmentId
+      || input.expected.bindingEpoch !== input.authorityBindingVersion) throw new HostAuthorityError('profile_mismatch')
+    let account: { readonly issuer: string; readonly subject: string; readonly bindingScope: string }
+    try { account = verifyToken(input.accountAccessToken, input.expected) }
+    catch { throw new HostAuthorityError('unauthorized') }
+    if (account.issuer !== input.issuer || account.subject !== input.subject
+      || input.accountBindingHandle !== `slark:${account.bindingScope}`) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    return this.provisionVerifiedAccount(input, account.bindingScope, { requireScopedBinding: account.bindingScope })
   }
 
   /**

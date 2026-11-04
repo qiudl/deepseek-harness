@@ -117,6 +117,8 @@ Profile worker 句柄读取其私有 `session/follow`、`workspace/follow` 或 `
 
 Profile registry 为每个 Profile 保存 opaque Profile id、opaque Keychain handle 与域隔离 unlock verifier。账号 Profile 还保存规范 DSH Account issuer 与 opaque subject 的设备密钥 HMAC，以及按环境划分的当前 binding handle／version；同一个人的 staging 与 production binding 解析到同一账号 Profile。本地专用 Profile 使用设备密钥随机 index，永远不会获得账号 binding。更高的服务端签名 binding version 只原子替换对应环境的旧账号 handle，并使旧签名 selector 失效。替换 Account issuer 时，只有请求携带同一环境 binding handle、严格递增的 version、相同 Keychain handle、匹配的 unlock material，以及替代身份的有效 token，Host 才会保留原 Profile。文件中不含原始账号身份或 Main vault 的 32 字节解锁材料；常量时间校验成功后只授权当前已认证连接。
 
+Slark 联邦要求 `profile.ensure_slark_federated` 能力，以及与当前 Slark 用户、环境、Profile、设备、设备密钥和登录／绑定代际匹配的 `dsh-slark-access+jwt` 令牌。Host 要求对应的绑定版本和 `slark:<binding-scope>` handle。作用域身份索引使这些 Profile 与旧 Account Profile 及其他 Slark 环境分离；已有 Profile 仍要求原本机解锁证明。缺少能力时，客户端在发送令牌前拒绝。
+
 `profile.ensure` 返回绑定 installation、Profile、binding generation、runtime generation 与 schema generation 的 Host 签名 opaque selector。`profile.restore` 接受该 selector、精确 Keychain handle 与新鲜 Main-vault material。跨 installation 复制、binding 轮换后重放、猜测 handle／material，或证明连接断开，都会 fail closed。
 
 macOS 启动组合会校验 owner-only 且非符号链接的根目录，只启动一个 Host，分别检查 Node executable 与固定 DSH entrypoint，按照嵌入应用发布版本提供的 SHA-256 pin 校验 Account 公钥环，执行原生 peer PID／executable／code-signature attestation，并发布不含秘密的精确 `~/.dsh/host/registration.v1.json` discovery 记录。取得 Host 独占所有权后，Runtime 升级只能原子刷新该记录的 executable signature digest；installation、key、endpoint 和 socket 字段必须全部保持一致。Profile worker 不继承 ambient environment。Host 校验子进程确实拥有其报告的 loopback listener，自行把一次性启动 token 兑换为签名 Cookie，确认未认证 `/` 为 401、携 Cookie 的 `/` 为 200，然后立即丢弃 token。

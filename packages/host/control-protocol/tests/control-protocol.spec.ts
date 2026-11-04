@@ -194,6 +194,38 @@ describe('Main-only Profile operations', () => {
     }
   })
 
+  it('REQ-20261022-0022 accepts only a token-bound Slark Profile expectation', () => {
+    const source = {
+      version: 1, type: 'request', request_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3140',
+      method: 'profile.ensure', params: {
+        client_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3111',
+        host_instance_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3120',
+        process_nonce: '_u3c-6mHZESVQ7tRzWjGo8nX5ApYxKfaJfwO06g6O1Q',
+        jti: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3130', issued_at: 1000, expires_at: 2000,
+        authority_environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        account_binding_handle: 'binding:opaque', authority_binding_version: 1,
+        account_access_token: 'header.payload.signature',
+        account_issuer: 'https://accounts.dsh.colorbuyai.com', account_subject: 'person',
+        profile_key_handle: 'keychain:person', profile_unlock_material: 'CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk',
+        slark_expected: {
+          slark_user_id: 'user-1', environment_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+          person_profile_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+          device_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+          device_key_thumbprint: 'A'.repeat(43), login_epoch: 0, binding_epoch: 1,
+        },
+      },
+    }
+    const frame = decodeHostControlFrame(`${JSON.stringify(source)}\n`)
+    expect(frame.type).toBe('request')
+    if (frame.type !== 'request' || frame.method !== 'profile.ensure') throw new Error('unexpected frame')
+    expect(frame.params.slark_expected?.login_epoch).toBe(0)
+    const missingToken = structuredClone(source)
+    delete (missingToken.params as { account_access_token?: string }).account_access_token
+    expect(() => decodeHostControlFrame(`${JSON.stringify(missingToken)}\n`)).toThrow(HostControlProtocolError)
+    source.params.slark_expected.device_key_thumbprint = 'wrong'
+    expect(() => decodeHostControlFrame(`${JSON.stringify(source)}\n`)).toThrow(HostControlProtocolError)
+  })
+
   it('round-trips local Profile bootstrap, restore, and open without account fields', () => {
     const selector = `${'A'.repeat(32)}.${'A'.repeat(86)}`
     const bootstrap = `{"version":1,"type":"request","request_id":"018f0f4c-87f8-7e2d-a2f8-7b93d34e3140","method":"profile.bootstrap_local","params":{${auth},"profile_key_handle":"keychain:local","profile_unlock_material":"${'A'.repeat(43)}"}}\n`
