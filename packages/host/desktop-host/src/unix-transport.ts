@@ -4596,20 +4596,7 @@ export class UnixHostClient {
     readonly botId: string
     readonly signal?: AbortSignal
   }): Promise<HostBotIdentity | null> {
-    input.signal?.throwIfAborted()
-    if (!this.inspection.capabilities.includes('profile.bot_identity' as HostControlCapability))
-      throw new HostAuthorityError('upgrade_required')
-    const target = parseHostBotIdentityTarget({ bot_id: input.botId })
-    const request: ProfileBotIdentityRequest = {
-      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity',
-      params: { ...this.collaborationAccountRequestParams(input), ...target },
-    }
-    const frame = await this.call(request, input.signal)
-    input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    const identity = parseHostBotIdentity(frame.result.identity)
-    if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
-    return identity
+    return this.readAccountBotIdentity(input, 'profile.bot_identity', parseHostBotIdentity)
   }
 
   /**
@@ -4618,18 +4605,27 @@ export class UnixHostClient {
    * @returns Public identity and the local Profile that authorized it, or absence.
    */
   async resolveBotIdentityV2(input: Parameters<UnixHostClient['resolveBotIdentity']>[0]): Promise<HostBotIdentityV2 | null> {
+    return this.readAccountBotIdentity(input, 'profile.bot_identity_v2', parseHostBotIdentityV2)
+  }
+
+  private async readAccountBotIdentity<T extends HostBotIdentity>(
+    input: Parameters<UnixHostClient['resolveBotIdentity']>[0],
+    method: ProfileBotIdentityRequest['method'] | ProfileBotIdentityV2Request['method'],
+    parseIdentity: (value: unknown) => T | null,
+  ): Promise<T | null> {
     input.signal?.throwIfAborted()
-    if (!this.inspection.capabilities.includes('profile.bot_identity_v2' as HostControlCapability))
+    if (!this.inspection.capabilities.includes(method as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
     const target = parseHostBotIdentityTarget({ bot_id: input.botId })
-    const request: ProfileBotIdentityV2Request = {
-      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity_v2',
+    const request: ProfileBotIdentityRequest | ProfileBotIdentityV2Request = {
+      version: 1, type: 'request', request_id: requestId(), method,
       params: { ...this.collaborationAccountRequestParams(input), ...target },
     }
     const frame = await this.call(request, input.signal)
     input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    const identity = parseHostBotIdentityV2(frame.result.identity)
+    if (frame.type !== 'result' || (frame.method !== 'profile.bot_identity' && frame.method !== 'profile.bot_identity_v2')
+      || frame.method !== method) throw new HostAuthorityError('unavailable')
+    const identity = parseIdentity(frame.result.identity)
     if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
     return identity
   }

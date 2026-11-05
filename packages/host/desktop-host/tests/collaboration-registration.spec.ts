@@ -149,7 +149,8 @@ it('rejects v2 response tampering, pre-abort and a missing live worker', async (
   f.alter(undefined)
   await expect(f.client.resolveBotIdentityV2({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
   try {
-    for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.other' }]) {
+    for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.other' },
+      { type: 'result', method: 'profile.bot_identity' }]) {
       expect(Reflect.set(f.client, 'call', async () => frame)).toBe(true)
       await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'unavailable' })
     }
