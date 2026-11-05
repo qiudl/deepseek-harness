@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
+import assert from 'node:assert/strict'
+import { load as parseYaml } from 'js-yaml'
 import { c as tar } from 'tar'
 import { downloadOfficeSidecar, runtimeNpmArchive } from './build-exe-for-python-sdk-office.ts'
 
@@ -150,4 +152,17 @@ it('takes npm integrity from the workspace lock without querying registry metada
 it('locks the tslib archive used by the Python runtime Office closure', async () => {
   const archive = await runtimeNpmArchive('tslib', '2.9.1')
   expect(archive.integrity).toMatch(/^sha512-/u)
+})
+
+it('keeps the legacy-deployed fontkit helper on its reviewed archive', async () => {
+  const workspace = parseYaml(await readFile(join(import.meta.dirname, '../pnpm-workspace.yaml'), 'utf8')) as {
+    overrides: Record<string, string>
+  }
+  const lock = parseYaml(await readFile(join(import.meta.dirname, '../pnpm-lock.yaml'), 'utf8')) as {
+    snapshots: Record<string, { dependencies?: Record<string, string> }>
+  }
+  const version = workspace.overrides['fontkit>@swc/helpers']
+  assert.ok(version, 'legacy deployment must pin the fontkit helper')
+  expect(version).toBe(lock.snapshots['fontkit@2.0.4']?.dependencies?.['@swc/helpers'])
+  expect((await runtimeNpmArchive('@swc/helpers', version)).integrity).toMatch(/^sha512-/u)
 })
