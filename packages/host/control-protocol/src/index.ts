@@ -32,14 +32,15 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
-export { parseHostBotIdentity, parseHostBotIdentityTarget,
+export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
-export type { HostBotIdentity, HostBotRosterPage } from './bot-identity.js'
+export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'
 export { parseHostBotChatRequest, parseHostBotChat } from './bot-chat.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
+  ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,

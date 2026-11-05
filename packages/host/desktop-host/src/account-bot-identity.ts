@@ -1,7 +1,7 @@
-import { parseHostBotIdentityTarget, parseHostBotRosterTarget,
+import { parseHostBotIdentityTarget, parseHostBotIdentityV2, parseHostBotRosterTarget,
   parseHostNativeRoomTarget, parseHostNativeRoomCommand,
   matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotIdentity, HostBotRosterPage, HostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage, HostNativeRoomSource } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
@@ -24,6 +24,32 @@ export async function resolveAccountBotIdentity(
   workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>,
   account: BotIdentityAccount, botId: string, signal: AbortSignal,
 ): Promise<HostBotIdentity | null> {
+  return (await resolveVerifiedAccountBotIdentity(host, workers, account, botId, signal)).identity
+}
+
+/**
+ * Return the local Profile that authorized this Bot read, after rechecking the same Account.
+ * @param host - Host authority for the authenticated connection.
+ * @param workers - Current Profile-private Bot worker.
+ * @param account - Current Account binding and verified caller.
+ * @param botId - Stable Bot root identifier.
+ * @param signal - Caller cancellation.
+ * @returns Public Bot and local Profile, or absence.
+ */
+export async function resolveAccountBotIdentityV2(
+  host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>,
+  workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>,
+  account: BotIdentityAccount, botId: string, signal: AbortSignal,
+): Promise<HostBotIdentityV2 | null> {
+  const { identity, profileId } = await resolveVerifiedAccountBotIdentity(host, workers, account, botId, signal)
+  return identity === null ? null : parseHostBotIdentityV2({ ...identity, host_profile_id: profileId })
+}
+
+async function resolveVerifiedAccountBotIdentity(
+  host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>,
+  workers: Pick<ProfileWorkerSupervisor, 'resolveBotIdentity'>,
+  account: BotIdentityAccount, botId: string, signal: AbortSignal,
+) {
   signal.throwIfAborted()
   const target = parseHostBotIdentityTarget({ bot_id: botId })
   host.authorizeCollaborationRegistration(account)
@@ -32,7 +58,7 @@ export async function resolveAccountBotIdentity(
   signal.throwIfAborted()
   host.authorizeCollaborationRegistration(account)
   if (host.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('stale')
-  return result
+  return { identity: result, profileId }
 }
 
 /** Read a public Bot roster page and fence the selected Account Profile after the worker reply. */

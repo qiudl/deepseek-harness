@@ -1,8 +1,38 @@
+import type { HostProfileId } from './types.ts'
+
 /** Bounded identity returned by a Profile-local Bot plugin; no chat content crosses the Host. */
 export interface HostBotIdentity {
   readonly bot_id: string
   readonly actor_ref: string
   readonly display_name: string
+}
+
+/** Public Bot identity with the local Profile selected by the authenticated Host. */
+export interface HostBotIdentityV2 extends HostBotIdentity {
+  readonly host_profile_id: HostProfileId
+}
+
+/**
+ * Validate the separate Profile-bearing response; v1 still accepts only three fields.
+ * @param value - Untrusted Host control response.
+ * @returns Public Bot and Host-local Profile coordinates, or absence.
+ */
+export function parseHostBotIdentityV2(value: unknown): HostBotIdentityV2 | null {
+  if (value === null) return null
+  if (typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype)
+    throw Error('invalid_bot_identity_v2')
+  const item = value as Record<string, unknown>
+  const keys = ['bot_id', 'actor_ref', 'display_name', 'host_profile_id']
+  if (Reflect.ownKeys(item).length !== keys.length || keys.some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(item, key)
+    return !descriptor || !('value' in descriptor)
+  }) || typeof item.host_profile_id !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(item.host_profile_id))
+    throw Error('invalid_bot_identity_v2')
+  const identity = parseHostBotIdentity({
+    bot_id: item.bot_id, actor_ref: item.actor_ref, display_name: item.display_name,
+  }) as HostBotIdentity
+  return { ...identity, host_profile_id: item.host_profile_id as HostProfileId }
 }
 
 /**

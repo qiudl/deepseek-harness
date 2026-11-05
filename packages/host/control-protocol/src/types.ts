@@ -906,6 +906,17 @@ export interface ProfileBotIdentityResult {
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
 }
 
+/** Account-bound Bot lookup whose local Profile is derived by the Host, never its caller. */
+export interface ProfileBotIdentityV2Request extends Omit<ProfileBotIdentityRequest, 'method'> {
+  readonly method: 'profile.bot_identity_v2'
+}
+
+/** Separate Profile-bearing response; the released three-field result remains unchanged. */
+export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_identity_v2'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
+}
+
 /** Account-bound page of public Bot identities in the selected Profile. */
 export interface ProfileBotRosterRequest {
   readonly version: 1
@@ -2403,6 +2414,8 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityRequest
   | ProfileBotIdentityResult
+  | ProfileBotIdentityV2Request
+  | ProfileBotIdentityV2Result
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
   | ProfileNativeRoomRequest

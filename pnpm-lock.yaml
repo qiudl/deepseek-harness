@@ -6,6 +6,7 @@ settings:
 
 overrides:
   extract-zip>yauzl: 3.4.0
+  fontkit>@swc/helpers: 0.5.23
   '@deepseek-ai/cosmokit': link:vendor/cosmokit
   '@deepseek-ai/schemastery': link:vendor/schemastery
 
