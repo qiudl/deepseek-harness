@@ -35,12 +35,22 @@ export type { HostControlProtocolFailure } from './codec.js'
 export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'
+export { parseHostTwinBindingOffer, encodeHostTwinBindingOffer,
+  hostTwinBindingOfferDigest, hostTwinBindingCommandDigest } from './twin-binding-offer.ts'
+export type { HostTwinBindingOffer, HostTwinBindingScope,
+  HostTwinBindingOfferContext } from './twin-binding-offer.ts'
+export { parseHostTwinBindingInput, parseHostTwinBindingDirective, parseHostTwinBindingAck,
+  parseHostTwinBindingResult, encodeHostTwinBindingDirective, encodeHostTwinBindingAck,
+  hostTwinBindingAckDigest } from './twin-binding.ts'
+export type { HostTwinBindingInput, HostTwinBindingCommand, HostTwinBindingDirective,
+  HostTwinBindingAck, HostTwinBindingPeer, HostTwinBindingResult } from './twin-binding.ts'
 export { parseHostBotChatRequest, parseHostBotChat } from './bot-chat.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
+  ProfileTwinBindingRequest, ProfileTwinBindingResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,

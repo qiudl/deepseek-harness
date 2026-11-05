@@ -1,5 +1,7 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotChatRequest } from './bot-chat.ts'
+import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
+import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
 import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
@@ -1839,7 +1841,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotRosterRequest
+  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
+  | ProfileTwinBindingRequest | ProfileBotRosterRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2576,6 +2579,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityV2Request
   }
+  if (frame.method === 'profile.twin_binding') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'input'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), input: parseHostTwinBindingInput(params.input),
+    } } satisfies ProfileTwinBindingRequest
+  }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'after_bot_id', 'limit'])
@@ -2693,7 +2703,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
-  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result | ProfileBotRosterResult
+  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result
+  | ProfileTwinBindingResult | ProfileBotRosterResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3120,6 +3131,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentityV2(result.identity) } } satisfies ProfileBotIdentityV2Result
+  }
+  if (frame.method === 'profile.twin_binding') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostTwinBindingResult(result) } satisfies ProfileTwinBindingResult
   }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(result, ['page'])

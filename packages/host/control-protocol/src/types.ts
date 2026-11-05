@@ -917,6 +917,20 @@ export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResul
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
 }
 
+/** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
+export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.twin_binding'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & {
+    readonly input: import('./twin-binding.ts').HostTwinBindingInput
+  }
+}
+
+/** The original durable acknowledgement or an explicitly absent receipt. */
+export interface ProfileTwinBindingResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.twin_binding'
+  readonly result: import('./twin-binding.ts').HostTwinBindingResult
+}
+
 /** Account-bound page of public Bot identities in the selected Profile. */
 export interface ProfileBotRosterRequest {
   readonly version: 1
@@ -2416,6 +2430,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotIdentityV2Request
   | ProfileBotIdentityV2Result
+  | ProfileTwinBindingRequest
+  | ProfileTwinBindingResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
   | ProfileNativeRoomRequest

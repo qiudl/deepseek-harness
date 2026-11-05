@@ -1,0 +1,406 @@
+{
+  "ownerUserId": "human:test",
+  "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+  "requestId": "00000008-0000-4000-8000-000000000008",
+  "offer": {
+    "presentationVersion": "v1",
+    "bindingId": "00000002-0000-4000-8000-000000000002",
+    "bindingGeneration": "1",
+    "scopeVersion": "1",
+    "directions": [
+      {
+        "direction": "dsh_to_slark",
+        "scope": {
+          "bindingId": "00000002-0000-4000-8000-000000000002",
+          "bindingGeneration": "1",
+          "scopeVersion": "1",
+          "projectId": "ai-proj",
+          "twinAgentId": "twin-ai-proj",
+          "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+          "sourceRef": {
+            "side": "dsh",
+            "actorRef": "deepseek-bot:ai-proj-operator",
+            "hostProfileId": "00000003-0000-4000-8000-000000000003",
+            "botRootId": "ai-proj-operator",
+            "providerId": "dsh-project-operation-v1",
+            "providerVersion": "1"
+          },
+          "recipientRef": {
+            "side": "slark",
+            "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+            "audienceKind": "owner_private",
+            "audienceRef": "human:test",
+            "audienceVersion": "1",
+            "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+          },
+          "deviceGrantRefs": [
+            {
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "workspaceRefs": [
+            {
+              "workspaceId": "00000007-0000-4000-8000-000000000007",
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "historyFrom": 100,
+          "historyTo": 200,
+          "timeZone": "UTC",
+          "materialKinds": [
+            "operation",
+            "result"
+          ],
+          "retentionConsentRef": {
+            "id": "00000004-0000-4000-8000-000000000004",
+            "generation": "1",
+            "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+            "presentationVersion": "v1"
+          },
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738"
+        }
+      },
+      {
+        "direction": "slark_to_dsh",
+        "scope": {
+          "bindingId": "00000002-0000-4000-8000-000000000002",
+          "bindingGeneration": "1",
+          "scopeVersion": "1",
+          "projectId": "ai-proj",
+          "twinAgentId": "twin-ai-proj",
+          "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+          "sourceRef": {
+            "side": "slark",
+            "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+            "hostProfileId": null,
+            "botRootId": null,
+            "providerId": "slark-project-operation-v1",
+            "providerVersion": "1"
+          },
+          "recipientRef": {
+            "side": "dsh",
+            "botRef": "deepseek-bot:ai-proj-operator",
+            "audienceKind": "owner_private",
+            "audienceRef": "human:test",
+            "audienceVersion": "1",
+            "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+          },
+          "deviceGrantRefs": [
+            {
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "workspaceRefs": [
+            {
+              "workspaceId": "00000007-0000-4000-8000-000000000007",
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "historyFrom": 100,
+          "historyTo": 200,
+          "timeZone": "UTC",
+          "materialKinds": [
+            "operation",
+            "result"
+          ],
+          "retentionConsentRef": {
+            "id": "00000005-0000-4000-8000-000000000005",
+            "generation": "1",
+            "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+            "presentationVersion": "v1"
+          },
+          "scopeDigest": "17fa895bcd2d6fa5f811b2e3f515d5dda925193b30b72d85473e151d129c9db3"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "dsh_to_slark": {
+      "scopeArray": [
+        "00000002-0000-4000-8000-000000000002",
+        "1",
+        "1",
+        "ai-proj",
+        "twin-ai-proj",
+        "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+        [
+          "dsh",
+          "deepseek-bot:ai-proj-operator",
+          "00000003-0000-4000-8000-000000000003",
+          "ai-proj-operator",
+          "dsh-project-operation-v1",
+          "1"
+        ],
+        [
+          "slark",
+          "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+          "owner_private",
+          "human:test",
+          "1",
+          "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+        ],
+        [
+          [
+            "00000006-0000-4000-8000-000000000006",
+            "2"
+          ]
+        ],
+        [
+          [
+            "00000007-0000-4000-8000-000000000007",
+            "00000006-0000-4000-8000-000000000006",
+            "2"
+          ]
+        ],
+        100,
+        200,
+        "UTC",
+        [
+          "operation",
+          "result"
+        ],
+        [
+          "00000004-0000-4000-8000-000000000004",
+          "1",
+          "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+          "v1"
+        ]
+      ],
+      "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7"
+    },
+    "slark_to_dsh": {
+      "scopeArray": [
+        "00000002-0000-4000-8000-000000000002",
+        "1",
+        "1",
+        "ai-proj",
+        "twin-ai-proj",
+        "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+        [
+          "slark",
+          "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+          null,
+          null,
+          "slark-project-operation-v1",
+          "1"
+        ],
+        [
+          "dsh",
+          "deepseek-bot:ai-proj-operator",
+          "owner_private",
+          "human:test",
+          "1",
+          "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+        ],
+        [
+          [
+            "00000006-0000-4000-8000-000000000006",
+            "2"
+          ]
+        ],
+        [
+          [
+            "00000007-0000-4000-8000-000000000007",
+            "00000006-0000-4000-8000-000000000006",
+            "2"
+          ]
+        ],
+        100,
+        200,
+        "UTC",
+        [
+          "operation",
+          "result"
+        ],
+        [
+          "00000005-0000-4000-8000-000000000005",
+          "1",
+          "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+          "v1"
+        ]
+      ],
+      "scopeDigest": "17fa895bcd2d6fa5f811b2e3f515d5dda925193b30b72d85473e151d129c9db3",
+      "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90"
+    },
+    "offerArray": [
+      "v1",
+      "00000002-0000-4000-8000-000000000002",
+      "1",
+      "1",
+      [
+        [
+          "dsh_to_slark",
+          [
+            "00000002-0000-4000-8000-000000000002",
+            "1",
+            "1",
+            "ai-proj",
+            "twin-ai-proj",
+            "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            [
+              "dsh",
+              "deepseek-bot:ai-proj-operator",
+              "00000003-0000-4000-8000-000000000003",
+              "ai-proj-operator",
+              "dsh-project-operation-v1",
+              "1"
+            ],
+            [
+              "slark",
+              "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "owner_private",
+              "human:test",
+              "1",
+              "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            ],
+            [
+              [
+                "00000006-0000-4000-8000-000000000006",
+                "2"
+              ]
+            ],
+            [
+              [
+                "00000007-0000-4000-8000-000000000007",
+                "00000006-0000-4000-8000-000000000006",
+                "2"
+              ]
+            ],
+            100,
+            200,
+            "UTC",
+            [
+              "operation",
+              "result"
+            ],
+            [
+              "00000004-0000-4000-8000-000000000004",
+              "1",
+              "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "v1"
+            ],
+            "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738"
+          ]
+        ],
+        [
+          "slark_to_dsh",
+          [
+            "00000002-0000-4000-8000-000000000002",
+            "1",
+            "1",
+            "ai-proj",
+            "twin-ai-proj",
+            "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            [
+              "slark",
+              "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              null,
+              null,
+              "slark-project-operation-v1",
+              "1"
+            ],
+            [
+              "dsh",
+              "deepseek-bot:ai-proj-operator",
+              "owner_private",
+              "human:test",
+              "1",
+              "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            ],
+            [
+              [
+                "00000006-0000-4000-8000-000000000006",
+                "2"
+              ]
+            ],
+            [
+              [
+                "00000007-0000-4000-8000-000000000007",
+                "00000006-0000-4000-8000-000000000006",
+                "2"
+              ]
+            ],
+            100,
+            200,
+            "UTC",
+            [
+              "operation",
+              "result"
+            ],
+            [
+              "00000005-0000-4000-8000-000000000005",
+              "1",
+              "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "v1"
+            ],
+            "17fa895bcd2d6fa5f811b2e3f515d5dda925193b30b72d85473e151d129c9db3"
+          ]
+        ]
+      ]
+    ],
+    "offerDigest": "27232621c5ac4b73f70f4d339f98fdb8ad27637e916ab06deeac183e9ef6dbcf",
+    "commandDigest": "5cd3a364952672d9438934af142fe7d83b39f0b1d495959a9cce34b1ff9ace5f",
+    "directivePayload": "slark.twin-binding-directive/v1\u0000[1,\"twin_binding_confirm\",\"https://colorbuyai.com\",\"dsh-assertion-test\",\"00000001-0000-4000-8000-000000000001\",\"human:test\",\"https://accounts.dsh.colorbuyai.com\",\"0000000b-0000-4000-8000-00000000000b\",\"account-test\",1,\"computer-test\",[\"00000009-0000-4000-8000-000000000009\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"0000000a-0000-4000-8000-00000000000a\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"],\"00000008-0000-4000-8000-000000000008\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"27232621c5ac4b73f70f4d339f98fdb8ad27637e916ab06deeac183e9ef6dbcf\",\"5cd3a364952672d9438934af142fe7d83b39f0b1d495959a9cce34b1ff9ace5f\",1000,31000]",
+    "ackPayload": "dsh.twin-binding-confirmation-ack/v1\u0000[1,\"twin_binding_acknowledged\",\"00000001-0000-4000-8000-000000000001\",\"human:test\",\"https://accounts.dsh.colorbuyai.com\",\"0000000b-0000-4000-8000-00000000000b\",\"account-test\",1,\"00000003-0000-4000-8000-000000000003\",\"ai-proj-operator\",\"00000008-0000-4000-8000-000000000008\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"27232621c5ac4b73f70f4d339f98fdb8ad27637e916ab06deeac183e9ef6dbcf\",\"5cd3a364952672d9438934af142fe7d83b39f0b1d495959a9cce34b1ff9ace5f\",[\"00000009-0000-4000-8000-000000000009\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"0000000a-0000-4000-8000-00000000000a\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"],1500]",
+    "ackDigest": "d35335b4d00d7bdbb2adf31f2346b832efc9a50d1a4ffe4e7fe3f0a45d5b0392"
+  },
+  "directive": {
+    "schemaVersion": 1,
+    "purpose": "twin_binding_confirm",
+    "issuer": "https://colorbuyai.com",
+    "keyId": "dsh-assertion-test",
+    "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+    "ownerUserId": "human:test",
+    "accountIssuer": "https://accounts.dsh.colorbuyai.com",
+    "accountSubject": "0000000b-0000-4000-8000-00000000000b",
+    "accountBindingId": "account-test",
+    "accountBindingVersion": 1,
+    "computerId": "computer-test",
+    "peer": {
+      "installationId": "00000009-0000-4000-8000-000000000009",
+      "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "hostInstanceId": "0000000a-0000-4000-8000-00000000000a",
+      "processNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "requestId": "00000008-0000-4000-8000-000000000008",
+    "bindingId": "00000002-0000-4000-8000-000000000002",
+    "bindingGeneration": "1",
+    "scopeVersion": "1",
+    "scopeDigest": "27232621c5ac4b73f70f4d339f98fdb8ad27637e916ab06deeac183e9ef6dbcf",
+    "payloadDigest": "5cd3a364952672d9438934af142fe7d83b39f0b1d495959a9cce34b1ff9ace5f",
+    "issuedAt": 1000,
+    "expiresAt": 31000,
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "ack": {
+    "schemaVersion": 1,
+    "purpose": "twin_binding_acknowledged",
+    "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+    "ownerUserId": "human:test",
+    "accountIssuer": "https://accounts.dsh.colorbuyai.com",
+    "accountSubject": "0000000b-0000-4000-8000-00000000000b",
+    "accountBindingId": "account-test",
+    "accountBindingVersion": 1,
+    "hostProfileId": "00000003-0000-4000-8000-000000000003",
+    "botId": "ai-proj-operator",
+    "requestId": "00000008-0000-4000-8000-000000000008",
+    "bindingId": "00000002-0000-4000-8000-000000000002",
+    "bindingGeneration": "1",
+    "scopeVersion": "1",
+    "scopeDigest": "27232621c5ac4b73f70f4d339f98fdb8ad27637e916ab06deeac183e9ef6dbcf",
+    "payloadDigest": "5cd3a364952672d9438934af142fe7d83b39f0b1d495959a9cce34b1ff9ace5f",
+    "peer": {
+      "installationId": "00000009-0000-4000-8000-000000000009",
+      "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "hostInstanceId": "0000000a-0000-4000-8000-00000000000a",
+      "processNonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "durableAt": 1500,
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

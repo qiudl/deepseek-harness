@@ -92,6 +92,8 @@ kind: "package-reference"
 
 `profile.bot_identity_v2` 单独返回该公开身份及当前认证 Host 的本地 `host_profile_id`，调用方不能提供此字段。原方法保持三字段响应；两种方法均不授予配对、记忆或设备权限。
 
+`profile.twin_binding` 接受完整、固定方向顺序的双向留存 offer，以及独立的 Cloud 目的限定许可，其有效期最多 30 秒。两方向必须对应同一本人、项目、分身与实际 DSH Bot；Host 重算 consent、scope 和父摘要，再核验当前 Account 与本地 Bot。结果仅为原始持久 `acknowledged` 事实，或回执查询的 `missing`，不返回 active 绑定，也不授予记忆、群或设备执行权。Directive 与 Ack 使用独立的规范数组签名域；持久 Ack 摘要还覆盖其原始签名。
+
 `profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
 `profile.native_room_operation` 为同一 Account Profile 传递一条私有的 `join`、`messages`、`turns`、`ack` 或 `leave` 命令。响应重复准确的房间与操作范围。消息和轮次每页最多三条，每条消息正文最多占用 16,000 个 JSON 编码的 UTF-8 字节，以适配 64 KiB 控制帧。读取轮次本身不会执行工作或授予 Slark 群成员资格。Host 使用安装密钥签署每个 `turns` 页面，将房间、群、成员周期、游标、选中的轮次 ID、顺序与当前 Account/Host 身份绑定。受理轮次前必须验证此断言。

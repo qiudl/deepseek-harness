@@ -85,6 +85,10 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_identity_v2` 沿用相同 Account 与 worker 校验，将 Host 选定的本地 Profile 作为 `host_profile_id` 返回。已配置 Bot 身份解析器时声明单独能力；`UnixHostClient.resolveBotIdentityV2` 要求此能力并校验返回的 Bot 与 Profile，原方法保持可用。
 
+`UnixHostClient.operateTwinBinding` 要求独立的 `profile.twin_binding` 能力。Host 仅在当前 Bot 解析器、私有回执存储及固定 Cloud 公钥集合均已装配时声明此能力。它在持久提交和返回前核验准确签名 offer、当前 Account/Profile/Bot 与有效期。Profile 的纯元数据回执集合跨重试、重启保留首份签名 Ack，拒绝同键改目标，完整集合最多 10,000 条回执和 16 MiB。未知格式、无效签名或不安全私有文件均拒绝，保留原内容。
+
+POSIX 提交同步回执文件及目录；恢复读取在返回先前已发布的 Ack 前完成该持久性屏障。Windows 恢复通过原生 write-through 原语重发布相同、已验证的原字节，并复核 SID、DACL 和重解析点证据，不创建新 consent 或签名。Slark 仍须重查当前权限，并原子激活绑定及两方向 consent；Host 的 acknowledged 事实本身不会开放新能力。
+
 `profile.native_room` 通过当前 Account Profile worker 为已有 DS Bot 房间准备独立的桥接 Source。请求由 worker 私有 token 保护。Host 校验准确的房间和 Source 字段，拒绝已替换的 worker，重新检查 Account 授权，并用安装密钥签署房间与 Source 映射。客户端校验签名及当前 Account/Host 身份；超时的写入可能已经提交，调用方须以相同房间 ID 重试核对。
 
 `profile.native_room_operation` 向当前 worker 转发有界的房间命令。Host 在调用前后检查当前连接的 Account 授权、worker 代际及命令与响应的准确范围。`messages` 和 `turns` 每页最多返回三条。写入响应丢失时，调用方须以同一房间和成员周期对账。对于 `turns`，Host 在完成这些检查后签署所选页面，Unix 客户端验证签名及当前 Host 身份后才返回。
