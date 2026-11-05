@@ -1,6 +1,6 @@
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotIdentity, parseHostBotIdentityTarget,
+import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
   encodeHostNativeRoomAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
@@ -9,12 +9,12 @@ import { parseHostNativeRoomCommand, parseHostNativeRoomReply,
 import { parseHostNativeAgentResultInput, type ProfileNativeAgentResultRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTurnAssertion,
   encodeHostNativeRoomTurnAssertionPayload } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotIdentity, HostBotRosterPage,
-  HostNativeRoomSource, HostNativeRoomAssertion, ProfileBotIdentityRequest, ProfileBotRosterRequest,
+import type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage,
+  HostNativeRoomSource, HostNativeRoomAssertion, ProfileBotIdentityRequest, ProfileBotIdentityV2Request, ProfileBotRosterRequest,
   ProfileNativeRoomRequest, ProfileNativeRoomOperationRequest,
   HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomTurnAssertion } from '@deepseek-ai/dsh-host-control-protocol'
-import { resolveAccountBotIdentity, listAccountBotRoster,
+import { resolveAccountBotIdentity, resolveAccountBotIdentityV2, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
 import { deliverAccountNativeAgentResultChunk } from './account-native-agent-result.ts'
 import { deliverAccountBotGroup, readAccountBotGroupResultPage,
@@ -2481,6 +2481,14 @@ export class HostControlAuthority {
             this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal))
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.bot_identity_v2') {
+          const resolve = this.options.resolveBotIdentity
+          if (!resolve) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const identity = await resolveAccountBotIdentityV2(
+            this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { identity } })
         } else if (frame.method === 'profile.bot_roster') {
           const list = this.options.listBotRoster
           if (!list) throw new HostAuthorityError('upgrade_required')
@@ -2742,7 +2750,7 @@ export class HostControlAuthority {
             ? ['profile.skillhub_package_chunk', 'profile.skillhub_package',
               'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
-          ...(this.options.resolveBotIdentity ? ['profile.bot_identity'] : []),
+          ...(this.options.resolveBotIdentity ? ['profile.bot_identity', 'profile.bot_identity_v2'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
@@ -4605,6 +4613,28 @@ export class UnixHostClient {
   }
 
   /**
+   * Resolve one Bot and its authenticated Host-local Profile through the separate v2 method.
+   * @param input - Current Account binding, exact Bot root identifier and cancellation.
+   * @returns Public identity and the local Profile that authorized it, or absence.
+   */
+  async resolveBotIdentityV2(input: Parameters<UnixHostClient['resolveBotIdentity']>[0]): Promise<HostBotIdentityV2 | null> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.bot_identity_v2' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const target = parseHostBotIdentityTarget({ bot_id: input.botId })
+    const request: ProfileBotIdentityV2Request = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.bot_identity_v2',
+      params: { ...this.collaborationAccountRequestParams(input), ...target },
+    }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const identity = parseHostBotIdentityV2(frame.result.identity)
+    if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
+    return identity
+  }
+
+  /**
    * Read one public roster page from this connection's current Account Profile.
    * @param input - Current authority binding and bounded roster cursor.
    * @returns Validated public identities, or absence when the Profile has no roster.
@@ -5789,7 +5819,7 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotRosterRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest

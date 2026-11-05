@@ -2,7 +2,7 @@ import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } fr
 import { parseHostBotChatRequest } from './bot-chat.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
 import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
-import { parseHostBotIdentity, parseHostBotIdentityTarget,
+import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
 import { parseHostNativeRoomAssertion, parseHostNativeRoomTarget } from './native-room.ts'
 import { parseHostNativeRoomCommand, parseHostNativeRoomReply } from './native-room-operations.ts'
@@ -114,7 +114,8 @@ import type {
   ProfileWorkspaceModelSelectionRequest, ProfileWorkspaceModelSelectionResult,
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
-  ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotRosterRequest, ProfileBotRosterResult,
+  ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
+  ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
   ProfileNativeAgentResultRequest, ProfileNativeAgentResultResult,
@@ -1838,7 +1839,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotRosterRequest
+  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotRosterRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2568,6 +2569,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityRequest
   }
+  if (frame.method === 'profile.bot_identity_v2') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
+    } } satisfies ProfileBotIdentityV2Request
+  }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'after_bot_id', 'limit'])
@@ -2685,7 +2693,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
-  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotRosterResult
+  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result | ProfileBotRosterResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3107,6 +3115,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentity(result.identity) } } satisfies ProfileBotIdentityResult
+  }
+  if (frame.method === 'profile.bot_identity_v2') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostBotIdentityV2(result.identity) } } satisfies ProfileBotIdentityV2Result
   }
   if (frame.method === 'profile.bot_roster') {
     exactKeys(result, ['page'])

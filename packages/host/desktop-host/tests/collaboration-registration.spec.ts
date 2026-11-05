@@ -99,6 +99,67 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
     alter: (callback: typeof alter) => { alter = callback } }
 }
 
+it('returns the authenticated local Profile through identity v2 while preserving v1', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id }
+  await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.resolveBotIdentityV2(input)).toEqual({ ...f.bot, host_profile_id: f.profile.profileId })
+  expect(await f.client.resolveBotIdentity(input)).toEqual(f.bot)
+  expect(await f.client.resolveBotIdentityV2({ ...input, botId: 'missing' })).toBeNull()
+  expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.bot_identity_v2')).toBe(true)
+  for (const change of [{ subject: randomUUID() }, { issuer: 'https://other.example.test' },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.resolveBotIdentityV2({ ...input, ...change })).rejects.toThrow()
+  }
+})
+
+it('refuses v2 without capability and when a pending Bot read loses its Account grant', async () => {
+  const old = await fixture(false)
+  await old.grant()
+  await expect(old.client.resolveBotIdentityV2({ ...old.input, issuer: old.account.issuer,
+    subject: old.account.subject, botId: old.bot.bot_id })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen.some(frame => frame.type === 'request' && frame.method === 'profile.bot_identity_v2')).toBe(false)
+  const f = await fixture()
+  await f.grant()
+  f.setBotResolver(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(f.client.resolveBotIdentityV2({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: f.bot.bot_id })).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('rejects v2 response tampering, pre-abort and a missing live worker', async () => {
+  const f = await fixture()
+  await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id }
+  for (const change of ['bot', 'profile', 'method'] as const) {
+    f.alter((frame) => {
+      if (frame.type === 'result' && frame.method === 'profile.bot_identity_v2' && frame.result.identity) {
+        if (change === 'method') Reflect.set(frame, 'method', 'profile.bot_identity')
+        else if (change === 'profile') Reflect.deleteProperty(frame.result.identity, 'host_profile_id')
+        else {
+          Reflect.set(frame.result.identity, 'bot_id', 'other')
+          Reflect.set(frame.result.identity, 'actor_ref', 'deepseek-bot:other')
+        }
+      }
+      return frame
+    })
+    if (change === 'bot') await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+    else await expect(f.client.resolveBotIdentityV2(input)).rejects.toThrow()
+  }
+  f.alter(undefined)
+  await expect(f.client.resolveBotIdentityV2({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+  try {
+    for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.other' }]) {
+      expect(Reflect.set(f.client, 'call', async () => frame)).toBe(true)
+      await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'unavailable' })
+    }
+  } finally { Reflect.deleteProperty(f.client, 'call') }
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'resolveBotIdentity')
+  await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
 it('prepares a native room through the Account-authorized Host transport', async () => {
   const f = await fixture()
   const input = { ...f.input, issuer: f.account.issuer,

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { resolveAccountBotIdentity, listAccountBotRoster,
+import { resolveAccountBotIdentity, resolveAccountBotIdentityV2, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from '../src/account-bot-identity.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -31,6 +31,32 @@ async function fixture() {
   const grant = () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid-token' })
   return { host, workers, ownerId, proof, bot, grant }
 }
+
+it('adds the verified local Profile to v2 only after current Account authorization', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  await expect(resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.workers.resolveBotIdentity).not.toHaveBeenCalled()
+  await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof)
+  expect(await resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, signal))
+    .toEqual({ ...f.bot, host_profile_id: profileId })
+  expect(await resolveAccountBotIdentity(f.host, f.workers, f.proof, f.bot.bot_id, signal)).toEqual(f.bot)
+})
+
+it('discards v2 coordinates if the Account grant or local Profile changes during the read', async () => {
+  const f = await fixture(); await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof)
+  let current = profileId
+  const host = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { resolveBotIdentity: async () => { current = `${profileId}-replaced` as typeof profileId; return f.bot } }
+  await expect(resolveAccountBotIdentityV2(host, workers, f.proof, f.bot.bot_id, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  f.workers.resolveBotIdentity.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+})
 
 it('prepares a native room only for the current Account Profile and requested room', async () => {
   const f = await fixture()
