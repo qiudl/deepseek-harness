@@ -1,4 +1,6 @@
 - insert:
+    - id: subagent-preset-settlement-fence
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/subagent-send-message-fence.ts'
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
     - id: agent-preset-registry

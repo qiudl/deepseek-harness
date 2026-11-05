@@ -1,6 +1,10 @@
 # Keyless counterpart to background-job-admission.cordis.yml: replace the
 # DeepSeek adapter with replay while preserving the app's one-task admission
 # config and the recorded flash route.
+- insert:
+    - id: background-job-admission-fence
+      name: '../../../packages/test-support/session-snapshot/tests/fixtures/background-job-admission-fence.ts'
+
 - id: llm-deepseek
   name: '@deepseek-ai/dsh-llm-deepseek-api-key'
   disabled: true
