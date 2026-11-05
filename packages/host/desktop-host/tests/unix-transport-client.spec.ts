@@ -133,6 +133,35 @@ const inventory = {
 }
 
 describe('Unix Host client protocol projections', () => {
+  it('requires Slark federation support before sending its token and current identity', async () => {
+    const respond = vi.fn((frame: HostControlFrame) => result(frame, {
+      state: 'ready', profile_id: 'profile-1', profile_selector: profileSelector,
+    }))
+    const input = { ...binding, issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'person',
+      accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:slark', unlockMaterial: 'A'.repeat(43),
+      expected: { slarkUserId: 'user-1', environmentId: binding.authorityEnvironmentId,
+        profileId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182',
+        deviceId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3183',
+        deviceKeyThumbprint: 'A'.repeat(43), loginEpoch: 0, bindingEpoch: 1 } }
+    const old = await makeClient(respond)
+    try {
+      await expect(old.client.ensureSlarkAccountProfile(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+      expect(respond).not.toHaveBeenCalled()
+    } finally { old.client.close() }
+    const current = await makeClient(respond,
+      [...allCapabilities, 'profile.ensure_slark_federated' as HostControlCapability].sort())
+    try {
+      await expect(current.client.ensureSlarkAccountProfile(input))
+        .resolves.toEqual({ profileId: 'profile-1', profileSelector })
+      expect(respond.mock.calls[0]?.[0]).toMatchObject({ method: 'profile.ensure',
+        params: { account_access_token: input.accountAccessToken,
+          slark_expected: { slark_user_id: input.expected.slarkUserId,
+            environment_id: input.expected.environmentId, person_profile_id: input.expected.profileId,
+            device_id: input.expected.deviceId, device_key_thumbprint: input.expected.deviceKeyThumbprint,
+            login_epoch: 0, binding_epoch: 1 } } })
+    } finally { current.client.close() }
+  })
+
   it('projects bounded personal model text only when the Host advertises it', async () => {
     const seen: HostControlFrame[] = []
     const unsupported = await makeClient((frame) => { seen.push(frame); return result(frame, {}) },

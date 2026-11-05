@@ -1,12 +1,13 @@
+import { AcpSession } from '../src/session.ts'
 import { mountWorkingDirectoryFixture } from '../../../subagent/subagent/tests/working-directory-fixture.ts'
 import { createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ContextFormed } from '@deepseek-ai/dsh-llm'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { setImmediate } from 'node:timers/promises'
 import SubagentRuntime, { NO_START_CAPABILITIES } from '@deepseek-ai/dsh-subagent'
-import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import { defineContentToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import { toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import {
   errorResponse,
@@ -65,6 +66,16 @@ describe('ACP prompt lifecycle', () => {
   afterEach(async () => {
     await harness?.dispose()
     harness = undefined
+  })
+
+  it('admits a prompt without a snapshot when no route was selected at admission', async () => {
+    harness = await makeBridgeHarness({ script: [textResponse('completed')] })
+    const sessionId = await newSession(harness)
+    const agent = harness.ctx.agents.get(SessionId(sessionId))!
+    vi.spyOn(agent.model, 'selected').mockReturnValueOnce(undefined)
+    const result = await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] })
+    expect(result.stopReason).toBe('end_turn')
+    await vi.waitFor(() => { expect(messageText(harness!)).toBe('completed') })
   })
 
   it('reports a max-token turn without losing its committed text', async () => {
@@ -470,13 +481,16 @@ describe('ACP prompt lifecycle', () => {
     expect(harness.adapter.requests).toEqual([])
   })
 
-  it('honors cancellation in the admission-to-followup handoff gap', async () => {
+  it('cancels after image storage completes before admission receives the result', async () => {
     harness = await makeBridgeHarness({ imageCapable: true, script: [] })
     const sessionId = await newSession(harness)
     const saveImages = harness.attachments!.saveImages.bind(harness.attachments!)
+    const cancel = vi.spyOn(AcpSession.prototype, 'cancel')
+    onTestFinished(() => { cancel.mockRestore() })
     vi.spyOn(harness.attachments!, 'saveImages').mockImplementationOnce(async (inputs) => {
       const refs = await saveImages(inputs)
-      queueMicrotask(() => { void harness!.client.cancel({ sessionId }) })
+      await harness!.client.cancel({ sessionId })
+      await vi.waitFor(() => { expect(cancel).toHaveBeenCalledOnce() })
       return refs
     })
 

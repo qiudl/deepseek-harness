@@ -1,8 +1,8 @@
+import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 /** Private native read streams from one Profile's Gateway to its Desktop Host worker. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
-import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 import { parseWorkbenchTerminalStreamPayload, parseWorkbenchReadPayload, parseWorkbenchChangesPayload } from '@deepseek-ai/dsh-host-control-protocol'
 import { readDesktopWorkbenchResponse } from './desktop-remote-workbench-read.ts'
 import type { HostRemoteSessionCommand } from '@deepseek-ai/dsh-host-control-protocol'
@@ -81,7 +81,7 @@ export class DesktopRemoteApprovalEvents {
    * @param gateway - Selected Profile's event response sender.
    * @param command - Validated result for one pending event.
    */
-  respond(gateway: TypertGateway,
+  respond(gateway: DesktopRemoteGateway,
     command: Extract<HostRemoteSessionCommand, { operation: 'remote.event.respond' }>): void {
     const pending = this.clients.get(command.client_id)
     if (!pending || pending.get(command.event_id) !== command.session_id) {
@@ -96,7 +96,7 @@ export class DesktopRemoteApprovalEvents {
 
 /** Opens only the selected Profile's native Session, Workspace, and forwarded event streams. */
 export class DesktopRemoteUiStreamExecutor {
-  constructor(private readonly gateway: TypertGateway,
+  constructor(private readonly gateway: DesktopRemoteGateway,
     private readonly approvals?: DesktopRemoteApprovalEvents,
     private readonly readResponse?: (request: Request) => Promise<Response>,
     private readonly terminalStreams?: DesktopRemoteTerminalStreams) {}

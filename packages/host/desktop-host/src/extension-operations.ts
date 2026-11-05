@@ -281,7 +281,10 @@ export class ProfileExtensionOperations {
       ...(restores && recoveryDigest ? { restores, recoveryDigest } : {}),
       ...(recoveryMode ? { recoveryMode } : {}), ...(scriptApproval ? { scriptApproval } : {}),
       digest: createHash('sha256').update(JSON.stringify([profileId, kind, payload, revision,
-        ...(recoveryDigest ? [recoveryDigest] : []), ...(scriptApproval ? [scriptApproval.digest] : [])])).digest('hex'), expiresAt: this.clock.now() + 300_000 }
+        ...(recoveryDigest ? [recoveryDigest] : []), ...(scriptApproval ? [scriptApproval.digest] : [])])).digest('hex'),
+      // REQ-20261028-0021: install plus acknowledge must fit on a cold Windows worker (registry
+      // fetch, worker restart, composition settle), which exceeds five minutes.
+      expiresAt: this.clock.now() + 900_000 }
     this.plans.set(plan.planId, plan)
     const { payload: _payload, ...result } = plan
     return result

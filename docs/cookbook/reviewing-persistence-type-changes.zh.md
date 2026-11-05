@@ -43,7 +43,7 @@ pnpm --silent run persistence-review --before .artifacts/base.schema.json --afte
 
 在报告旁记录这些文件对应的 commit。添加 `--json` 可获取结构化输出。此只读比较将共享变更与受影响的根类型归组，使用实际字面量 `kind`/`form` 值代替联合类型位置。无法唯一匹配的候选项保留为独立的新增与删除。兼容性部分复制每个根类型的权威分类结果；结构说明不替代确认检查。当前目录标签和声明名称是描述元数据；结构锚点和指纹标识类型。
 
-当前机器清单在 `roots` 中保存完整图。每个 `types` 条目包含 `digest`、`names` 和 `sources`；若根无法精确重建该图，条目还会保存显式 `schema`。读取器按摘要从根的子图恢复省略的图，并直接验证显式图，保留每个类型及其元数据。历史完整条目仍然可读。`formatVersion` 标识规范化规则；存储压缩不改变根指纹，也不需要确认记录。
+所有清单都使用[节点表布局](../persistence-changes/README.zh.md#files-and-ownership)；两个比较输入都必须由当前工具生成。`formatVersion` 标识规范化规则；存储布局不改变根指纹，也不需要确认记录。
 
 <a id="acknowledge"></a>
 ## 1. 记录变更
@@ -103,7 +103,7 @@ pnpm --silent run persistence-changes --update 2026-09-11-poc-optional --prose .
 
 命令刷新机器声明、schema、目录和配对。没有 `--prose` 时，它保留已有说明。根据完整转换重新评估说明，并为任何被标记的同版本更新提供 `--decision same-version`。更新会拒绝初始基线、其他记录所依赖的记录，以及已被定稿检查点锁定的记录。定稿检查点之外，目录不会推断审阅接受状态：保留已接受历史，并创建后继。
 
-集成产生竞争末端记录时，根据剩余历史更新尚未接受的记录，再重新评估最终差异。无关根的确认无需刷新。[机制决策](../../.agents/notes/implemented/process/2026-09-11-persistence-type-history.zh.md)解释为何保留完整快照和逐根前驱。
+集成产生竞争末端记录时，根据剩余历史更新尚未接受的记录，再重新评估最终差异。当两个分支均已接受时，保留双方记录，并为每个受影响的根创建版本 2 合流记录，在 `previous` 数组中列出分支末端。根据当前源码构建完整的变更后 schema，逐一与每个父记录比较，并记录双方读取兼容性决策和实际执行的检查；此形式仅接受分类器未标记为需要复核的同版本变更。重新生成双语记录、目录和清单，然后运行 `pnpm run verify-persistence-changes` 和 `pnpm run verify-translation-pairing`。无关根的确认无需刷新。[机制决策](../../.agents/notes/implemented/process/2026-09-11-persistence-type-history.zh.md)解释为何保留完整快照和逐根前驱。
 
 若已有属性的值类型变化需要评审，先修改说明文件中的兼容性与验证部分，解释实际的新转换及已执行检查。不要为不同变更复用先前必选改可选的说明。然后使用该说明与显式同版本选择更新记录：
 

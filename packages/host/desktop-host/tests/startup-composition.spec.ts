@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { parseHostCollaborationSourceTarget, parseHostGroupInputFenceChallenge } from '@deepseek-ai/dsh-host-control-protocol'
 import { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
-import type { UnixHostServer, UnixHostServerOptions } from '../src/unix-transport.ts'
+import { UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
+import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
 import type { Config } from '../src/startup.ts'
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from '../src/types.ts'
 import { FileProfileClaimMarkerFiles, ProfileClaimMarker } from '../src/legacy-claim-marker.ts'
@@ -178,6 +179,32 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
     },
   }
 }
+
+it.skipIf(process.platform === 'win32')('wires Slark federation verification through macOS startup', async () => {
+  const { config, root, accountPrivateKey } = fixture()
+  const cleanup: { close?: () => Promise<void> } = {}
+  onTestFinished(async () => {
+    await cleanup.close?.()
+    rmSync(root, { recursive: true, force: true })
+  })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin',
+    createServer: options => new UnixHostServer({ ...options,
+      attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
+    }),
+    profileWorkerFactory: async () => ({
+      viewOrigin: 'http://127.0.0.1:43123', generation: 1,
+      bootstrapCookie: { name: 'fixture', value: 'private' },
+      closeNotifications: () => undefined, abort: () => undefined, done: Promise.resolve(),
+    }),
+  })
+  cleanup.close = () => application.close()
+  await expectSlarkStartupAdmission(application.host, {
+    key: accountPrivateKey, kid: 'fixture', issuer: 'https://accounts.dsh.colorbuyai.com',
+    subject: randomUUID(), deviceId: config.installationId, now: NOW,
+  })
+})
 
 it.skipIf(process.platform === 'win32')('wires profile, extension, and migration owners into one disposable application', async () => {
   const { config, root, accountPrivateKey } = fixture()

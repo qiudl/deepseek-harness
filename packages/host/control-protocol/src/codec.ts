@@ -2253,9 +2253,32 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     ]
     const hasAccountAccessToken = Object.hasOwn(params, 'account_access_token')
     const hasBindingScope = Object.hasOwn(params, 'authority_binding_scope')
+    const hasSlarkExpected = Object.hasOwn(params, 'slark_expected')
     if (hasBindingScope && !hasAccountAccessToken) reject()
+    if (hasSlarkExpected && (!hasAccountAccessToken || hasBindingScope)) reject()
     exactKeys(params, [...(hasAccountAccessToken ? tokenKeys : legacyKeys),
-      ...(hasBindingScope ? ['authority_binding_scope'] : [])])
+      ...(hasBindingScope ? ['authority_binding_scope'] : []),
+      ...(hasSlarkExpected ? ['slark_expected'] : [])])
+    let slarkExpected: ProfileEnsureRequest['params']['slark_expected']
+    if (hasSlarkExpected) {
+      const expected = record(params.slark_expected)
+      exactKeys(expected, ['slark_user_id', 'environment_id', 'person_profile_id', 'device_id',
+        'device_key_thumbprint', 'login_epoch', 'binding_epoch'])
+      const thumbprint = boundedText(expected.device_key_thumbprint, 43)
+      if (!/^[A-Za-z0-9_-]{43}$/u.test(thumbprint)
+        || Buffer.from(thumbprint, 'base64url').length !== 32
+        || Buffer.from(thumbprint, 'base64url').toString('base64url') !== thumbprint
+        || !Number.isSafeInteger(expected.login_epoch) || (expected.login_epoch as number) < 0) reject()
+      slarkExpected = {
+        slark_user_id: boundedText(expected.slark_user_id, 128),
+        environment_id: uuid(expected.environment_id),
+        person_profile_id: uuid(expected.person_profile_id),
+        device_id: uuid(expected.device_id),
+        device_key_thumbprint: thumbprint,
+        login_epoch: expected.login_epoch as number,
+        binding_epoch: generation(expected.binding_epoch),
+      }
+    }
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.ensure',
       params: {
@@ -2268,6 +2291,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
         profile_key_handle: boundedText(params.profile_key_handle, 512),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
         ...(hasBindingScope ? { authority_binding_scope: digest(params.authority_binding_scope) } : {}),
+        ...(slarkExpected ? { slark_expected: slarkExpected } : {}),
       },
     }
   }

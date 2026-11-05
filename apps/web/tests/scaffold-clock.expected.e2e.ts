@@ -14,3 +14,9 @@ it.each([
     expect(normalizeAria(`- text: ${clock}`, '/workspace', false)).toBe(`- text: ${expected}`)
   },
 )
+
+it('normalizes the generated sampling date while retaining dates in user text', () => {
+  const text = 'Time sampled while preparing turn 1, step 1: 2026-11-03T12:34:56+08:00; due 2026-11-04'
+  expect(normalizeAria(text, '/workspace', false))
+    .toBe('Time sampled while preparing turn 1, step 1: {{date}}T{{clock}}+{{clock}}; due 2026-11-04')
+})

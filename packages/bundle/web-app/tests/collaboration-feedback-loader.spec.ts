@@ -1,11 +1,13 @@
+import RemoteAccessService from '@deepseek-ai/dsh-api-remote-access'
 /** REQ-20261004-0008: real Loader, AgentLoop, JSONL writer and private HTTP feedback path. */
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
-import JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Tools from '@deepseek-ai/dsh-tools'
 import SessionController, { collaborationJournalDigest } from '@deepseek-ai/dsh-api-session-controller'
@@ -58,14 +60,18 @@ it.each((['reply', 'before_flush', 'after_flush', 'model_checkpoint'] as const).
     routes.set(route.path, route.handler); return () => routes.delete(route.path)
   } } as never)
   ctx.provide('connection', { fetch: { register: () => async () => {} } } as never)
-  ctx.provide('typert', { lookups: { configure: () => () => {} }, contexts: { configureHost: () => () => {} } } as never)
+  ctx.provide('typert', { lookups: { configure: () => () => {} }, contexts: { configureHost: () => () => {} },
+    resources: { register: () => () => {} } } as never)
+  ctx.provide('typertGateway', { getPendingRemoteEvents: () => [] } as never)
+  new RemoteAccessService(ctx)
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture', model: 'selected' }) } as never)
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1, maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
   ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
   ctx.provide('fs', {} as never)
   installSessionReadTestServices(ctx)
   const plugins = { storage: Storage, sessions: SessionStore, persistence: JsonlPersistence, agents: AgentRegistry, llm: LlmRuntime,
-    prompt: SystemPrompt, tools: Tools, loop: AgentLoop, workspace: WorkspaceRegistry, controller: SessionController, web: WebApp,
+    prompt: SystemPrompt, tools: Tools, executor: NativeToolExecutor, loop: AgentLoop,
+    workspace: WorkspaceRegistry, controller: SessionController, web: WebApp,
     domain: { name: 'feedback-domain', inject: ['storage'], apply(c: Context) {
       backend = new JsonStorageBackend(join(directory, 'state')); c.storage.backend.register('json', backend)
       facility = new DomainFacility(c, { backend: 'json' }); c.storage.mount('domain', facility); c.provide('storageDomain', facility)

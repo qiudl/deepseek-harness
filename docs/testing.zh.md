@@ -2,9 +2,11 @@
 
 [English](testing.md) | 中文
 
-本文说明本仓库的分层测试方式，以及保持绿色测试套件有意义的规则。命令见根目录 [AGENTS.md](../AGENTS.md)；相关 Agent Note 承载设计动机。
+本文说明本仓库的测试方式，以及保持绿色测试套件有意义的规则。命令见根目录 [AGENTS.md](../AGENTS.md)；相关 Agent Note 承载设计动机。
 
 ## 层级
+
+[峰值驻留内存](../benchmarks/support/peak-memory.ts)排除父进程峰值；冷请求与终端空闲就绪独占执行。
 
 - **单元测试**（`pnpm run test`）：vitest 运行包和示例各自的 `tests/**` 目录下的测试，以及匹配 `scripts/**/*.spec.ts` 的仓库脚本测试；测试文件与其所覆盖的代码区域放在一起。每个注册表都有一个 HMR（热模块替换）安全测试（对向该注册表贡献内容的 fiber 执行 dispose（资源释放），并断言清理完成）。优先覆盖边界情况、错误路径、事件顺序、并发竞态，以及针对约定回归的永久测试（见 `packages/core/agent-loop/tests/contract-regressions.spec.ts`）。
 - **覆盖率门禁**（`pnpm run test:coverage`）：对 `packages/*/*/src` 按文件 100% 覆盖。未覆盖的行常表示死代码；覆盖率证明代码执行过，不证明交付行为。`packages/shell/pwsh-local/src` 门禁需要真实的 `pwsh`：缺少它的主机会跳过对应测试和文件，CI 则提供 `pwsh`。持久化测试读取 `docs/persistence-schema.json`；静态 `verify-persistence-changes` 门禁从源码重新生成并核对它。
@@ -18,7 +20,7 @@ Session fixture 保留 header 与 payload，但省略正文 seq/time envelope；
 
 ## spec 如何被执行
 
-fork 出的 worker 会同时运行多个 spec 文件，coverage gate 会拆成并发的 partition，与同一个 job 中的其它 gate 并排运行，而自托管 runner 共用同一台宿主机和同一个卷。被隔离的只有进程：端口、可预测路径、外部命名空间和继承而来的子进程都不隔离。为每个占用的资源负责到 teardown。只在单独运行时通过的 spec 存在测试缺陷，而非 runner 不稳定。[dsh-ci-test-reliability](../.agents/skills/dsh-ci-test-reliability/SKILL.md) 负责资源分配、状态恢复、同步、超时预算、平台差异与 teardown 规则；它的 [flake 诊断流程](../.agents/skills/dsh-ci-test-reliability/references/ci-flake-diagnosis.md)用于归类已经存在的概率性失败。 [fork 意外退出](../scripts/coverage-fork-diagnostics.ts)时会报告 PID、文件、退出码和信号。
+fork 出的 worker 会同时运行多个 spec 文件，coverage gate 会拆成[并发的 partition](../scripts/coverage-partitions.ts)，与同一个 job 中的其它 gate 并排运行，而自托管 runner 共用同一台宿主机和同一个卷。被隔离的只有进程：端口、可预测路径、外部命名空间和继承而来的子进程都不隔离。为每个占用的资源负责到 teardown。只在单独运行时通过的 spec 存在测试缺陷，而非 runner 不稳定。[dsh-ci-test-reliability](../.agents/skills/dsh-ci-test-reliability/SKILL.md) 负责资源分配、状态恢复、同步、超时预算、平台差异与 teardown 规则；它的 [flake 诊断流程](../.agents/skills/dsh-ci-test-reliability/references/ci-flake-diagnosis.md)用于归类已经存在的概率性失败。 [fork 意外退出](../scripts/coverage-fork-diagnostics.ts)时会报告 PID、文件、退出码和信号。
 
 ## 带密钥策略：推理（inference）在这里很便宜
 

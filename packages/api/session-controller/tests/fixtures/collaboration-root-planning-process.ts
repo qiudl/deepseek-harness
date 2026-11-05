@@ -14,6 +14,8 @@ await ctx.plugin(Storage)
 const backend = new JsonStorageBackend(directory), original = backend.kv.open.bind(backend.kv)
 let writes = 0
 async function stop(event: string) {
+  // A pending top-level await does not keep Node's event loop alive.
+  process.channel?.ref()
   process.send?.({ event })
   await new Promise<void>(() => {})
 }

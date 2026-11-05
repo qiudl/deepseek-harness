@@ -1,11 +1,12 @@
 /** Cold parent-catalog observations beside fork children with tool-heavy inherited histories. */
 
 import { performance } from 'node:perf_hooks'
+import { peakResidentSetBytes } from '../support/peak-memory.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { provideWorkingDirectoryFixture } from '@deepseek-ai/dsh-agent-loop-testkit'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import * as JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionQueryEngine from '@deepseek-ai/dsh-session-query'
 import SubagentRuntime, { SUBAGENT_DESCRIPTOR_VERSION } from '@deepseek-ai/dsh-subagent'
@@ -95,7 +96,7 @@ async function run(root: string, mode: string): Promise<CatalogReport | { seeded
     return {
       totalMs: end - start, firstMs: firstDone - start, repeatMs: end - firstDone,
       cpuUserMs: cpu.user / 1_000, cpuSystemMs: cpu.system / 1_000,
-      children: first.length, peakRssMb: process.resourceUsage().maxRSS / 1_024,
+      children: first.length, peakRssMb: peakResidentSetBytes() / 1_048_576,
     }
   } finally { await ctx.fiber.dispose() }
 }

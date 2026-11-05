@@ -627,6 +627,7 @@ const capabilities = [
   'profile.lease_close',
   'profile.ensure',
   'profile.ensure_account_token',
+  'profile.ensure_slark_federated',
   'profile.ensure_binding_scope',
   'profile.bootstrap_local',
   'profile.open',
@@ -1516,7 +1517,22 @@ export class HostControlAuthority {
           let profile: ReadyProfileIdentity
           if (frame.method === 'profile.ensure') {
             if (!frame.params.account_access_token) throw new HostAuthorityError('upgrade_required')
-            profile = await this.options.host.ensureAccountProfile({
+            const slark = frame.params.slark_expected
+            profile = slark ? await this.options.host.ensureSlarkAccountProfile({
+              accountAccessToken: frame.params.account_access_token,
+              issuer: frame.params.account_issuer, subject: frame.params.account_subject,
+              ...accountBindingFields(frame.params),
+              ...profileUnlockFields(frame.params, ownerId),
+              expected: {
+                slarkUserId: slark.slark_user_id,
+                environmentId: slark.environment_id,
+                profileId: slark.person_profile_id,
+                deviceId: slark.device_id,
+                deviceKeyThumbprint: slark.device_key_thumbprint,
+                loginEpoch: slark.login_epoch,
+                bindingEpoch: slark.binding_epoch,
+              },
+            }) : await this.options.host.ensureAccountProfile({
               ...(frame.params.authority_binding_scope === undefined
                 ? {} : { authorityBindingScope: frame.params.authority_binding_scope }),
               accountAccessToken: frame.params.account_access_token,
@@ -3339,11 +3355,51 @@ export class UnixHostClient {
     const request: ProfileEnsureRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
       params: {
-        ...this.accountBindingParams(input),
-        account_access_token: input.accountAccessToken,
-        account_issuer: input.issuer, account_subject: input.subject, profile_key_handle: input.keyHandle,
-        profile_unlock_material: input.unlockMaterial,
+        ...this.accountTokenParams(input),
         ...(input.authorityBindingScope === undefined ? {} : { authority_binding_scope: input.authorityBindingScope as never }),
+      },
+    }
+    return this.callReadyProfile(request, input.signal)
+  }
+
+  /**
+   * Require the Slark token verifier and a Main-selected current identity.
+   * @param input - Scoped binding, token, and current Slark claims.
+   * @returns Ready Profile ID and local selector.
+   */
+  async ensureSlarkAccountProfile(input: AccountBindingInput & {
+    readonly issuer: string
+    readonly subject: string
+    readonly accountAccessToken: string
+    readonly keyHandle: string
+    readonly unlockMaterial: string
+    readonly expected: {
+      readonly slarkUserId: string
+      readonly environmentId: string
+      readonly profileId: string
+      readonly deviceId: string
+      readonly deviceKeyThumbprint: string
+      readonly loginEpoch: number
+      readonly bindingEpoch: number
+    }
+    readonly signal?: AbortSignal
+  }): Promise<{ readonly profileId: string; readonly profileSelector: string }> {
+    if (!this.inspection.capabilities.includes('profile.ensure_slark_federated' as HostControlCapability)) {
+      throw new HostAuthorityError('upgrade_required')
+    }
+    const request: ProfileEnsureRequest = {
+      version: 1, type: 'request', request_id: requestId(), method: 'profile.ensure',
+      params: {
+        ...this.accountTokenParams(input),
+        slark_expected: {
+          slark_user_id: input.expected.slarkUserId,
+          environment_id: input.expected.environmentId,
+          person_profile_id: input.expected.profileId,
+          device_id: input.expected.deviceId,
+          device_key_thumbprint: input.expected.deviceKeyThumbprint,
+          login_epoch: input.expected.loginEpoch,
+          binding_epoch: input.expected.bindingEpoch,
+        },
       },
     }
     return this.callReadyProfile(request, input.signal)
@@ -5552,6 +5608,20 @@ export class UnixHostClient {
       authority_environment_id: input.authorityEnvironmentId as never,
       account_binding_handle: input.accountBindingHandle as never,
       authority_binding_version: input.authorityBindingVersion,
+    }
+  }
+
+  private accountTokenParams(input: AccountBindingInput & Readonly<{
+    issuer: string
+    subject: string
+    accountAccessToken: string
+    keyHandle: string
+    unlockMaterial: string
+  }>) {
+    return {
+      ...this.accountBindingParams(input), account_access_token: input.accountAccessToken,
+      account_issuer: input.issuer, account_subject: input.subject,
+      profile_key_handle: input.keyHandle, profile_unlock_material: input.unlockMaterial,
     }
   }
 

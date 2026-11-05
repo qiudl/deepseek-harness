@@ -40,6 +40,7 @@ function stubAgent(ctx: Context, rawId: string): Agent {
   const scope = ctx.plugin(() => {})
   const session = Session.create(id)
   const agent: Agent = {
+    get model(): Agent['model'] { throw new Error('model selection is not used by this fixture') },
     id, options: {}, session, inbox: unsupportedInbox(),
     status: 'idle',
     ctx: scope.ctx,
@@ -61,10 +62,10 @@ async function harness(
   const ctx = new Context()
   provideWorkingDirectoryFixture(ctx)
   contexts.push(ctx)
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(TerminalSessionService)
   await ctx.plugin(PassthroughSandbox)
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SandboxPolicyService, { mode, workspaceRoot: root })
   await ctx.plugin(LocalSubprocessRuntime)
   const fiber = await ctx.plugin(ptyLocal, {
@@ -188,11 +189,15 @@ describe.skipIf(process.platform === 'win32')('terminal-bash real shell', () => 
     const readerPidFile = join(root, 'tty-reader.pid')
 
     const waiting = ctx.terminals.startSend(agent, created.sessionId, {
-      text: `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAITING\\n"; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`,
+      text: `bash -c 'exec </dev/tty; printf "%s" "$BASHPID" > "$1"; printf "WAIT%s\\n" ING; read -r answer; printf "ANSWER=%s\\n" "$answer"' dsh "${readerPidFile}"`,
       submit: true,
     })
-    await waitForOutput(waiting, 'WAITING', 8_000)
     const result = await waiting.done
+    // The kernel can observe the tty read before its preceding output reaches
+    // the PTY consumer. A settled operation stops collecting, while the session
+    // keeps receiving output. Split the marker above so command echo cannot pass.
+    await expect.poll(() => ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 100 }).text,
+      { timeout: 8_000 }).toContain('WAITING')
     const readerPid = Number(readFileSync(readerPidFile, 'utf8'))
     expect(readerPid).toBeGreaterThan(0)
     expect(result.waitReason).toBe(canReadLinuxProcessSyscall(readerPid) ? 'stdin_read' : 'inferred_idle')
@@ -200,7 +205,8 @@ describe.skipIf(process.platform === 'win32')('terminal-bash real shell', () => 
     const answer = ctx.terminals.startSend(agent, created.sessionId, { text: 'accepted', submit: true })
     const answered = await answer.done
     expect(answered.waitReason).toBe('stdin_read')
-    expect(answered.viewport).toContain('ANSWER=accepted')
+    await expect.poll(() => ctx.terminals.read(agent, created.sessionId, { offset: 0, count: 100 }).text,
+      { timeout: 8_000 }).toContain('ANSWER=accepted')
     await ctx.terminals.kill(agent, created.sessionId)
   }, 20_000)
 

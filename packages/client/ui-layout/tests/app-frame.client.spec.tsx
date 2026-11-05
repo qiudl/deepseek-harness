@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /** Frame interactions with a real store and explicitly driven browser measurements. */
 import type { GlobalStandardProps, RenderOpts } from '@deepseek-ai/dsh-client-ui-slots'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { allowAllAccess, bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { AppFrame } from '../src/client/AppFrame.tsx'
@@ -100,6 +100,7 @@ function mountFrame(windowWidth = frameWidth) {
       useSessionRetainInfo={() => undefined}
       useResource={useResource}
       useWorkspaces={sel => sel(workspaceState)}
+      {...allowAllAccess}
       t={key => key === 'brand.localBuild' ? 'DSH Local Build' : key}
     />
   )
@@ -184,6 +185,13 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it.each(['darwin', 'win32', 'linux'])('keeps desktop navigation at phone widths on %s', (platform) => {
+    document.documentElement.dataset.platform = platform
+    const { frame, queryByRole } = mountFrame(390)
+    resize(390)
+    expect(frame.dataset.phoneWeb).toBeUndefined()
+    expect(queryByRole('button', { name: 'mobile.openNavigation' })).toBeNull()
+  })
   for (const width of [320, 390, 430]) it(`opens and closes a left drawer without replacing retained chat at ${width}px`, () => {
     const { frame, instance, sidebarOwner, getByRole, queryByRole } = mountFrame(width)
     resize(width)

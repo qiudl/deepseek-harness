@@ -15,9 +15,12 @@
   cursor: pointer;
 }
 
-.trigger:hover,
 .trigger:focus-visible {
   color: var(--dsw-alias-label-primary);
+}
+
+@media (hover: hover) {
+  .trigger:hover { color: var(--dsw-alias-label-primary); }
 }
 
 .trigger:disabled {

@@ -125,6 +125,32 @@ async function localSelector(client: UnixHostClient): Promise<string> {
 }
 
 describe('Unix transport authority failures', () => {
+  it('dispatches Slark expectations to its separate verifier and preserves its refusal', async () => {
+    const host = fakeHost()
+    const ensureSlark = vi.fn(async () => ready)
+    const ensureLegacy = vi.fn(async () => ready)
+    Object.assign(host, { ensureSlarkAccountProfile: ensureSlark, ensureAccountProfile: ensureLegacy })
+    const { client } = await authorityClient({ host })
+    onTestFinished(() => { client.close() })
+    const input = {
+      authorityEnvironmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+      accountBindingHandle: `slark:${'a'.repeat(64)}`, authorityBindingVersion: 3,
+      issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'person',
+      accountAccessToken: 'header.payload.signature', keyHandle: 'keychain:slark', unlockMaterial: 'A'.repeat(43),
+      expected: { slarkUserId: 'user-1', environmentId: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181',
+        profileId, deviceId: installationId, deviceKeyThumbprint: 'A'.repeat(43),
+        loginEpoch: 0, bindingEpoch: 3 },
+    }
+    await expect(client.ensureSlarkAccountProfile(input)).resolves.toMatchObject({ profileId })
+    expect(ensureSlark).toHaveBeenCalledWith(expect.objectContaining({
+      ownerId, accountAccessToken: input.accountAccessToken, expected: input.expected,
+      accountBindingHandle: input.accountBindingHandle, authorityBindingVersion: 3,
+    }))
+    expect(ensureLegacy).not.toHaveBeenCalled()
+    ensureSlark.mockRejectedValueOnce(new HostAuthorityError('unauthorized'))
+    await expect(client.ensureSlarkAccountProfile(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  })
+
   it('rejects absent executors even when a client has stale capability flags', async () => {
     const { client } = await authorityClient()
     onTestFinished(() => { client.close() })

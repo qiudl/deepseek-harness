@@ -2,9 +2,11 @@
 
 English | [中文](testing.zh.md)
 
-How this repo tests, tier by tier, and the rules that keep a green suite meaningful. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
+How this repo tests and the rules that keep a green suite meaningful. Commands live in root [AGENTS.md](../AGENTS.md); linked Agent Notes carry the rationale.
 
 ## Tiers
+
+[Peak RSS](../benchmarks/support/peak-memory.ts) excludes parent peaks; cold requests and terminal readiness run exclusively.
 
 - **Unit** (`pnpm run test`): vitest over package and example specs under their `tests/**` directories plus repository script specs under `scripts/**/*.spec.ts`; tests stay with the code area they exercise. Every registry gets an HMR-safety test (dispose the contributing fiber, assert cleanup). Prefer edge cases, error paths, event ordering, concurrency races, and permanent tests for contract regressions (see `packages/core/agent-loop/tests/contract-regressions.spec.ts`).
 - **Coverage gate** (`pnpm run test:coverage`): per-file 100% on `packages/*/*/src`. Uncovered lines often indicate dead code; coverage proves execution, not shipped behavior. The `packages/shell/pwsh-local/src` gate needs real `pwsh`: hosts without it skip those tests and the file, while CI provides `pwsh`. Persistence tests read `docs/persistence-schema.json`; the static `verify-persistence-changes` gate regenerates it from source.
@@ -18,7 +20,7 @@ Session fixtures retain headers and payloads but omit body sequence/time envelop
 
 ## How specs execute
 
-Forked workers run several spec files at once, the coverage gate splits into concurrent partitions beside the other gates in its job, and the self-hosted runners share one host and one volume. Only the process is isolated: ports, predictable paths, external namespaces, and inherited children are not. Own each acquired resource through teardown. A spec passing only alone has a test defect, not an unstable runner. [dsh-ci-test-reliability](../.agents/skills/dsh-ci-test-reliability/SKILL.md) owns the allocation, restoration, synchronization, timeout-budget, platform, and teardown rules; its [flake diagnosis workflow](../.agents/skills/dsh-ci-test-reliability/references/ci-flake-diagnosis.md) classifies an existing probabilistic failure. [Unexpected fork exits](../scripts/coverage-fork-diagnostics.ts) report PID, file, code, and signal.
+Forked workers run several spec files at once, the coverage gate splits into [concurrent partitions](../scripts/coverage-partitions.ts) beside the other gates in its job, and the self-hosted runners share one host and one volume. Only the process is isolated: ports, predictable paths, external namespaces, and inherited children are not. Own each acquired resource through teardown. A spec passing only alone has a test defect, not an unstable runner. [dsh-ci-test-reliability](../.agents/skills/dsh-ci-test-reliability/SKILL.md) owns the allocation, restoration, synchronization, timeout-budget, platform, and teardown rules; its [flake diagnosis workflow](../.agents/skills/dsh-ci-test-reliability/references/ci-flake-diagnosis.md) classifies an existing probabilistic failure. [Unexpected fork exits](../scripts/coverage-fork-diagnostics.ts) report PID, file, code, and signal.
 
 ## The with-key policy: inference is cheap here
 

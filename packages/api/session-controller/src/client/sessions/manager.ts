@@ -2,7 +2,7 @@
 
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import { SessionSeq, type SessionId, type SessionSeqCursor } from '@deepseek-ai/dsh-session/types'
-import type { SessionProjectionMap } from '@deepseek-ai/dsh-session-projection/types'
+import type { SessionProjectionMap, SessionProjectionViewValues } from '@deepseek-ai/dsh-session-projection/types'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
 import type {
   SessionControlBaseline,
@@ -58,9 +58,14 @@ export interface SessionListSnapshot {
 
 }
 
-/** Shared projection values and the lifecycle of their explicit baseline read. */
+/**
+ * Every projection value the store currently holds, with the summary mark
+ * stripped, and the lifecycle of its explicit baseline read. This is the full
+ * attached-Session set, not a list row's summary contract (see
+ * `SessionListEntry.projectionValues`).
+ */
 export interface SessionProjectionSnapshot {
-  readonly values: Readonly<Partial<SessionProjectionMap>>
+  readonly values: Readonly<Partial<SessionProjectionViewValues>>
   readonly state: 'idle' | 'loading' | 'ready' | 'migration-required' | 'error'
   readonly error: RemoteFailure | null
 }
@@ -424,7 +429,7 @@ export class SessionManager {
     this.notifier.markDirty()
     this.listInflight = (async () => {
       try {
-        const result = await this.remote.session.list({})
+        const result = await this.remote.session.list({ includeArchived: true })
         if (this.listMutations !== mutations) return
         if (result.ok) {
           const baseline: SessionSummary[] = this.listPhase === 'pending'
@@ -485,13 +490,15 @@ export class SessionManager {
    * state to the list snapshot.
    * @param query - non-blank literal phrase.
    * @param signal - cancellation for superseded UI queries.
+   * @param archivedFilter - which archived Sessions may contribute results.
    * @returns the Host result or a folded transport error.
    */
   async search(
     query: string,
     signal: AbortSignal,
+    archivedFilter?: 'default' | 'show' | 'only',
   ): Promise<RemoteResult<{ items: SessionSearchResultItem[]; hasMore: boolean }>> {
-    const result = await this.remote.session.search({ query }, signal)
+    const result = await this.remote.session.search({ query, ...(archivedFilter === undefined ? {} : { archivedFilter }) }, signal)
     if (!result.ok) return result
     return {
       ok: true,
@@ -506,8 +513,8 @@ export class SessionManager {
    * Contract session.create; on success merge into summaries immediately (no
    * wait for the next refresh). A created session is blank by definition
    * (entity birth precedes the first message).
-   * @param opts - target workspace or working directory, plus an optional caller-owned id.
-   * @returns the create result.
+   * @param opts - target workspace or working directory, an optional blank Session to reuse, and an optional Agent preset.
+   * @returns the create result, naming the Session the Host created or reused.
   */
   async create(
     opts: {
@@ -515,12 +522,18 @@ export class SessionManager {
       cwd?: string
       sessionId?: SessionId
       dedicatedCollaboration?: true
+      agentPreset?: string
+      exactAdopt?: true
     } = {},
   ): Promise<RemoteResult<{ sessionId: SessionId }>> {
-    const shared = opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }
+    const shared = {
+      ...(opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }),
+      ...(opts.agentPreset === undefined ? {} : { agentPreset: opts.agentPreset }),
+      ...(opts.exactAdopt === undefined ? {} : { exactAdopt: opts.exactAdopt }),
+      ...(opts.dedicatedCollaboration === undefined ? {} : { dedicatedCollaboration: opts.dedicatedCollaboration }),
+    }
     const payload = opts.workspaceId !== undefined
-      ? { workspaceId: opts.workspaceId, ...shared,
-        ...(opts.dedicatedCollaboration ? { dedicatedCollaboration: true as const } : {}) }
+      ? { workspaceId: opts.workspaceId, ...shared }
       : { ...(opts.cwd === undefined ? {} : { cwd: opts.cwd }), ...shared }
     const result = await this.remote.session.create(payload)
     if (result.ok) {
@@ -550,7 +563,7 @@ export class SessionManager {
    * immediately (same synchronous-addressability guarantee as create).
    * Blankness starts provisionally true so the authoritative Host summary can
    * preserve it or lower it after an exact cut before the first `turn/start`;
-   * lineage rides parentSessionId. A child published before Workspace
+   * the fork has no durable source relationship. A child published before Workspace
    * attachment fails is also reconciled into the list.
    * @param opts - source session, optional exact inclusive boundary seq, and permission to start migration.
    * @returns the fork result (the child session id).
@@ -570,7 +583,6 @@ export class SessionManager {
     if (childId !== undefined) {
       this.recordMutation({ kind: 'placeholder', summary: { agentAvailable: true,
         sessionId: childId, updatedAt: Date.now(), running: false, blank: true,
-        parentSessionId: opts.sessionId,
         ...(source?.cwd !== undefined ? { cwd: source.cwd } : {}),
       } })
     }
@@ -879,5 +891,6 @@ function applyMutation(summaries: readonly SessionSummary[], mutation: SessionLi
 
 /** Temporary source-plane bridge while the Host contract and client project build independently. */
 function workspaceAttachSessionId(error: RemoteFailure): SessionId | undefined {
-  return error.code === 'session/workspace-attach-failed' ? error.details.sessionId : undefined
+  return error.code === 'session/workspace-attach-failed' && error.details.workspaceAttached !== true
+    ? error.details.sessionId : undefined
 }

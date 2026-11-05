@@ -1,3 +1,4 @@
+import RemoteAccessService from '@deepseek-ai/dsh-api-remote-access'
 import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto'
 import { HostControlAuthority } from '../../../host/desktop-host/src/unix-transport.ts'
 import { UnixHostClient, DesktopHost, ProfileRegistry } from '@deepseek-ai/dsh-slark-desktop-host'
@@ -77,7 +78,9 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
     routes.set(route.path, route.handler); return () => { routes.delete(route.path) }
   } } as never)
   ctx.provide('connection', { fetch: { register: () => async () => {} } } as never)
-  ctx.provide('typert', { lookups: { configure: () => () => {} }, contexts: { configureHost: () => () => {} } } as never)
+  ctx.provide('typert', { lookups: { configure: () => () => {} }, contexts: { configureHost: () => () => {} }, resources: { register: () => () => {} } } as never)
+  ctx.provide('typertGateway', { getPendingRemoteEvents: () => [] } as never)
+  new RemoteAccessService(ctx)
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture', model: 'selected' }) } as never)
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
@@ -315,8 +318,10 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
           objective_ref: 'objective-1', task_grant_ref: 'grant-1', continuation_policy: 'display_only' }, new AbortController().signal)
         : await ctx.sessionController.captureCollaborationSource(source, new AbortController().signal)
   if (mode === 'source-only') {
-    expect((await ctx.sessionController.list({}, new AbortController().signal)).items
-      .find(item => item.sessionId === header.id)?.blank).toBe(false)
+    const beforeRestart = (await ctx.sessionController.list({}, new AbortController().signal)).items
+      .find(item => item.sessionId === header.id)
+    expect(beforeRestart?.blank).toBe(false)
+    expect(beforeRestart?.projections?.values.sessionListMetadata?.blank).toBe(true)
     const controllerEntry = [...ctx.loader.entries()].find(entry => entry.options.id === 'controller')
     if (!controllerEntry?.fiber) throw Error('Controller Loader entry missing')
     for (let cycle = 0; cycle < 2; cycle++) {
@@ -393,7 +398,6 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
   if (mode === 'source-only') {
     const row = (await ctx.sessionController.list({}, new AbortController().signal)).items.find(item => item.sessionId === sessionId)
     expect(row?.blank).toBe(false)
-    expect(row?.projections?.values.sessionListMetadata?.blank).toBe(true)
     expect(session.seq).toBe(1)
     expect(stream).not.toHaveBeenCalled()
   }

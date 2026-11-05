@@ -157,6 +157,33 @@ async function initialize(session: LocalPtySession, terminal: FakeTerminal): Pro
 }
 
 describe('LocalPtySession readiness and output', () => {
+  it('retains terminal output delivered after a foreground stdin wait settles', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const inspector = new FakeInspector()
+    const session = makeSession(terminal, inspector, config())
+    try {
+      await initialize(session, terminal)
+      const operation = session.startSend({ text: 'reader', submit: true })
+      await vi.advanceTimersByTimeAsync(10)
+      inspector.pgid = 789
+      inspector.waiting = true
+      await vi.advanceTimersByTimeAsync(20)
+      const settled = await operation.done
+      expect(settled.waitReason).toBe('stdin_read')
+
+      // Kernel readiness and PTY delivery are independent: place output after
+      // settlement explicitly instead of depending on scheduler contention.
+      terminal.emitData('WAITING\r\n')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(settled.viewport).not.toContain('WAITING')
+      expect(operation.readOutput().delta).toBe('')
+      expect(session.read({ offset: 0, count: 10 }).text).toContain('WAITING')
+    } finally {
+      await session.close('late PTY output cleanup')
+    }
+  })
+
   it('polls startup and settles sends without assembling scrollback for status checks', async () => {
     vi.useFakeTimers()
     const terminal = new FakeTerminal()

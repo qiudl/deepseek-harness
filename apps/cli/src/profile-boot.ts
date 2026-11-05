@@ -26,12 +26,12 @@ import {
   reportSkippedBundles,
   PluginPackages,
   PROFILE_PATCH_FILENAME,
-  PROFILE_TEMPLATES,
   resolveProfileDir,
   type ProfileContext,
   type Profile,
   type RuntimeResolution,
 } from '@deepseek-ai/dsh-app-boot'
+import { PROFILE_TEMPLATES } from '@deepseek-ai/dsh-official-bundles'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { installProxyFromEnvironment } from '@deepseek-ai/dsh-http-proxy'
 import { DSH_LAUNCH_ENVIRONMENT_KEY, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
@@ -127,9 +127,10 @@ export function initializeProfileFromDefault(
       `${NAME}: unknown default profile ${JSON.stringify(fromDefaultProfile)}; expected one of ${expected}`,
     )
   }
-  if (Object.hasOwn(PROFILE_TEMPLATES, name)) {
+  const shipped = Object.keys(PROFILE_TEMPLATES).find(shippedName => shippedName.toLowerCase() === name.toLowerCase())
+  if (shipped !== undefined) {
     throw new Error(
-      `${NAME}: profile ${JSON.stringify(name)} is shipped and cannot be a custom profile target; `
+      `${NAME}: profile ${JSON.stringify(name)} names shipped profile ${JSON.stringify(shipped)} and cannot be a custom profile target; `
       + 'omit --from-default-profile to use it',
     )
   }
@@ -174,9 +175,9 @@ export function initializeProfileFromDefault(
  * the identical base).
  * @param name - the profile name.
  * @param userLayer - `false` skips parsing `cordis.patch.yml` (the default dump).
- * @param fromDefaultProfile - shipped template used once to initialize a missing profile.
+ * @param fromDefaultProfile - shipped template used to initialize an unused profile.
  * @returns the loaded profile.
- * @throws when explicit initialization names an unknown template or an existing profile.
+ * @throws when explicit initialization names an unknown template or a shipped target.
  */
 export function prepareProfile(name: string, userLayer = true, fromDefaultProfile?: string): Profile {
   if (fromDefaultProfile !== undefined) initializeProfileFromDefault(name, fromDefaultProfile)
@@ -204,7 +205,7 @@ interface ComposedProfile {
  * then the telemetry switch.
  * @param name - the profile name.
  * @param patchFiles - `--patch` overlay paths, in argv order.
- * @param fromDefaultProfile - shipped template for a missing named profile.
+ * @param fromDefaultProfile - shipped template used to initialize an unused profile.
  * @param resolvedProfile - application-owned profile and installation.
  * @returns the profile and its patch layers.
  */
@@ -238,7 +239,7 @@ export interface RunProfileOptions {
   profile: string
   /** Loaded application profile; bypasses named profile initialization when supplied. */
   resolvedProfile?: ResolvedProfileRuntime | undefined
-  /** Shipped template used once to initialize a missing profile. */
+  /** Shipped template used to initialize an unused profile before boot. */
   fromDefaultProfile?: string | undefined
   /** `--patch` overlay paths, in argv order. */
   patchFiles: readonly string[]

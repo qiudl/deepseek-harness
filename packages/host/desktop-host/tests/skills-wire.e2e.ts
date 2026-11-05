@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { boot } from '@deepseek-ai/dsh-app-boot'
+import { Peer } from '@deepseek-ai/dsh-client-connection'
 import { SessionSkillCatalog } from '@deepseek-ai/dsh-api-session-controller'
 import type { Context } from '@deepseek-ai/cordis'
 import { DesktopHost } from '../src/desktop-host.ts'
@@ -43,7 +44,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
         expect(['skills/inspectProfile', 'skills/profileCatalog']).toContain(request.method)
         try {
           if (!loaded) throw Error('missing runtime')
-          const value = await loaded.typertGateway.invoke({ namespace: 'skills', method: request.method.split('/')[1]!, args: request.payload.args, signal: new AbortController().signal })
+          const value = await loaded.typertGateway.invoke({ namespace: 'skills', method: request.method.split('/')[1]!, args: request.payload.args, peer: new Peer(loaded, { principal: { kind: 'owner' } }), signal: new AbortController().signal })
           res.end(JSON.stringify({ type: 'server-response', rpcId: request.rpcId, result: { ok: true, value } }))
         } catch (error) { failures.push(String(error)); res.writeHead(500); res.end() }
       })()
@@ -57,6 +58,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
     writeFileSync(config, JSON.stringify([
       { id: 'typert', name: '@deepseek-ai/dsh-typert-registry' },
       { id: 'projection', name: '@deepseek-ai/dsh-session-projection' },
+      { id: 'agents', name: '@deepseek-ai/dsh-agent' },
       { id: 'skills', name: '@deepseek-ai/dsh-skill' },
       { id: 'presets', name: '@deepseek-ai/dsh-agent-preset-registry', config: { default: 'fixture' } },
       { id: 'fixture', name: new URL('../../../preset/agent-preset/lib/index.js', import.meta.url).href, config: {
@@ -65,6 +67,7 @@ it.skipIf(process.platform === 'win32')('installs through the leased socket and 
             config: { dshHome: home(id), agentsHome: join(root, 'isolated-agents'), watch: false } },
         ],
       } },
+      { id: 'remote-access', name: '@deepseek-ai/dsh-api-remote-access' },
       { id: 'gateway', name: '@deepseek-ai/dsh-api-gateway' },
     ]))
     loaded = await boot('skill-wire', config, [], undefined, new URL('../../../api/session-controller/', import.meta.url).href)

@@ -4,10 +4,10 @@ import { runWindowsHostClientWorkerMain } from './windows-host-client-worker-mai
 if (parentPort === null) throw new Error('Windows Host client Worker entry requires a parent port')
 
 const port = parentPort
-await runWindowsHostClientWorkerMain({
+void runWindowsHostClientWorkerMain({
   send: (message) => { port.postMessage(message) },
   subscribe: (listener) => {
     port.on('message', listener)
     return () => { port.off('message', listener) }
   },
-}, workerData as unknown)
+}, workerData as unknown).catch((error: unknown) => { setImmediate(() => { throw error }) })

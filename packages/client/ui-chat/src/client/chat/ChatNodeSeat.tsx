@@ -3,9 +3,11 @@ import { IconAgentPresetOutlineRegular, IconUserOutlineRegular, JsonBlock } from
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { ConversationLocationDataStore, ConversationTurnDataMap } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatNodeHookContext, ChatNodeOwnerProps, ChatFlowSlotProps, UsePresentation } from '../contract/slots.ts'
+import { hasAssistantReplyContent } from '../contract/assistant-content.ts'
 import type { ChatNode } from '../contract/chat-nodes.ts'
 import type { ChatNodeStore } from '../contract/snapshot.ts'
-import { TURN_PROCESS_INDEPENDENT_KINDS, turnProcessAlwaysOpen } from '../contract/turn-process.ts'
+import { isAtOrOutside } from '../contract/group-tree.ts'
+import { turnProcessAlwaysOpen } from '../contract/turn-process.ts'
 import { turnProcessOpen } from '../stores.ts'
 import { hiddenOrCollapsing } from './flow-motion.ts'
 import css from './ChatView.module.css'
@@ -47,8 +49,8 @@ function turnOf(node: ChatNode | undefined): number | undefined {
  */
 export const ChatNodeSeat = memo(function ChatNodeSeat({
   nodeKey, groupPart, useChatNode, useChatNodeProcess, usePresentation,
-  cwd, openFile, openSkill, inspectCall, forkAt,
-  loadImage, renderMessageImages, fileMentions, useStore, actions, renderSlot, t, useChatNodeBottom, deferCollapse, useGroupAction,
+  cwd, openFile, inspectCall, forkAt,
+  loadImage, fileMentions, useStore, actions, renderSlot, t, useChatNodeBottom, deferCollapse, useGroupAction,
 }: ChatNodeSeatProps) {
   const separateProcess = usePresentation(policy => policy.separateProcess === true)
   const bottom = useChatNodeBottom(nodeKey)
@@ -69,15 +71,22 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     }
   }, [actions, processSpec, alwaysOpen])
   const foldCompleted = usePresentation(policy => policy.foldCompletedTurns)
+  const keepReplies = usePresentation(policy => policy.foldedReplies === 'all')
   // A loaded end makes a partial historical Turn eligible without its start.
   const processWindowReady = processSpec !== undefined
     && processPresentation !== undefined
     && foldCompleted
     && processPresentation.turn === processSpec.turn
     && (processPresentation.turnStarted || processPresentation.turnClosed)
+  // With every reply kept, an Assistant reply stays outside whole-Turn folding; its reasoning remains process content.
+  const replyRow = keepReplies
+    && routedNode?.kind === 'assistant-step'
+    && groupPart !== 'reasoning'
+    && hasAssistantReplyContent(routedNode.data.blocks)
   const processMember = routedNode !== undefined
     && processWindowReady
-    && !TURN_PROCESS_INDEPENDENT_KINDS.has(routedNode.kind)
+    && !replyRow
+    && !isAtOrOutside(routedNode, 'turn')
     && routedNode.anchorSeq >= processSpec.processStartSeq
     && (liveProcess || processSpec.answerAnchorSeq === null || routedNode.anchorSeq < processSpec.answerAnchorSeq
       || (groupPart === 'reasoning' && routedNode.kind === 'assistant-step' && routedNode.data.step === processSpec.answerStep))
@@ -87,7 +96,7 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     && groupPart !== 'reasoning'
     && routedNode.kind === 'assistant-step'
     && routedNode.data.step === processSpec.answerStep
-  const ownsDisclosure = routedNode?.kind === 'turn-process' || processAnswer
+  const ownsDisclosure = routedNode?.kind === 'turn-process' || processAnswer || replyRow
   const foldable = processWindowReady
     && (liveProcess || processMember || ownsDisclosure)
   const turnProcess = useMemo(() => processSpec === undefined
@@ -95,18 +104,17 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
     : {
       spec: processSpec,
       foldable,
-      hasContent: !interleavedInput && (processPresentation?.hasExternalProcess === true || processSpec.inlineReasoning),
+      hasContent: !interleavedInput && (processSpec.inlineReasoning || (keepReplies
+        ? processPresentation?.hasNonReplyProcess === true
+        : processPresentation?.hasExternalProcess === true)),
       open: processOpen,
       setOpen,
     }, [
-    foldable, interleavedInput, processOpen, processSpec, processPresentation?.hasExternalProcess, setOpen,
+    foldable, interleavedInput, keepReplies, processOpen, processSpec,
+    processPresentation?.hasExternalProcess, processPresentation?.hasNonReplyProcess, setOpen,
   ])
   const controllerInactive = routedNode?.kind === 'turn-process'
     && foldCompleted && !foldable
-  const compactAnswer = processAnswer
-    && foldable
-    && processPresentation.compactAnswer
-    && !processOpen
   const processHidden = controllerInactive || (foldable && processMember && !processOpen)
   const revealProcess = useCallback(() => {
     if (processMember) setOpen(true)
@@ -128,16 +136,14 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       ...groupPart === undefined ? {} : { groupPart },
       cwd,
       openFile,
-      openSkill,
       inspectCall,
       forkAt,
       loadImage,
-      renderMessageImages,
       fileMentions,
       turnProcess,
     }, [
-    node, groupPart, cwd, openFile, openSkill, inspectCall, forkAt,
-    loadImage, renderMessageImages, fileMentions, turnProcess,
+    node, groupPart, cwd, openFile, inspectCall, forkAt,
+    loadImage, fileMentions, turnProcess,
   ])
   if (routedNode === undefined || owner === null) return null
   if (separateProcess && (groupPart === 'reasoning' || !['user', 'steering', 'assistant-step', 'turn-error', 'turn-max-tokens', 'turn-tail'].includes(routedNode.kind))) return null
@@ -161,7 +167,6 @@ export const ChatNodeSeat = memo(function ChatNodeSeat({
       data-chat-turn={turn}
       data-turn-process-member={processMember || undefined}
       data-turn-process-hidden={processHidden || undefined}
-      data-turn-process-answer={compactAnswer || undefined}
     >
       {speaker !== undefined && <div className={css.messageIdentity}>
         <span className={css.messageAvatar} aria-hidden="true">
