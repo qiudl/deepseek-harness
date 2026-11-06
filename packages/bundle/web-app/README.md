@@ -104,6 +104,8 @@ Each browser session selects a shipped preset (`standard` by default). The Agent
 
 `/internal/desktop-native-room` accepts one room ID under the same worker token and asks the optional Profile-local `dsBotSlarkNativeRoom` service to prepare its Slark bridge Source. The response contains only the room ID and Source coordinates. It rejects a Source in the room Session or with extra fields. Browser cookies cannot call this route.
 
+`/internal/desktop-native-room-retirement` accepts only the complete original join identity under the private worker token and calls the current plugin service's `retireAgent`. It passes no Cloud binding or challenge to the plugin. Its strict result preserves upgrade_required for a missing method; only left certifies a durable close. This route creates no bridge Source or Session and invokes no model.
+
 `/internal/desktop-native-room-operations` uses the same private worker token to call that service's bounded join, message page, acknowledgement, and leave operations. It checks exact command and response fields and returns at most three message lines per page. Browser cookies cannot authorize this route.
 
 `/internal/desktop-native-room-operations` also accepts a bounded `agent-result-chunk` only through the Host's dedicated `profile.native_agent_result` capability. The Host checks the current Account, Slark's signed result ticket, and the live Slark turn before forwarding the chunk to the Profile. The Profile assembles the complete reply, verifies its digest, saves one room result, and publishes one group Session message. A repeated chunk returns the saved receipt.

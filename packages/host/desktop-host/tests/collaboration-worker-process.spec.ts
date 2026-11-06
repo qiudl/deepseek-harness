@@ -1,6 +1,7 @@
+import { parseHostNativeRoomRetirementCommand } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: original Profile worker communication through public handles. */
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -61,7 +62,7 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
-  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }) {
+  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 }) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -73,6 +74,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   const executable = join(root, 'worker.mjs')
   writeFileSync(executable, `
     import { createServer } from 'node:http'
+    import { writeFileSync } from 'node:fs'
     const descriptor = ${JSON.stringify(descriptor)}
     const snapshot = ${JSON.stringify(snapshot)}
     const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
@@ -87,6 +89,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bound-bot-rooms': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-native-room-retirement': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
@@ -114,6 +117,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
         }
         const chunks = []; for await (const chunk of request) chunks.push(chunk)
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if (url.pathname.endsWith('native-room-retirement')) writeFileSync(${JSON.stringify(join(root, 'retirement-request.json'))}, JSON.stringify(input))
         const value = url.pathname.endsWith('reference-capture') ? { untrusted_selection: input,
             independent_reference_capability: process.env.DSH_PROFILE_REFERENCE_TOKEN !== process.env.DSH_PROFILE_SOURCE_TOKEN }
           : url.pathname.endsWith('reference-content') ? { descriptor, reference_request_digest: input.reference_request_digest,
@@ -129,6 +133,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
             { bots: [botIdentity], next_cursor: null })}
           : url.pathname.endsWith('bound-bot-rooms') ? ${JSON.stringify(boundRoomsReply)}
+          : url.pathname.endsWith('native-room-retirement') ? ${JSON.stringify(retirementReply)}
           : url.pathname.endsWith('native-room') ? ${JSON.stringify(nativeRoom)}
           : url.pathname.endsWith('native-room-operations') ? input.operation === 'messages'
             ? { state: 'ok', room_id: input.room_id, next_seq: input.after_seq,
@@ -171,19 +176,19 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms } = worker
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms, retireNativeRoom } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
-    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !listBoundBotRooms)
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !listBoundBotRooms || !retireNativeRoom)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms }
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms, retireNativeRoom, root }
 }
 
 it('reads bound Bot room inventory through the actual worker process and private token', async () => {
@@ -578,4 +583,31 @@ it('reads the full 32 KiB saved Source output through its private worker without
   expect(() => parseHostRemoteSessionJson(sourceOutput)).toThrow()
   expect(await h.collaborationAnalysis({ action: 'read_source_output', target: { ...target } }, signal)).toEqual(sourceOutput)
   expect(signal.aborted).toBe(false)
+})
+
+it('closes an original member through the actual worker private token without Cloud target leakage', async () => {
+  const h = await harness()
+  const query = parseHostNativeRoomRetirementCommand({ operation: 'join', room_id: 'room-1',
+    group_id: '10000000-0000-4000-8000-000000000001', member_id: '20000000-0000-4000-8000-000000000002',
+    cycle: 1, project_id: 'project', agent_id: 'agent', name: 'Original name' })
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-native-room-retirement`, { method: 'POST' })).status).toBe(403)
+  expect(await h.retireNativeRoom(query, new AbortController().signal)).toEqual({ state: 'left', left_room_seq: 0 })
+  expect(JSON.parse(readFileSync(join(h.root, 'retirement-request.json'), 'utf8'))).toEqual(query)
+  await expect(h.retireNativeRoom(query, AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' })
+  h.worker.abort()
+  await expect(h.retireNativeRoom(query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it.each([
+  { state: 'upgrade_required' }, { state: 'conflict' }, { state: 'unavailable' }, { state: 'invalid' },
+  { state: 'left', left_room_seq: Number.MAX_SAFE_INTEGER },
+  { state: 'joined', joined_room_seq: 0 }, { state: 'left', left_room_seq: '0' },
+])('strictly captures the actual worker retirement reply: $state', async (reply) => {
+  const h = await harness(undefined, undefined, undefined, null, undefined, undefined, reply)
+  const query = parseHostNativeRoomRetirementCommand({ operation: 'join', room_id: 'room-1',
+    group_id: '10000000-0000-4000-8000-000000000001', member_id: '20000000-0000-4000-8000-000000000002',
+    cycle: 1, project_id: 'project', agent_id: 'agent', name: 'Original name' })
+  const result = h.retireNativeRoom(query, new AbortController().signal)
+  if (reply.state === 'joined' || typeof reply.left_room_seq === 'string') await expect(result).rejects.toThrow()
+  else expect(await result).toEqual(reply)
 })

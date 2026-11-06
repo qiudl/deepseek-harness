@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-06-native-member-retirement.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-11-06-native-member-retirement.md
+/agent-note-native-member-retirement-acknowledgements:
+  en: bfb07ac9a3f5a198
+  zh: a3c39dcbb18958ec
+/agent-note-native-member-retirement-acknowledgements/problem:
+  en: ff838099634d8e7d
+  zh: b11236431d75233c
+/agent-note-native-member-retirement-acknowledgements/decision:
+  en: a9dd335569a63843
+  zh: 01f978f8f036f03a
+/agent-note-native-member-retirement-acknowledgements/alternatives-considered:
+  en: 62cee5961354b204
+  zh: b4a3b1e9bf50a83d
+/agent-note-native-member-retirement-acknowledgements/verification:
+  en: b47ed955a05a26f9
+  zh: 1eeca4ccd3fae02a
+/agent-note-native-member-retirement-acknowledgements/consequences:
+  en: d2e337ff6ad9d31e
+  zh: 0ec37b8ca6968cc9

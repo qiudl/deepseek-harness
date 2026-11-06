@@ -104,6 +104,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 `/internal/desktop-native-room` 使用同一 worker token 接收单个房间 ID，并调用 Profile 本地可选的 `dsBotSlarkNativeRoom` 服务准备 Slark 桥接 Source。响应只包含房间 ID 和 Source 坐标；房间 Session 自身的 Source 或附带额外字段的响应会被拒绝。浏览器 Cookie 不能调用此入口。
 
+`/internal/desktop-native-room-retirement` 在私有 worker token 下只接收完整原 join 身份，调用当前插件 service 的 `retireAgent`，不向插件传入 Cloud binding 或 challenge。严格结果在方法缺失时保留 upgrade_required；只有 left 才证明持久关闭。本路由不创建 bridge Source 或 Session，也不调用模型。
+
 `/internal/desktop-native-room-operations` 使用同一私有 worker token 调用该服务有界的加入、消息分页、确认与离开操作。入口校验命令及响应的准确字段，每页最多返回三条消息。浏览器 Cookie 不能授权此入口。
 
 `/internal/desktop-native-room-operations` 还只通过 Host 专用的 `profile.native_agent_result` 能力接收有界的 `agent-result-chunk`。Host 在转发给 Profile 前检查当前 Account、Slark 签名结果票据及仍有效的 Slark 轮次。Profile 按轮次组装完整回复、验证摘要、保存一条房间结果，并发布一条群 Session 消息。重复分块返回已保存的回执。

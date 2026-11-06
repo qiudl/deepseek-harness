@@ -120,8 +120,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     state_revision: 1, membership_snapshot: 'a'.repeat(64),
     items: [{ room_id: 'room_1', member_set_digest: 'b'.repeat(64) }], next_cursor: null }
   const roomsForBot = vi.fn(async (_query: { botId: string; limit: number; cursor: string | null }) => inventoryPage)
+  const retireAgent = vi.fn(async () => ({ state: 'left', left_room_seq: 0 }))
   const nativeRoom = {
     roomsForBot: roomsForBot as typeof roomsForBot | undefined,
+    retireAgent: retireAgent as typeof retireAgent | undefined,
     prepare: vi.fn(async () => ({ room_id: 'room_1', source: {
       workspace_id: target.workspace_id, session_id: 'bridge_1',
       source_message_id: 'source_1', source_revision: '1',
@@ -340,7 +342,16 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   nativeRoom.roomsForBot = undefined
   expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
   nativeRoom.roomsForBot = roomsForBot
+  const retirement = { operation: 'join', ...roomBase, group_id: groupId,
+    project_id: 'project', agent_id: 'agent', name: 'Original frozen name' }
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'left', left_room_seq: 0 })
+  expect(retireAgent).toHaveBeenCalledWith({ roomId: 'room_1', groupId,
+    memberId: roomBase.member_id, cycle: 1, projectId: 'project', agentId: 'agent', name: 'Original frozen name' })
+  nativeRoom.retireAgent = undefined
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'upgrade_required' })
+  nativeRoom.retireAgent = retireAgent
   disposeNativeRoom()
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'upgrade_required' })
   expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
   expect((await postNative('', { room_id: 'room_1' })).status).toBe(422)
   expect((await postNative('-operations', { operation: 'messages', ...roomBase,

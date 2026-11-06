@@ -119,6 +119,11 @@ export interface ProfileWorkerHandle {
   /** Read a private participation page from the selected exclusive-writer Profile. */
   readonly listBoundBotRooms?: (query: import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsQuery,
     signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsRead>
+  /** Persist a fence for the complete original member identity without joining it. */
+  readonly retireNativeRoom?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomRetirementCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomRetirementReply>
   /** Prepare a native room's bridge Source in the selected Profile writer. */
   readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>

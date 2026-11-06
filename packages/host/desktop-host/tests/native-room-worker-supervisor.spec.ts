@@ -101,3 +101,34 @@ it('bound-room inventory is fenced to its current worker and absent implementati
   onTestFinished(() => old.disposeAll()); await old.start(profile)
   await expect(old.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).rejects.toMatchObject({ code: 'upgrade_required' })
 })
+
+it('retirement uses only the current worker and has no ordinary-operation fallback', async () => {
+  let mode: 'left' | 'upgrade' | 'cancel' | 'dispose' = 'left'
+  let controller = new AbortController()
+  const calls: unknown[] = []
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    retireNativeRoom: async (command: unknown) => {
+      calls.push(command)
+      if (mode === 'cancel') controller.abort()
+      if (mode === 'dispose') await workers.dispose(profile.profileId)
+      return mode === 'upgrade' ? { state: 'upgrade_required' as const } : { state: 'left' as const, left_room_seq: 0 }
+    },
+    operateNativeRoom: async () => { throw Error('must not fall back') },
+  }))
+  onTestFinished(() => workers.disposeAll())
+  await expect(workers.retireNativeRoom(profile.profileId, join, controller.signal)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(profile)
+  await expect(workers.retireNativeRoom(profile.profileId, join, controller.signal)).resolves.toEqual({ state: 'left', left_room_seq: 0 })
+  expect(calls).toEqual([join])
+  mode = 'upgrade'
+  await expect(workers.retireNativeRoom(profile.profileId, join, controller.signal)).resolves.toEqual({ state: 'upgrade_required' })
+  mode = 'cancel'
+  await expect(workers.retireNativeRoom(profile.profileId, join, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  controller = new AbortController(); mode = 'dispose'
+  await expect(workers.retireNativeRoom(profile.profileId, join, controller.signal)).rejects.toMatchObject({ code: 'stale' })
+  const old = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(() => old.disposeAll())
+  await old.start(profile)
+  await expect(old.retireNativeRoom(profile.profileId, join, controller.signal)).rejects.toMatchObject({ code: 'upgrade_required' })
+})

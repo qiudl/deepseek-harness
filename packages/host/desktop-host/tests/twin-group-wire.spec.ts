@@ -1,3 +1,4 @@
+import { parseHostNativeRoomRetirementTarget, encodeHostNativeRoomRetirementProofPayload, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { generateKeyPairSync, randomUUID, verify } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -42,8 +43,10 @@ async function fixture(supported = true) {
   })
   const operate = vi.fn(async (_profileId: string, command: { operation: string }, _signal: AbortSignal): Promise<HostNativeRoomReply> =>
     command.operation === 'join' ? { state: 'joined', joined_room_seq: 7 } : { state: 'left', left_room_seq: 9 })
+  const retire = vi.fn(async (_profileId: string, _command: unknown, _signal: AbortSignal): Promise<HostNativeRoomRetirementReply> =>
+    ({ state: 'left', left_room_seq: 0 }))
   const authority = new HostControlAuthority({ identity, host, now: clock.now, profilePersistenceGeneration: () => 1,
-    ...(supported ? { listBoundBotRooms: list, operateNativeRoom: operate } : {}) })
+    ...(supported ? { listBoundBotRooms: list, operateNativeRoom: operate, retireNativeRoom: retire } : {}) })
   const lifetime = new AbortController(), session = authority.openSession(ownerId, lifetime.signal)
   onTestFinished(() => { lifetime.abort(); session.close() })
   const seen: HostControlFrame[] = []
@@ -58,7 +61,11 @@ async function fixture(supported = true) {
   const target = parseHostBoundBotRoomsTarget({ ...challenge, bot_id: 'operator', limit: 20, cursor: null })
   const projection = parseHostNativeRoomProjectionTarget({ ...challenge, command_request_id: randomUUID(), command: {
     operation: 'join', room_id: 'room-1', group_id: randomUUID(), member_id: randomUUID(), cycle: 1, project_id: 'project', agent_id: 'my-twin', name: 'My twin' } })
-  return { client, host, ownerId, profile, keys, page, list, operate, time, input, target, projection, seen,
+  const retirement = parseHostNativeRoomRetirementTarget({ ...challenge,
+    join_command_request_id: projection.command_request_id, join_command: projection.command,
+    leave_command_request_id: randomUUID(), leave_command: { operation: 'leave', room_id: projection.command.room_id,
+      member_id: projection.command.member_id, cycle: projection.command.cycle } })
+  return { client, host, ownerId, profile, keys, page, list, operate, retire, retirement, time, input, target, projection, seen,
     grant: () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid' }),
     alter: (next: typeof alter) => { alter = next } }
 }
@@ -202,5 +209,78 @@ it.skipIf(process.platform === 'win32').each(['page', 'projection'] as const)(
         : f.client.projectNativeRoom({ ...f.input, target: f.projection })
       await expect(result).rejects.toMatchObject({ code: 'unavailable' })
     }
+  },
+)
+
+it.skipIf(process.platform === 'win32')('retirement signs the complete original pair only through the actual current Account Profile', async () => {
+  const f = await fixture()
+  await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement })).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.retire).not.toHaveBeenCalled()
+  await f.grant()
+  const proof = await f.client.retireNativeRoom({ ...f.input, target: f.retirement })
+  expect(proof.target).toEqual(f.retirement)
+  expect(proof.reply).toEqual({ state: 'left', left_room_seq: 0 })
+  expect(proof.host_profile_id).toBe(f.profile.profileId)
+  expect(f.retire).toHaveBeenCalledWith(f.profile.profileId, f.retirement.join_command, expect.any(AbortSignal))
+  expect(verify(null, encodeHostNativeRoomRetirementProofPayload(proof), f.keys.publicKey,
+    Buffer.from(proof.signature, 'base64url'))).toBe(true)
+  expect(f.operate).not.toHaveBeenCalled()
+  expect(f.list).not.toHaveBeenCalled()
+})
+
+it.skipIf(process.platform === 'win32')('retirement requires its independent callback and refuses every unsuccessful plugin result', async () => {
+  const old = await fixture(false); await old.grant()
+  const before = old.seen.length
+  await expect(old.client.retireNativeRoom({ ...old.input, target: old.retirement })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen).toHaveLength(before)
+  Reflect.set(old.client.inspection, 'capabilities', [...old.client.inspection.capabilities, 'profile.native_room_retirement'])
+  await expect(old.client.retireNativeRoom({ ...old.input, target: old.retirement })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.retire).not.toHaveBeenCalled()
+  const f = await fixture(); await f.grant()
+  for (const state of ['upgrade_required', 'conflict', 'unavailable', 'invalid'] as const) {
+    f.retire.mockResolvedValueOnce({ state })
+    await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement }))
+      .rejects.toMatchObject({ code: state === 'invalid' ? 'unavailable' : state })
+  }
+})
+
+it.skipIf(process.platform === 'win32')('retirement rechecks expiry and Account after its awaited close', async () => {
+  const f = await fixture(); await f.grant()
+  for (const expires_at of [1000, 31001])
+    await expect(f.client.retireNativeRoom({ ...f.input, target: { ...f.retirement, expires_at } })).rejects.toMatchObject({ code: 'stale' })
+  expect(f.retire).not.toHaveBeenCalled()
+  f.retire.mockImplementationOnce(async () => { f.time.value = 2000; return { state: 'left', left_room_seq: 0 } })
+  await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement })).rejects.toMatchObject({ code: 'stale' })
+  f.time.value = 1000
+  f.retire.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return { state: 'left', left_room_seq: 0 } })
+  await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement })).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it.skipIf(process.platform === 'win32')('retirement refuses proof tampering and changed original command requests', async () => {
+  const f = await fixture(); await f.grant()
+  for (const part of ['signature', 'account_subject', 'process_nonce', 'target'] as const) {
+    f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_retirement'
+      ? { ...frame, result: { proof: { ...frame.result.proof,
+        [part]: part === 'signature' ? 'A'.repeat(86) : part === 'process_nonce' ? 'C'.repeat(42) + 'A' :
+          part === 'target' ? { ...frame.result.proof.target, leave_command_request_id: randomUUID() } : randomUUID() } } } : frame)
+    await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+})
+
+it.skipIf(process.platform === 'win32').each(['closed', 'peer', 'cancel', 'method', 'request'] as const)(
+  'retirement rejects response-time transport changes: %s', async (mode) => {
+    const f = await fixture(); await f.grant()
+    const cancel = new AbortController()
+    f.alter((frame) => {
+      if (mode === 'closed') f.client.close()
+      if (mode === 'peer') Reflect.set(f.client.inspection, 'process_nonce', 'C'.repeat(42) + 'A')
+      if (mode === 'cancel') cancel.abort()
+      if (mode === 'request') return f.seen.at(-1)!
+      if (mode === 'method') return { version: 1, type: 'result', request_id: frame.request_id,
+        method: 'profile.bot_roster', result: { page: null } }
+      return frame
+    })
+    await expect(f.client.retireNativeRoom({ ...f.input, target: f.retirement, signal: cancel.signal }))
+      .rejects.toMatchObject(mode === 'cancel' ? { name: 'AbortError' } : { code: 'unavailable' })
   },
 )

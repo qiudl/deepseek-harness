@@ -1,3 +1,4 @@
+import { handleDesktopNativeRoomRetirementRequest } from './desktop-native-room-retirement.ts'
 import { handleDesktopBoundBotRoomsRequest } from './desktop-bound-bot-rooms.ts'
 import { bindDesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
@@ -283,6 +284,30 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.roomsForBot) return { state: 'upgrade_required' }
           const result = await service.roomsForBot({ botId: query.bot_id, limit: query.limit, cursor: query.cursor })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-retirement',
+      handler: (req, res) => handleDesktopNativeRoomRetirementRequest(req, res, sourceToken,
+        async (command, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            retireAgent?: (input: {
+              roomId: string
+              groupId: string
+              memberId: string
+              cycle: number
+              projectId: string
+              agentId: string
+              name: string
+            }) => Promise<unknown>
+          }
+          if (!service?.retireAgent) return { state: 'upgrade_required' }
+          const result = await service.retireAgent({ roomId: command.room_id, groupId: command.group_id,
+            memberId: command.member_id, cycle: command.cycle, projectId: command.project_id,
+            agentId: command.agent_id, name: command.name })
           signal.throwIfAborted()
           return result
         }),

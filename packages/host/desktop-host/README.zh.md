@@ -95,6 +95,8 @@ POSIX 提交同步回执文件及目录；恢复读取在返回先前已发布�
 
 `profile.bound_bot_rooms` 通过当前获授权 Account 的实际 Profile，读取当前 DS Bot 插件中某个 Bot 参加的原生群。私有 worker 只收到 Bot 和有界分页选择条件。安装密钥签署的页面绑定调用方新挑战值、原绑定选择条件、Account、Profile、Host 进程及完整页面；挑战值须在 30 秒内到期。成员快照变化、Bot 不可用或插件能力缺失均不能当作完整空目录。绑定选择条件只是回显上下文，不代表 Host 已验证 Slark 绑定。Slark 接受证明前必须另验当前绑定及已登记的实时 Host；目录本身不授权后续模型调用。
 
+`profile.native_room_retirement` 通过专用 worker 操作关闭完整原成员身份。它在 await 前后检查当前 Account/Profile 和 worker 归属，再签署 durable left 边界以及两个原请求 ID 和命令。client 另验实际 peer、挑战值有效期、target 和签名。能力缺失要求升级；恢复保留原身份，不回落普通 leave。清理不要求原 Bot 仍在目录中。
+
 `profile.native_room_projection` 在相同 Account 和挑战值检查下，签署原生加入或离开命令的成功响应，包含原请求 ID、成员 ID 和周期。冲突或接收结果未知时不产生成功证明。恢复保留原命令；离开清理不要求原 Bot 仍在目录中。这两个方法分别协商独立能力，旧原生群响应结构保持不变。
 
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
