@@ -117,6 +117,14 @@ it.skipIf(process.platform === 'win32')('requires all composed capability owners
     expect(f.client.inspection.capabilities.includes('profile.twin_binding' as never)).toBe(false)
     await expect(f.client.operateTwinBinding({ ...f.input, input: f.confirm() })).rejects.toMatchObject({ code: 'upgrade_required' })
     expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.twin_binding')).toBe(false)
+    // A caller can lie about negotiated capabilities; the Host executor still owns admission.
+    Object.defineProperty(f.client.inspection, 'capabilities', {
+      value: [...f.client.inspection.capabilities, 'profile.twin_binding'],
+    })
+    await expect(f.client.operateTwinBinding({ ...f.input, input: f.confirm() }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.twin_binding')).toBe(true)
+    expect(f.resolver).not.toHaveBeenCalled()
   }
 })
 
