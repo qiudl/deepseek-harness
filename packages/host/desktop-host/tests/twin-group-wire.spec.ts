@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
 import { encodeHostBoundBotRoomsProofPayload, encodeHostNativeRoomProjectionProofPayload,
   parseHostBoundBotRoomsPage, parseHostBoundBotRoomsTarget, parseHostNativeRoomProjectionTarget,
-  parseHostBoundBotRoomsQuery } from '@deepseek-ai/dsh-host-control-protocol'
+  parseHostBoundBotRoomsQuery, parseHostNativeRoomProjectionProof } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBoundBotRoomsRead, HostControlFrame, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -104,6 +104,11 @@ it.skipIf(process.platform === 'win32')('preserves changed and unavailable outco
   await expect(old.client.listBoundBotRooms({ ...old.input, target: old.target })).rejects.toMatchObject({ code: 'upgrade_required' })
   await expect(old.client.projectNativeRoom({ ...old.input, target: old.projection })).rejects.toMatchObject({ code: 'upgrade_required' })
   expect(old.seen).toHaveLength(before)
+  Reflect.set(old.client.inspection, 'capabilities', [...old.client.inspection.capabilities,
+    'profile.bound_bot_rooms', 'profile.native_room_projection'])
+  await expect(old.client.listBoundBotRooms({ ...old.input, target: old.target })).rejects.toMatchObject({ code: 'upgrade_required' })
+  await expect(old.client.projectNativeRoom({ ...old.input, target: old.projection })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.list).not.toHaveBeenCalled(); expect(old.operate).not.toHaveBeenCalled()
 })
 
 it.skipIf(process.platform === 'win32')('enforces nonce expiry before and after IO and current owner revocation', async () => {
@@ -132,6 +137,12 @@ it.skipIf(process.platform === 'win32')('refuses tampered pages, identities, ori
       return { ...frame, result: { state: 'page', proof: { ...proof, [part]: changed } } }
     })
     await expect(f.client.listBoundBotRooms({ ...f.input, target: f.target })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+  for (const part of ['signature', 'account_subject'] as const) {
+    f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_projection'
+      ? { ...frame, result: { proof: parseHostNativeRoomProjectionProof({ ...frame.result.proof,
+        [part]: part === 'signature' ? 'A'.repeat(86) : randomUUID() }) } } : frame)
+    await expect(f.client.projectNativeRoom({ ...f.input, target: f.projection })).rejects.toMatchObject({ code: 'profile_mismatch' })
   }
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.native_room_projection'
     ? { ...frame, result: { proof: { ...frame.result.proof,

@@ -209,6 +209,19 @@ it.each([
   else expect(await result).toEqual(reply)
 })
 
+it.each(['excess', 'stuck', 'progress'] as const)('checks actual worker page bounds and cursor progress: %s', async (mode) => {
+  const page = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: mode === 'excess' ? [
+      { room_id: 'room-1', member_set_digest: 'b'.repeat(64) },
+      { room_id: 'room-2', member_set_digest: 'b'.repeat(64) },
+    ] : [], next_cursor: mode === 'stuck' ? 'here' : 'next' }
+  const h = await harness(undefined, undefined, undefined, null, undefined, page)
+  const result = h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: 'here' }),
+    new AbortController().signal)
+  if (mode === 'progress') expect(await result).toEqual(page)
+  else await expect(result).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
+
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
   const h = await harness(), signal = new AbortController().signal
   const command = { operation: 'messages' as const, room_id: nativeRoom.room_id,
