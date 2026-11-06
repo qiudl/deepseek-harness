@@ -963,10 +963,24 @@ export class Session implements SessionFace {
   }
 }
 
-/** Run one callback on the next animation frame, or a macrotask where no frame clock exists. */
+/** Run after a frame, but settle hidden or occluded views without a frame clock. */
 function scheduleFrame(fn: () => void): void {
-  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { fn() })
-  else setTimeout(fn, 0)
+  if (typeof requestAnimationFrame !== 'function'
+    || (typeof document !== 'undefined' && document.hidden)) {
+    setTimeout(fn, 0)
+    return
+  }
+  let finished = false
+  const run = (): void => {
+    if (finished) return
+    finished = true
+    fn()
+  }
+  const fallback = setTimeout(run, 250)
+  requestAnimationFrame(() => {
+    clearTimeout(fallback)
+    run()
+  })
 }
 
 /** Attachment references in one structurally-read content block list, in block order. */
