@@ -14,6 +14,11 @@ import type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage,
   ProfileNativeRoomRequest, ProfileNativeRoomOperationRequest,
   HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomTurnAssertion } from '@deepseek-ai/dsh-host-control-protocol'
+import { operateAccountTwinBinding } from './account-twin-binding.ts'
+import type { TwinBindingReceipts } from './twin-binding-receipts.ts'
+import { parseHostTwinBindingInput, parseHostTwinBindingResult, encodeHostTwinBindingAck,
+  type HostTwinBindingInput, type HostTwinBindingResult,
+  type ProfileTwinBindingRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentity, resolveAccountBotIdentityV2, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from './account-bot-identity.ts'
 import { deliverAccountNativeAgentResultChunk } from './account-native-agent-result.ts'
@@ -330,6 +335,8 @@ export interface UnixHostServerOptions {
     signal: AbortSignal) => Promise<HostBotGroupResponse>
   /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
   readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
+  /** Private metadata-only receipt storage; it never opens model or Session history. */
+  readonly createTwinBindingReceiptStore?: (profileId: string) => TwinBindingReceipts
   /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
   readonly diagnostics?: HostDiagnostics
   /** Read effective choice only in the Account-authorized Profile worker. */
@@ -602,6 +609,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom'
+    | 'createTwinBindingReceiptStore'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2489,6 +2497,19 @@ export class HostControlAuthority {
             this.options.host, { resolveBotIdentity: resolve }, account, frame.params.bot_id, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result: { identity } })
+        } else if (frame.method === 'profile.twin_binding') {
+          const resolve = this.options.resolveBotIdentity, store = this.options.createTwinBindingReceiptStore
+          const trustedKeyrings = this.options.trustedBotGroupKeyrings
+          if (!resolve || !store || !trustedKeyrings?.length) throw new HostAuthorityError('upgrade_required')
+          const identity = this.options.identity
+          const result = await operateAccountTwinBinding({
+            host: this.options.host, workers: { resolveBotIdentity: resolve },
+            peer: { installationId: identity.installationId, publicKey: identity.installationPublicKey,
+              hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce },
+            trustedKeyrings, store, now: clock,
+            sign: payload => sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url'),
+          }, commandReadAccount(frame.params, ownerId), frame.params.input, context.signal)
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.bot_roster') {
           const list = this.options.listBotRoster
           if (!list) throw new HostAuthorityError('upgrade_required')
@@ -2751,6 +2772,8 @@ export class HostControlAuthority {
               'profile.skillhub_package_snapshot', 'profile.skillhub_execution_receipt'] : []),
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity', 'profile.bot_identity_v2'] : []),
+          ...(this.options.resolveBotIdentity && this.options.createTwinBindingReceiptStore
+            && this.options.trustedBotGroupKeyrings?.length ? ['profile.twin_binding'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
@@ -4608,6 +4631,41 @@ export class UnixHostClient {
     return this.readAccountBotIdentity(input, 'profile.bot_identity_v2', parseHostBotIdentityV2)
   }
 
+  /**
+   * Submit a signed owner consent or recover its original durable acknowledgement.
+   * @param input - Current Account plus a complete purpose-bound Cloud command.
+   * @returns An acknowledgement or explicit receipt absence, never an active grant.
+   */
+  async operateTwinBinding(input: Omit<Parameters<UnixHostClient['resolveBotIdentity']>[0], 'botId'> & {
+    readonly input: HostTwinBindingInput
+  }): Promise<HostTwinBindingResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.twin_binding' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const body = parseHostTwinBindingInput(input.input)
+    const request: ProfileTwinBindingRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.twin_binding', params: { ...this.collaborationAccountRequestParams(input), input: body } }
+    const frame = await this.call(request, input.signal)
+    input.signal?.throwIfAborted()
+    if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
+    const result = parseHostTwinBindingResult(frame.result)
+    if (body.command.operation === 'confirm' && result.state === 'missing') throw new HostAuthorityError('unavailable')
+    if (result.state === 'acknowledged') {
+      const a = result.ack, d = body.directive, peer = this.inspection
+      const fields = ['authorityEnvironmentId', 'ownerUserId', 'accountIssuer', 'accountSubject',
+        'accountBindingId', 'accountBindingVersion', 'requestId', 'bindingId', 'bindingGeneration',
+        'scopeVersion', 'scopeDigest', 'payloadDigest'] as const
+      if (fields.some(key => a[key] !== d[key]) || a.peer.installationId !== peer.installation_id
+        || a.peer.publicKey !== peer.installation_public_key
+        || (body.command.operation === 'confirm' && (a.hostProfileId !== body.command.offer.directions[0].scope.sourceRef.hostProfileId
+          || a.botId !== body.command.offer.directions[0].scope.sourceRef.botRootId)))
+        throw new HostAuthorityError('profile_mismatch')
+      if (!verify(null, Buffer.from(encodeHostTwinBindingAck(a)), publicKeyObject(peer.installation_public_key),
+        Buffer.from(a.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
+    }
+    return result
+  }
+
   private async readAccountBotIdentity<T extends HostBotIdentity>(
     input: Parameters<UnixHostClient['resolveBotIdentity']>[0],
     method: ProfileBotIdentityRequest['method'] | ProfileBotIdentityV2Request['method'],
@@ -5815,7 +5873,8 @@ export class UnixHostClient {
       | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotRosterRequest
+      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
+      | ProfileTwinBindingRequest | ProfileBotRosterRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest

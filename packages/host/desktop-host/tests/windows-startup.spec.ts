@@ -23,6 +23,7 @@ import { WindowsHostTransport, type StartWindowsHostTransportOptions } from '../
 import { WindowsHostCarrier } from '../src/windows-host-carrier.ts'
 import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
 import { UnixHostClient } from '../src/unix-transport.ts'
+import * as hostControl from '../src/unix-transport.ts'
 import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
 
 vi.mock('node:fs', async (load) => {
@@ -213,6 +214,23 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('composes twin receipt storage only for a registry-resolved Profile and a fixed native private path', async () => {
+    const Original = hostControl.HostControlAuthority
+    let captured: ConstructorParameters<typeof Original>[0] | undefined
+    const observed = vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(class extends Original {
+      constructor(options: ConstructorParameters<typeof Original>[0]) { super(options); captured = options }
+    })
+    onTestFinished(() => { observed.mockRestore() })
+    const state = fixture()
+    const app = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    const local = await app.host.bootstrapLocalProfile({ keyHandle: 'windows-credential:twin',
+      unlockMaterial, ownerId: 'local-connection' })
+    if (!captured?.createTwinBindingReceiptStore) throw Error('missing twin receipt composition')
+    expect(() => captured!.createTwinBindingReceiptStore!(randomUUID())).toThrow('stale')
+    expect(captured.createTwinBindingReceiptStore(local.profileId)).toBeDefined()
+  })
+
   it('wires Slark federation verification through Windows startup', async () => {
     const state = fixture(), now = 1_780_000_000_000
     const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)

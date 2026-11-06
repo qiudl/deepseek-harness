@@ -9,6 +9,7 @@ import { HostAuthorityError } from './types.ts'
 /** Read only a single owner-private regular file, without following a final symlink. */
 export function readOwnerPrivateFile(
   path: string, uid: number, maximumBytes: number, invalid: () => Error,
+  beforeClose?: (fd: number, bytes: Buffer) => void,
 ): Buffer | undefined {
   let fd: number
   try { fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK) } catch (error) {
@@ -19,7 +20,9 @@ export function readOwnerPrivateFile(
     const stat = fstatSync(fd)
     if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== uid || (stat.mode & 0o077) !== 0
       || stat.size > maximumBytes) throw invalid()
-    return readFileSync(fd)
+    const bytes = readFileSync(fd)
+    beforeClose?.(fd, bytes)
+    return bytes
   } finally { closeSync(fd) }
 }
 

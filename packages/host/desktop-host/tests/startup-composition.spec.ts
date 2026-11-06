@@ -322,6 +322,10 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     .toThrow()
   expect(await serverOptions.createSkillHubPackageStore?.(profile.profileId, '1', 'a'.repeat(64)))
     .toBeDefined()
+  expect(() => capturedServerOptions.createTwinBindingReceiptStore?.(randomUUID()))
+    .toThrow()
+  expect(capturedServerOptions.createTwinBindingReceiptStore?.(profile.profileId)).toBeDefined()
+  expect(lstatSync(join(root, 'profiles', profile.profileId, 'twin-binding-receipts')).mode & 0o777).toBe(0o700)
   expect(serverOptions.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => profile.profileId })).toBeNull()
   expect(serverOptions.modelClaimRecovery?.pendingReceipts({
