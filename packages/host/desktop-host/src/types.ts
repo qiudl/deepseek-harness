@@ -116,6 +116,9 @@ export interface ProfileWorkerHandle {
   /** Page public Bot identities only from the selected exclusive-writer Profile. */
   readonly listBotRoster?: (afterBotId: string, limit: number, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null>
+  /** Read a private participation page from the selected exclusive-writer Profile. */
+  readonly listBoundBotRooms?: (query: import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsQuery,
+    signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsRead>
   /** Prepare a native room's bridge Source in the selected Profile writer. */
   readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>

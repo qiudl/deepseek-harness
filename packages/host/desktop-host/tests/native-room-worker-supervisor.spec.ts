@@ -1,3 +1,4 @@
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsPage } from '@deepseek-ai/dsh-host-control-protocol'
 import { expect, it, onTestFinished } from 'vitest'
 import type { HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
@@ -67,4 +68,36 @@ it('accepts only the exact native room command reply from a live Profile worker'
   mode = 'dispose'; signal = new AbortController()
   await expect(workers.operateNativeRoom(profile.profileId, join, signal.signal))
     .rejects.toMatchObject({ code: 'stale' })
+})
+
+it('bound-room inventory is fenced to its current worker and absent implementations require upgrade', async () => {
+  const query = parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: null })
+  const page = parseHostBoundBotRoomsPage({ state: 'page', bot_id: query.bot_id, workspace_id: '123e4567-e89b-42d3-a456-426614174000', state_revision: 1, membership_snapshot: 'a'.repeat(64), items: [], next_cursor: null })
+  let mode: 'valid' | 'wrong' | 'excess' | 'cursor' | 'negative' | 'dispose' = 'valid'
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    listBoundBotRooms: async () => {
+      if (mode === 'dispose') await workers.dispose(profile.profileId)
+      if (mode === 'negative') return { state: 'bot_unavailable' as const }
+      if (mode === 'excess') return { ...page, items: Array.from({ length: 2 }, (_, i) =>
+        ({ room_id: `room-${i}` as never, member_set_digest: page.membership_snapshot })) }
+      if (mode === 'cursor') return { ...page, next_cursor: 'here' as never }
+      return mode === 'wrong' ? { ...page, bot_id: 'another' as typeof page.bot_id } : page
+    } }))
+  onTestFinished(() => workers.disposeAll())
+  await expect(workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+  await workers.start(profile)
+  expect(await workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).toEqual(page)
+  mode = 'wrong'; await expect(workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  mode = 'excess'
+  await expect(workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  mode = 'cursor'
+  await expect(workers.listBoundBotRooms(profile.profileId, { ...query, cursor: 'here' as never }, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'profile_mismatch' })
+  mode = 'negative'
+  expect(await workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).toEqual({ state: 'bot_unavailable' })
+  mode = 'dispose'; await expect(workers.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+  const old = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(() => old.disposeAll()); await old.start(profile)
+  await expect(old.listBoundBotRooms(profile.profileId, query, new AbortController().signal)).rejects.toMatchObject({ code: 'upgrade_required' })
 })

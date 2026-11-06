@@ -10,6 +10,7 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
   parseHostRemoteSessionJson,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBoundBotRoomsQuery } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
@@ -60,7 +61,7 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
-  botGroupReply: unknown = { state: 'missing' }) {
+  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -84,6 +85,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bound-bot-rooms': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
@@ -126,6 +128,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
           : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
             { bots: [botIdentity], next_cursor: null })}
+          : url.pathname.endsWith('bound-bot-rooms') ? ${JSON.stringify(boundRoomsReply)}
           : url.pathname.endsWith('native-room') ? ${JSON.stringify(nativeRoom)}
           : url.pathname.endsWith('native-room-operations') ? input.operation === 'messages'
             ? { state: 'ok', room_id: input.room_id, next_seq: input.after_seq,
@@ -168,20 +171,56 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup } = worker
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
-    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup)
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !listBoundBotRooms)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup }
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms }
 }
+
+it('reads bound Bot room inventory through the actual worker process and private token', async () => {
+  const page = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: [{ room_id: 'room-1', member_set_digest: 'b'.repeat(64) }], next_cursor: null }
+  const query = parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 20, cursor: null })
+  const h = await harness(undefined, undefined, undefined, null, undefined, page)
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bound-bot-rooms`, { method: 'POST' })).status).toBe(403)
+  expect(await h.listBoundBotRooms(query, new AbortController().signal)).toEqual(page)
+  await expect(h.listBoundBotRooms(query, AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' })
+  h.worker.abort()
+  await expect(h.listBoundBotRooms(query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it.each([
+  { state: 'upgrade_required' }, { state: 'snapshot_changed' },
+  { state: 'page', bot_id: 'other', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: [], next_cursor: null },
+])('preserves explicit worker inventory outcomes and refuses a different Bot: $state', async (reply) => {
+  const h = await harness(undefined, undefined, undefined, null, undefined, reply)
+  const result = h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 20, cursor: null }), new AbortController().signal)
+  if (reply.state === 'page') await expect(result).rejects.toMatchObject({ code: 'profile_mismatch' })
+  else expect(await result).toEqual(reply)
+})
+
+it.each(['excess', 'stuck', 'progress'] as const)('checks actual worker page bounds and cursor progress: %s', async (mode) => {
+  const page = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: mode === 'excess' ? [
+      { room_id: 'room-1', member_set_digest: 'b'.repeat(64) },
+      { room_id: 'room-2', member_set_digest: 'b'.repeat(64) },
+    ] : [], next_cursor: mode === 'stuck' ? 'here' : 'next' }
+  const h = await harness(undefined, undefined, undefined, null, undefined, page)
+  const result = h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: 'here' }),
+    new AbortController().signal)
+  if (mode === 'progress') expect(await result).toEqual(page)
+  else await expect(result).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
 
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
   const h = await harness(), signal = new AbortController().signal

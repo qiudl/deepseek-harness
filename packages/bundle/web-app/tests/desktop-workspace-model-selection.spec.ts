@@ -116,7 +116,12 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
+  const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
+    state_revision: 1, membership_snapshot: 'a'.repeat(64),
+    items: [{ room_id: 'room_1', member_set_digest: 'b'.repeat(64) }], next_cursor: null }
+  const roomsForBot = vi.fn(async (_query: { botId: string; limit: number; cursor: string | null }) => inventoryPage)
   const nativeRoom = {
+    roomsForBot: roomsForBot as typeof roomsForBot | undefined,
     prepare: vi.fn(async () => ({ room_id: 'room_1', source: {
       workspace_id: target.workspace_id, session_id: 'bridge_1',
       source_message_id: 'source_1', source_revision: '1',
@@ -322,7 +327,21 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     resultDigest: 'a'.repeat(64), chunkIndex: 0, chunkCount: 1, chunkText: 'Hello', chunkDigest: 'b'.repeat(64) })
   await roomCommand({ operation: 'leave', ...roomBase })
   expect(nativeRoom.leaveAgent).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id, cycle: 1 })
+  const postInventory = (credential = token) => fetch(
+    `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bound-bot-rooms`,
+    { method: 'POST', headers: { authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ bot_id: 'operator', limit: 20, cursor: null }) })
+  expect((await postInventory('wrong')).status).toBe(403)
+  expect(roomsForBot).not.toHaveBeenCalled()
+  const inventory = await postInventory()
+  expect(inventory.status).toBe(200)
+  expect(await inventory.json()).toEqual(inventoryPage)
+  expect(roomsForBot).toHaveBeenCalledExactlyOnceWith({ botId: 'operator', limit: 20, cursor: null })
+  nativeRoom.roomsForBot = undefined
+  expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
+  nativeRoom.roomsForBot = roomsForBot
   disposeNativeRoom()
+  expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
   expect((await postNative('', { room_id: 'room_1' })).status).toBe(422)
   expect((await postNative('-operations', { operation: 'messages', ...roomBase,
     after_seq: 1, limit: 2 })).status).toBe(422)

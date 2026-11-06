@@ -1,3 +1,5 @@
+import { readAccountBoundBotRooms, projectAccountNativeRoom } from '../src/account-twin-groups.ts'
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsPage, parseHostNativeRoomProjectionTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -285,4 +287,32 @@ it('rejects unavailable, stale and out-of-order worker roster pages', async () =
   await workers.disposeAll()
   await expect(workers.listBotRoster(input.profileId, '', 50, signal))
     .rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('bound-room reads require a human owner and preserve the actual authorized Profile', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  const query = parseHostBoundBotRoomsQuery({ bot_id: f.bot.bot_id, limit: 20, cursor: null })
+  const page = parseHostBoundBotRoomsPage({ state: 'page', bot_id: f.bot.bot_id, workspace_id: randomUUID(), state_revision: 1, membership_snapshot: 'a'.repeat(64), items: [], next_cursor: null })
+  const workers = { listBoundBotRooms: vi.fn(async () => page) }
+  await expect(readAccountBoundBotRooms(f.host, workers, f.proof, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  await expect(readAccountBoundBotRooms(f.host, workers, { ...f.proof, ownerId: '' }, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(workers.listBoundBotRooms).not.toHaveBeenCalled()
+  expect(await readAccountBoundBotRooms(f.host, workers, f.proof, query, signal))
+    .toEqual({ profileId: f.host.authorizeAccountModelText(f.proof), value: page })
+  workers.listBoundBotRooms.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return page })
+  await expect(readAccountBoundBotRooms(f.host, workers, f.proof, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+it('bound-room reads and projection replies cannot outlive their Profile or cancellation', async () => {
+  const f = await fixture(); await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof), signal = new AbortController()
+  const query = parseHostBoundBotRoomsQuery({ bot_id: f.bot.bot_id, limit: 20, cursor: null })
+  let current = profileId
+  const host = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { listBoundBotRooms: async () => { current = profileId + '-replaced' as typeof profileId; return { state: 'bot_unavailable' as const } } }
+  await expect(readAccountBoundBotRooms(host, workers, f.proof, query, signal.signal)).rejects.toMatchObject({ code: 'stale' })
+  current = profileId
+  await expect(readAccountBoundBotRooms(host, { listBoundBotRooms: async () => { signal.abort(); return { state: 'snapshot_changed' } } }, f.proof, query, signal.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  const command = parseHostNativeRoomProjectionTarget({ challenge_nonce: 'A'.repeat(43), expires_at: 2000, binding_id: randomUUID(), binding_generation: '1', command_request_id: randomUUID(), command: { operation: 'leave', room_id: 'room', member_id: randomUUID(), cycle: 1 } }).command
+  expect(await projectAccountNativeRoom(f.host, { operateNativeRoom: async () => ({ state: 'left', left_room_seq: 1 }) }, f.proof, command, new AbortController().signal)).toEqual({ profileId, value: { state: 'left', left_room_seq: 1 } })
 })

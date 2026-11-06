@@ -1,3 +1,5 @@
+import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
+import type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult, ProfileNativeRoomProjectionRequest, ProfileNativeRoomProjectionResult } from './types.ts'
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotChatRequest } from './bot-chat.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
@@ -1843,6 +1845,8 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
   | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
   | ProfileTwinBindingRequest | ProfileBotRosterRequest
+  | ProfileBoundBotRoomsRequest
+  | ProfileNativeRoomProjectionRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2594,6 +2598,20 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...parseHostBotRosterTarget({ after_bot_id: params.after_bot_id, limit: params.limit }),
     } } satisfies ProfileBotRosterRequest
   }
+  if (frame.method === 'profile.bound_bot_rooms') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostBoundBotRoomsTarget(params.target),
+    } } satisfies ProfileBoundBotRoomsRequest
+  }
+  if (frame.method === 'profile.native_room_projection') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomProjectionTarget(params.target),
+    } } satisfies ProfileNativeRoomProjectionRequest
+  }
   if (frame.method === 'profile.native_room') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'room_id'])
@@ -2705,6 +2723,8 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result
   | ProfileTwinBindingResult | ProfileBotRosterResult
+  | ProfileBoundBotRoomsResult
+  | ProfileNativeRoomProjectionResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3140,6 +3160,15 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['page'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { page: parseHostBotRosterPage(result.page) } } satisfies ProfileBotRosterResult
+  }
+  if (frame.method === 'profile.bound_bot_rooms') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostBoundBotRoomsResult(result) } satisfies ProfileBoundBotRoomsResult
+  }
+  if (frame.method === 'profile.native_room_projection') {
+    exactKeys(result, ['proof'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { proof: parseHostNativeRoomProjectionProof(result.proof) } } satisfies ProfileNativeRoomProjectionResult
   }
   if (frame.method === 'profile.native_room') {
     exactKeys(result, ['binding'])
