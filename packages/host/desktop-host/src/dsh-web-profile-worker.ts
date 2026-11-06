@@ -1,3 +1,4 @@
+import { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
@@ -300,6 +301,8 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, afterBotId, limit, signal, () => requestedStop || settled),
       listBoundBotRooms: (query, signal) => this.listBoundBotRooms(
         viewOrigin, sourceToken, query, signal, () => requestedStop || settled),
+      retireNativeRoom: (command, signal) => this.retireNativeRoom(
+        viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
         viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled),
       operateNativeRoom: (command, signal) => this.operateNativeRoom(
@@ -551,6 +554,14 @@ export class DshWebProfileWorkerFactory {
           result.next_cursor !== null && result.next_cursor === target.cursor)) throw new HostAuthorityError('profile_mismatch')
         return result
       })
+  }
+
+  private async retireNativeRoom(viewOrigin: string, token: string, command: HostNativeRoomRetirementCommand,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostNativeRoomRetirementReply> {
+    const target = parseHostNativeRoomRetirementCommand(command)
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-native-room-retirement',
+      target, 35_000, 2048, signal, stopped, bytes =>
+        parseHostNativeRoomRetirementReply(JSON.parse(bytes.toString('utf8'))))
   }
 
   private async prepareNativeRoom(

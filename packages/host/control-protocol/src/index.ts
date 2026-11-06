@@ -32,6 +32,12 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementTarget,
+  parseHostNativeRoomRetirementReply, parseHostNativeRoomRetirementProof,
+  encodeHostNativeRoomRetirementProofPayload } from './bound-bot-rooms.ts'
+export type { HostNativeRoomRetirementCommand, HostNativeRoomRetirementTarget,
+  HostNativeRoomRetirementReply, HostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
+export type { ProfileNativeRoomRetirementRequest, ProfileNativeRoomRetirementResult } from './types.ts'
 export { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, parseHostBoundBotRoomsTarget,
   parseHostBoundBotRoomsPage, parseHostBoundBotRoomsProof,
   parseHostBoundBotRoomsResult, encodeHostBoundBotRoomsProofPayload, parseHostNativeRoomProjectionTarget,

@@ -1,3 +1,5 @@
+import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
+import type { ProfileNativeRoomRetirementRequest, ProfileNativeRoomRetirementResult } from './types.ts'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
 import type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult, ProfileNativeRoomProjectionRequest, ProfileNativeRoomProjectionResult } from './types.ts'
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
@@ -1847,6 +1849,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileTwinBindingRequest | ProfileBotRosterRequest
   | ProfileBoundBotRoomsRequest
   | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomRetirementRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2612,6 +2615,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), target: parseHostNativeRoomProjectionTarget(params.target),
     } } satisfies ProfileNativeRoomProjectionRequest
   }
+  if (frame.method === 'profile.native_room_retirement') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomRetirementTarget(params.target),
+    } } satisfies ProfileNativeRoomRetirementRequest
+  }
   if (frame.method === 'profile.native_room') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'room_id'])
@@ -2725,6 +2735,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileTwinBindingResult | ProfileBotRosterResult
   | ProfileBoundBotRoomsResult
   | ProfileNativeRoomProjectionResult
+  | ProfileNativeRoomRetirementResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3169,6 +3180,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['proof'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { proof: parseHostNativeRoomProjectionProof(result.proof) } } satisfies ProfileNativeRoomProjectionResult
+  }
+  if (frame.method === 'profile.native_room_retirement') {
+    exactKeys(result, ['proof'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { proof: parseHostNativeRoomRetirementProof(result.proof) } } satisfies ProfileNativeRoomRetirementResult
   }
   if (frame.method === 'profile.native_room') {
     exactKeys(result, ['binding'])

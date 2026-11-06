@@ -1019,6 +1019,25 @@ export interface ProfileNativeRoomProjectionResult {
   readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomProjectionProof }
 }
 
+/** Current Account Profile retires one exact original native member cycle. */
+export interface ProfileNativeRoomRetirementRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomRetirementTarget
+  }
+}
+/** Signature guarantees durable retirement of the original paired commands. */
+export interface ProfileNativeRoomRetirementResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomRetirementProof }
+}
+
 /** Account-bound member and message operation for an existing native room. */
 export interface ProfileNativeRoomOperationRequest {
   readonly version: 1
@@ -2474,7 +2493,9 @@ export type HostControlFrame =
   | ProfileBoundBotRoomsRequest
   | ProfileBoundBotRoomsResult
   | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomRetirementRequest
   | ProfileNativeRoomProjectionResult
+  | ProfileNativeRoomRetirementResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

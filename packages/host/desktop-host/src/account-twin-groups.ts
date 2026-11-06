@@ -1,6 +1,6 @@
 /** Account/Profile fences shared by private twin-room reads and original-cycle projection. */
 import type { HostBoundBotRoomsQuery, HostBoundBotRoomsRead, HostRoomProjectionCommand,
-  HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+  HostNativeRoomReply, HostNativeRoomRetirementCommand, HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
 import type { BotIdentityAccount } from './account-bot-identity.ts'
@@ -43,4 +43,18 @@ export function projectAccountNativeRoom(host: Host,
   workers: Pick<ProfileWorkerSupervisor, 'operateNativeRoom'>, account: BotIdentityAccount,
   command: HostRoomProjectionCommand, signal: AbortSignal): Promise<{ profileId: string; value: HostNativeRoomReply }> {
   return currentProfile(host, account, signal, profile => workers.operateNativeRoom(profile, command, signal))
+}
+
+/** Close an original cycle without requiring the original Bot to remain available.
+ * @param host Current Account authority.
+ * @param workers Current Profile worker registry.
+ * @param account Authenticated Account and owner.
+ * @param command Complete original member identity.
+ * @param signal Caller cancellation.
+ * @returns Actual Profile and durable left or explicit failure.
+ */
+export function retireAccountNativeRoom(host: Host,
+  workers: Pick<ProfileWorkerSupervisor, 'retireNativeRoom'>, account: BotIdentityAccount,
+  command: HostNativeRoomRetirementCommand, signal: AbortSignal): Promise<{ profileId: string; value: HostNativeRoomRetirementReply }> {
+  return currentProfile(host, account, signal, profile => workers.retireNativeRoom(profile, command, signal))
 }

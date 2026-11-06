@@ -86,6 +86,25 @@ export type HostNativeRoomProjectionProof = Authority & Readonly<{
   target: HostNativeRoomProjectionTarget
   reply: HostRoomProjectionReply
 }>
+/** Complete original join identity used only to close its native cycle. */
+export type HostNativeRoomRetirementCommand = Extract<HostRoomProjectionCommand, { operation: 'join' }>
+/** Original join/leave pair retained across unknown acceptance and retries. */
+export type HostNativeRoomRetirementTarget = Challenge & Readonly<{
+  join_command_request_id: HostRoomProjectionCommandId
+  join_command: HostNativeRoomRetirementCommand
+  leave_command_request_id: HostRoomProjectionCommandId
+  leave_command: Extract<HostRoomProjectionCommand, { operation: 'leave' }>
+}>
+/** Private plugin result; only left acknowledges a durable cycle fence. */
+export type HostNativeRoomRetirementReply = Extract<HostNativeRoomReply, { state: 'left' }>
+  | Readonly<{ state: 'upgrade_required' | 'conflict' | 'unavailable' | 'invalid' }>
+/** Independent signed guarantee that the exact original member cycle stays closed. */
+export type HostNativeRoomRetirementProof = Authority & Readonly<{
+  schema_version: 1
+  purpose: 'native_room_retirement'
+  target: HostNativeRoomRetirementTarget
+  reply: Extract<HostNativeRoomReply, { state: 'left' }>
+}>
 const challengeKeys = ['challenge_nonce', 'expires_at', 'binding_id', 'binding_generation']
 const authorityKeys = ['host_profile_id', 'authority_environment_id', 'account_binding_handle',
   'authority_binding_version', 'account_issuer', 'account_subject', 'installation_id',
@@ -286,4 +305,76 @@ export function encodeHostNativeRoomProjectionProofPayload(value: HostNativeRoom
   const reply = p.reply.state === 'joined' ? [p.reply.state, p.reply.joined_room_seq] : [p.reply.state, p.reply.left_room_seq]
   return Buffer.from('dsh-native-room-projection/v1\0' + JSON.stringify([1, p.purpose,
     [...challengeTuple(t), t.command_request_id, command], reply, authorityTuple(p)]), 'utf8')
+}
+
+/** Capture the complete original join without Cloud selectors or authority.
+ * @param value Untrusted private retirement command.
+ * @returns Detached original join identity.
+ */
+export function parseHostNativeRoomRetirementCommand(value: unknown): HostNativeRoomRetirementCommand {
+  return parse(() => {
+    const command = projectionCommand(value)
+    if (command.operation !== 'join') return invalid()
+    return command
+  })
+}
+/** Bind both original requests to one room and member cycle.
+ * @param value Untrusted retirement target.
+ * @returns Exact original command pair and challenge.
+ */
+export function parseHostNativeRoomRetirementTarget(value: unknown): HostNativeRoomRetirementTarget {
+  return parse(() => {
+    const r = record(value, [...challengeKeys, 'join_command_request_id', 'join_command',
+      'leave_command_request_id', 'leave_command'])
+    const joined = parseHostNativeRoomRetirementCommand(r.join_command)
+    const left = projectionCommand(r.leave_command)
+    const joinId = uuid(r.join_command_request_id) as HostRoomProjectionCommandId
+    const leaveId = uuid(r.leave_command_request_id) as HostRoomProjectionCommandId
+    if (left.operation !== 'leave' || joinId === leaveId || joined.room_id !== left.room_id ||
+      joined.member_id !== left.member_id || joined.cycle !== left.cycle) return invalid()
+    return { ...challenge(r), join_command_request_id: joinId, join_command: joined,
+      leave_command_request_id: leaveId, leave_command: left }
+  })
+}
+/** Preserve explicit missing capability without certifying an unavailable member as retired.
+ * @param value Untrusted private plugin reply.
+ * @returns Strict durable left or explicit failure.
+ */
+export function parseHostNativeRoomRetirementReply(value: unknown): HostNativeRoomRetirementReply {
+  return parse(() => {
+    const state = resultState(value)
+    if (state === 'left') {
+      const r = record(value, ['state', 'left_room_seq'])
+      return { state, left_room_seq: time(r.left_room_seq) }
+    }
+    if (state !== 'upgrade_required' && state !== 'conflict' && state !== 'unavailable' && state !== 'invalid') return invalid()
+    record(value, ['state'])
+    return { state }
+  })
+}
+/** Capture a durable cycle-closing proof; its consumer verifies signature and current authority.
+ * @param value Untrusted signed retirement acknowledgement.
+ * @returns Detached proof of the exact original command pair.
+ */
+export function parseHostNativeRoomRetirementProof(value: unknown): HostNativeRoomRetirementProof {
+  return parse(() => {
+    const r = record(value, ['schema_version', 'purpose', 'target', 'reply', ...authorityKeys])
+    if (r.schema_version !== 1 || r.purpose !== 'native_room_retirement') return invalid()
+    const target = parseHostNativeRoomRetirementTarget(r.target), a = authority(r)
+    const reply = parseHostNativeRoomRetirementReply(r.reply)
+    if (reply.state !== 'left' || a.issued_at > target.expires_at) return invalid()
+    return { schema_version: 1, purpose: 'native_room_retirement', target, reply, ...a }
+  })
+}
+/** Encode both original commands and the durable left boundary under the retirement-only domain.
+ * @param value Strictly captured retirement proof.
+ * @returns Ed25519 payload excluding its signature.
+ */
+export function encodeHostNativeRoomRetirementProofPayload(value: HostNativeRoomRetirementProof): Buffer {
+  const p = parseHostNativeRoomRetirementProof(value), t = p.target, j = t.join_command, l = t.leave_command
+  return Buffer.from('dsh-native-room-retirement/v1\0' + JSON.stringify([1, p.purpose,
+    [...challengeTuple(t), t.join_command_request_id,
+      [j.operation, j.room_id, j.group_id, j.member_id, j.cycle, j.project_id, j.agent_id, j.name],
+      t.leave_command_request_id, [l.operation, l.room_id, l.member_id, l.cycle]],
+    [p.reply.state, p.reply.left_room_seq], authorityTuple(p)]), 'utf8')
 }

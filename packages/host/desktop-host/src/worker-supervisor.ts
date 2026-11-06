@@ -1,3 +1,4 @@
+import { parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBoundBotRoomsQuery, HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
@@ -144,6 +145,24 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (!matchesHostNativeRoomReply(reply, command)) throw new HostAuthorityError('profile_mismatch')
     return reply
+  }
+
+  /** Close only the original cycle in the same current Profile worker.
+   * @param profileId Actual Account Profile.
+   * @param command Complete frozen original join identity.
+   * @param signal Caller cancellation.
+   * @returns Durable left or explicit inability to close the cycle.
+   */
+  async retireNativeRoom(profileId: string, command: HostNativeRoomRetirementCommand,
+    signal: AbortSignal): Promise<HostNativeRoomRetirementReply> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.retireNativeRoom) throw new HostAuthorityError('upgrade_required')
+    const reply = await worker.retireNativeRoom(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return parseHostNativeRoomRetirementReply(reply)
   }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
