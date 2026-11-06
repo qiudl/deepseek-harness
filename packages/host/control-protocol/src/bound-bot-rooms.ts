@@ -168,16 +168,19 @@ export function parseHostBoundBotRoomsPage(value: unknown): HostBoundBotRoomsPag
       membership_snapshot: digest(r.membership_snapshot) as HostControlSha256, items, next_cursor: cursor(r.next_cursor) }
   })
 }
+function resultState(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return invalid()
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'state')
+  if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return invalid()
+  return descriptor.value
+}
 /** Preserve explicit private plugin failures instead of fabricating an empty page.
  * @param value Untrusted Profile-private read.
  * @returns Parsed page or fixed non-page state.
  */
 export function parseHostBoundBotRoomsRead(value: unknown): HostBoundBotRoomsRead {
   return parse(() => {
-    if (!value || typeof value !== 'object') return invalid()
-    const descriptor = Object.getOwnPropertyDescriptor(value, 'state')
-    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return invalid()
-    const state: unknown = descriptor.value
+    const state = resultState(value)
     if (state === 'page') return parseHostBoundBotRoomsPage(value)
     if (state !== 'bot_unavailable' && state !== 'snapshot_changed' && state !== 'upgrade_required' && state !== 'unavailable' && state !== 'invalid') return invalid()
     record(value, ['state'])
@@ -204,10 +207,7 @@ export function parseHostBoundBotRoomsProof(value: unknown): HostBoundBotRoomsPr
  */
 export function parseHostBoundBotRoomsResult(value: unknown): HostBoundBotRoomsResult {
   return parse(() => {
-    if (!value || typeof value !== 'object') return invalid()
-    const descriptor = Object.getOwnPropertyDescriptor(value, 'state')
-    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return invalid()
-    const state: unknown = descriptor.value
+    const state = resultState(value)
     if (state === 'page') {
       const r = record(value, ['state', 'proof'])
       return { state, proof: parseHostBoundBotRoomsProof(r.proof) }

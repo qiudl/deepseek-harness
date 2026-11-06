@@ -4799,11 +4799,8 @@ export class UnixHostClient {
     assertTwinGroupNonceCurrent(target.expires_at, this.now())
     const request: ProfileBoundBotRoomsRequest = { version: 1, type: 'request', request_id: requestId(), method: 'profile.bound_bot_rooms',
       params: { ...this.collaborationAccountRequestParams(input), target } }
-    const frame = await this.call(request, input.signal)
-    input.signal?.throwIfAborted()
-    this.requireCurrentPeer(peer)
+    const frame = await this.callCurrentPeer(request, input.signal, peer)
     assertTwinGroupNonceCurrent(target.expires_at, this.now())
-    if (frame.type !== 'result' || frame.method !== 'profile.bound_bot_rooms') throw new HostAuthorityError('unavailable')
     const result = parseHostBoundBotRoomsResult(frame.result)
     if (result.state === 'page') {
       const proof = result.proof
@@ -4835,11 +4832,8 @@ export class UnixHostClient {
     assertTwinGroupNonceCurrent(target.expires_at, this.now())
     const request: ProfileNativeRoomProjectionRequest = { version: 1, type: 'request', request_id: requestId(), method: 'profile.native_room_projection',
       params: { ...this.collaborationAccountRequestParams(input), target } }
-    const frame = await this.call(request, input.signal)
-    input.signal?.throwIfAborted()
-    this.requireCurrentPeer(peer)
+    const frame = await this.callCurrentPeer(request, input.signal, peer)
     assertTwinGroupNonceCurrent(target.expires_at, this.now())
-    if (frame.type !== 'result' || frame.method !== 'profile.native_room_projection') throw new HostAuthorityError('unavailable')
     const proof = parseHostNativeRoomProjectionProof(frame.result.proof)
     if (JSON.stringify(proof.target) !== JSON.stringify(target) || !this.matchesNativeRoomAssertionAuthority(proof, input) ||
       !verify(null, encodeHostNativeRoomProjectionProofPayload(proof), publicKeyObject(this.inspection.installation_public_key),
@@ -5878,16 +5872,17 @@ export class UnixHostClient {
     return result
   }
 
-  private async callCurrentPeer(
-    request: ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest,
-    signal: AbortSignal,
-  ): Promise<Extract<HostControlFrame, { type: 'result' }>> {
-    const peer = this.currentPeerFingerprint()
+  private async callCurrentPeer<T extends ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest
+    | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest>(
+    request: T,
+    signal?: AbortSignal,
+    peer = this.currentPeerFingerprint(),
+  ): Promise<Extract<HostControlFrame, { type: 'result'; method: T['method'] }>> {
     const frame = await this.call(request, signal)
-    signal.throwIfAborted()
+    signal?.throwIfAborted()
     this.requireCurrentPeer(peer)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
-    return frame
+    return frame as Extract<HostControlFrame, { type: 'result'; method: T['method'] }>
   }
 
   private requireCurrentPeer(peer: string): void {
