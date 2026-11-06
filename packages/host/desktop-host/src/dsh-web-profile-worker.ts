@@ -1,3 +1,4 @@
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
@@ -297,6 +298,8 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
         viewOrigin, sourceToken, afterBotId, limit, signal, () => requestedStop || settled),
+      listBoundBotRooms: (query, signal) => this.listBoundBotRooms(
+        viewOrigin, sourceToken, query, signal, () => requestedStop || settled),
       prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
         viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled),
       operateNativeRoom: (command, signal) => this.operateNativeRoom(
@@ -536,6 +539,18 @@ export class DshWebProfileWorkerFactory {
         throw new HostAuthorityError('profile_mismatch')
       return page
     }, 'await')
+  }
+
+  private async listBoundBotRooms(viewOrigin: string, token: string, query: HostBoundBotRoomsQuery,
+    signal: AbortSignal, stopped: () => boolean): Promise<HostBoundBotRoomsRead> {
+    const target = parseHostBoundBotRoomsQuery(query)
+    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bound-bot-rooms',
+      target, 10_000, 16 * 1024, signal, stopped, (bytes) => {
+        const result = parseHostBoundBotRoomsRead(JSON.parse(bytes.toString('utf8')))
+        if (result.state === 'page' && (result.bot_id !== target.bot_id || result.items.length > target.limit ||
+          result.next_cursor !== null && result.next_cursor === target.cursor)) throw new HostAuthorityError('profile_mismatch')
+        return result
+      })
   }
 
   private async prepareNativeRoom(

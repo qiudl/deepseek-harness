@@ -1,3 +1,4 @@
+import type { HostBoundBotRoomsQuery, HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
@@ -68,6 +69,26 @@ export class ProfileWorkerSupervisor {
     if (page && (page.bots.length > limit || page.bots.some(bot => bot.bot_id <= afterBotId)))
       throw new HostAuthorityError('profile_mismatch')
     return page
+  }
+
+  /** Read participation only from the same selected live worker.
+   * @param profileId Actual Account Profile.
+   * @param query Original private Bot/page selector.
+   * @param signal Caller cancellation.
+   * @returns Current bounded read outcome.
+   */
+  async listBoundBotRooms(profileId: string, query: HostBoundBotRoomsQuery,
+    signal: AbortSignal): Promise<HostBoundBotRoomsRead> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.listBoundBotRooms) throw new HostAuthorityError('upgrade_required')
+    const result = await worker.listBoundBotRooms(query, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result.state === 'page' && (result.bot_id !== query.bot_id || result.items.length > query.limit ||
+      result.next_cursor !== null && result.next_cursor === query.cursor)) throw new HostAuthorityError('profile_mismatch')
+    return result
   }
 
   /**

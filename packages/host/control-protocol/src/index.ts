@@ -32,6 +32,17 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, parseHostBoundBotRoomsTarget,
+  parseHostBoundBotRoomsPage, parseHostBoundBotRoomsProof,
+  parseHostBoundBotRoomsResult, encodeHostBoundBotRoomsProofPayload, parseHostNativeRoomProjectionTarget,
+  parseHostNativeRoomProjectionProof, encodeHostNativeRoomProjectionProofPayload } from './bound-bot-rooms.ts'
+export type { HostTwinGroupBindingId, HostTwinGroupBindingGeneration, HostBoundRoomBotId,
+  HostBoundRoomId, HostBoundRoomCursor, HostRoomProjectionCommandId, HostBoundBotRoomsTarget,
+  HostBoundBotRoomsQuery, HostBoundBotRoomsRead, HostBoundBotRoomsPage, HostBoundBotRoomsProof,
+  HostBoundBotRoomsResult, HostRoomProjectionCommand,
+  HostNativeRoomProjectionTarget, HostRoomProjectionReply, HostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
+export type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult,
+  ProfileNativeRoomProjectionRequest, ProfileNativeRoomProjectionResult } from './types.ts'
 export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'

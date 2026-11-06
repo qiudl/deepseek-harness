@@ -1,3 +1,4 @@
+import { handleDesktopBoundBotRoomsRequest } from './desktop-bound-bot-rooms.ts'
 import { bindDesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
@@ -272,6 +273,20 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bound-bot-rooms',
+      handler: (req, res) => handleDesktopBoundBotRoomsRequest(req, res, sourceToken,
+        async (query, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            roomsForBot?: (input: { botId: string; limit: number; cursor: string | null }) => Promise<unknown>
+          }
+          if (!service?.roomsForBot) return { state: 'upgrade_required' }
+          const result = await service.roomsForBot({ botId: query.bot_id, limit: query.limit, cursor: query.cursor })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-native-room',
       handler: (req, res) => handleDesktopNativeRoomRequest(req, res, sourceToken,

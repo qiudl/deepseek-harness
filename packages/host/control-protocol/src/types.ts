@@ -982,6 +982,43 @@ export interface ProfileNativeRoomResult {
   readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
 }
 
+/** Current Account Profile reads a nonce-bound native participation page. */
+export interface ProfileBoundBotRoomsRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostBoundBotRoomsTarget
+  }
+}
+/** Independently signed current page, or an explicit incomplete read. */
+export interface ProfileBoundBotRoomsResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly result: import('./bound-bot-rooms.ts').HostBoundBotRoomsResult
+}
+/** Current Account Profile projects an original Cloud member command. */
+export interface ProfileNativeRoomProjectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomProjectionTarget
+  }
+}
+/** Signature acknowledges the original native join/leave and exact member cycle only. */
+export interface ProfileNativeRoomProjectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomProjectionProof }
+}
+
 /** Account-bound member and message operation for an existing native room. */
 export interface ProfileNativeRoomOperationRequest {
   readonly version: 1
@@ -2434,6 +2471,10 @@ export type HostControlFrame =
   | ProfileTwinBindingResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileBoundBotRoomsRequest
+  | ProfileBoundBotRoomsResult
+  | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomProjectionResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest
