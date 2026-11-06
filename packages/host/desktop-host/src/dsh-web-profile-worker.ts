@@ -201,7 +201,7 @@ export class DshWebProfileWorkerFactory {
           ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'ignore'],
     })
     const activated = await this.waitForOrigin(child)
     this.generation += 1
@@ -255,6 +255,9 @@ export class DshWebProfileWorkerFactory {
     } finally {
       clearTimeout(timer)
       child.stdout.off('data', onData)
+      // The readiness line is the only stdout protocol. Keep draining later
+      // output so a full pipe cannot block the Web worker's event loop.
+      child.stdout.resume()
     }
   }
 
