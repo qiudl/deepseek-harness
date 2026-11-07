@@ -86,6 +86,8 @@ The `session/collaborationSources` remote UI request also accepts an exact `snap
 
 `profile.bot_identity` reads one exact Bot ID from the current Account Profile's private plugin service. Its response is either absence or only Bot ID, derived actor reference and bounded display name. The caller cannot select a Profile path, private chat or plugin room. This read grants no group membership, delivery or proxy authority.
 
+The Bot/Session coordinate parsers accept only exact bounded `bot_id` and `session_id` fields, or explicit absence in a response. The Profile-local producer must verify that the live Session belongs to that Bot. Coordinates contain no account, project, source content or execution authority.
+
 `profile.bot_identity_v2` separately returns that public identity with the authenticated Host's local `host_profile_id`. The caller cannot supply this field. The original method retains its three-field response; neither method grants pairing, memory or device authority.
 
 `profile.twin_binding` accepts a complete, fixed-order bidirectional retention offer and a separate purpose-bound Cloud directive valid for at most 30 seconds. Both directions identify the same owner, project, twin and actual DSH Bot; the Host recomputes the consent, scope and parent digests before checking its current Account and local Bot. The result is only the original durable `acknowledged` fact, or `missing` for a receipt query. It never returns an active binding or grants memory, group or device execution. Directive and Ack signatures use independent canonical-array domains; the persistent Ack digest also covers its original signature.

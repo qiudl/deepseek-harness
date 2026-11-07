@@ -61,6 +61,8 @@ export type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult,
 export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'
+export { parseHostBotSessionTarget, parseHostBotSessionIdentity } from './bot-session-identity.ts'
+export type { HostBotSessionCoordinates, HostBotSessionBotId, HostBotSessionId } from './bot-session-identity.ts'
 export { parseHostTwinBindingOffer, encodeHostTwinBindingOffer,
   hostTwinBindingOfferDigest, hostTwinBindingCommandDigest } from './twin-binding-offer.ts'
 export { createHostProjectOperationEvent, parseHostProjectOperationEvent,
