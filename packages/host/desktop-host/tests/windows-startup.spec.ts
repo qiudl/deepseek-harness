@@ -1,3 +1,4 @@
+import { parseHostNativeRoomPreparationTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import * as appBoot from '@deepseek-ai/dsh-app-boot'
 import * as pluginExecutors from '../src/profile-plugin-executor.ts'
 import * as pluginCommands from '../src/plugin-command.ts'
@@ -252,13 +253,14 @@ describe('Windows Desktop Host startup', () => {
     }) }
     const inspect = vi.fn(async () => descriptor), read = vi.fn(async () => snapshot)
     const receive = vi.fn(async () => null), analysis = vi.fn(async () => null)
+    const nativePhase = vi.fn(async () => ({ state: 'bot_unavailable' as const }))
     state.createProfileWorker.mockImplementation(async () => ({
       closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve(),
       viewOrigin: 'http://127.0.0.1:49152', generation: 1,
       bootstrapCookie: { name: 'dsh-auth-test', value: 'v1.test.test' },
       inspectWorkspaceModelSelection: async value => ({ ...value, provider: 'deepseek', model: 'chat' }),
       inspectCollaborationSource: inspect, readCollaborationSourceSnapshot: read, receiveCollaborationDelivery: receive,
-      collaborationAnalysis: analysis,
+      collaborationAnalysis: analysis, prepareNativeRoomPhase: nativePhase,
     }))
     const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)
     onTestFinished(async () => { await application.close() })
@@ -275,9 +277,16 @@ describe('Windows Desktop Host startup', () => {
       authorityBindingVersion: 1, issuer, subject: accountId }
     const selection = { ...account, workspace_id: target.workspace_id, session_id: target.session_id }
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
-    await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
+    const ensured = await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
     expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    expect(client.inspection.capabilities).toContain('profile.native_room_preparation')
+    const nativeTarget = parseHostNativeRoomPreparationTarget({ operation: 'prepare_source',
+      challenge_nonce: 'A'.repeat(43), expires_at: now + 1000, binding_id: randomUUID(), binding_generation: '1',
+      computer_id: 'fixture-computer', slark_audience: 'https://slark.example.test', expected_profile_id: ensured.profileId,
+      bot_id: 'operator', room_id: 'room-1', workspace_id: target.workspace_id, member_set_digest: 'a'.repeat(64), expected_source: null })
+    expect(await client.prepareNativeRoomPhase({ ...account, target: nativeTarget })).toEqual({ state: 'bot_unavailable' })
+    expect(nativePhase).toHaveBeenCalledWith(nativeTarget, expect.any(AbortSignal))
     const registrationChallenge = parseHostCollaborationRegistrationChallenge({
       registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
       expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,

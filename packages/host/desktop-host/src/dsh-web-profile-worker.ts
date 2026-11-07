@@ -1,4 +1,7 @@
 import { NativeRoomDrain } from './native-room-drain.ts'
+import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationWorkerRead,
+  matchHostNativeRoomPreparationWorkerRead, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES,
+  type HostNativeRoomPreparationTarget, type HostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
@@ -313,6 +316,8 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
         viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled, actualExit.signal),
+      prepareNativeRoomPhase: (target, signal) => this.prepareNativeRoomPhase(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled, actualExit.signal),
       operateNativeRoom: (command, signal) => this.operateNativeRoom(
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       operateBotGroup: (command, signal) => this.operateBotGroup(
@@ -601,6 +606,14 @@ export class DshWebProfileWorkerFactory {
         if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
         return binding
       })
+  }
+
+  private async prepareNativeRoomPhase(viewOrigin: string, token: string, input: HostNativeRoomPreparationTarget,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal): Promise<HostNativeRoomPreparationWorkerRead> {
+    const target = parseHostNativeRoomPreparationTarget(input)
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room-preparation',
+      target, 60_000, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, signal, stopped, exited, bytes =>
+        matchHostNativeRoomPreparationWorkerRead(parseHostNativeRoomPreparationWorkerRead(JSON.parse(bytes.toString('utf8'))), target))
   }
 
   private async operateBotGroup(

@@ -1038,6 +1038,26 @@ export interface ProfileNativeRoomRetirementResult {
   readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomRetirementProof }
 }
 
+/** Current Account Profile prepares or attests one original bound-Bot room Source. */
+export interface ProfileNativeRoomPreparationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./native-room-preparation.ts').HostNativeRoomPreparationTarget
+  }
+}
+
+/** Independent stage outcome; unavailable facts never become a signed success. */
+export interface ProfileNativeRoomPreparationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly result: { readonly outcome: import('./native-room-preparation.ts').HostNativeRoomPreparationOutcome }
+}
+
 /** Account-bound member and message operation for an existing native room. */
 export interface ProfileNativeRoomOperationRequest {
   readonly version: 1
@@ -2496,6 +2516,8 @@ export type HostControlFrame =
   | ProfileNativeRoomRetirementRequest
   | ProfileNativeRoomProjectionResult
   | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationRequest
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

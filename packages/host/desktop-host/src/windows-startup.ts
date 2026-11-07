@@ -641,6 +641,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         }),
         diagnostics,
         ...collaborationWorkerReaders(workers),
+        nativeRoomPreparationReceiver: workers.nativeRoomPreparationReceiver.bind(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,
         rootAnalysisRecoverySupported: true,

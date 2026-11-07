@@ -197,6 +197,8 @@ Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.re
 
 这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
 
+原生群准备在整个阶段捕获同一个准确的 Profile worker。父进程在每次签名及发布响应前，同步重新检查当前 Account、选定 Profile、nonce 和原 worker；异步 helper 先前的检查不足以代替此步骤。同 Profile 的替代 worker 不能证明之前的观察。macOS 和 Windows 启动装配均安装这个受检查的 receiver。worker 缺少支持时要求升级。[准备协议](../control-protocol/README.zh.md#wire-contract) 定义独立签名结果，不授予 Cloud 群成员资格、模型执行或设备权限。
+
 默认 Host worker 跨 Profile 和控制连接共享 8 个未结束原生操作名额。调用取消及原有读写截止时间只结束等待，不释放已接收的操作。私有接收器须在 service 实际结束后返回匹配收据，才释放名额；收据缺失或 HTTP 断链时，名额保留到原进程实际退出。进程错误使 worker 不可用，`done` 和关闭流程仍等待实际退出。外部注入的 worker factory 自行负责生命周期保证。参见[私有接收器规则](../../bundle/web-app/README.zh.md#understand-the-implementation)。
 
 ## 模型体验

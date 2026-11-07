@@ -5,6 +5,11 @@ import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostBo
   type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead, type HostNativeRoomProjectionTarget,
   type HostNativeRoomProjectionProof, type ProfileBoundBotRoomsRequest, type ProfileNativeRoomProjectionRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { readAccountBoundBotRooms, projectAccountNativeRoom, retireAccountNativeRoom } from './account-twin-groups.ts'
+import { readAccountNativeRoomPreparation, assertNativePreparationCurrent } from './account-native-room-preparation.ts'
+import { signNativeRoomPreparation, verifyNativeRoomPreparationSignatures } from './native-room-preparation-signing.ts'
+import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome,
+  type HostNativeRoomPreparationTarget,
+  type HostNativeRoomPreparationOutcome, type ProfileNativeRoomPreparationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
@@ -343,6 +348,8 @@ export interface UnixHostServerOptions {
   /** Prepare a native room Source in the current Account Profile. */
   readonly prepareNativeRoom?: (profileId: string, roomId: string,
     signal: AbortSignal) => Promise<HostNativeRoomSource | null>
+  /** Read one complete guarded phase from the same current Account Profile worker. */
+  readonly nativeRoomPreparationReceiver?: (profileId: string) => import('./types.ts').NativeRoomPreparationReceiver
   /** Operate one native room member or message cursor in the Account Profile. */
   readonly operateNativeRoom?: (profileId: string, command: HostNativeRoomCommand,
     signal: AbortSignal) => Promise<HostNativeRoomReply>
@@ -624,7 +631,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
-    | 'prepareNativeRoom' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
+    | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
@@ -2597,6 +2604,19 @@ export class HostControlAuthority {
             signature: sign(null, encodeHostNativeRoomRetirementProofPayload(unsigned),
               privateKeyObject(this.options.identity.installationPrivateKey)).toString('base64url') })
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result: { proof } })
+        } else if (frame.method === 'profile.native_room_preparation') {
+          const receiver = this.options.nativeRoomPreparationReceiver
+          if (!receiver) throw new HostAuthorityError('upgrade_required')
+          const target = frame.params.target
+          const read = await readAccountNativeRoomPreparation(this.options.host,
+            { nativeRoomPreparationReceiver: receiver }, commandReadAccount(frame.params, ownerId), target, context.signal, clock)
+          read.assertCurrent()
+          const outcome = signNativeRoomPreparation(read.value, target, read.profileId,
+            nativeRoomAccountAssertionFields(frame.params, this.options.identity, clock()), frame.request_id,
+            (payload) => { read.assertCurrent(); return signAuthorityPayload(this.options.identity, payload) })
+          read.assertCurrent()
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id,
+            method: frame.method, result: { outcome } })
         } else if (frame.method === 'profile.native_room') {
           const prepare = this.options.prepareNativeRoom
           if (!prepare) throw new HostAuthorityError('upgrade_required')
@@ -2857,6 +2877,7 @@ export class HostControlAuthority {
           ...(this.options.operateNativeRoom ? ['profile.native_room_projection'] : []),
           ...(this.options.retireNativeRoom ? ['profile.native_room_retirement'] : []),
           ...(this.options.prepareNativeRoom ? ['profile.native_room'] : []),
+          ...(this.options.nativeRoomPreparationReceiver ? ['profile.native_room_preparation'] : []),
           ...(this.options.operateNativeRoom ? ['profile.native_room_operation'] : []),
           ...(this.options.operateNativeRoom && this.options.trustedBotGroupKeyrings?.length
             ? ['profile.native_agent_result'] : []),
@@ -4895,6 +4916,42 @@ export class UnixHostClient {
     return proof
   }
 
+  /** Run one guarded native preparation phase and verify both installation signature domains.
+   * @param input Current Account, exact binding selectors and one original stage.
+   * @returns Explicit inability or verified proof; it does not imply Cloud group activation.
+   */
+  async prepareNativeRoomPhase(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly issuer: string
+    readonly subject: string
+    readonly target: HostNativeRoomPreparationTarget
+    readonly signal?: AbortSignal
+  }): Promise<HostNativeRoomPreparationOutcome> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.native_room_preparation' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const peer = this.currentPeerFingerprint()
+    this.requireCurrentPeer(peer)
+    const target = parseHostNativeRoomPreparationTarget(input.target)
+    assertNativePreparationCurrent(target, this.now())
+    const request: ProfileNativeRoomPreparationRequest = { version: 1, type: 'request', request_id: requestId(),
+      method: 'profile.native_room_preparation', params: { ...this.collaborationAccountRequestParams(input), target } }
+    const frame = await this.callCurrentPeer(request, input.signal, peer)
+    assertNativePreparationCurrent(target, this.now())
+    const outcome = parseHostNativeRoomPreparationOutcome(frame.result.outcome)
+    if (outcome.state === 'prepared') {
+      const proof = outcome.proof
+      if (JSON.stringify(proof.target) !== JSON.stringify(target) ||
+        !this.matchesNativeRoomAssertionAuthority(proof, input) ||
+        !verifyNativeRoomPreparationSignatures(proof, (payload, signature) =>
+          verify(null, payload, publicKeyObject(this.inspection.installation_public_key), Buffer.from(signature, 'base64url'))))
+        throw new HostAuthorityError('profile_mismatch')
+    }
+    return outcome
+  }
+
   /**
    * Prepare one native room's bridge Source in the current Account Profile.
    * @param input - Current Account binding and existing room ID.
@@ -5927,7 +5984,8 @@ export class UnixHostClient {
   }
 
   private async callCurrentPeer<T extends ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest
-    | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest | ProfileNativeRoomRetirementRequest>(
+    | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest | ProfileNativeRoomRetirementRequest
+    | ProfileNativeRoomPreparationRequest>(
     request: T,
     signal?: AbortSignal,
     peer = this.currentPeerFingerprint(),
@@ -6051,7 +6109,7 @@ export class UnixHostClient {
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
       | ProfileTwinBindingRequest | ProfileBotRosterRequest
       | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest | ProfileNativeRoomRetirementRequest
-      | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
+      | ProfileNativeRoomRequest | ProfileNativeRoomPreparationRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
       | ProfileBotGroupDeliverRequest
       | ProfileBotGroupResultPageRequest
       | ProfileBotGroupResultAckRequest

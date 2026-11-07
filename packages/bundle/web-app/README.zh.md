@@ -98,11 +98,13 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 ## 理解实现
 
-四个私有原生群目录、准备、退役和操作路由可在 worker token 下接收可选的 `x-dsh-native-drain`，其值为 32 字节规范 base64url nonce。只有实际 service Promise 结束（含失败），或输入在接收执行前被拒绝，才用 `x-dsh-native-settled` 返回相同 nonce。这类请求到期时取消操作 signal，不销毁已接收执行的请求。调用方断链仍取消 signal，handler 仍等待 service。收据缺失不证明实际结束；旧 worker 可能执行后不返回收据。未带该 header 的请求保留原截止时间行为。
+五个私有原生群目录、准备、退役和操作路由可在 worker token 下接收可选的 `x-dsh-native-drain`，其值为 32 字节规范 base64url nonce。只有实际 service Promise 结束（含失败），或输入在接收执行前被拒绝，才用 `x-dsh-native-settled` 返回相同 nonce。这类请求到期时取消操作 signal，不销毁已接收执行的请求。调用方断链仍取消 signal，handler 仍等待 service。收据缺失不证明实际结束；旧 worker 可能执行后不返回收据。未带该 header 的请求保留原截止时间行为。
 
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` 仅在隔离 Profile worker 中启用 `/internal/desktop-workspace-model-selection`。入口接受最多 2 KiB 的注册表工作区/Session 目标，交给仅供 Host 使用的 Session Controller 读取，不激活 Agent 或调用模型。浏览器 Cookie 不能授权此入口。失败不含异常详情；响应禁止缓存，仅包含已校验的选择字段。该读取不提供 Source 凭据或已准备的配置快照。
 
 `DSH_PROFILE_SOURCE_TOKEN` 也保护 `/internal/desktop-bot-identity`。入口在每次请求时通过 Profile 本地可选的 `dsBotSlarkExternalGroup` 服务解析准确 Bot ID。服务或 Bot 缺失时返回缺失；只有 Bot ID、派生的发言者引用和有界显示名可以离开 worker。浏览器 Cookie 不能调用此入口。
+
+`/internal/desktop-native-room-preparation` 使用同一 worker token 执行一个有界、未签名的阶段。它捕获保留调用追踪的 native-room、Session Controller 和 Workspace Registry provider，并拒绝 provider 替换；阶段前后均读取 Bot 的实际参与。只有预期 Source 为 null 且房间尚未准备时，才允许调用 `prepareBinding`，由插件内部用四个选择字段约束创建；不会回落到旧 `prepare` 方法。已有 Source 和两个证明阶段只读原严格 journal，要求固定控制文本、修订一和空 mentions。激活在安装原持久输入围栏前再次核验参与。child 不返回签名、Account 字段或凭据，也不启动模型回合。父进程负责证明签名和完整响应上限。
 
 `/internal/desktop-native-room` 使用同一 worker token 接收单个房间 ID，并调用 Profile 本地可选的 `dsBotSlarkNativeRoom` 服务准备 Slark 桥接 Source。响应只包含房间 ID 和 Source 坐标；房间 Session 自身的 Source 或附带额外字段的响应会被拒绝。浏览器 Cookie 不能调用此入口。
 

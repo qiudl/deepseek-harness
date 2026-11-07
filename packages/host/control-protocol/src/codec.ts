@@ -1,3 +1,5 @@
+import { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
+import type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
 import type { ProfileNativeRoomRetirementRequest, ProfileNativeRoomRetirementResult } from './types.ts'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
@@ -1850,6 +1852,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileBoundBotRoomsRequest
   | ProfileNativeRoomProjectionRequest
   | ProfileNativeRoomRetirementRequest
+  | ProfileNativeRoomPreparationRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2622,6 +2625,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), target: parseHostNativeRoomRetirementTarget(params.target),
     } } satisfies ProfileNativeRoomRetirementRequest
   }
+  if (frame.method === 'profile.native_room_preparation') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomPreparationTarget(params.target),
+    } } satisfies ProfileNativeRoomPreparationRequest
+  }
   if (frame.method === 'profile.native_room') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'room_id'])
@@ -2736,6 +2746,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileBoundBotRoomsResult
   | ProfileNativeRoomProjectionResult
   | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3185,6 +3196,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['proof'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { proof: parseHostNativeRoomRetirementProof(result.proof) } } satisfies ProfileNativeRoomRetirementResult
+  }
+  if (frame.method === 'profile.native_room_preparation') {
+    exactKeys(result, ['outcome'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { outcome: parseHostNativeRoomPreparationOutcome(result.outcome) } } satisfies ProfileNativeRoomPreparationResult
   }
   if (frame.method === 'profile.native_room') {
     exactKeys(result, ['binding'])
@@ -3665,7 +3681,9 @@ function decodeObject(value: unknown): HostControlFrame {
 export function encodeHostControlFrame(frame: HostControlFrame): string {
   const normalized = decodeObject(frame)
   const encoded = `${JSON.stringify(normalized)}\n`
-  if (new TextEncoder().encode(encoded.slice(0, -1)).byteLength > HOST_CONTROL_MAX_FRAME_BYTES) {
+  const limit = 'method' in normalized && normalized.method === 'profile.native_room_preparation'
+    ? HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES : HOST_CONTROL_MAX_FRAME_BYTES
+  if (new TextEncoder().encode(encoded.slice(0, -1)).byteLength > limit) {
     reject('frame_too_large')
   }
   return encoded
