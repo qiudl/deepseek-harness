@@ -1,5 +1,6 @@
 /** Profile-local Bot/Session coordinates; neither selectors nor observations grant source access. */
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import type { HostProfileId } from './types.ts'
 import { record } from './twin-binding-validation.ts'
 
 /** Stable root Bot identity supplied by the Profile-local producer. */
@@ -10,6 +11,27 @@ export type HostBotSessionId = Branded<'HostBotSessionId'>
 export interface HostBotSessionCoordinates {
   readonly bot_id: HostBotSessionBotId
   readonly session_id: HostBotSessionId
+}
+
+/** Coordinates observed in the local Profile selected by the authenticated Parent. */
+export interface HostAccountBotSessionIdentity extends HostBotSessionCoordinates {
+  readonly host_profile_id: HostProfileId
+}
+
+/**
+ * Validate the separate Parent response without widening the private producer contract.
+ * @param value - Untrusted authenticated Host response.
+ * @returns Account Profile and observed coordinates, or explicit absence.
+ */
+export function parseHostAccountBotSessionIdentity(value: unknown): HostAccountBotSessionIdentity | null {
+  if (value === null) return null
+  const item = record(value, ['bot_id', 'session_id', 'host_profile_id'])
+  if (typeof item.host_profile_id !== 'string'
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.exec(item.host_profile_id)?.[0]
+      !== item.host_profile_id)
+    throw Error('invalid_account_bot_session_identity')
+  return { ...parseHostBotSessionTarget({ bot_id: item.bot_id, session_id: item.session_id }),
+    host_profile_id: item.host_profile_id as HostProfileId }
 }
 
 /**

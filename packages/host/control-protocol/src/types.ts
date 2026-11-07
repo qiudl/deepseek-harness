@@ -917,6 +917,18 @@ export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResul
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
 }
 
+/** Account-scoped observation of an exact original Bot/Session association. */
+export interface ProfileBotSessionIdentityRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & import('./bot-session-identity.ts').HostBotSessionCoordinates
+}
+
+/** The Parent-selected local Profile and private producer coordinates, or absence. */
+export interface ProfileBotSessionIdentityResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly result: { readonly identity: import('./bot-session-identity.ts').HostAccountBotSessionIdentity | null }
+}
+
 /** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
 export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
   readonly method: 'profile.twin_binding'
@@ -2506,6 +2518,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotIdentityV2Request
   | ProfileBotIdentityV2Result
+  | ProfileBotSessionIdentityRequest
+  | ProfileBotSessionIdentityResult
   | ProfileTwinBindingRequest
   | ProfileTwinBindingResult
   | ProfileBotRosterRequest

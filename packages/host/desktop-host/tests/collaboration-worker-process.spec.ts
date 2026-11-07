@@ -62,7 +62,8 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
-  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 }) {
+  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 },
+  botSessionIdentity: { bot_id: string; session_id: string } | null = null) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -86,6 +87,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-session-identity': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bound-bot-rooms': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
@@ -129,6 +131,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : input.action === 'inspect_root_attempt' ? { value: ${JSON.stringify(planning)} }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
+          : url.pathname.endsWith('bot-session-identity') ? ${JSON.stringify(botSessionIdentity)}
           : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
           : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
             { bots: [botIdentity], next_cursor: null })}
@@ -622,4 +625,58 @@ it.each([
   const result = h.retireNativeRoom(query, new AbortController().signal)
   if (reply.state === 'joined' || typeof reply.left_room_seq === 'string') await expect(result).rejects.toThrow()
   else expect(await result).toEqual(reply)
+})
+
+
+it('reads exact Bot/Session coordinates through the actual child and rejects token, target and size mismatches', async () => {
+  const coordinates = { bot_id: 'bot_1', session_id: 'session_1' }
+  const h = await harness(undefined, 'staged', groupValue, null, undefined, undefined, undefined, coordinates)
+  const resolve = h.worker.resolveBotSessionIdentity
+  if (!resolve) throw Error('missing Bot/Session reader')
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-session-identity`, {
+    method: 'POST', body: JSON.stringify(coordinates),
+  })).status).toBe(403)
+  expect(await resolve(coordinates.bot_id, coordinates.session_id, signal)).toEqual(coordinates)
+  await expect(resolve('bot_2', coordinates.session_id, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(resolve(coordinates.bot_id, 'session_2', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(resolve('../bot', coordinates.session_id, signal)).rejects.toThrow()
+  const response = vi.spyOn(globalThis, 'fetch')
+  try {
+    response.mockResolvedValueOnce(new Response(Buffer.alloc(2049)))
+    await expect(resolve(coordinates.bot_id, coordinates.session_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
+    response.mockResolvedValueOnce(new Response('null'))
+    expect(await resolve(coordinates.bot_id, coordinates.session_id, signal)).toBeNull()
+    const reply = new Response(JSON.stringify(coordinates))
+    const body = reply.body
+    if (!body) throw Error('missing response body')
+    const reader = body.getReader()
+    const cancel = vi.spyOn(reader, 'cancel').mockImplementationOnce(async () => { h.worker.abort() })
+    vi.spyOn(body, 'getReader').mockReturnValue(reader)
+    response.mockResolvedValueOnce(reply)
+    await expect(resolve(coordinates.bot_id, coordinates.session_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(cancel).toHaveBeenCalledOnce()
+  } finally { response.mockRestore() }
+})
+
+it.each([null, { bot_id: 'bot_1', session_id: 'session_1' }])('retains the Bot/Session deadline through response cleanup for %j', async (identity) => {
+  const h = await harness(), resolve = h.worker.resolveBotSessionIdentity
+  if (!resolve) throw Error('missing Bot/Session reader')
+  const deadline = new AbortController()
+  const timer = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
+  const response = vi.spyOn(globalThis, 'fetch')
+  try {
+    const reply = new Response(JSON.stringify(identity)), body = reply.body
+    if (!body) throw Error('missing response body')
+    const reader = body.getReader()
+    vi.spyOn(reader, 'cancel').mockImplementationOnce(async () => {
+      deadline.abort(new DOMException('private read deadline elapsed', 'TimeoutError'))
+    })
+    vi.spyOn(body, 'getReader').mockReturnValue(reader)
+    response.mockResolvedValueOnce(reply)
+    const owner = new AbortController().signal
+    await expect(resolve('bot_1', 'session_1', owner)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(owner.aborted).toBe(false)
+    expect(timer).toHaveBeenCalledWith(10_000)
+  } finally { response.mockRestore(); timer.mockRestore() }
 })

@@ -39,6 +39,19 @@ export interface NativeRoomPreparationReceiver {
     signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationWorkerRead>
 }
 
+/** Retains one original worker until the Parent publishes its coordinate observation. */
+export interface BotSessionIdentityReceiver {
+  /** Reject disposal or replacement of the captured worker. */
+  assertCurrent(): void
+  /** Read the exact requested association from that worker.
+   * @param target Original Bot and Session selectors.
+   * @param signal Caller cancellation.
+   * @returns Observed coordinates or explicit absence.
+   */
+  read(target: import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>
+}
+
 /** Closed Host authority errors; arbitrary local exception text never crosses IPC. */
 export type HostAuthorityErrorCode =
   | 'invalid_input'
@@ -124,6 +137,9 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Observe one exact Bot/Session association through the private Profile producer. */
+  readonly resolveBotSessionIdentity?: (botId: string, sessionId: string, signal: AbortSignal) =>
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>
   /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
   readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
   /** Page public Bot identities only from the selected exclusive-writer Profile. */

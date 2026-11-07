@@ -94,6 +94,8 @@ Bot/Session 坐标解析器只接受有界的精确 `bot_id`、`session_id`；�
 
 `profile.bot_identity_v2` 单独返回该公开身份及当前认证 Host 的本地 `host_profile_id`，调用方不能提供此字段。原方法保持三字段响应；两种方法均不授予配对、记忆或设备权限。
 
+`profile.bot_session_identity` 使用原认证 Account 范围及精确 `bot_id`/`session_id` 选择值。独立响应仅添加父进程选定的 `host_profile_id`，或返回 null。未知字段和调用方指定的 Profile 均被拒绝；私有 producer 仍保持两字段协议。该观察不授予来源正文、项目归属、记忆或执行权限。
+
 `profile.twin_binding` 接受完整、固定方向顺序的双向留存 offer，以及独立的 Cloud 目的限定许可，其有效期最多 30 秒。两方向必须对应同一本人、项目、分身与实际 DSH Bot；Host 重算 consent、scope 和父摘要，再核验当前 Account 与本地 Bot。结果仅为原始持久 `acknowledged` 事实，或回执查询的 `missing`，不返回 active 绑定，也不授予记忆、群或设备执行权。Directive 与 Ack 使用独立的规范数组签名域；持久 Ack 摘要还覆盖其原始签名。
 
 `profile.native_room_retirement` 独立绑定完整原 join/leave 命令及各自不同的请求 ID，要求同一 room/member/cycle。其 `native_room_retirement` proof 只在独立签名域内签署 durable left，序号0也合法。不可用或受理结果未知都不能证明已关闭。绑定选择值只是回显上下文，调用方仍须核验 Cloud 清理授权。

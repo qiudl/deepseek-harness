@@ -8,6 +8,7 @@ import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } fro
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSessionTarget, parseHostBotSessionIdentity, type HostBotSessionCoordinates } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
@@ -306,6 +307,8 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      resolveBotSessionIdentity: (botId, sessionId, signal) => this.resolveBotSessionIdentity(
+        viewOrigin, sourceToken, botId, sessionId, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
@@ -521,7 +524,10 @@ export class DshWebProfileWorkerFactory {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    const result = await this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    signal.throwIfAborted()
+    if (active.aborted || stopped()) throw new HostAuthorityError('unavailable')
+    return result
   }
 
   private async postNativeProfileResource<T>(
@@ -539,6 +545,23 @@ export class DshWebProfileWorkerFactory {
       if (error instanceof HostAuthorityError || signal.aborted) throw error
       throw new HostAuthorityError('unavailable')
     }
+  }
+
+  private async resolveBotSessionIdentity(
+    viewOrigin: string, token: string, botId: string, sessionId: string,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotSessionCoordinates | null> {
+    const target = parseHostBotSessionTarget({ bot_id: botId, session_id: sessionId })
+    const result = await this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bot-session-identity',
+      target, 10_000, 2048, signal, stopped, (bytes) => {
+        const identity = parseHostBotSessionIdentity(JSON.parse(bytes.toString('utf8')))
+        if (identity !== null && (identity.bot_id !== target.bot_id || identity.session_id !== target.session_id))
+          throw new HostAuthorityError('profile_mismatch')
+        return identity
+      })
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    return result
   }
 
   private async resolveBotIdentity(
