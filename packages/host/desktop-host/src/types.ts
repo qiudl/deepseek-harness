@@ -26,6 +26,19 @@ export type ProfileAccessScope = 'connected' | 'local_profile' | 'offline_local'
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
 
+/** One original worker retained through the parent's final synchronous signing checks. */
+export interface NativeRoomPreparationReceiver {
+  /** Reject a closed supervisor or replacement of this exact worker. */
+  assertCurrent(): void
+  /** Read one phase; caller cancellation does not certify actual operation settlement.
+   * @param target Original binding and phase selector.
+   * @param signal Caller cancellation, separate from actual execution settlement.
+   * @returns Unsigned observations from this retained worker only.
+   */
+  read(target: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationTarget,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationWorkerRead>
+}
+
 /** Closed Host authority errors; arbitrary local exception text never crosses IPC. */
 export type HostAuthorityErrorCode =
   | 'invalid_input'
@@ -127,6 +140,11 @@ export interface ProfileWorkerHandle {
   /** Prepare a native room's bridge Source in the selected Profile writer. */
   readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>
+  /** Observe one guarded preparation phase; no signing authority enters the worker. */
+  readonly prepareNativeRoomPhase?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationWorkerRead>
   /** Run one native room member or message operation in the selected Profile writer. */
   readonly operateNativeRoom?: (
     command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomCommand,

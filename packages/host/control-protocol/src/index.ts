@@ -32,6 +32,15 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationProof,
+  parseHostNativeRoomPreparationOutcome, parseHostNativeRoomPreparationObservation,
+  encodeHostNativeRoomPreparationProofPayload } from './native-room-preparation.ts'
+export { parseHostNativeRoomBindingRead, parseHostNativeRoomPreparationWorkerRead,
+  matchHostNativeRoomPreparationWorkerRead } from './native-room-preparation-worker.ts'
+export type { HostNativeRoomBindingRead, HostNativeRoomPreparationWorkerRead } from './native-room-preparation-worker.ts'
+export type { HostNativePreparationComputerId, HostNativeRoomPreparationTarget, HostNativeRoomPreparationObservation,
+  HostNativeRoomPreparationOutput, HostNativeRoomPreparationProof, HostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
+export type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
 export { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementTarget,
   parseHostNativeRoomRetirementReply, parseHostNativeRoomRetirementProof,
   encodeHostNativeRoomRetirementProofPayload } from './bound-bot-rooms.ts'

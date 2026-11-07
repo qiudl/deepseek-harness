@@ -1,0 +1,1086 @@
+{
+  "schema_version": 1,
+  "design": "REQ-20261031-0006 /21721v5 /Task26335",
+  "key": {
+    "synthetic_only": true,
+    "algorithm": "Ed25519",
+    "seed_hex": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "private_key_pkcs8_der_base64": "MC4CAQAwBQYDK2VwBCIEICoqKioqKioqKioqKioqKioqKioqKioqKioqKioqKioq",
+    "public_key_raw_base64url": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+    "public_key_spki_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAGX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=\n-----END PUBLIC KEY-----\n"
+  },
+  "source_snapshot": {
+    "workspace_id": "10000000-0000-4000-8000-000000000006",
+    "session_id": "source-session-golden-1",
+    "source_message_id": "source-message-golden-1",
+    "source_revision": "1",
+    "original_message": "[Slark Agent group membership requested]",
+    "active_mentions": [],
+    "model_snapshot": {
+      "provider": "synthetic-provider",
+      "model": "synthetic-model",
+      "configuration_generation": "0",
+      "adapter_fingerprint": "ff64cf1515cfe7f87bcdec58d7806ac79c427de3718559d796e230169a699432"
+    },
+    "host_journal_commit": {
+      "journal_id": "journal-golden-1",
+      "commit_version": "1",
+      "content_digest": "7490b3e4d32f773295c182857c8605f88efd1e791cf5cac195941b1d7b06ab2b"
+    }
+  },
+  "source_descriptor": {
+    "workspace_id": "10000000-0000-4000-8000-000000000006",
+    "session_id": "source-session-golden-1",
+    "source_message_id": "source-message-golden-1",
+    "source_revision": "1",
+    "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+  },
+  "cases": [
+    {
+      "name": "prepare_source",
+      "request": {
+        "method": "profile.native_room_preparation",
+        "params": {
+          "client_instance_id": "10000000-0000-4000-8000-000000000011",
+          "host_instance_id": "10000000-0000-4000-8000-000000000002",
+          "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          "jti": "10000000-0000-4000-8000-000000000012",
+          "issued_at": 1700000000000,
+          "expires_at": 1700000060000,
+          "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+          "account_binding_handle": "account-binding-golden-1",
+          "authority_binding_version": 7,
+          "account_issuer": "https://accounts.example.test",
+          "account_subject": "10000000-0000-4000-8000-000000000005",
+          "target": {
+            "operation": "prepare_source",
+            "challenge_nonce": "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+            "expires_at": 1700000060000,
+            "binding_id": "10000000-0000-4000-8000-000000000007",
+            "binding_generation": "9007199254740993",
+            "computer_id": "computer-golden-1",
+            "slark_audience": "https://slark.example.test",
+            "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+            "bot_id": "bot-golden-1",
+            "room_id": "native-room-golden-1",
+            "workspace_id": "10000000-0000-4000-8000-000000000006",
+            "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            "expected_source": null
+          }
+        }
+      },
+      "result": {
+        "outcome": {
+          "state": "prepared",
+          "proof": {
+            "schema_version": 1,
+            "purpose": "native_room_preparation",
+            "target": {
+              "operation": "prepare_source",
+              "challenge_nonce": "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+              "expires_at": 1700000060000,
+              "binding_id": "10000000-0000-4000-8000-000000000007",
+              "binding_generation": "9007199254740993",
+              "computer_id": "computer-golden-1",
+              "slark_audience": "https://slark.example.test",
+              "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "expected_source": null
+            },
+            "observation": {
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              }
+            },
+            "output": {
+              "operation": "prepare_source",
+              "native_room_assertion": {
+                "schema_version": 1,
+                "binding": {
+                  "room_id": "native-room-golden-1",
+                  "source": {
+                    "workspace_id": "10000000-0000-4000-8000-000000000006",
+                    "session_id": "source-session-golden-1",
+                    "source_message_id": "source-message-golden-1",
+                    "source_revision": "1"
+                  }
+                },
+                "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+                "account_binding_handle": "account-binding-golden-1",
+                "authority_binding_version": 7,
+                "account_issuer": "https://accounts.example.test",
+                "account_subject": "10000000-0000-4000-8000-000000000005",
+                "installation_id": "10000000-0000-4000-8000-000000000001",
+                "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+                "host_instance_id": "10000000-0000-4000-8000-000000000002",
+                "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+                "issued_at": 1700000000100,
+                "signature": "b7ceDp_Z5fOCS6sCJDwHzoEvEUCGaYG8RzVXrusY-nMVFLDcT09t_D7WME0ggstiri60meiLJnZVUhT_v0SlAA"
+              },
+              "source_snapshot": {
+                "descriptor": {
+                  "workspace_id": "10000000-0000-4000-8000-000000000006",
+                  "session_id": "source-session-golden-1",
+                  "source_message_id": "source-message-golden-1",
+                  "source_revision": "1",
+                  "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+                },
+                "snapshot_json": "{\"workspace_id\":\"10000000-0000-4000-8000-000000000006\",\"session_id\":\"source-session-golden-1\",\"source_message_id\":\"source-message-golden-1\",\"source_revision\":\"1\",\"original_message\":\"[Slark Agent group membership requested]\",\"active_mentions\":[],\"model_snapshot\":{\"provider\":\"synthetic-provider\",\"model\":\"synthetic-model\",\"configuration_generation\":\"0\",\"adapter_fingerprint\":\"ff64cf1515cfe7f87bcdec58d7806ac79c427de3718559d796e230169a699432\"},\"host_journal_commit\":{\"journal_id\":\"journal-golden-1\",\"commit_version\":\"1\",\"content_digest\":\"7490b3e4d32f773295c182857c8605f88efd1e791cf5cac195941b1d7b06ab2b\"}}"
+              }
+            },
+            "host_profile_id": "10000000-0000-4000-8000-000000000003",
+            "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+            "account_binding_handle": "account-binding-golden-1",
+            "authority_binding_version": 7,
+            "account_issuer": "https://accounts.example.test",
+            "account_subject": "10000000-0000-4000-8000-000000000005",
+            "installation_id": "10000000-0000-4000-8000-000000000001",
+            "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "host_instance_id": "10000000-0000-4000-8000-000000000002",
+            "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            "issued_at": 1700000000300,
+            "signature": "X08iL-WXGyqOggF20mGHfXmj2upvMTZEbvHVI0PG_97FY9Zc8uEwkgYMq9fMAbL7VdWsCoaKMOAuBOgJuHiTBQ"
+          }
+        }
+      },
+      "expected": {
+        "target_tuple": [
+          [
+            "prepare_source",
+            "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+            1700000060000,
+            "10000000-0000-4000-8000-000000000007",
+            "9007199254740993",
+            "computer-golden-1",
+            "https://slark.example.test",
+            "10000000-0000-4000-8000-000000000003",
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+          ],
+          null
+        ],
+        "observation_tuple": [
+          "bot-golden-1",
+          "native-room-golden-1",
+          "10000000-0000-4000-8000-000000000006",
+          "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ]
+        ],
+        "authority_tuple": [
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004",
+          "account-binding-golden-1",
+          7,
+          "https://accounts.example.test",
+          "10000000-0000-4000-8000-000000000005",
+          "10000000-0000-4000-8000-000000000001",
+          "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+          "10000000-0000-4000-8000-000000000002",
+          "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          1700000000300
+        ],
+        "output_tuple": [
+          "prepare_source",
+          "15cde290743fbde72bd0c40e98aba59eedd575b64d29ae415d9e52bc2f533023",
+          "b7ceDp_Z5fOCS6sCJDwHzoEvEUCGaYG8RzVXrusY-nMVFLDcT09t_D7WME0ggstiri60meiLJnZVUhT_v0SlAA",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ],
+          "2d4b6acde53e4e0c1ec6332d64b50f1c57e16ab4ce9a82dfd9b2f7862163a0b4"
+        ],
+        "output_sha256": "0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8",
+        "signing_tuple": [
+          1,
+          "native_room_preparation",
+          [
+            [
+              "prepare_source",
+              "FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU",
+              1700000060000,
+              "10000000-0000-4000-8000-000000000007",
+              "9007199254740993",
+              "computer-golden-1",
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000003",
+              "bot-golden-1",
+              "native-room-golden-1",
+              "10000000-0000-4000-8000-000000000006",
+              "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+            ],
+            null
+          ],
+          [
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ]
+          ],
+          "0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8",
+          [
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+            "account-binding-golden-1",
+            7,
+            "https://accounts.example.test",
+            "10000000-0000-4000-8000-000000000005",
+            "10000000-0000-4000-8000-000000000001",
+            "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "10000000-0000-4000-8000-000000000002",
+            "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            1700000000300
+          ]
+        ],
+        "payload_utf8": "dsh-native-room-preparation/v1\u0000[1,\"native_room_preparation\",[[\"prepare_source\",\"FRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRU\",1700000060000,\"10000000-0000-4000-8000-000000000007\",\"9007199254740993\",\"computer-golden-1\",\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000003\",\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\"],null],[\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\",[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"]],\"0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8\",[\"10000000-0000-4000-8000-000000000003\",\"10000000-0000-4000-8000-000000000004\",\"account-binding-golden-1\",7,\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000001\",\"GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE\",\"10000000-0000-4000-8000-000000000002\",\"ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM\",1700000000300]]",
+        "payload_base64": "ZHNoLW5hdGl2ZS1yb29tLXByZXBhcmF0aW9uL3YxAFsxLCJuYXRpdmVfcm9vbV9wcmVwYXJhdGlvbiIsW1sicHJlcGFyZV9zb3VyY2UiLCJGUlVWRlJVVkZSVVZGUlVWRlJVVkZSVVZGUlVWRlJVVkZSVVZGUlVWRlJVIiwxNzAwMDAwMDYwMDAwLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDciLCI5MDA3MTk5MjU0NzQwOTkzIiwiY29tcHV0ZXItZ29sZGVuLTEiLCJodHRwczovL3NsYXJrLmV4YW1wbGUudGVzdCIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImJvdC1nb2xkZW4tMSIsIm5hdGl2ZS1yb29tLWdvbGRlbi0xIiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2IiwiZDA2ZjA4M2MwZmE2ZTQ4ODVjN2YwNThhNGUyYjE2YjY0MDg2NzNjZDZkOTA3MDFjZThhNzUwZjdjMGZmOGZjOSJdLG51bGxdLFsiYm90LWdvbGRlbi0xIiwibmF0aXZlLXJvb20tZ29sZGVuLTEiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDYiLCJkMDZmMDgzYzBmYTZlNDg4NWM3ZjA1OGE0ZTJiMTZiNjQwODY3M2NkNmQ5MDcwMWNlOGE3NTBmN2MwZmY4ZmM5IixbIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIiwic291cmNlLW1lc3NhZ2UtZ29sZGVuLTEiLCIxIiwiNTVlNTA3YTcxMmRlYzQ0YmFkODcwMmZhODMxYWZlZjY0NmMxYzM3NmY1YjBiNjAxNjBkNTYyZTFkMmM2OWYxZCJdXSwiMGMzYzc5MGVkZjdmY2VmMGRmZWVmNjYzMDJiNzIwNDZiOTVkNzE2YTNkOTFkNzFlYzE4MTMxZDUyNzdjZWNjOCIsWyIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJhY2NvdW50LWJpbmRpbmctZ29sZGVuLTEiLDcsImh0dHBzOi8vYWNjb3VudHMuZXhhbXBsZS50ZXN0IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA1IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiR1g5ckktRnNoVExHcThnNC1zMWVwNG0tREhheWtnTTBBNXY2aXowMmpXRSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsIkV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE0iLDE3MDAwMDAwMDAzMDBdXQ==",
+        "payload_sha256": "8c6ceb8b69409f80138ad43a444b8705588d0306161cf5b2cbd0587a79ef9ce6",
+        "signature": "X08iL-WXGyqOggF20mGHfXmj2upvMTZEbvHVI0PG_97FY9Zc8uEwkgYMq9fMAbL7VdWsCoaKMOAuBOgJuHiTBQ"
+      }
+    },
+    {
+      "name": "attest_source",
+      "request": {
+        "method": "profile.native_room_preparation",
+        "params": {
+          "client_instance_id": "10000000-0000-4000-8000-000000000011",
+          "host_instance_id": "10000000-0000-4000-8000-000000000002",
+          "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          "jti": "10000000-0000-4000-8000-000000000013",
+          "issued_at": 1700000000000,
+          "expires_at": 1700000060000,
+          "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+          "account_binding_handle": "account-binding-golden-1",
+          "authority_binding_version": 7,
+          "account_issuer": "https://accounts.example.test",
+          "account_subject": "10000000-0000-4000-8000-000000000005",
+          "target": {
+            "operation": "attest_source",
+            "challenge_nonce": "FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY",
+            "expires_at": 1700000060000,
+            "binding_id": "10000000-0000-4000-8000-000000000007",
+            "binding_generation": "9007199254740993",
+            "computer_id": "computer-golden-1",
+            "slark_audience": "https://slark.example.test",
+            "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+            "bot_id": "bot-golden-1",
+            "room_id": "native-room-golden-1",
+            "workspace_id": "10000000-0000-4000-8000-000000000006",
+            "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            "source_challenge": {
+              "request_id": "10000000-0000-4000-8000-000000000008",
+              "challenge_nonce": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+              "expires_at": 1700000050000,
+              "audience": "https://slark.example.test",
+              "environment_id": "10000000-0000-4000-8000-000000000004",
+              "account_issuer": "https://accounts.example.test",
+              "account_subject": "10000000-0000-4000-8000-000000000005",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "session_id": "source-session-golden-1",
+              "source_message_id": "source-message-golden-1",
+              "source_revision": "1",
+              "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d",
+              "host_epoch": "9007199254740995"
+            }
+          }
+        }
+      },
+      "result": {
+        "outcome": {
+          "state": "prepared",
+          "proof": {
+            "schema_version": 1,
+            "purpose": "native_room_preparation",
+            "target": {
+              "operation": "attest_source",
+              "challenge_nonce": "FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY",
+              "expires_at": 1700000060000,
+              "binding_id": "10000000-0000-4000-8000-000000000007",
+              "binding_generation": "9007199254740993",
+              "computer_id": "computer-golden-1",
+              "slark_audience": "https://slark.example.test",
+              "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source_challenge": {
+                "request_id": "10000000-0000-4000-8000-000000000008",
+                "challenge_nonce": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+                "expires_at": 1700000050000,
+                "audience": "https://slark.example.test",
+                "environment_id": "10000000-0000-4000-8000-000000000004",
+                "account_issuer": "https://accounts.example.test",
+                "account_subject": "10000000-0000-4000-8000-000000000005",
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d",
+                "host_epoch": "9007199254740995"
+              }
+            },
+            "observation": {
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              }
+            },
+            "output": {
+              "operation": "attest_source",
+              "source_assertion": {
+                "schema_version": 1,
+                "challenge": {
+                  "request_id": "10000000-0000-4000-8000-000000000008",
+                  "challenge_nonce": "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+                  "expires_at": 1700000050000,
+                  "audience": "https://slark.example.test",
+                  "environment_id": "10000000-0000-4000-8000-000000000004",
+                  "account_issuer": "https://accounts.example.test",
+                  "account_subject": "10000000-0000-4000-8000-000000000005",
+                  "workspace_id": "10000000-0000-4000-8000-000000000006",
+                  "session_id": "source-session-golden-1",
+                  "source_message_id": "source-message-golden-1",
+                  "source_revision": "1",
+                  "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d",
+                  "host_epoch": "9007199254740995"
+                },
+                "installation_id": "10000000-0000-4000-8000-000000000001",
+                "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+                "host_instance_id": "10000000-0000-4000-8000-000000000002",
+                "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+                "signature": "zju_DXLZq2_WjmZmllG9LAbT0FDA51ZCJRPEbp3si7eKNRvsx5qrPH24YbSe93e-lWaheBoanK_9d6OomUgBBQ"
+              }
+            },
+            "host_profile_id": "10000000-0000-4000-8000-000000000003",
+            "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+            "account_binding_handle": "account-binding-golden-1",
+            "authority_binding_version": 7,
+            "account_issuer": "https://accounts.example.test",
+            "account_subject": "10000000-0000-4000-8000-000000000005",
+            "installation_id": "10000000-0000-4000-8000-000000000001",
+            "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "host_instance_id": "10000000-0000-4000-8000-000000000002",
+            "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            "issued_at": 1700000000300,
+            "signature": "Ox2J0cdUIXVqTSDC3FVbqS7iZcUJ5SaTVgjK3okeaVgvCq85CkZDVF2MNAjM1GLZhuNXSUt4ivjGIsowyYqkDg"
+          }
+        }
+      },
+      "expected": {
+        "target_tuple": [
+          [
+            "attest_source",
+            "FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY",
+            1700000060000,
+            "10000000-0000-4000-8000-000000000007",
+            "9007199254740993",
+            "computer-golden-1",
+            "https://slark.example.test",
+            "10000000-0000-4000-8000-000000000003",
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+          ],
+          [
+            [
+              "10000000-0000-4000-8000-000000000008",
+              "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+              1700000050000,
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000004",
+              "https://accounts.example.test",
+              "10000000-0000-4000-8000-000000000005",
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1"
+            ],
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d",
+            "9007199254740995"
+          ]
+        ],
+        "observation_tuple": [
+          "bot-golden-1",
+          "native-room-golden-1",
+          "10000000-0000-4000-8000-000000000006",
+          "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ]
+        ],
+        "authority_tuple": [
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004",
+          "account-binding-golden-1",
+          7,
+          "https://accounts.example.test",
+          "10000000-0000-4000-8000-000000000005",
+          "10000000-0000-4000-8000-000000000001",
+          "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+          "10000000-0000-4000-8000-000000000002",
+          "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          1700000000300
+        ],
+        "output_tuple": [
+          "attest_source",
+          "a495408afa776fd99f636f2b678ea59d9114e7570f8f503c4eed66e2ce574bcb",
+          "zju_DXLZq2_WjmZmllG9LAbT0FDA51ZCJRPEbp3si7eKNRvsx5qrPH24YbSe93e-lWaheBoanK_9d6OomUgBBQ"
+        ],
+        "output_sha256": "685d81e26a8a83ff948ee9697aaaf917e600968d653947b43838be577f1fdac3",
+        "signing_tuple": [
+          1,
+          "native_room_preparation",
+          [
+            [
+              "attest_source",
+              "FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY",
+              1700000060000,
+              "10000000-0000-4000-8000-000000000007",
+              "9007199254740993",
+              "computer-golden-1",
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000003",
+              "bot-golden-1",
+              "native-room-golden-1",
+              "10000000-0000-4000-8000-000000000006",
+              "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+            ],
+            [
+              [
+                "10000000-0000-4000-8000-000000000008",
+                "DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw",
+                1700000050000,
+                "https://slark.example.test",
+                "10000000-0000-4000-8000-000000000004",
+                "https://accounts.example.test",
+                "10000000-0000-4000-8000-000000000005",
+                "10000000-0000-4000-8000-000000000006",
+                "source-session-golden-1"
+              ],
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d",
+              "9007199254740995"
+            ]
+          ],
+          [
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ]
+          ],
+          "685d81e26a8a83ff948ee9697aaaf917e600968d653947b43838be577f1fdac3",
+          [
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+            "account-binding-golden-1",
+            7,
+            "https://accounts.example.test",
+            "10000000-0000-4000-8000-000000000005",
+            "10000000-0000-4000-8000-000000000001",
+            "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "10000000-0000-4000-8000-000000000002",
+            "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            1700000000300
+          ]
+        ],
+        "payload_utf8": "dsh-native-room-preparation/v1\u0000[1,\"native_room_preparation\",[[\"attest_source\",\"FhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhY\",1700000060000,\"10000000-0000-4000-8000-000000000007\",\"9007199254740993\",\"computer-golden-1\",\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000003\",\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\"],[[\"10000000-0000-4000-8000-000000000008\",\"DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\",1700000050000,\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000004\",\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\"],\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\",\"9007199254740995\"]],[\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\",[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"]],\"685d81e26a8a83ff948ee9697aaaf917e600968d653947b43838be577f1fdac3\",[\"10000000-0000-4000-8000-000000000003\",\"10000000-0000-4000-8000-000000000004\",\"account-binding-golden-1\",7,\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000001\",\"GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE\",\"10000000-0000-4000-8000-000000000002\",\"ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM\",1700000000300]]",
+        "payload_base64": "ZHNoLW5hdGl2ZS1yb29tLXByZXBhcmF0aW9uL3YxAFsxLCJuYXRpdmVfcm9vbV9wcmVwYXJhdGlvbiIsW1siYXR0ZXN0X3NvdXJjZSIsIkZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFlXRmhZV0ZoWVdGaFkiLDE3MDAwMDAwNjAwMDAsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNyIsIjkwMDcxOTkyNTQ3NDA5OTMiLCJjb21wdXRlci1nb2xkZW4tMSIsImh0dHBzOi8vc2xhcmsuZXhhbXBsZS50ZXN0IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzIiwiYm90LWdvbGRlbi0xIiwibmF0aXZlLXJvb20tZ29sZGVuLTEiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDYiLCJkMDZmMDgzYzBmYTZlNDg4NWM3ZjA1OGE0ZTJiMTZiNjQwODY3M2NkNmQ5MDcwMWNlOGE3NTBmN2MwZmY4ZmM5Il0sW1siMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA4IiwiREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBd01EQXdNREF3TURBdyIsMTcwMDAwMDA1MDAwMCwiaHR0cHM6Ly9zbGFyay5leGFtcGxlLnRlc3QiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJodHRwczovL2FjY291bnRzLmV4YW1wbGUudGVzdCIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIl0sInNvdXJjZS1tZXNzYWdlLWdvbGRlbi0xIiwiMSIsIjU1ZTUwN2E3MTJkZWM0NGJhZDg3MDJmYTgzMWFmZWY2NDZjMWMzNzZmNWIwYjYwMTYwZDU2MmUxZDJjNjlmMWQiLCI5MDA3MTk5MjU0NzQwOTk1Il1dLFsiYm90LWdvbGRlbi0xIiwibmF0aXZlLXJvb20tZ29sZGVuLTEiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDYiLCJkMDZmMDgzYzBmYTZlNDg4NWM3ZjA1OGE0ZTJiMTZiNjQwODY3M2NkNmQ5MDcwMWNlOGE3NTBmN2MwZmY4ZmM5IixbIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIiwic291cmNlLW1lc3NhZ2UtZ29sZGVuLTEiLCIxIiwiNTVlNTA3YTcxMmRlYzQ0YmFkODcwMmZhODMxYWZlZjY0NmMxYzM3NmY1YjBiNjAxNjBkNTYyZTFkMmM2OWYxZCJdXSwiNjg1ZDgxZTI2YThhODNmZjk0OGVlOTY5N2FhYWY5MTdlNjAwOTY4ZDY1Mzk0N2I0MzgzOGJlNTc3ZjFmZGFjMyIsWyIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJhY2NvdW50LWJpbmRpbmctZ29sZGVuLTEiLDcsImh0dHBzOi8vYWNjb3VudHMuZXhhbXBsZS50ZXN0IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA1IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiR1g5ckktRnNoVExHcThnNC1zMWVwNG0tREhheWtnTTBBNXY2aXowMmpXRSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsIkV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE0iLDE3MDAwMDAwMDAzMDBdXQ==",
+        "payload_sha256": "8bc6cad677753811a7541da8e474eb1aa0ba3fa0886a7c635b0737ec1046f0e9",
+        "signature": "Ox2J0cdUIXVqTSDC3FVbqS7iZcUJ5SaTVgjK3okeaVgvCq85CkZDVF2MNAjM1GLZhuNXSUt4ivjGIsowyYqkDg"
+      }
+    },
+    {
+      "name": "attest_activation",
+      "request": {
+        "method": "profile.native_room_preparation",
+        "params": {
+          "client_instance_id": "10000000-0000-4000-8000-000000000011",
+          "host_instance_id": "10000000-0000-4000-8000-000000000002",
+          "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          "jti": "10000000-0000-4000-8000-000000000014",
+          "issued_at": 1700000000000,
+          "expires_at": 1700000060000,
+          "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+          "account_binding_handle": "account-binding-golden-1",
+          "authority_binding_version": 7,
+          "account_issuer": "https://accounts.example.test",
+          "account_subject": "10000000-0000-4000-8000-000000000005",
+          "target": {
+            "operation": "attest_activation",
+            "challenge_nonce": "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc",
+            "expires_at": 1700000060000,
+            "binding_id": "10000000-0000-4000-8000-000000000007",
+            "binding_generation": "9007199254740993",
+            "computer_id": "computer-golden-1",
+            "slark_audience": "https://slark.example.test",
+            "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+            "bot_id": "bot-golden-1",
+            "room_id": "native-room-golden-1",
+            "workspace_id": "10000000-0000-4000-8000-000000000006",
+            "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            "source": {
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "session_id": "source-session-golden-1",
+              "source_message_id": "source-message-golden-1",
+              "source_revision": "1",
+              "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            },
+            "activation_challenge": {
+              "request_id": "10000000-0000-4000-8000-000000000009",
+              "challenge_nonce": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0",
+              "expires_at": 1700000050000,
+              "audience": "https://slark.example.test",
+              "environment_id": "10000000-0000-4000-8000-000000000004",
+              "account_issuer": "https://accounts.example.test",
+              "account_subject": "10000000-0000-4000-8000-000000000005",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "session_id": "source-session-golden-1",
+              "group_id": "10000000-0000-4000-8000-000000000010",
+              "group_version": 1
+            }
+          }
+        }
+      },
+      "result": {
+        "outcome": {
+          "state": "prepared",
+          "proof": {
+            "schema_version": 1,
+            "purpose": "native_room_preparation",
+            "target": {
+              "operation": "attest_activation",
+              "challenge_nonce": "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc",
+              "expires_at": 1700000060000,
+              "binding_id": "10000000-0000-4000-8000-000000000007",
+              "binding_generation": "9007199254740993",
+              "computer_id": "computer-golden-1",
+              "slark_audience": "https://slark.example.test",
+              "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              },
+              "activation_challenge": {
+                "request_id": "10000000-0000-4000-8000-000000000009",
+                "challenge_nonce": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0",
+                "expires_at": 1700000050000,
+                "audience": "https://slark.example.test",
+                "environment_id": "10000000-0000-4000-8000-000000000004",
+                "account_issuer": "https://accounts.example.test",
+                "account_subject": "10000000-0000-4000-8000-000000000005",
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "group_id": "10000000-0000-4000-8000-000000000010",
+                "group_version": 1
+              }
+            },
+            "observation": {
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              }
+            },
+            "output": {
+              "operation": "attest_activation",
+              "activation_assertion": {
+                "schema_version": 1,
+                "challenge": {
+                  "request_id": "10000000-0000-4000-8000-000000000009",
+                  "challenge_nonce": "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0",
+                  "expires_at": 1700000050000,
+                  "audience": "https://slark.example.test",
+                  "environment_id": "10000000-0000-4000-8000-000000000004",
+                  "account_issuer": "https://accounts.example.test",
+                  "account_subject": "10000000-0000-4000-8000-000000000005",
+                  "workspace_id": "10000000-0000-4000-8000-000000000006",
+                  "session_id": "source-session-golden-1",
+                  "group_id": "10000000-0000-4000-8000-000000000010",
+                  "group_version": 1
+                },
+                "installation_id": "10000000-0000-4000-8000-000000000001",
+                "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+                "host_instance_id": "10000000-0000-4000-8000-000000000002",
+                "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+                "signature": "mutRJHyCaEIcItLqqGbTFFSu22cv6ObzvUHt3tufZQD6-__gFCiMVD-dO5MLablTiH7MIQnTl8ZLrmVCZraADg"
+              }
+            },
+            "host_profile_id": "10000000-0000-4000-8000-000000000003",
+            "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+            "account_binding_handle": "account-binding-golden-1",
+            "authority_binding_version": 7,
+            "account_issuer": "https://accounts.example.test",
+            "account_subject": "10000000-0000-4000-8000-000000000005",
+            "installation_id": "10000000-0000-4000-8000-000000000001",
+            "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "host_instance_id": "10000000-0000-4000-8000-000000000002",
+            "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            "issued_at": 1700000000300,
+            "signature": "w6N4V1kbO2OVJ_F5OfNpM1Ur6R1MVyHeIj0DhiI_fJTbrUdjS0xffFhf-BzLFJPjfhuPJ-_EIz97EaiYup5ZDg"
+          }
+        }
+      },
+      "expected": {
+        "target_tuple": [
+          [
+            "attest_activation",
+            "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc",
+            1700000060000,
+            "10000000-0000-4000-8000-000000000007",
+            "9007199254740993",
+            "computer-golden-1",
+            "https://slark.example.test",
+            "10000000-0000-4000-8000-000000000003",
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+          ],
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ],
+          [
+            [
+              "10000000-0000-4000-8000-000000000009",
+              "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0",
+              1700000050000,
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000004",
+              "https://accounts.example.test",
+              "10000000-0000-4000-8000-000000000005",
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1"
+            ],
+            "10000000-0000-4000-8000-000000000010",
+            1
+          ]
+        ],
+        "observation_tuple": [
+          "bot-golden-1",
+          "native-room-golden-1",
+          "10000000-0000-4000-8000-000000000006",
+          "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ]
+        ],
+        "authority_tuple": [
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004",
+          "account-binding-golden-1",
+          7,
+          "https://accounts.example.test",
+          "10000000-0000-4000-8000-000000000005",
+          "10000000-0000-4000-8000-000000000001",
+          "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+          "10000000-0000-4000-8000-000000000002",
+          "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          1700000000300
+        ],
+        "output_tuple": [
+          "attest_activation",
+          "164c714fe561301edff9bfd1b73a72911bb20f858d19accdf87c2625a0187ec3",
+          "mutRJHyCaEIcItLqqGbTFFSu22cv6ObzvUHt3tufZQD6-__gFCiMVD-dO5MLablTiH7MIQnTl8ZLrmVCZraADg"
+        ],
+        "output_sha256": "246e6873367d2f1722a3a37d43c7f8c770670502c1d6a8a84d2a8ace70759aea",
+        "signing_tuple": [
+          1,
+          "native_room_preparation",
+          [
+            [
+              "attest_activation",
+              "FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc",
+              1700000060000,
+              "10000000-0000-4000-8000-000000000007",
+              "9007199254740993",
+              "computer-golden-1",
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000003",
+              "bot-golden-1",
+              "native-room-golden-1",
+              "10000000-0000-4000-8000-000000000006",
+              "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+            ],
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ],
+            [
+              [
+                "10000000-0000-4000-8000-000000000009",
+                "DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0",
+                1700000050000,
+                "https://slark.example.test",
+                "10000000-0000-4000-8000-000000000004",
+                "https://accounts.example.test",
+                "10000000-0000-4000-8000-000000000005",
+                "10000000-0000-4000-8000-000000000006",
+                "source-session-golden-1"
+              ],
+              "10000000-0000-4000-8000-000000000010",
+              1
+            ]
+          ],
+          [
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ]
+          ],
+          "246e6873367d2f1722a3a37d43c7f8c770670502c1d6a8a84d2a8ace70759aea",
+          [
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+            "account-binding-golden-1",
+            7,
+            "https://accounts.example.test",
+            "10000000-0000-4000-8000-000000000005",
+            "10000000-0000-4000-8000-000000000001",
+            "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "10000000-0000-4000-8000-000000000002",
+            "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            1700000000300
+          ]
+        ],
+        "payload_utf8": "dsh-native-room-preparation/v1\u0000[1,\"native_room_preparation\",[[\"attest_activation\",\"FxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxcXFxc\",1700000060000,\"10000000-0000-4000-8000-000000000007\",\"9007199254740993\",\"computer-golden-1\",\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000003\",\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\"],[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"],[[\"10000000-0000-4000-8000-000000000009\",\"DQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0\",1700000050000,\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000004\",\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\"],\"10000000-0000-4000-8000-000000000010\",1]],[\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\",[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"]],\"246e6873367d2f1722a3a37d43c7f8c770670502c1d6a8a84d2a8ace70759aea\",[\"10000000-0000-4000-8000-000000000003\",\"10000000-0000-4000-8000-000000000004\",\"account-binding-golden-1\",7,\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000001\",\"GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE\",\"10000000-0000-4000-8000-000000000002\",\"ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM\",1700000000300]]",
+        "payload_base64": "ZHNoLW5hdGl2ZS1yb29tLXByZXBhcmF0aW9uL3YxAFsxLCJuYXRpdmVfcm9vbV9wcmVwYXJhdGlvbiIsW1siYXR0ZXN0X2FjdGl2YXRpb24iLCJGeGNYRnhjWEZ4Y1hGeGNYRnhjWEZ4Y1hGeGNYRnhjWEZ4Y1hGeGNYRnhjIiwxNzAwMDAwMDYwMDAwLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDciLCI5MDA3MTk5MjU0NzQwOTkzIiwiY29tcHV0ZXItZ29sZGVuLTEiLCJodHRwczovL3NsYXJrLmV4YW1wbGUudGVzdCIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImJvdC1nb2xkZW4tMSIsIm5hdGl2ZS1yb29tLWdvbGRlbi0xIiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2IiwiZDA2ZjA4M2MwZmE2ZTQ4ODVjN2YwNThhNGUyYjE2YjY0MDg2NzNjZDZkOTA3MDFjZThhNzUwZjdjMGZmOGZjOSJdLFsiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2Iiwic291cmNlLXNlc3Npb24tZ29sZGVuLTEiLCJzb3VyY2UtbWVzc2FnZS1nb2xkZW4tMSIsIjEiLCI1NWU1MDdhNzEyZGVjNDRiYWQ4NzAyZmE4MzFhZmVmNjQ2YzFjMzc2ZjViMGI2MDE2MGQ1NjJlMWQyYzY5ZjFkIl0sW1siMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA5IiwiRFEwTkRRME5EUTBORFEwTkRRME5EUTBORFEwTkRRME5EUTBORFEwTkRRMCIsMTcwMDAwMDA1MDAwMCwiaHR0cHM6Ly9zbGFyay5leGFtcGxlLnRlc3QiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJodHRwczovL2FjY291bnRzLmV4YW1wbGUudGVzdCIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIl0sIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAxMCIsMV1dLFsiYm90LWdvbGRlbi0xIiwibmF0aXZlLXJvb20tZ29sZGVuLTEiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDYiLCJkMDZmMDgzYzBmYTZlNDg4NWM3ZjA1OGE0ZTJiMTZiNjQwODY3M2NkNmQ5MDcwMWNlOGE3NTBmN2MwZmY4ZmM5IixbIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIiwic291cmNlLW1lc3NhZ2UtZ29sZGVuLTEiLCIxIiwiNTVlNTA3YTcxMmRlYzQ0YmFkODcwMmZhODMxYWZlZjY0NmMxYzM3NmY1YjBiNjAxNjBkNTYyZTFkMmM2OWYxZCJdXSwiMjQ2ZTY4NzMzNjdkMmYxNzIyYTNhMzdkNDNjN2Y4Yzc3MDY3MDUwMmMxZDZhOGE4NGQyYThhY2U3MDc1OWFlYSIsWyIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJhY2NvdW50LWJpbmRpbmctZ29sZGVuLTEiLDcsImh0dHBzOi8vYWNjb3VudHMuZXhhbXBsZS50ZXN0IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA1IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiR1g5ckktRnNoVExHcThnNC1zMWVwNG0tREhheWtnTTBBNXY2aXowMmpXRSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsIkV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE0iLDE3MDAwMDAwMDAzMDBdXQ==",
+        "payload_sha256": "1387a53705a969b57d62b98be0b58ddbc4034b4e04c22a1dd85c78f47855253e",
+        "signature": "w6N4V1kbO2OVJ_F5OfNpM1Ur6R1MVyHeIj0DhiI_fJTbrUdjS0xffFhf-BzLFJPjfhuPJ-_EIz97EaiYup5ZDg"
+      }
+    },
+    {
+      "name": "prepare_source_known",
+      "request": {
+        "method": "profile.native_room_preparation",
+        "params": {
+          "client_instance_id": "10000000-0000-4000-8000-000000000011",
+          "host_instance_id": "10000000-0000-4000-8000-000000000002",
+          "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          "jti": "10000000-0000-4000-8000-000000000015",
+          "issued_at": 1700000000000,
+          "expires_at": 1700000060000,
+          "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+          "account_binding_handle": "account-binding-golden-1",
+          "authority_binding_version": 7,
+          "account_issuer": "https://accounts.example.test",
+          "account_subject": "10000000-0000-4000-8000-000000000005",
+          "target": {
+            "operation": "prepare_source",
+            "challenge_nonce": "GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg",
+            "expires_at": 1700000060000,
+            "binding_id": "10000000-0000-4000-8000-000000000007",
+            "binding_generation": "9007199254740993",
+            "computer_id": "computer-golden-1",
+            "slark_audience": "https://slark.example.test",
+            "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+            "bot_id": "bot-golden-1",
+            "room_id": "native-room-golden-1",
+            "workspace_id": "10000000-0000-4000-8000-000000000006",
+            "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            "expected_source": {
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "session_id": "source-session-golden-1",
+              "source_message_id": "source-message-golden-1",
+              "source_revision": "1",
+              "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            }
+          }
+        }
+      },
+      "result": {
+        "outcome": {
+          "state": "prepared",
+          "proof": {
+            "schema_version": 1,
+            "purpose": "native_room_preparation",
+            "target": {
+              "operation": "prepare_source",
+              "challenge_nonce": "GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg",
+              "expires_at": 1700000060000,
+              "binding_id": "10000000-0000-4000-8000-000000000007",
+              "binding_generation": "9007199254740993",
+              "computer_id": "computer-golden-1",
+              "slark_audience": "https://slark.example.test",
+              "expected_profile_id": "10000000-0000-4000-8000-000000000003",
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "expected_source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              }
+            },
+            "observation": {
+              "bot_id": "bot-golden-1",
+              "room_id": "native-room-golden-1",
+              "workspace_id": "10000000-0000-4000-8000-000000000006",
+              "member_set_digest": "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+              "source": {
+                "workspace_id": "10000000-0000-4000-8000-000000000006",
+                "session_id": "source-session-golden-1",
+                "source_message_id": "source-message-golden-1",
+                "source_revision": "1",
+                "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+              }
+            },
+            "output": {
+              "operation": "prepare_source",
+              "native_room_assertion": {
+                "schema_version": 1,
+                "binding": {
+                  "room_id": "native-room-golden-1",
+                  "source": {
+                    "workspace_id": "10000000-0000-4000-8000-000000000006",
+                    "session_id": "source-session-golden-1",
+                    "source_message_id": "source-message-golden-1",
+                    "source_revision": "1"
+                  }
+                },
+                "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+                "account_binding_handle": "account-binding-golden-1",
+                "authority_binding_version": 7,
+                "account_issuer": "https://accounts.example.test",
+                "account_subject": "10000000-0000-4000-8000-000000000005",
+                "installation_id": "10000000-0000-4000-8000-000000000001",
+                "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+                "host_instance_id": "10000000-0000-4000-8000-000000000002",
+                "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+                "issued_at": 1700000000100,
+                "signature": "b7ceDp_Z5fOCS6sCJDwHzoEvEUCGaYG8RzVXrusY-nMVFLDcT09t_D7WME0ggstiri60meiLJnZVUhT_v0SlAA"
+              },
+              "source_snapshot": {
+                "descriptor": {
+                  "workspace_id": "10000000-0000-4000-8000-000000000006",
+                  "session_id": "source-session-golden-1",
+                  "source_message_id": "source-message-golden-1",
+                  "source_revision": "1",
+                  "snapshot_digest": "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+                },
+                "snapshot_json": "{\"workspace_id\":\"10000000-0000-4000-8000-000000000006\",\"session_id\":\"source-session-golden-1\",\"source_message_id\":\"source-message-golden-1\",\"source_revision\":\"1\",\"original_message\":\"[Slark Agent group membership requested]\",\"active_mentions\":[],\"model_snapshot\":{\"provider\":\"synthetic-provider\",\"model\":\"synthetic-model\",\"configuration_generation\":\"0\",\"adapter_fingerprint\":\"ff64cf1515cfe7f87bcdec58d7806ac79c427de3718559d796e230169a699432\"},\"host_journal_commit\":{\"journal_id\":\"journal-golden-1\",\"commit_version\":\"1\",\"content_digest\":\"7490b3e4d32f773295c182857c8605f88efd1e791cf5cac195941b1d7b06ab2b\"}}"
+              }
+            },
+            "host_profile_id": "10000000-0000-4000-8000-000000000003",
+            "authority_environment_id": "10000000-0000-4000-8000-000000000004",
+            "account_binding_handle": "account-binding-golden-1",
+            "authority_binding_version": 7,
+            "account_issuer": "https://accounts.example.test",
+            "account_subject": "10000000-0000-4000-8000-000000000005",
+            "installation_id": "10000000-0000-4000-8000-000000000001",
+            "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "host_instance_id": "10000000-0000-4000-8000-000000000002",
+            "process_nonce": "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            "issued_at": 1700000000300,
+            "signature": "hpjwt5v0DEMNumTsJmMZSxXf1yicfCw0mgw4OurXEqGCliR76l6hgqgmtgSTlk89k83Gec0zKMnhz9xb5t2fDg"
+          }
+        }
+      },
+      "expected": {
+        "target_tuple": [
+          [
+            "prepare_source",
+            "GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg",
+            1700000060000,
+            "10000000-0000-4000-8000-000000000007",
+            "9007199254740993",
+            "computer-golden-1",
+            "https://slark.example.test",
+            "10000000-0000-4000-8000-000000000003",
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+          ],
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ]
+        ],
+        "observation_tuple": [
+          "bot-golden-1",
+          "native-room-golden-1",
+          "10000000-0000-4000-8000-000000000006",
+          "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ]
+        ],
+        "authority_tuple": [
+          "10000000-0000-4000-8000-000000000003",
+          "10000000-0000-4000-8000-000000000004",
+          "account-binding-golden-1",
+          7,
+          "https://accounts.example.test",
+          "10000000-0000-4000-8000-000000000005",
+          "10000000-0000-4000-8000-000000000001",
+          "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+          "10000000-0000-4000-8000-000000000002",
+          "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+          1700000000300
+        ],
+        "output_tuple": [
+          "prepare_source",
+          "15cde290743fbde72bd0c40e98aba59eedd575b64d29ae415d9e52bc2f533023",
+          "b7ceDp_Z5fOCS6sCJDwHzoEvEUCGaYG8RzVXrusY-nMVFLDcT09t_D7WME0ggstiri60meiLJnZVUhT_v0SlAA",
+          [
+            "10000000-0000-4000-8000-000000000006",
+            "source-session-golden-1",
+            "source-message-golden-1",
+            "1",
+            "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+          ],
+          "2d4b6acde53e4e0c1ec6332d64b50f1c57e16ab4ce9a82dfd9b2f7862163a0b4"
+        ],
+        "output_sha256": "0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8",
+        "signing_tuple": [
+          1,
+          "native_room_preparation",
+          [
+            [
+              "prepare_source",
+              "GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg",
+              1700000060000,
+              "10000000-0000-4000-8000-000000000007",
+              "9007199254740993",
+              "computer-golden-1",
+              "https://slark.example.test",
+              "10000000-0000-4000-8000-000000000003",
+              "bot-golden-1",
+              "native-room-golden-1",
+              "10000000-0000-4000-8000-000000000006",
+              "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9"
+            ],
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ]
+          ],
+          [
+            "bot-golden-1",
+            "native-room-golden-1",
+            "10000000-0000-4000-8000-000000000006",
+            "d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9",
+            [
+              "10000000-0000-4000-8000-000000000006",
+              "source-session-golden-1",
+              "source-message-golden-1",
+              "1",
+              "55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d"
+            ]
+          ],
+          "0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8",
+          [
+            "10000000-0000-4000-8000-000000000003",
+            "10000000-0000-4000-8000-000000000004",
+            "account-binding-golden-1",
+            7,
+            "https://accounts.example.test",
+            "10000000-0000-4000-8000-000000000005",
+            "10000000-0000-4000-8000-000000000001",
+            "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+            "10000000-0000-4000-8000-000000000002",
+            "ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM",
+            1700000000300
+          ]
+        ],
+        "payload_utf8": "dsh-native-room-preparation/v1\u0000[1,\"native_room_preparation\",[[\"prepare_source\",\"GBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBg\",1700000060000,\"10000000-0000-4000-8000-000000000007\",\"9007199254740993\",\"computer-golden-1\",\"https://slark.example.test\",\"10000000-0000-4000-8000-000000000003\",\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\"],[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"]],[\"bot-golden-1\",\"native-room-golden-1\",\"10000000-0000-4000-8000-000000000006\",\"d06f083c0fa6e4885c7f058a4e2b16b6408673cd6d90701ce8a750f7c0ff8fc9\",[\"10000000-0000-4000-8000-000000000006\",\"source-session-golden-1\",\"source-message-golden-1\",\"1\",\"55e507a712dec44bad8702fa831afef646c1c376f5b0b60160d562e1d2c69f1d\"]],\"0c3c790edf7fcef0dfeef66302b72046b95d716a3d91d71ec18131d5277cecc8\",[\"10000000-0000-4000-8000-000000000003\",\"10000000-0000-4000-8000-000000000004\",\"account-binding-golden-1\",7,\"https://accounts.example.test\",\"10000000-0000-4000-8000-000000000005\",\"10000000-0000-4000-8000-000000000001\",\"GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE\",\"10000000-0000-4000-8000-000000000002\",\"ExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExM\",1700000000300]]",
+        "payload_base64": "ZHNoLW5hdGl2ZS1yb29tLXByZXBhcmF0aW9uL3YxAFsxLCJuYXRpdmVfcm9vbV9wcmVwYXJhdGlvbiIsW1sicHJlcGFyZV9zb3VyY2UiLCJHQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnWUdCZ1lHQmdZR0JnIiwxNzAwMDAwMDYwMDAwLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDciLCI5MDA3MTk5MjU0NzQwOTkzIiwiY29tcHV0ZXItZ29sZGVuLTEiLCJodHRwczovL3NsYXJrLmV4YW1wbGUudGVzdCIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsImJvdC1nb2xkZW4tMSIsIm5hdGl2ZS1yb29tLWdvbGRlbi0xIiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2IiwiZDA2ZjA4M2MwZmE2ZTQ4ODVjN2YwNThhNGUyYjE2YjY0MDg2NzNjZDZkOTA3MDFjZThhNzUwZjdjMGZmOGZjOSJdLFsiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2Iiwic291cmNlLXNlc3Npb24tZ29sZGVuLTEiLCJzb3VyY2UtbWVzc2FnZS1nb2xkZW4tMSIsIjEiLCI1NWU1MDdhNzEyZGVjNDRiYWQ4NzAyZmE4MzFhZmVmNjQ2YzFjMzc2ZjViMGI2MDE2MGQ1NjJlMWQyYzY5ZjFkIl1dLFsiYm90LWdvbGRlbi0xIiwibmF0aXZlLXJvb20tZ29sZGVuLTEiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDYiLCJkMDZmMDgzYzBmYTZlNDg4NWM3ZjA1OGE0ZTJiMTZiNjQwODY3M2NkNmQ5MDcwMWNlOGE3NTBmN2MwZmY4ZmM5IixbIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNiIsInNvdXJjZS1zZXNzaW9uLWdvbGRlbi0xIiwic291cmNlLW1lc3NhZ2UtZ29sZGVuLTEiLCIxIiwiNTVlNTA3YTcxMmRlYzQ0YmFkODcwMmZhODMxYWZlZjY0NmMxYzM3NmY1YjBiNjAxNjBkNTYyZTFkMmM2OWYxZCJdXSwiMGMzYzc5MGVkZjdmY2VmMGRmZWVmNjYzMDJiNzIwNDZiOTVkNzE2YTNkOTFkNzFlYzE4MTMxZDUyNzdjZWNjOCIsWyIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCIxMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQiLCJhY2NvdW50LWJpbmRpbmctZ29sZGVuLTEiLDcsImh0dHBzOi8vYWNjb3VudHMuZXhhbXBsZS50ZXN0IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA1IiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiR1g5ckktRnNoVExHcThnNC1zMWVwNG0tREhheWtnTTBBNXY2aXowMmpXRSIsIjEwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMiIsIkV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE1URXhNVEV4TVRFeE0iLDE3MDAwMDAwMDAzMDBdXQ==",
+        "payload_sha256": "947ddf0e051f6715352b5cbfab47daf9222a4c385ad7de6c78666f33fd840416",
+        "signature": "hpjwt5v0DEMNumTsJmMZSxXf1yicfCw0mgw4OurXEqGCliR76l6hgqgmtgSTlk89k83Gec0zKMnhz9xb5t2fDg"
+      }
+    }
+  ]
+}

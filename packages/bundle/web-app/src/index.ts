@@ -50,6 +50,7 @@ import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
+import { handleDesktopNativeRoomPreparationRequest, readDesktopNativeRoomPreparation } from './desktop-native-room-preparation.ts'
 import { handleDesktopNativeRoomOperationRequest } from './desktop-native-room-operations.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
@@ -274,6 +275,11 @@ export function apply(ctx: Context, config: Config): void {
   }
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-preparation',
+      handler: (req, res) => handleDesktopNativeRoomPreparationRequest(req, res, sourceToken,
+        (target, signal) => readDesktopNativeRoomPreparation(ctx, target, signal)),
+    }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bound-bot-rooms',
       handler: (req, res) => handleDesktopBoundBotRoomsRequest(req, res, sourceToken,

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:http'
 import { expect, it, onTestFinished } from 'vitest'
-import { parseHostBoundBotRoomsQuery } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBoundBotRoomsQuery, parseHostNativeRoomPreparationTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
@@ -42,8 +42,17 @@ it('shares factory slots across workers and treats process errors as failure wit
     if (!worker.listBoundBotRooms) throw Error('missing native inventory method')
     return worker.listBoundBotRooms(query, new AbortController().signal)
   }
-  for (let index = 0; index < 8; index++) await expect(read(first.worker)).rejects.toMatchObject({ code: 'upgrade_required' })
-  await expect(read(replacement.worker)).rejects.toMatchObject({ code: 'busy' })
+  const target = parseHostNativeRoomPreparationTarget({ operation: 'prepare_source', challenge_nonce: 'A'.repeat(43),
+    expires_at: Date.now() + 60_000, binding_id: '10000000-0000-4000-8000-000000000001', binding_generation: '1',
+    computer_id: 'fixture-computer', slark_audience: 'https://slark.example.test', expected_profile_id: '20000000-0000-4000-8000-000000000002',
+    bot_id: 'operator', room_id: 'room-1', workspace_id: '30000000-0000-4000-8000-000000000003', member_set_digest: 'a'.repeat(64), expected_source: null })
+  const phase = (worker: ProfileWorkerHandle) => {
+    if (!worker.prepareNativeRoomPhase) throw Error('missing guarded preparation method')
+    return worker.prepareNativeRoomPhase(target, new AbortController().signal)
+  }
+  for (let index = 0; index < 8; index++) await expect(index % 2 ? phase(first.worker) : read(first.worker))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  await expect(phase(replacement.worker)).rejects.toMatchObject({ code: 'busy' })
   const failure = Error('owned child error before exit')
   first.child.emit('error', failure)
   if (first.child.pid === undefined) throw Error('owned child did not spawn')
@@ -57,6 +66,7 @@ it('shares factory slots across workers and treats process errors as failure wit
   expect(await first.done).toBe(failure)
   terminal = true
   expect(await read(replacement.worker)).toEqual({ state: 'bot_unavailable' })
+  expect(await phase(replacement.worker)).toEqual({ state: 'bot_unavailable' })
   replacement.worker.abort()
   await replacement.done
 })

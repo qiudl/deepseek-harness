@@ -23,8 +23,8 @@ export async function handleDesktopPrivateRequest<Target, Result>(
   parseTarget: (value: unknown) => Target,
   parseResult: (value: unknown) => Result,
   matches: (result: Result, target: Target) => boolean,
-  requestBytes: 2048 | 32768 | 131072,
-  timeoutMs: 10_000 | 30_000 = 10_000,
+  requestBytes: 2048 | 32768 | 49152 | 131072,
+  timeoutMs: 10_000 | 30_000 | 60_000 = 10_000,
   nativeDrain = false,
 ): Promise<void> {
   const authorization = req.headers.authorization

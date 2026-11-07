@@ -96,6 +96,8 @@ kind: "package-reference"
 
 `profile.native_room_retirement` 独立绑定完整原 join/leave 命令及各自不同的请求 ID，要求同一 room/member/cycle。其 `native_room_retirement` proof 只在独立签名域内签署 durable left，序号0也合法。不可用或受理结果未知都不能证明已关闭。绑定选择值只是回显上下文，调用方仍须核验 Cloud 清理授权。
 
+`profile.native_room_preparation` 是独立能力，每次请求只执行 `prepare_source`、`attest_source` 或 `attest_activation` 中的一个阶段。完整 JSON 帧最多为 49,152 个 UTF-8 字节。target 将原 Computer、绑定代次、Profile、Bot、房间、工作区和成员摘要绑定到最多有效 60 秒的 nonce。成功 proof 在 `dsh-native-room-preparation/v1` 域内签署实际参与和原 Source，同时包含原 native-room、Source-authority 或 input-fence 的独立签名凭据。客户端用当前安装公钥验证两层签名。嵌套 challenge 保留原 Account、audience 和到期检查。明确未就绪状态不含 proof，不证明缺失或就绪。[字段解析器和固定元组](src/native-room-preparation.ts) 定义准确编码。Cloud 调用方提交前仍须重新核验当前绑定和群授权。
+
 `profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
 `profile.native_room_operation` 为同一 Account Profile 传递一条私有的 `join`、`messages`、`turns`、`ack` 或 `leave` 命令。响应重复准确的房间与操作范围。消息和轮次每页最多三条，每条消息正文最多占用 16,000 个 JSON 编码的 UTF-8 字节，以适配 64 KiB 控制帧。读取轮次本身不会执行工作或授予 Slark 群成员资格。Host 使用安装密钥签署每个 `turns` 页面，将房间、群、成员周期、游标、选中的轮次 ID、顺序与当前 Account/Host 身份绑定。受理轮次前必须验证此断言。
