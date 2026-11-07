@@ -63,6 +63,11 @@ export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarge
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'
 export { parseHostTwinBindingOffer, encodeHostTwinBindingOffer,
   hostTwinBindingOfferDigest, hostTwinBindingCommandDigest } from './twin-binding-offer.ts'
+export { createHostProjectOperationEvent, parseHostProjectOperationEvent,
+  encodeHostProjectOperationEventPayload } from './project-operation-event.ts'
+export type { HostProjectOperationEvent, HostProjectOperationContent, HostProjectOperationDependency,
+  HostProjectOperationLocator, HostProjectOperationEventId, HostProjectOperationProjectId,
+  HostProjectOperationReference, HostProjectOperationVersion, HostProjectOperationSequence } from './project-operation-event.ts'
 export type { HostTwinBindingOffer, HostTwinBindingScope,
   HostTwinBindingOfferContext } from './twin-binding-offer.ts'
 export { parseHostTwinBindingInput, parseHostTwinBindingDirective, parseHostTwinBindingAck,
