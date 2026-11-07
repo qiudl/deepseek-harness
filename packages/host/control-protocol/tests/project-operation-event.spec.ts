@@ -173,7 +173,7 @@ it('requires all declared keys and rejects non-JSON, hidden keys and accessors w
     expect(() => createHostProjectOperationEvent(property === 'materialDependencies'
       ? { ...fact(), materialDependencies: sparse } : { ...fact(), content: { ...fact().content, unfinishedRefs: sparse } })).toThrow()
   }
-  const cyclic = fact() as unknown as Record<string, unknown>
+  const cyclic: Record<string, unknown> = fact()
   cyclic.content = cyclic
   expect(() => createHostProjectOperationEvent(cyclic)).toThrow()
 })
