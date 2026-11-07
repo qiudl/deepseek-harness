@@ -235,6 +235,11 @@ async function waitForCollaborationSourceRead<T>(read: Promise<T>, signal: Abort
 
 /** Host service backing the generated `ctx.remote.session` namespace. */
 export class SessionController extends TypertRemoteService {
+  /** Whether `create({ sessionId, exactAdopt: true })` keeps that identity or fails without minting another. */
+  get supportsExactAdopt(): true {
+    return true
+  }
+
   static inject = [
     'agentDefaultModel',
     'agents',

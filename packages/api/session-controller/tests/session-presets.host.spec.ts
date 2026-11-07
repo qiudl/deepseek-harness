@@ -13,7 +13,7 @@ import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-sess
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
+import { createSessionTestController, createSessionTestRemote, testSessionPersistence } from './test-remote.ts'
 
 /** Booted contexts and their temp roots, torn down after each test. */
 const contexts: Context[] = []
@@ -172,6 +172,10 @@ async function harness(options: HarnessOptions = {}) {
     defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
     cwd,
   })
+  const controller = await createSessionTestController(ctx, {
+    defaultModelSelection: () => ({ provider: 'test', model: 'test-model' }),
+    cwd,
+  })
   const presetOf = (id: SessionId): string | null | undefined => {
     const session = ctx.sessions.get(id)
     return session === undefined ? undefined : preset.stateOf(session)
@@ -182,7 +186,7 @@ async function harness(options: HarnessOptions = {}) {
       .filter(event => event.type === 'agent-preset/selected')
       .map(event => event.data)
   }
-  return { ctx, remote, cwd, selections, resumed, presetOf, selectedEvents }
+  return { ctx, controller, remote, cwd, selections, resumed, presetOf, selectedEvents }
 }
 
 function storedHeader(id: SessionId, cwd: string, extra: Partial<SessionHeader> = {}): SessionHeader {
@@ -205,6 +209,27 @@ function completedTurn(seq: number): SessionEvent[] {
 }
 
 describe('session.create Agent preset identity', () => {
+  it('advertises exact adoption without opening a Session and preserves a started cold identity', async () => {
+    const id = SessionId('exact-capability-started')
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-session-exact-capability-')))
+    tempDirs.push(cwd)
+    const { ctx, controller, remote, resumed } = await harness({
+      stored: new Map([[id, { header: storedHeader(id, cwd), events: completedTurn(0) }]]),
+    })
+    expect(Reflect.get(controller, 'supportsExactAdopt')).toBe(true)
+    expect(Reflect.set(controller, 'supportsExactAdopt', false)).toBe(false)
+    expect(Reflect.get(controller, 'supportsExactAdopt')).toBe(true)
+    expect(resumed).toEqual([])
+    expect(ctx.sessions.get(id)).toBeUndefined()
+    const created = await remote.create({ sessionId: id, cwd, exactAdopt: true })
+    expect(created).toEqual({ ok: true, value: { sessionId: id } })
+    expect(resumed).toEqual([id])
+    expect(ctx.sessions.get(id)?.snapshotEvents()).toEqual([
+      ...completedTurn(0),
+      expect.objectContaining({ type: 'session/end-seed', seq: SessionSeq(2), data: {} }),
+    ])
+  })
+
   it('records the requested preset on the Session header', async () => {
     const { ctx, remote } = await harness({ presets: ['standard', 'minimal'] })
 
@@ -563,14 +588,16 @@ describe('session.create reuse of a stored blank Session', () => {
     const draft = SessionId('held-draft')
     const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-session-preset-stored-')))
     tempDirs.push(cwd)
-    const { ctx, remote } = await harness({
+    const { ctx, controller, remote } = await harness({
       presets: ['standard'],
       stored: new Map([[draft, { header: storedHeader(draft, cwd, { agentPreset: 'standard' }), events: [modelSelection(0)] }]]),
       held: new Set([draft]),
     })
 
+    expect(Reflect.get(controller, 'supportsExactAdopt')).toBe(true)
     const exact = await remote.create({ sessionId: draft, cwd, exactAdopt: true })
     expect(exact).toMatchObject({ ok: false, error: { code: 'session/writer-held', details: { sessionId: draft } } })
+    expect(ctx.sessions.get(draft)).toBeUndefined()
     const created = await remote.create({ sessionId: draft, cwd })
 
     if (!created.ok) throw new Error(`create failed: ${created.error.message}`)
