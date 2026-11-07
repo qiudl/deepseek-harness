@@ -93,12 +93,13 @@ function dependency(value: unknown): HostProjectOperationDependency {
 }
 function dependencies(value: unknown): readonly HostProjectOperationDependency[] {
   const items = array(value, 20, dependency)
-  for (let index = 1; index < items.length; index++) {
-    const a = items[index - 1], b = items[index]
-    if (!a || !b) return invalid()
-    if (a.rightId > b.rightId || a.rightId === b.rightId &&
-        (BigInt(a.generation) > BigInt(b.generation) || a.generation === b.generation && BigInt(a.revision) >= BigInt(b.revision)))
+  let previous: HostProjectOperationDependency | undefined
+  for (const item of items) {
+    if (previous !== undefined && (previous.rightId > item.rightId || previous.rightId === item.rightId &&
+        (BigInt(previous.generation) > BigInt(item.generation) || previous.generation === item.generation &&
+          BigInt(previous.revision) >= BigInt(item.revision))))
       return invalid()
+    previous = item
   }
   return Object.freeze(items)
 }
