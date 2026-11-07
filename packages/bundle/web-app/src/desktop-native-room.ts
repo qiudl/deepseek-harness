@@ -17,5 +17,5 @@ export async function handleDesktopNativeRoomRequest(req: IncomingMessage, res: 
     (target, signal) => prepare(target.room_id, signal), parseHostNativeRoomTarget,
     value => value === null ? null : parseHostNativeRoomSource(value),
     (result, target) => result === null || result.room_id === target.room_id,
-    2048, 30_000)
+    2048, 30_000, true)
 }

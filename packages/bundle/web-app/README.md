@@ -98,6 +98,8 @@ Each browser session selects a shipped preset (`standard` by default). The Agent
 
 ## Understand the implementation
 
+The four private native inventory, preparation, retirement and operation routes accept an optional canonical 32-byte base64url `x-dsh-native-drain` nonce under the worker token. They return the same nonce as `x-dsh-native-settled` only after the actual service Promise settles, including failures, or after rejecting input before admission. For these requests, the deadline aborts the operation signal without destroying an admitted request. Caller disconnect still aborts the signal and the handler still awaits the service. Missing receipts do not prove settlement; an older worker may execute before omitting the receipt. Requests without this header retain their existing deadline behavior.
+
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` enables `/internal/desktop-workspace-model-selection` only inside an isolated Profile worker. The endpoint accepts a 2 KiB registry workspace/Session target and delegates to the Host-only Session Controller reader without activating an Agent or dispatching a model. Browser cookies cannot authorize it. Failures omit exception details; responses are noncacheable and contain only validated selection fields. This read does not provide a Source proof or prepared configuration snapshot.
 
 `DSH_PROFILE_SOURCE_TOKEN` also protects `/internal/desktop-bot-identity`. The exact Bot ID is resolved through the Profile-local optional `dsBotSlarkExternalGroup` service at request time. Missing service or Bot returns absence; only Bot ID, derived actor reference and bounded display name can leave the worker. Browser cookies cannot call this route.

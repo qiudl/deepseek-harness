@@ -150,6 +150,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
+        if (request.headers['x-dsh-native-drain']) response.setHeader('x-dsh-native-settled', request.headers['x-dsh-native-drain'])
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value)); return
       }
       if (url.searchParams.get('token') === 'fixture-bootstrap') {
@@ -203,6 +204,16 @@ it('reads bound Bot room inventory through the actual worker process and private
   await expect(h.listBoundBotRooms(query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
 })
 
+it('keeps the private inventory deadline and reports its expiry as unavailable', async () => {
+  const h = await harness()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(AbortSignal.abort(new DOMException('expired', 'TimeoutError')))
+  try {
+    await expect(h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: null }),
+      new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(timeout).toHaveBeenCalledWith(10_000)
+  } finally { timeout.mockRestore() }
+})
+
 it.each([
   { state: 'upgrade_required' }, { state: 'snapshot_changed' },
   { state: 'page', bot_id: 'other', workspace_id: target.workspace_id, state_revision: 1,
@@ -242,13 +253,14 @@ it('uses the private Profile token for native room Source and exact operation re
     .toEqual({ state: 'left', left_room_seq: 3 })
   const response = vi.spyOn(globalThis, 'fetch')
   try {
-    response.mockResolvedValueOnce(new Response('null'))
+    const terminal = (body: string) => response.mockImplementationOnce(async (_url, init) => new Response(body,
+      { headers: { 'x-dsh-native-settled': new Headers(init?.headers).get('x-dsh-native-drain')! } }))
+    terminal('null')
     await expect(h.prepareNativeRoom('missing', signal)).resolves.toBeNull()
-    response.mockResolvedValueOnce(new Response(JSON.stringify({ ...nativeRoom, room_id: 'other' })))
+    terminal(JSON.stringify({ ...nativeRoom, room_id: 'other' }))
     await expect(h.prepareNativeRoom(nativeRoom.room_id, signal))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
-    response.mockResolvedValueOnce(new Response(JSON.stringify({ state: 'ok', room_id: 'other',
-      next_seq: 2, last_seq: 2, messages: [] })))
+    terminal(JSON.stringify({ state: 'ok', room_id: 'other', next_seq: 2, last_seq: 2, messages: [] }))
     await expect(h.operateNativeRoom(command, signal))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
   } finally { response.mockRestore() }
