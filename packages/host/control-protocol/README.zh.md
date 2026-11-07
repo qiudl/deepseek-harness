@@ -138,6 +138,8 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 ## API
 
+`createHostProjectOperationEvent` 校验 v3 精确源字段并计算事件摘要；`parseHostProjectOperationEvent` 验证完整事件，`encodeHostProjectOperationEventPayload` 返回带独立用途域的规范摘要原像。完整事件不超过 8192 UTF-8 字节，三项摘要分别最多 2000 字节，材料依赖最多 20 条。修订和序号完整保留 int64 十进制字符串；依赖先按 Right ID、再按数值 generation/revision 升序。实时引用只包含定位、版本及原来源摘要，暂存阶段也不携带正文。解析不证明来源归属，也不授予材料导出或留存权。
+
 `profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
 
 | 导出 | 职责 |
