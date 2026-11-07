@@ -25,7 +25,7 @@ export type GroupMessageCommand =
   }
   | { operation: 'receipt'; workspace_id: string; session_id: string; request_id: string }
   | { operation: 'work-source'; workspace_id: string; session_id: string; message_id: string }
-  | { operation: 'page'; workspace_id: string; session_id: string; after_seq: number; limit: number }
+  | { operation: 'page'; workspace_id: string; session_id: string; after_seq: number; limit: number; attention_after_id?: string }
   | { operation: 'pending_claim'; workspace_id: string; session_id: string; group_id: string; digest: string }
   | { operation: 'pending_ack'; workspace_id: string; session_id: string; group_id: string; digest: string; request_id: string }
   | { operation: 'pending_status'; workspace_id: string; session_id: string; group_id: string }
@@ -46,10 +46,20 @@ export type GroupMessageReply =
   | { state: 'pending_other' | 'acknowledged' }
   | {
     state: 'page'
-    items: readonly { id: string; seq: number; actor_kind: string; actor_ref: string; body: string; created_at: number }[]
+    items: readonly {
+      id: string
+      seq: number
+      actor_kind: string
+      actor_ref: string
+      body: string
+      created_at: number
+      attention?: { reason_code: 'binding_source_ambiguous' | 'binding_source_revoked' }
+    }[]
     next_seq: number
     has_more: boolean
     last_seq: number
+    attention_updates?: readonly { id: string; reason_code: 'binding_source_ambiguous' | 'binding_source_revoked' }[]
+    attention_next_id?: string | null
   }
 
 /** The verified Slark parent owns this bridge in bundled remote mode. */

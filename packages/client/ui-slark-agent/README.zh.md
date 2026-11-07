@@ -38,6 +38,8 @@ Slark 账号栏只显示当前认证的 Slark 用户名称和头像，设置按�
 
 <a id="understand-the-implementation"></a>
 
+群消息在原文下方显示绑定来源澄清或绑定结束提示。提示不会重试请求，也不能证明此前的操作是否已经执行。
+
 ## 了解实现
 
 <details>
