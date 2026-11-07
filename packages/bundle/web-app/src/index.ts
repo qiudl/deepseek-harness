@@ -48,6 +48,7 @@ import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collabo
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotSessionIdentityRequest, type DesktopBotSessionIdentityProvider } from './desktop-bot-session-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
 import { handleDesktopNativeRoomPreparationRequest, readDesktopNativeRoomPreparation } from './desktop-native-room-preparation.ts'
@@ -445,6 +446,11 @@ export function apply(ctx: Context, config: Config): void {
         signal.throwIfAborted()
         return result
       }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-session-identity',
+      handler: (req, res) => handleDesktopBotSessionIdentityRequest(req, res, sourceToken,
+        () => ctx.get('dsBotSlarkExternalGroup') as DesktopBotSessionIdentityProvider | undefined),
     }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-identity',

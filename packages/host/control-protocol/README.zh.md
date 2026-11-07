@@ -90,7 +90,11 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
+Bot/Session 坐标解析器只接受有界的精确 `bot_id`、`session_id`；响应可显式表示缺失。Profile 本地 producer 必须核实存活 Session 属于该 Bot。坐标不包含账号、项目、来源正文或执行权限。
+
 `profile.bot_identity_v2` 单独返回该公开身份及当前认证 Host 的本地 `host_profile_id`，调用方不能提供此字段。原方法保持三字段响应；两种方法均不授予配对、记忆或设备权限。
+
+`profile.bot_session_identity` 使用原认证 Account 范围及精确 `bot_id`/`session_id` 选择值。独立响应仅添加父进程选定的 `host_profile_id`，或返回 null。未知字段和调用方指定的 Profile 均被拒绝；私有 producer 仍保持两字段协议。该观察不授予来源正文、项目归属、记忆或执行权限。
 
 `profile.twin_binding` 接受完整、固定方向顺序的双向留存 offer，以及独立的 Cloud 目的限定许可，其有效期最多 30 秒。两方向必须对应同一本人、项目、分身与实际 DSH Bot；Host 重算 consent、scope 和父摘要，再核验当前 Account 与本地 Bot。结果仅为原始持久 `acknowledged` 事实，或回执查询的 `missing`，不返回 active 绑定，也不授予记忆、群或设备执行权。Directive 与 Ack 使用独立的规范数组签名域；持久 Ack 摘要还覆盖其原始签名。
 

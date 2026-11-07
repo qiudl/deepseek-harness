@@ -1,3 +1,4 @@
+import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity } from './bot-session-identity.ts'
 import { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
 import type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
@@ -123,6 +124,7 @@ import type {
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
+  ProfileBotSessionIdentityRequest, ProfileBotSessionIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
@@ -1847,7 +1849,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
+  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotSessionIdentityRequest
   | ProfileTwinBindingRequest | ProfileBotRosterRequest
   | ProfileBoundBotRoomsRequest
   | ProfileNativeRoomProjectionRequest
@@ -2589,6 +2591,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityV2Request
   }
+  if (frame.method === 'profile.bot_session_identity') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id', 'session_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      ...parseHostBotSessionTarget({ bot_id: params.bot_id, session_id: params.session_id }),
+    } } satisfies ProfileBotSessionIdentityRequest
+  }
   if (frame.method === 'profile.twin_binding') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'input'])
@@ -2741,7 +2751,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
-  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result
+  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result | ProfileBotSessionIdentityResult
   | ProfileTwinBindingResult | ProfileBotRosterResult
   | ProfileBoundBotRoomsResult
   | ProfileNativeRoomProjectionResult
@@ -3173,6 +3183,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentityV2(result.identity) } } satisfies ProfileBotIdentityV2Result
+  }
+  if (frame.method === 'profile.bot_session_identity') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostAccountBotSessionIdentity(result.identity) } } satisfies ProfileBotSessionIdentityResult
   }
   if (frame.method === 'profile.twin_binding') {
     return { version: 1, type: 'result', request_id, method: frame.method,

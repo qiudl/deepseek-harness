@@ -1,3 +1,4 @@
+import { parseHostBotSessionTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, generateKeyPairSync, randomUUID, sign, type KeyObject } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -245,6 +246,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     async target => ({ ...target, provider: 'deepseek', model: 'chat' }))
   const resolveBotIdentity = vi.fn<NonNullable<ProfileWorkerHandle['resolveBotIdentity']>>(
     async botId => ({ bot_id: botId, actor_ref: `deepseek-bot:${botId}`, display_name: 'My Bot' }))
+  const resolveBotSessionIdentity = vi.fn<NonNullable<ProfileWorkerHandle['resolveBotSessionIdentity']>>(
+    async (botId, sessionId) => parseHostBotSessionTarget({ bot_id: botId, session_id: sessionId }))
   const listBotRoster = vi.fn<NonNullable<ProfileWorkerHandle['listBotRoster']>>(
     async () => ({ bots: [{ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1',
       display_name: 'My Bot' }], next_cursor: null }))
@@ -288,7 +291,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
       viewOrigin: 'http://127.0.0.1:43123',
       generation: workerSpecs.length,
       bootstrapCookie: { name: 'fixture', value: 'private' },
-      generateText, resolveBotIdentity, listBotRoster,
+      generateText, resolveBotIdentity, resolveBotSessionIdentity, listBotRoster,
       inspectWorkspaceModelSelection, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
       transitionCollaborationArchive,
       installGroupInputFence,
@@ -433,6 +436,12 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(serverOptions.resolveBotIdentity?.(profile.profileId, 'bot_1', collaborationSignal))
     .resolves.toEqual({ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' })
   expect(resolveBotIdentity).toHaveBeenCalledWith('bot_1', collaborationSignal)
+  const sessionTarget = parseHostBotSessionTarget({ bot_id: 'bot_1', session_id: 'session_1' })
+  const receiver = serverOptions.botSessionIdentityReceiver?.(profile.profileId)
+  if (!receiver) throw Error('missing startup Bot/Session receiver')
+  expect(await receiver.read(sessionTarget, collaborationSignal)).toEqual(sessionTarget)
+  receiver.assertCurrent()
+  expect(resolveBotSessionIdentity).toHaveBeenCalledWith('bot_1', 'session_1', collaborationSignal)
   await expect(serverOptions.listBotRoster?.(profile.profileId, '', 50, collaborationSignal))
     .resolves.toEqual({ bots: [{ bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1',
       display_name: 'My Bot' }], next_cursor: null })
