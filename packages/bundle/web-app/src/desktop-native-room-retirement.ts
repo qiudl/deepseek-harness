@@ -13,5 +13,5 @@ import { handleDesktopPrivateRequest } from './desktop-private-read.ts'
 export function handleDesktopNativeRoomRetirementRequest(req: IncomingMessage, res: ServerResponse,
   token: string, retire: (command: HostNativeRoomRetirementCommand, signal: AbortSignal) => Promise<unknown>): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token, retire, parseHostNativeRoomRetirementCommand,
-    parseHostNativeRoomRetirementReply, () => true, 32768, 30_000)
+    parseHostNativeRoomRetirementReply, () => true, 32768, 30_000, true)
 }

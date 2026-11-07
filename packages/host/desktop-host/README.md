@@ -198,6 +198,8 @@ The Host advertises `profile.recovery_materials.describe` and `profile.recovery_
 
 These [Main-only recovery methods](../control-protocol/README.md#wire-contract) verify a unique Account handle, issuer-qualified registry identity and unlock verifier without changing registry rows, bindings, grants or Profile files. A historical null verifier requires a supported upgrade path; it is never accepted or rewritten by recovery. Binding and persistence generations are observations, not current online authority. The importing Main owns selected-identity checks, operation freshness, safeStorage commit and later offline worker recovery.
 
+Default Host workers share eight unsettled native operations across Profiles and control connections. Caller cancellation and existing read/write deadlines end waiting without releasing an admitted operation. A matching private receiver receipt releases it only after the service settles; a missing receipt or disconnected HTTP request retains the slot until that original process exits. Process errors make the worker unavailable, while `done` and shutdown still await actual exit. Externally injected worker factories own their lifecycle guarantees. See the [private receiver rules](../../bundle/web-app/README.md#understand-the-implementation).
+
 ## Model Experience
 
 None, as this package exposes no model-facing registration.

@@ -14,5 +14,5 @@ export function handleDesktopBoundBotRoomsRequest(req: IncomingMessage, res: Ser
   token: string, inspect: (query: HostBoundBotRoomsQuery, signal: AbortSignal) => Promise<unknown>): Promise<void> {
   return handleDesktopPrivateRequest(req, res, token, inspect, parseHostBoundBotRoomsQuery,
     parseHostBoundBotRoomsRead, (read, query) => read.state !== 'page' || read.bot_id === query.bot_id &&
-      read.items.length <= query.limit && (read.next_cursor === null || read.next_cursor !== query.cursor), 32768)
+      read.items.length <= query.limit && (read.next_cursor === null || read.next_cursor !== query.cursor), 32768, 10_000, true)
 }
