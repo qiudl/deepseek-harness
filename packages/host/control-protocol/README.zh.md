@@ -90,6 +90,18 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
+Bot/Session 坐标解析器只接受有界的精确 `bot_id`、`session_id`；响应可显式表示缺失。Profile 本地 producer 必须核实存活 Session 属于该 Bot。坐标不包含账号、项目、来源正文或执行权限。
+
+`profile.bot_identity_v2` 单独返回该公开身份及当前认证 Host 的本地 `host_profile_id`，调用方不能提供此字段。原方法保持三字段响应；两种方法均不授予配对、记忆或设备权限。
+
+`profile.bot_session_identity` 使用原认证 Account 范围及精确 `bot_id`/`session_id` 选择值。独立响应仅添加父进程选定的 `host_profile_id`，或返回 null。未知字段和调用方指定的 Profile 均被拒绝；私有 producer 仍保持两字段协议。该观察不授予来源正文、项目归属、记忆或执行权限。
+
+`profile.twin_binding` 接受完整、固定方向顺序的双向留存 offer，以及独立的 Cloud 目的限定许可，其有效期最多 30 秒。两方向必须对应同一本人、项目、分身与实际 DSH Bot；Host 重算 consent、scope 和父摘要，再核验当前 Account 与本地 Bot。结果仅为原始持久 `acknowledged` 事实，或回执查询的 `missing`，不返回 active 绑定，也不授予记忆、群或设备执行权。Directive 与 Ack 使用独立的规范数组签名域；持久 Ack 摘要还覆盖其原始签名。
+
+`profile.native_room_retirement` 独立绑定完整原 join/leave 命令及各自不同的请求 ID，要求同一 room/member/cycle。其 `native_room_retirement` proof 只在独立签名域内签署 durable left，序号0也合法。不可用或受理结果未知都不能证明已关闭。绑定选择值只是回显上下文，调用方仍须核验 Cloud 清理授权。
+
+`profile.native_room_preparation` 是独立能力，每次请求只执行 `prepare_source`、`attest_source` 或 `attest_activation` 中的一个阶段。完整 JSON 帧最多为 49,152 个 UTF-8 字节。target 将原 Computer、绑定代次、Profile、Bot、房间、工作区和成员摘要绑定到最多有效 60 秒的 nonce。成功 proof 在 `dsh-native-room-preparation/v1` 域内签署实际参与和原 Source，同时包含原 native-room、Source-authority 或 input-fence 的独立签名凭据。客户端用当前安装公钥验证两层签名。嵌套 challenge 保留原 Account、audience 和到期检查。明确未就绪状态不含 proof，不证明缺失或就绪。[字段解析器和固定元组](src/native-room-preparation.ts) 定义准确编码。Cloud 调用方提交前仍须重新核验当前绑定和群授权。
+
 `profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
 `profile.native_room_operation` 为同一 Account Profile 传递一条私有的 `join`、`messages`、`turns`、`ack` 或 `leave` 命令。响应重复准确的房间与操作范围。消息和轮次每页最多三条，每条消息正文最多占用 16,000 个 JSON 编码的 UTF-8 字节，以适配 64 KiB 控制帧。读取轮次本身不会执行工作或授予 Slark 群成员资格。Host 使用安装密钥签署每个 `turns` 页面，将房间、群、成员周期、游标、选中的轮次 ID、顺序与当前 Account/Host 身份绑定。受理轮次前必须验证此断言。
@@ -129,6 +141,8 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 `parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
 
 ## API
+
+`createHostProjectOperationEvent` 校验 v3 精确源字段并计算事件摘要；`parseHostProjectOperationEvent` 验证完整事件，`encodeHostProjectOperationEventPayload` 返回带独立用途域的规范摘要原像。完整事件不超过 8192 UTF-8 字节，三项摘要分别最多 2000 字节，材料依赖最多 20 条。修订和序号完整保留 int64 十进制字符串；依赖先按 Right ID、再按数值 generation/revision 升序。实时引用只包含定位、版本及原来源摘要，暂存阶段也不携带正文。解析不证明来源归属，也不授予材料导出或留存权。
 
 `profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
 

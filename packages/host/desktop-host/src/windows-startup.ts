@@ -1,4 +1,6 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
+import { TwinBindingReceipts } from './twin-binding-receipts.ts'
+import { createWindowsTwinBindingReceiptFile } from './twin-binding-receipt-files.ts'
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync } from 'node:fs'
 import { win32 } from 'node:path'
@@ -622,6 +624,13 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        createTwinBindingReceiptStore: (profileId) => {
+          if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+          return new TwinBindingReceipts({ profileId, installationId: config.installationId,
+            publicKey: config.installationPublicKey,
+            file: createWindowsTwinBindingReceiptFile(
+              win32.join(config.root, 'profiles', profileId, 'twin-binding-receipts'), userSid, bindings) })
+        },
         createSkillHubPackageStore: createSkillHubPackageStoreFactory((profileId) => {
           /* v8 ignore next -- authorization just resolved this Profile; only concurrent removal reaches this guard. */
           if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
@@ -632,6 +641,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         }),
         diagnostics,
         ...collaborationWorkerReaders(workers),
+        nativeRoomPreparationReceiver: workers.nativeRoomPreparationReceiver.bind(workers),
         rootAnalysisSupported: true,
         rootCaptureSupported: true,
         rootAnalysisRecoverySupported: true,

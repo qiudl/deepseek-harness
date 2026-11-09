@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-07-bound-native-room-preparation.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-11-07-bound-native-room-preparation.md
+/agent-note-bound-native-room-preparation:
+  en: 94a3d99b1fdd5ef6
+  zh: 0900f00bfcb4949c
+/agent-note-bound-native-room-preparation/problem:
+  en: bbd44bb26749becd
+  zh: 1aa74cd6bdb04e0c
+/agent-note-bound-native-room-preparation/decision:
+  en: 64b4f4e271b08962
+  zh: 6c65308397a566df
+/agent-note-bound-native-room-preparation/alternatives-considered:
+  en: 640a19d7b39e07b5
+  zh: e9397dfde18731f0
+/agent-note-bound-native-room-preparation/consequences:
+  en: 09dbfd13920a7b34
+  zh: 2571fa53bd9ecffe

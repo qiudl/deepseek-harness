@@ -262,6 +262,43 @@ describe('prompt-coupled retirement', () => {
 })
 
 describe('observed retirement', () => {
+  it('retires an accepted echo in a hidden view when animation frames stop', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID)
+    await session.open()
+    const onRetire = vi.fn()
+    const frame = vi.fn()
+    vi.stubGlobal('document', { hidden: true })
+    vi.stubGlobal('requestAnimationFrame', frame)
+    const handle = await submitAccepted(session, {
+      mode: 'queue', text: '发送', attachments: [], onRetire,
+    })
+    await pushEvent(mock, promptEvent(SessionSeq(0), handle.requestId))
+    expect(session.getSnapshot().pendingSubmissions).toHaveLength(1)
+    await settleFrames()
+    expect(session.getSnapshot().pendingSubmissions).toEqual([])
+    expect(onRetire).toHaveBeenCalledExactlyOnceWith({ reason: 'observed', attachments: [] })
+    expect(frame).not.toHaveBeenCalled()
+  })
+
+  it('retires once when a visible view stops receiving frames', async ({ mock, start }) => {
+    const session = await sessionBench(mock, start, SID)
+    await session.open()
+    const onRetire = vi.fn()
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('document', { hidden: false })
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback))
+    const handle = await submitAccepted(session, {
+      mode: 'queue', text: '发送', attachments: [], onRetire,
+    })
+    await pushEvent(mock, promptEvent(SessionSeq(0), handle.requestId))
+    expect(session.getSnapshot().pendingSubmissions).toHaveLength(1)
+    expect(frames).toHaveLength(1)
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(session.getSnapshot().pendingSubmissions).toEqual([])
+    frames[0]?.(0)
+    expect(onRetire).toHaveBeenCalledExactlyOnceWith({ reason: 'observed', attachments: [] })
+  })
+
   it('a live durable event carrying the rpcId retires the echo one frame later with the admitted refs', async ({ mock, start }) => {
     const session = await sessionBench(mock, start, SID)
     await session.open()

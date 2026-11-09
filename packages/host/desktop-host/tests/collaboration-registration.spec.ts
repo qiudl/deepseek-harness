@@ -1,3 +1,4 @@
+import { parseHostBotSessionTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -46,6 +47,9 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
       publicKeyPem: botGroupSigner.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
       validFrom: botGroupNow - 1000, validUntil: botGroupNow + 120_000 }] }
   let resolveBot = async (_profileId: string, botId: string, _signal: AbortSignal) => botId === 'bot_1' ? bot : null
+  let sessionRead = async (_profileId: string, target: { bot_id: string; session_id: string }, _signal: AbortSignal) =>
+    target.bot_id === bot.bot_id && target.session_id === 'session_1' ? parseHostBotSessionTarget(target) : null
+  let workerCurrent = true
   const operateBotGroup = vi.fn(async (_profileId: string, command: HostBotGroupCommand,
     _signal: AbortSignal): Promise<HostBotGroupResponse> => {
     if (command.operation !== 'deliver') throw Error('invalid command')
@@ -63,6 +67,10 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
           turn_order: 1 }] } : { state: 'unavailable' })
   const authority = new HostControlAuthority({ identity, host, profilePersistenceGeneration: () => 1, now: clock.now,
     ...(supportBot ? {
+      botSessionIdentityReceiver: (profileId: string) => ({
+        assertCurrent() { if (!workerCurrent) throw Error('original worker replaced') },
+        read: (target, signal) => sessionRead(profileId, target, signal),
+      }),
       prepareNativeRoom: async (profileId: string, roomId: string, signal: AbortSignal) => {
         signal.throwIfAborted()
         if (profileId !== profile.profileId || roomId !== nativeRoom.room_id) return null
@@ -96,8 +104,72 @@ async function fixture(supportBot = true, supportDelivery = false, pinDeliveryKe
   return { host, account, profile, ownerId, client, grant, seen, session, identity, authority, keys, challenge, input, time,
     bot, nativeRoom, botGroupSigner, botGroupKeyring, operateBotGroup, operateNativeRoom,
     setBotResolver: (value: typeof resolveBot) => { resolveBot = value },
+    setSessionReader: (value: typeof sessionRead) => { sessionRead = value },
+    replaceSessionWorker: () => { workerCurrent = false },
     alter: (callback: typeof alter) => { alter = callback } }
 }
+
+it('returns the authenticated local Profile through identity v2 while preserving v1', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id }
+  await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.resolveBotIdentityV2(input)).toEqual({ ...f.bot, host_profile_id: f.profile.profileId })
+  expect(await f.client.resolveBotIdentity(input)).toEqual(f.bot)
+  expect(await f.client.resolveBotIdentityV2({ ...input, botId: 'missing' })).toBeNull()
+  expect(f.seen.some(frame => frame.type === 'request' && frame.method === 'profile.bot_identity_v2')).toBe(true)
+  for (const change of [{ subject: randomUUID() }, { issuer: 'https://other.example.test' },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }]) {
+    await expect(f.client.resolveBotIdentityV2({ ...input, ...change })).rejects.toThrow()
+  }
+})
+
+it('refuses v2 without capability and when a pending Bot read loses its Account grant', async () => {
+  const old = await fixture(false)
+  await old.grant()
+  await expect(old.client.resolveBotIdentityV2({ ...old.input, issuer: old.account.issuer,
+    subject: old.account.subject, botId: old.bot.bot_id })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen.some(frame => frame.type === 'request' && frame.method === 'profile.bot_identity_v2')).toBe(false)
+  const f = await fixture()
+  await f.grant()
+  f.setBotResolver(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(f.client.resolveBotIdentityV2({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: f.bot.bot_id })).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it('rejects v2 response tampering, pre-abort and a missing live worker', async () => {
+  const f = await fixture()
+  await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id }
+  for (const change of ['bot', 'profile', 'method'] as const) {
+    f.alter((frame) => {
+      if (frame.type === 'result' && frame.method === 'profile.bot_identity_v2' && frame.result.identity) {
+        if (change === 'method') Reflect.set(frame, 'method', 'profile.bot_identity')
+        else if (change === 'profile') Reflect.deleteProperty(frame.result.identity, 'host_profile_id')
+        else {
+          Reflect.set(frame.result.identity, 'bot_id', 'other')
+          Reflect.set(frame.result.identity, 'actor_ref', 'deepseek-bot:other')
+        }
+      }
+      return frame
+    })
+    if (change === 'bot') await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'profile_mismatch' })
+    else await expect(f.client.resolveBotIdentityV2(input)).rejects.toThrow()
+  }
+  f.alter(undefined)
+  await expect(f.client.resolveBotIdentityV2({ ...input, signal: AbortSignal.abort() })).rejects.toThrow()
+  try {
+    for (const frame of [{ type: 'error' }, { type: 'result', method: 'profile.other' },
+      { type: 'result', method: 'profile.bot_identity' }]) {
+      expect(Reflect.set(f.client, 'call', async () => frame)).toBe(true)
+      await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'unavailable' })
+    }
+  } finally { Reflect.deleteProperty(f.client, 'call') }
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'resolveBotIdentity')
+  await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
 
 it('prepares a native room through the Account-authorized Host transport', async () => {
   const f = await fixture()
@@ -826,4 +898,68 @@ it('refuses a valid result frame for another method after Account registration a
   f.alter(frame => frame.type === 'result' && frame.method === 'profile.collaboration_registration'
     ? { ...frame, method: 'profile.collaboration_analysis', result: { kind: 'output', json_base64url: 'e30' } } : frame)
   await expect(f.client.attestCollaborationRegistration(f.input)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+
+it('observes the exact original Bot/Session under the authenticated Account without a view lease', async () => {
+  const f = await fixture()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id, sessionId: 'session_1' }
+  await expect(f.client.resolveBotSessionIdentity(input)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  expect(await f.client.resolveBotSessionIdentity(input)).toEqual({ bot_id: input.botId,
+    session_id: input.sessionId, host_profile_id: f.profile.profileId })
+  expect(await f.client.resolveBotSessionIdentity({ ...input, sessionId: 'missing' })).toBeNull()
+  for (const change of [{ subject: randomUUID() }, { issuer: 'https://other.example.test' },
+    { authorityEnvironmentId: randomUUID() }, { authorityBindingVersion: 2 }])
+    await expect(f.client.resolveBotSessionIdentity({ ...input, ...change })).rejects.toThrow()
+  const old = await fixture(false); await old.grant()
+  await expect(old.client.resolveBotSessionIdentity({ ...old.input, issuer: old.account.issuer,
+    subject: old.account.subject, botId: old.bot.bot_id, sessionId: 'session_1' }))
+    .rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen.some(frame => frame.method === 'profile.bot_session_identity')).toBe(false)
+})
+
+it.each(['revoke', 'worker', 'cancel', 'peer'])('rejects a pending Bot/Session observation after %s changes', async (change) => {
+  const f = await fixture(); await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id, sessionId: 'session_1' }
+  const cancellation = new AbortController()
+  f.setSessionReader(async (_profile, target) => {
+    if (change === 'revoke') f.host.revokeOwner(f.ownerId)
+    if (change === 'worker') f.replaceSessionWorker()
+    if (change === 'cancel') cancellation.abort()
+    if (change === 'peer') f.client.close()
+    return parseHostBotSessionTarget(target)
+  })
+  await expect(f.client.resolveBotSessionIdentity({ ...input, signal: cancellation.signal })).rejects.toThrow()
+})
+
+it('rejects substituted Bot/Session coordinates and malformed Parent responses', async () => {
+  const f = await fixture(); await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject, botId: f.bot.bot_id, sessionId: 'session_1' }
+  for (const change of ['bot_id', 'session_id', 'host_profile_id', 'extra', 'method'] as const) {
+    f.alter((frame) => {
+      if (frame.type === 'result' && frame.method === 'profile.bot_session_identity' && frame.result.identity) {
+        if (change === 'method') Reflect.set(frame, 'method', 'profile.bot_identity_v2')
+        else if (change === 'extra') Reflect.set(frame.result.identity, 'project_id', randomUUID())
+        else if (change === 'host_profile_id') Reflect.deleteProperty(frame.result.identity, change)
+        else Reflect.set(frame.result.identity, change, 'different')
+      }
+      return frame
+    })
+    await expect(f.client.resolveBotSessionIdentity(input)).rejects.toThrow()
+  }
+})
+
+
+it.each(['revoke', 'worker'])('fences %s changes between helper completion and the final synchronous send', async (change) => {
+  const f = await fixture(); await f.grant()
+  f.setSessionReader(async (_profile, target) => {
+    queueMicrotask(() => { queueMicrotask(() => {
+      if (change === 'revoke') f.host.revokeOwner(f.ownerId)
+      else f.replaceSessionWorker()
+    }) })
+    return parseHostBotSessionTarget(target)
+  })
+  await expect(f.client.resolveBotSessionIdentity({ ...f.input, issuer: f.account.issuer,
+    subject: f.account.subject, botId: f.bot.bot_id, sessionId: 'session_1' })).rejects.toThrow()
 })
