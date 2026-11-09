@@ -201,6 +201,42 @@ describe('Windows Host registration native filesystem', () => {
     expect(calls.filter(call => call.name === 'CloseHandle')).toHaveLength(1)
     functions.GetFileInformationByHandle = originalInfo
 
+    // SQLite retains metadata-only shared read/write guards until its own connection closes.
+    functions.GetFileInformationByHandle = (_handle, output) => {
+      if (!Buffer.isBuffer(output)) throw Error('expected file information')
+      output.writeUInt32LE(0, 0); output.writeUInt32LE(1, 40); return 1
+    }
+    functions.GetFileSizeEx = (_handle, output) => {
+      if (!Buffer.isBuffer(output)) throw Error('expected file size')
+      output.writeBigInt64LE(0n); return 1
+    }
+    calls.length = 0
+    const database = bindings.acquirePrivateDatabaseFile!(root, sddl)
+    expect(database.state).toBe('created'); expect(database.byteLength).toBe(0n)
+    expect(database.inspect().evidence.kind).toBe('file')
+    expect(calls.find(call => call.name === 'CreateFileW')?.args.slice(0, 6)).toEqual([
+      root, 0x40020080, 3, expect.anything(), 1, 0x00200080,
+    ])
+    expect(calls.some(call => call.name === 'ReadFile' || call.name === 'WriteFile' || call.name === 'DeleteFileW')).toBe(false)
+    database.release(); database.release()
+    expect(() => { database.inspect() }).toThrow()
+    let disposition = 0
+    functions.CreateFileW = (...args) => { disposition = Number(args[4]); return disposition === 1 ? -1n : 91n }
+    functions.GetLastError = () => 80
+    calls.length = 0
+    const existingDatabase = bindings.acquirePrivateDatabaseFile!(root, sddl)
+    expect(existingDatabase.state).toBe('existing')
+    expect(calls.filter(call => call.name === 'CreateFileW').at(-1)?.args.slice(0, 6)).toEqual([
+      root, 0x20080, 3, null, 3, 0x00200000,
+    ])
+    functions.CloseHandle = () => 0
+    expect(() => { existingDatabase.release() }).toThrow('CloseHandle')
+    functions.CloseHandle = () => 1
+    expect(existingDatabase.inspect().evidence.kind).toBe('file')
+    existingDatabase.release()
+    functions.CreateFileW = () => 91n
+    functions.GetFileInformationByHandle = originalInfo
+
     for (const error of [2, 3, 5, 32]) {
       calls.length = 0
       functions.CreateFileW = () => -1n

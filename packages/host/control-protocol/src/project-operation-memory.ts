@@ -482,3 +482,10 @@ export function hostProjectMemoryReceiptDigest(value: unknown): ReturnType<typeo
   const d = readReceipt(value)
   return hash('signed-material-receipt', [hostProjectMemoryReceiptFields(d), d.signature])
 }
+
+
+/** Parse exact scan coordinates without advancing any persistent consumer.
+ * @param value - Untrusted four-field checkpoint.
+ * @returns Detached canonical checkpoint; source and recipient authorization remain external.
+ */
+export function parseHostProjectMemoryCheckpoint(value: unknown): HostProjectMemoryCheckpoint { return checkpoint(value) }

@@ -823,6 +823,8 @@ interface PluginRecord {
 
 可选 `projectOperationOrigins` 读取器为精确的原生事件提供原 Root 主体及项目的历史引用。不透明 token 仅能在等待中的 `project-operation/origin` 事件内、取消或已验证的 Cloud 截止时间之前使用。消费者仅确认完整提交或幂等匹配的引用修订；未确认时保留空缺，等待全新核对。[Session Controller](../../packages/api/session-controller/README.zh.md) 负责捕获，[Web App](../../packages/bundle/web-app/README.zh.md) 负责私有验证及发布。
 
+可选服务 `projectOperationMemoryAuthorizations.read(token)` 仅对仍有效的不透明 `ProjectOperationMemoryAuthorizationToken` 返回深度不可变的 `ProjectOperationMemoryAuthorization`。私有 Host 创建 token，并在取消、截止时间或 provider 被替换时永久撤销。`source_read` 只允许五种源读取操作；`binding_activation_anchor` 只允许捕获原始确认元数据。原 anchor 始终保留历史含义，每个新读取计划另行固定实际当前源修订。token 不能排队，也不能用于铸造 SourceProof。此 owner-private 实现仍不提供 retained-recipient 操作，也不广告公共记忆 capability。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -830,6 +832,23 @@ interface PluginRecord {
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxprojectoperationmemoryauthorizations--projectoperationmemoryauthorizations"></a>
+
+### `ctx.projectOperationMemoryAuthorizations` — `ProjectOperationMemoryAuthorizations`
+
+Read-only request owner; no public mint, assertion callback, queue or transferable grant exists.
+
+```ts cordis-catalog
+/** Read while the captured request, local provider/worker and deadline remain live.
+ * The owning Host separately rechecks actual Account before publication.
+ * @param token - Opaque object supplied by the private authenticated Host call.
+ * @returns Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.
+ */
+read(token: ProjectOperationMemoryAuthorizationToken): ProjectOperationMemoryAuthorization | null
+```
+
+Source: [`packages/api/session-controller/src/project-operation-memory-authorizations.ts`](../../packages/api/session-controller/src/project-operation-memory-authorizations.ts)
 
 <a id="ctxprojectoperationorigins--projectoperationorigins"></a>
 

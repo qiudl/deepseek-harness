@@ -271,3 +271,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 `continuation_read` 在独立的 `collaboration_continuation_v1` 域记录原消费步骤中首条已持久化的助手消息。它校验原消费前缀，并在日志增长和重新打开后保留首次观察 ID 与前缀。历史或 Session 身份变化会拒绝观察；写入结果不确定时必须重新打开。此读取不唤醒 Agent、不续签授权，也不证明 turn 或根任务完成。
 
 私有操作来源捕获通过当前 Profile 成员关系检查和固定 JSONL 持久化屏障读取实际 Root 与已消费日志。仅原消费步骤中已完成的原生调用及结果符合条件；保留的 PTC `run_code` 程序保持为空缺；继承的消费、后续步骤、未完成调用和输入歧义保留为空缺。可选 `projectOperationOrigins.read(token)` 服务仅在等待中的 `project-operation/origin` 事件内返回不可变历史引用。取消、已验证的 Cloud 截止时间或事件结束均使 token 失效；消费者确认要求所有匹配修订已提交或已存在相同引用。这些引用不证明材料依赖，也不授予执行、保留或导出权限。
+
+可选只读 `projectOperationMemoryAuthorizations.read(token)` 契约仅在单次等待中的私有请求内解析不可伪造的对象。确认 anchor token 只捕获原始日志元数据；五种来源读取命令携带准确的已确认 scope、当前 Account/peer/worker、原确认、计划修订和截止时间。新计划从实际 producer 获取当前修订；原 activation 修订与水位保持不可变。只有匹配且已 finalize 的 delta 交付能提供已提交检查点，恢复计划保留原起点。交付 stage/finalize/receipt 不进入 DSP 来源 producer。取消、provider 替换、过期或请求结束永久撤销 token；保留对象不能续权。契约不提供 mint、verified 标志回调、Host wire DTO、来源正文或执行权限。

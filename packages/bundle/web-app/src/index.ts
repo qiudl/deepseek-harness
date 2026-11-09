@@ -1,3 +1,5 @@
+import { DesktopProjectOperationMemory } from './desktop-project-operation-memory.ts'
+import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopOperationOrigin, parseOperationOriginKeyrings } from './desktop-operation-origin.ts'
 import { handleDesktopNativeRoomRetirementRequest } from './desktop-native-room-retirement.ts'
 import { handleDesktopBoundBotRoomsRequest } from './desktop-bound-bot-rooms.ts'
@@ -236,6 +238,7 @@ export function apply(ctx: Context, config: Config): void {
       }))
     })
   }
+  const operationMemoryEnvironments = parseHostProjectMemoryEnvironments(process.env.DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS)
   const operationOriginKeyrings = parseOperationOriginKeyrings(process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
   const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
   if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
@@ -250,6 +253,8 @@ export function apply(ctx: Context, config: Config): void {
       const origins = new DesktopOperationOrigin(sessionCtx, sessionCtx.sessionController, operationOriginKeyrings,
         process.env.DSH_PROFILE_ID ?? '', lifetime.signal)
       sessionCtx.provide('projectOperationOrigins', origins.reader)
+      const operationMemory = new DesktopProjectOperationMemory(sessionCtx, operationMemoryEnvironments, process.env.DSH_PROFILE_ID ?? '', lifetime.signal)
+      sessionCtx.provide('projectOperationMemoryAuthorizations', operationMemory.reader)
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
         async () => {
@@ -272,6 +277,7 @@ export function apply(ctx: Context, config: Config): void {
         (target, signal) => sessionCtx.sessionController.readCollaborationSourceSnapshot(target, signal),
         (input, signal) => sessionCtx.sessionController.captureCollaborationGroupRoot(input, signal),
         (input, signal) => origins.execute(input, signal),
+        operationMemory,
       )
       sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({

@@ -1,3 +1,4 @@
+export type * from './project-operation-memory-authorizations.ts'
 export { observeOriginalCollaborationOperations } from './collaboration-operation-origin.ts'
 export type { ProjectOperationOrigins, ProjectOperationOriginToken, ProjectOperationOriginReference } from './project-operation-origins.ts'
 export type { CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'

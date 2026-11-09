@@ -340,6 +340,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Validates bounded browser audio before provider dispatch.',
   },
   {
+    key: 'projectOperationMemoryAuthorizations',
+    pkg: 'api-session-controller',
+    title: 'Scoped operation-memory authorization reader',
+    mode: 'seam',
+    implementations: ['web-app'],
+    consumers: ['ds-bot (external)'],
+    note: 'Resolves one immutable request-local authorization during an awaited private source read or original confirmation-anchor capture; no public mint, retained body or execution authority.',
+  },
+  {
     key: 'projectOperationOrigins',
     pkg: 'api-session-controller',
     title: 'Scoped original operation attribution reader',

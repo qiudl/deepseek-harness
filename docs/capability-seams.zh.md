@@ -103,9 +103,10 @@ flowchart LR
   pkg_message_feedback["message-feedback"]
   pkg_experimental_api_speech_to_text["experimental-api-speech-to-text"]
   svc_speechController["ctx.speechController<br/>Experimental transcription Remote"]
-  svc_projectOperationOrigins["ctx.projectOperationOrigins<br/>Scoped original operation attribution reader"]
+  svc_projectOperationMemoryAuthorizations["ctx.projectOperationMemoryAuthorizations<br/>Scoped operation-memory authorization reader"]
   pkg_web_app["web-app"]
   pkg_ds_bot__external_["ds-bot (external)"]
+  svc_projectOperationOrigins["ctx.projectOperationOrigins<br/>Scoped original operation attribution reader"]
   svc_sessionController["ctx.sessionController<br/>Host Session Remote controller"]
   svc_sessionFileReferences["ctx.sessionFileReferences<br/>Session-addressed file-reference Remote adapter"]
   svc_sessionSkillCatalog["ctx.sessionSkillCatalog<br/>Session-addressed skill Remote adapter"]
@@ -326,6 +327,7 @@ flowchart LR
   pkg_api_gateway --> svc_typertGateway
   pkg_api_job_controller --> svc_jobController
   pkg_api_remote_access --> svc_remoteAccess
+  pkg_api_session_controller --> svc_projectOperationMemoryAuthorizations
   pkg_api_session_controller --> svc_projectOperationOrigins
   pkg_api_session_controller --> svc_sessionController
   pkg_api_session_controller --> svc_sessionFileReferences
@@ -473,6 +475,7 @@ flowchart LR
   pkg_user_approval --> svc_approval
   pkg_user_questions --> svc_userQuestions
   pkg_web --> svc_web
+  pkg_web_app --> svc_projectOperationMemoryAuthorizations
   pkg_web_app --> svc_projectOperationOrigins
   pkg_web_app --> svc_webApp
   pkg_web_deepseek_api --> svc_web
@@ -552,6 +555,7 @@ flowchart LR
   svc_pluginRecommendations --> pkg_client_ui_plugin_recommendations
   svc_pluginRegistryProbe --> pkg_client_ui_plugin_manager
   svc_profileContext --> pkg_plugin_manager
+  svc_projectOperationMemoryAuthorizations --> pkg_ds_bot__external_
   svc_projectOperationOrigins --> pkg_ds_bot__external_
   svc_ptcRuntime --> pkg_tool_executor_ptc
   svc_ptcRuntime --> pkg_workflow_ptc
@@ -684,6 +688,7 @@ flowchart LR
 | `ctx.toolResultPruner` | `core` | [`compaction-tool-result-pruner`](../packages/compaction/compaction-tool-result-pruner) | - | [`compaction-basic`](../packages/compaction/compaction-basic) | - | 在摘要压缩前，通过可回放的单节点表层替换来改写过大的当前工具结果。 |
 | `ctx.sessions` | `core` | [`session`](../packages/core/session) | - | [`agent-loop`](../packages/core/agent-loop), [`agent`](../packages/core/agent), [`session-persistence`](../packages/session/session-persistence), [`session-query`](../packages/session-query/session-query), [`session-query-sqlite`](../packages/session-query/session-query-sqlite), [`subagent`](../packages/subagent/subagent), [`message-feedback`](../packages/feedback/message-feedback) | - | 拥有仅追加的 Session 实例，并发出持久的会话事件流。 |
 | `ctx.speechController` | `core` | [`experimental-api-speech-to-text`](../packages/experimental/api-speech-to-text) | - | - | - | 在 Provider 调用前校验受限的浏览器音频。 |
+| `ctx.projectOperationMemoryAuthorizations` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | 在等待中的私有源读取或原始确认 anchor 捕获期间解析不可变的单次请求授权；不提供公共铸造、保留正文或执行权限。 |
 | `ctx.projectOperationOrigins` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | 在等待中的认证来源发布期间读取不可变历史引用；外部 DSBot 观察器提交匹配的元数据修订，不授予执行、保留或导出权限。 |
 | `ctx.sessionController` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | - | - | 负责 Session 命令、冷读取、持久事件跟随、实时控制状态、模型目录、workspace 打开与 Agent 激活策略。 |
 | `ctx.sessionFileReferences` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | - | - | 通过 Session Controller 的既有 Agent lookup 策略委托文件引用发现。 |

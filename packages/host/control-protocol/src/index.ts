@@ -339,7 +339,8 @@ export { parseHostOperationOriginResult, parseHostOperationOriginCommand,
   encodeHostOperationOriginObservation, encodeHostOperationOriginAttribution, hostOperationOriginReference } from './project-operation-origin.ts'
 export type { HostOperationOriginCommand, HostOperationOriginObservation, HostOperationOriginAttribution, HostOperationOriginPair } from './project-operation-origin.ts'
 
-export { parseHostProjectMemoryDirective, parseHostProjectMemorySourceProof, parseHostProjectMemoryProjectionProof,
+export { parseHostProjectMemoryCheckpoint, parseHostProjectMemoryDirective, parseHostProjectMemorySourceProof,
+  parseHostProjectMemoryProjectionProof,
   parseHostProjectMemoryHostAck, parseHostProjectMemoryReceipt, encodeHostProjectMemoryDirective,
   encodeHostProjectMemorySourceProof, encodeHostProjectMemoryProjectionProof, encodeHostProjectMemoryHostAck,
   encodeHostProjectMemoryReceipt, hostProjectMemoryDirectiveDigest, hostProjectMemorySourceProofDigest,
@@ -348,9 +349,14 @@ export type { HostProjectMemoryOperation, HostProjectMemoryReadOperation, HostPr
   HostProjectMemoryDirective, HostProjectMemorySourceProof, HostProjectMemoryMaterialVersion, HostProjectMemoryProjectionProof,
   HostProjectMemoryHostAck, HostProjectMemoryDisposition, HostProjectMemoryReceipt } from './project-operation-memory.ts'
 export { parseHostProjectMemoryCommand, parseHostProjectMemoryRequest, hostProjectMemoryQueryDigest,
-  hostProjectMemoryCommandDigest, hostProjectMemoryBatchDigest } from './project-operation-memory-command.ts'
+  hostProjectMemoryCommandDigest, hostProjectMemoryBatchDigest, hostProjectMemoryRecipientDigest } from './project-operation-memory-command.ts'
 export type { HostProjectMemoryCommands, HostProjectMemoryStage, HostProjectMemoryCommand, HostProjectMemoryRequest } from './project-operation-memory-command.ts'
-export { parseHostProjectMemoryReadResult, parseHostProjectMemoryReadEnvelope, hostProjectMemoryReadResultDigest,
+export { parseHostProjectMemoryReadResult, parseHostProjectMemoryReadEnvelope, parseHostProjectMemoryResponse,
+  hostProjectMemoryReadResultDigest,
   parseHostProjectMemoryFinalizeResult, parseHostProjectMemoryReceiptResult } from './project-operation-read-result.ts'
 export type { HostProjectMemoryCoverage, HostProjectMemoryReadResults, HostProjectMemoryReadResult, HostProjectMemoryReadEnvelope,
   HostProjectMemoryFinalizeResult, HostProjectMemoryReceiptResult } from './project-operation-read-result.ts'
+export { HOST_PROJECT_MEMORY_AUDIENCE, parseHostProjectMemoryEnvironment, parseHostProjectMemoryEnvironments } from './project-operation-memory-environment.ts'
+export type { HostProjectMemoryEnvironment } from './project-operation-memory-environment.ts'
+
+export { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'

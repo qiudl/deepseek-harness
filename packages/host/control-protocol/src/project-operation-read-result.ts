@@ -534,3 +534,28 @@ export type HostProjectMemoryReceiptResult = ReturnType<typeof receiptResult>
 export function parseHostProjectMemoryReceiptResult(value: unknown): HostProjectMemoryReceiptResult {
   return receiptResult(value)
 }
+
+
+/** Parse a closed response before the caller compares its original request and saved plan.
+ * @param value - Untrusted read envelope, Host Ack, activation result or receipt result.
+ * @returns Detached syntax and intrinsic digest checks only; signatures and current authority remain external.
+ */
+export function parseHostProjectMemoryResponse(value: unknown):
+  HostProjectMemoryReadEnvelope | ReturnType<typeof parseHostProjectMemoryHostAck> |
+  HostProjectMemoryFinalizeResult | HostProjectMemoryReceiptResult {
+  if (value && typeof value === 'object' && Object.hasOwn(value, 'schemaVersion')) return parseHostProjectMemoryHostAck(value)
+  const status = discriminant(value, 'status')
+  if (status === 'error') return failure(value)
+  if (status === 'missing' || status === 'found') return receiptResult(value)
+  if (status !== 'ok') return finalizeResult(value)
+  const operation = choice(discriminant(value, 'operation'), ['prepare_snapshot', 'history_page', 'delta_page', 'search', 'evidence'])
+  const r = object(value, { status: (v: unknown) => choice(v, ['ok']), operation: (v: unknown) => choice(v, [operation]),
+    result: (v: unknown) => parseHostProjectMemoryReadResult(operation, v),
+    sourceProof: (v: unknown) => nullable(v, parseHostProjectMemorySourceProof),
+    projectionProof: (v: unknown) => nullable(v, parseHostProjectMemoryProjectionProof) })
+  const p = r.sourceProof ?? r.projectionProof
+  if (p === null || r.sourceProof !== null && r.projectionProof !== null ||
+    r.sourceProof === null && operation !== 'search' && operation !== 'evidence' ||
+    p.operation !== operation || p.resultDigest !== hostProjectMemoryReadResultDigest(operation, r.result)) return invalid()
+  return r
+}

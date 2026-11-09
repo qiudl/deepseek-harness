@@ -1,3 +1,8 @@
+import type { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
+import { parseHostProjectMemoryJson, parseHostProjectMemoryRequest, parseHostProjectMemoryResponse, encodeHostProjectMemorySourceProof, hostProjectMemoryDirectiveDigest, encodeHostProjectMemoryHostAck } from '@deepseek-ai/dsh-host-control-protocol'
+import { operateAccountProjectOperationMemory } from './account-project-operation-memory.ts'
+import type { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
+import type { HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostOperationOriginCommand, parseHostOperationOriginObservation, encodeHostOperationOriginObservation } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity, type HostAccountBotSessionIdentity, type ProfileBotSessionIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotSessionIdentity } from './account-bot-session-identity.ts'
@@ -364,6 +369,13 @@ export interface UnixHostServerOptions {
   /** Pinned by the signed embedding at Host startup; requests cannot replace these keys. */
   readonly trustedBotGroupKeyrings?: readonly HostBotGroupPublicKeyring[]
   /** Private metadata-only receipt storage; it never opens model or Session history. */
+  /** Explicit signed embedding audience/environment policy; absence keeps source authority unavailable. */
+  readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
+  /** Separate private sidecar; original twin-binding receipt bytes remain unchanged. */
+  readonly createProjectOperationMemorySourceExports?: (profileId: string) =>
+    ProjectOperationMemorySourceExports | Promise<ProjectOperationMemorySourceExports>
+  readonly createProjectOperationMemoryMetadata?: (profileId: string) =>
+    ProjectOperationMemoryMetadata | Promise<ProjectOperationMemoryMetadata>
   readonly createTwinBindingReceiptStore?: (profileId: string) => TwinBindingReceipts
   /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
   readonly diagnostics?: HostDiagnostics
@@ -638,7 +650,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'botSessionIdentityReceiver' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported' | 'projectOperationOriginSupported'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
-    | 'createTwinBindingReceiptStore'
+    | 'createTwinBindingReceiptStore' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2189,6 +2201,22 @@ export class HostControlAuthority {
             accountBindingVersion: account.authorityBindingVersion, hostProfileId: profileId }
           const actualPeer = { installationId: identity.installationId, publicKey: identity.installationPublicKey,
             hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce }
+          if (command.action === 'project_operation_memory') {
+            const metadata = this.options.createProjectOperationMemoryMetadata
+            const record = await operateAccountProjectOperationMemory({ host: this.options.host,
+              peer: actualPeer as Parameters<typeof operateAccountProjectOperationMemory>[0]['peer'],
+              environments: this.options.projectOperationMemoryEnvironments ?? [],
+              ...(this.options.createProjectOperationMemorySourceExports
+                ? { sourceExports: this.options.createProjectOperationMemorySourceExports } : {}),
+              metadata: (profile) => { if (!metadata) throw new HostAuthorityError('unavailable'); return metadata(profile) },
+              execute: (profile, input, signal) => execute(profile, input, signal), now: clock,
+              sign: payload => sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url'),
+            }, account, command.request, binding, context.signal)
+            if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: parseHostCollaborationAnalysisResult({ kind: 'project_operation_memory', record }) })
+            return
+          }
           const value = await execute(profileId, command.action === 'root_operation_origin'
             ? { ...payload, actualAccount, actualPeer } : payload, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
@@ -2577,6 +2605,22 @@ export class HostControlAuthority {
             peer: { installationId: identity.installationId, publicKey: identity.installationPublicKey,
               hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce },
             trustedKeyrings, store, now: clock,
+            ...(this.options.createProjectOperationMemoryMetadata && this.options.collaborationAnalysis
+              && this.options.projectOperationMemoryEnvironments?.length
+              ? { memory: { metadata: this.options.createProjectOperationMemoryMetadata,
+                capture: (profile: string, input: import('@deepseek-ai/dsh-host-control-protocol').HostTwinBindingInput,
+                  confirmation: ReturnType<ProjectOperationMemoryMetadata['begin']>['confirmation'], signal: AbortSignal) => {
+                  const execute = this.options.collaborationAnalysis
+                  if (!execute) throw new HostAuthorityError('unavailable')
+                  const account = commandReadAccount(frame.params, ownerId)
+                  return execute(profile, parseHostProjectMemoryJson({ action: 'project_operation_memory_anchor', input, confirmation,
+                    binding_key: createHash('sha256').update(JSON.stringify(['dsh-memory-anchor-request-v1', profile, account, identity.hostInstanceId])).digest('hex'),
+                    actualAccount: { authorityEnvironmentId: account.authorityEnvironmentId, accountIssuer: account.issuer,
+                      accountSubject: account.subject, accountBindingId: account.accountBindingHandle,
+                      accountBindingVersion: account.authorityBindingVersion, hostProfileId: profile },
+                    actualPeer: { installationId: identity.installationId, publicKey: identity.installationPublicKey,
+                      hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce } }), signal)
+                } } } : {}),
             sign: payload => sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url'),
           }, commandReadAccount(frame.params, ownerId), frame.params.input, context.signal)
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
@@ -4490,7 +4534,7 @@ export class UnixHostClient {
             Buffer.from(receipt.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
       }
     }
-    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_operation_origin' ? 'root_operation_origin' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'project_operation_memory' ? 'project_operation_memory' : command.action === 'root_operation_origin' ? 'root_operation_origin' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
     if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
       Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
@@ -4842,6 +4886,153 @@ export class UnixHostClient {
     return result
   }
 
+  /** Execute the private signed memory protocol through this connection's current Account and fixed Host peer.
+   * @param input - Current Account, exact frozen Request and optional cancellation; no caller token or local identity override.
+   * @returns The unwrapped read/Ack/activation/receipt record, with Host signatures checked; current Cloud authority remains external.
+   */
+  async operateProjectOperationMemory(
+    input: Omit<Parameters<UnixHostClient['resolveBotIdentity']>[0], 'botId'> & {
+      readonly request: import('@deepseek-ai/dsh-host-control-protocol').HostProjectMemoryRequest
+    },
+  ): Promise<ReturnType<typeof parseHostProjectMemoryResponse>> {
+    input.signal?.throwIfAborted()
+    const original = parseHostProjectMemoryRequest(input.request),
+      d = original.directive,
+      peer = this.currentPeerFingerprint()
+    if (
+      !d.peer ||
+      d.authorityEnvironmentId !== input.authorityEnvironmentId ||
+      d.accountIssuer !== input.issuer ||
+      d.accountSubject !== input.subject ||
+      d.accountBindingId !== input.accountBindingHandle ||
+      d.accountBindingVersion !== input.authorityBindingVersion ||
+      d.peer.installationId !== this.inspection.installation_id ||
+      d.peer.publicKey !== this.inspection.installation_public_key ||
+      d.peer.hostInstanceId !== this.inspection.host_instance_id ||
+      d.peer.processNonce !== this.inspection.process_nonce
+    )
+      throw new HostAuthorityError('profile_mismatch')
+    const response = await this.collaborationAnalysis({
+      ...input,
+      command: { action: 'project_operation_memory', request: parseHostProjectMemoryJson(original) },
+    })
+    input.signal?.throwIfAborted()
+    this.requireCurrentPeer(peer)
+    if (response.kind !== 'project_operation_memory') throw new HostAuthorityError('unavailable')
+    const record = parseHostProjectMemoryResponse(response.record)
+    const command = original.commandBody
+    const verifyAck = (ack: import('@deepseek-ai/dsh-host-control-protocol').HostProjectMemoryHostAck) => {
+      if (
+        ack.issuer !== input.issuer ||
+        (ack.keyId as string) !== this.inspection.installation_id ||
+        ack.peer.installationId !== this.inspection.installation_id ||
+        ack.peer.publicKey !== this.inspection.installation_public_key ||
+        ack.bindingId !== d.scope.bindingId ||
+        ack.bindingGeneration !== d.scope.bindingGeneration ||
+        ack.scopeVersion !== d.scope.scopeVersion ||
+        ack.scopeDigest !== d.scope.scopeDigest ||
+        ack.recipientDigest !==
+          createHash('sha256')
+            .update(
+              'slark.project-operation-memory.recipient/v1\0' +
+                JSON.stringify([
+                  d.scope.recipientRef.side,
+                  d.scope.recipientRef.botRef,
+                  d.scope.recipientRef.audienceKind,
+                  d.scope.recipientRef.audienceRef,
+                  d.scope.recipientRef.audienceVersion,
+                  d.scope.recipientRef.audienceDigest,
+                ]),
+            )
+            .digest('hex') ||
+        !('deliveryId' in command) ||
+        ack.deliveryId !== command.deliveryId ||
+        ack.batchId !== command.batchId ||
+        ack.batchDigest !== command.batchDigest ||
+        ('phase' in command &&
+          command.phase === 'stage' &&
+          (ack.participantRole !== command.participantRole ||
+            ack.readDirectiveDigest !== command.readDirectiveDigest ||
+            ack.sourceProofDigest !== command.sourceProofDigest ||
+            JSON.stringify(ack.checkpoint) !== JSON.stringify(command.expectedCheckpoint))) ||
+        !verify(
+          null,
+          Buffer.from(encodeHostProjectMemoryHostAck(ack)),
+          publicKeyObject(this.inspection.installation_public_key),
+          Buffer.from(ack.signature, 'base64url'),
+        )
+      )
+        throw new HostAuthorityError('unauthorized')
+    }
+    if ('status' in record) {
+      if (record.status === 'error') {
+        if (record.requestId !== d.requestId) throw new HostAuthorityError('unavailable')
+      } else if (record.status === 'ok') {
+        if (d.operation === 'apply' || d.operation === 'receipt') throw new HostAuthorityError('unavailable')
+        const proof = record.sourceProof
+        if (
+          !proof ||
+          record.operation !== d.operation ||
+          proof.authorityEnvironmentId !== d.authorityEnvironmentId ||
+          proof.issuer !== input.issuer ||
+          (proof.keyId as string) !== this.inspection.installation_id ||
+          proof.side !== 'dsh' ||
+          proof.bindingId !== d.scope.bindingId ||
+          proof.bindingGeneration !== d.scope.bindingGeneration ||
+          proof.scopeVersion !== d.scope.scopeVersion ||
+          proof.scopeDigest !== d.scope.scopeDigest ||
+          proof.recipientDigest !==
+            createHash('sha256')
+              .update(
+                'slark.project-operation-memory.recipient/v1\0' +
+                  JSON.stringify([
+                    d.scope.recipientRef.side,
+                    d.scope.recipientRef.botRef,
+                    d.scope.recipientRef.audienceKind,
+                    d.scope.recipientRef.audienceRef,
+                    d.scope.recipientRef.audienceVersion,
+                    d.scope.recipientRef.audienceDigest,
+                  ]),
+              )
+              .digest('hex') ||
+          proof.sourceActorRef !== d.scope.sourceRef.actorRef ||
+          proof.readDirectiveDigest !== hostProjectMemoryDirectiveDigest(d) ||
+          proof.issuedAt < d.issuedAt ||
+          proof.issuedAt > this.now() ||
+          proof.expiresAt > d.expiresAt ||
+          this.now() >= proof.expiresAt ||
+          !verify(
+            null,
+            Buffer.from(encodeHostProjectMemorySourceProof(proof)),
+            publicKeyObject(this.inspection.installation_public_key),
+            Buffer.from(proof.signature, 'base64url'),
+          )
+        )
+          throw new HostAuthorityError('unauthorized')
+      } else if (record.status === 'found' || record.status === 'missing') {
+        if (d.operation !== 'receipt') throw new HostAuthorityError('unavailable')
+        if (record.status === 'found') verifyAck(record.hostApplyAck)
+      } else {
+        if (
+          d.operation !== 'apply' ||
+          !('phase' in command) ||
+          command.phase !== 'finalize' ||
+          record.deliveryId !== command.deliveryId ||
+          record.batchId !== command.batchId ||
+          record.batchDigest !== command.batchDigest ||
+          JSON.stringify(record.checkpoint) !== JSON.stringify(command.cloudMaterialReceipt.checkpoint) ||
+          (record.status === 'reconciliation_only') !== (command.cloudMaterialReceipt.stage === 'reconciliation_only')
+        )
+          throw new HostAuthorityError('unavailable')
+      }
+    } else {
+      if (d.operation !== 'apply' || !('phase' in command) || command.phase !== 'stage')
+        throw new HostAuthorityError('unavailable')
+      verifyAck(record)
+    }
+    return record
+  }
+
   private async readAccountBotIdentity<T extends HostBotIdentity>(
     input: Parameters<UnixHostClient['resolveBotIdentity']>[0],
     method: ProfileBotIdentityRequest['method'] | ProfileBotIdentityV2Request['method'],
@@ -4852,18 +5043,24 @@ export class UnixHostClient {
       throw new HostAuthorityError('upgrade_required')
     const target = parseHostBotIdentityTarget({ bot_id: input.botId })
     const request: ProfileBotIdentityRequest | ProfileBotIdentityV2Request = {
-      version: 1, type: 'request', request_id: requestId(), method,
+      version: 1,
+      type: 'request',
+      request_id: requestId(),
+      method,
       params: { ...this.collaborationAccountRequestParams(input), ...target },
     }
     const frame = await this.call(request, input.signal)
     input.signal?.throwIfAborted()
-    if (frame.type !== 'result' || (frame.method !== 'profile.bot_identity' && frame.method !== 'profile.bot_identity_v2')
-      || frame.method !== method) throw new HostAuthorityError('unavailable')
+    if (
+      frame.type !== 'result' ||
+      (frame.method !== 'profile.bot_identity' && frame.method !== 'profile.bot_identity_v2') ||
+      frame.method !== method
+    )
+      throw new HostAuthorityError('unavailable')
     const identity = parseIdentity(frame.result.identity)
     if (identity !== null && identity.bot_id !== target.bot_id) throw new HostAuthorityError('profile_mismatch')
     return identity
   }
-
   /**
    * Read one public roster page from this connection's current Account Profile.
    * @param input - Current authority binding and bounded roster cursor.

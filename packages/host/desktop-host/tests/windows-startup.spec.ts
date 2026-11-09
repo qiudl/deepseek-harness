@@ -216,6 +216,36 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('projects only explicit public memory policy JSON into the actual worker factory', async () => {
+    const state = fixture(), keys = generateKeyPairSync('ed25519')
+    const policy = { audience: 'urn:slark:project-memory:v1', environmentKey: 'staging', keyring: {
+      version: 1, environmentId: randomUUID(), issuer, keys: [{ kid: 'dsh-assertion-memory-test',
+        publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }), validFrom: 1, validUntil: 2_000_000_000_000 }],
+    } }
+    const app = await startWindowsDesktopHostApplication({ ...state.options,
+      projectOperationMemoryEnvironmentsJson: JSON.stringify([policy]),
+    }, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    expect(state.dependencies.createProfileWorkerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      projectOperationMemoryEnvironments: [policy],
+    }))
+  })
+
+  it('rejects ambiguous, unknown or private memory policy carrier inputs before starting transport', async () => {
+    for (const input of [
+      { projectOperationMemoryEnvironmentsJson: '[]', projectOperationMemoryEnvironments: [] },
+      { projectOperationMemoryEnvironmentsJson: '{}' },
+      { projectOperationMemoryEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:project-memory:v1',
+        environmentKey: 'staging', keyring: {}, privateKeyPem: 'forbidden' }]) },
+    ]) {
+      const state = fixture()
+      await expect(startWindowsDesktopHostApplication({ ...state.options, ...input }, undefined, state.dependencies))
+        .rejects.toThrow()
+      expect(state.startTransport).not.toHaveBeenCalled()
+      expect(state.dependencies.createProfileWorkerFactory).not.toHaveBeenCalled()
+    }
+  })
+
   it('composes twin receipt storage only for a registry-resolved Profile and a fixed native private path', async () => {
     const Original = hostControl.HostControlAuthority
     let captured: ConstructorParameters<typeof Original>[0] | undefined

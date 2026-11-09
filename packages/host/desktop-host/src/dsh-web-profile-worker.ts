@@ -1,3 +1,4 @@
+import { parseHostProjectMemoryJson, parseHostProjectMemoryEnvironment, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupPublicKeyring, type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { NativeRoomDrain } from './native-room-drain.ts'
 import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationWorkerRead,
@@ -58,6 +59,7 @@ const REMOTE_UI_ASSET_CACHE_ENTRIES = 4
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS',
+  'DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS',
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -82,6 +84,7 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 
 /** Launch configuration for `dsh --profile web` Profile workers. */
 export interface DshWebProfileWorkerFactoryOptions {
+  readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
   readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
@@ -165,10 +168,12 @@ async function exchangeBootstrap(
 
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
 export class DshWebProfileWorkerFactory {
+  private readonly projectOperationMemoryEnvironments: readonly HostProjectMemoryEnvironment[]
   private readonly operationOriginKeyrings: readonly HostBotGroupPublicKeyring[]
   private generation = 0
   private readonly nativeDrain = new NativeRoomDrain()
   constructor(private readonly options: DshWebProfileWorkerFactoryOptions) {
+    this.projectOperationMemoryEnvironments = (options.projectOperationMemoryEnvironments ?? []).map(parseHostProjectMemoryEnvironment)
     this.operationOriginKeyrings = (options.operationOriginKeyrings ?? []).map(parseHostBotGroupPublicKeyring)
     if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)
       || options.pnpmEntrypointPath !== undefined && !isAbsolute(options.pnpmEntrypointPath)) throw new HostAuthorityError('invalid_input')
@@ -199,6 +204,7 @@ export class DshWebProfileWorkerFactory {
         ...spec.env,
         DSH_HOME: root,
         DSH_PROFILE_ID: spec.profileId,
+        DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS: JSON.stringify(this.projectOperationMemoryEnvironments),
         DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: JSON.stringify(this.operationOriginKeyrings),
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
@@ -705,7 +711,9 @@ export class DshWebProfileWorkerFactory {
     const active = AbortSignal.any([signal, AbortSignal.timeout(35000)])
     active.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const body = JSON.stringify(parseHostRemoteSessionJson(command))
+    const memory = command && typeof command === 'object' && !Array.isArray(command) && 'action' in command &&
+      (command.action === 'project_operation_memory' || command.action === 'project_operation_memory_anchor')
+    const body = JSON.stringify(memory ? parseHostProjectMemoryJson(command) : parseHostRemoteSessionJson(command))
     if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
     const response = await fetch(`${origin}/internal/desktop-collaboration-analysis`, {
       method: 'POST',
@@ -729,7 +737,7 @@ export class DshWebProfileWorkerFactory {
         const evidence = parseHostSourceAnalysisOutput(value)
         return { ...evidence, descriptor: { ...evidence.descriptor } }
       }
-      return parseHostRemoteSessionJson(value)
+      return memory ? parseHostProjectMemoryJson(value) : parseHostRemoteSessionJson(value)
     }, 'detach')
   }
 

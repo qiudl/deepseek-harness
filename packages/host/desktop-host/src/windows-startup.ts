@@ -1,3 +1,9 @@
+import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
+import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
+import { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
+import { parseHostProjectMemoryEnvironments, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
+import { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { TwinBindingReceipts } from './twin-binding-receipts.ts'
@@ -136,6 +142,9 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumJournalBytes: number
   /** Explicit receipt capacity enables MCP extensions; omission retains the existing local-only composition. */
   readonly maximumExtensionReceiptBytes?: number
+  /** Nonsecret signed-carrier JSON; mutually exclusive with the typed environment array. */
+  readonly projectOperationMemoryEnvironmentsJson?: string
+  readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
   readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
@@ -217,6 +226,7 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || !positive(config.maximumRegistryBytes) || !positive(config.maximumManagedFileBytes)
     || !positive(config.maximumJournalBytes) || !positive(config.profileReadyTimeoutMs)
     || (config.maximumExtensionReceiptBytes !== undefined && !positive(config.maximumExtensionReceiptBytes))
+    || (config.projectOperationMemoryEnvironmentsJson !== undefined && config.projectOperationMemoryEnvironments !== undefined)
     || !positive(config.profileAbortTimeoutMs)) throw new HostAuthorityError('invalid_input')
 }
 
@@ -360,7 +370,11 @@ async function startWindowsDesktopHostApplicationWithTrust(
     dependencies.loadProfileListenerAttestor
       ?? (() => loadWindowsProfileListenerAttestor({ ...nativeOptions, loadKoffi }))
   )()
+  const projectOperationMemoryEnvironments = config.projectOperationMemoryEnvironmentsJson === undefined
+    ? parseHostProjectMemoryEnvironments(JSON.stringify(config.projectOperationMemoryEnvironments ?? []))
+    : parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson)
   const profileWorkerOptions = {
+    projectOperationMemoryEnvironments,
     ...(config.operationOriginKeyrings === undefined ? {} : { operationOriginKeyrings: config.operationOriginKeyrings }),
     nodeExecutablePath: config.nodeExecutablePath,
     dshEntrypointPath: config.dshEntrypointPath,
@@ -376,6 +390,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
   const createProfileWorker = dependencies.createProfileWorkerFactory?.(profileWorkerOptions)
     ?? (spec => (defaultProfileWorkerFactory as DshWebProfileWorkerFactory).create(spec))
   const workers = new ProfileWorkerSupervisor(createProfileWorker)
+  let memoryDatabases: ProjectOperationMemoryDatabases | undefined
   let state: {
     readonly host: DesktopHost
     readonly commandAuthority: SessionCommandAuthority
@@ -423,6 +438,17 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const accountAccessVerifier = new DshAccountAccessTokenVerifier(trust.accountAccessKeyring, {
         now: () => clock.now(),
       })
+      const databases = new ProjectOperationMemoryDatabases(async (profileId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        const profileRoot = win32.join(config.root, 'profiles', profileId)
+        return ProjectOperationMemoryDatabase.open(await ProjectOperationMemoryDatabaseFiles.windows({
+          root: win32.join(profileRoot, 'project-operation-memory-sqlite-v1'),
+          legacyRoots: [win32.join(profileRoot, 'project-operation-memory'), win32.join(profileRoot, 'project-operation-memory-source-exports')],
+          profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+          userSid, pid: process.pid, processNonce: config.processNonce, bindings,
+        }))
+      })
+      memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
       const registryFiles = createWindowsProfileRegistryFileAuthority({
         root: registryRoot,
@@ -627,6 +653,15 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        projectOperationMemoryEnvironments,
+        createProjectOperationMemorySourceExports: async profileId => new ProjectOperationMemorySourceExports({
+          profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+          environments: projectOperationMemoryEnvironments, database: await databases.get(profileId),
+        }),
+        createProjectOperationMemoryMetadata: async profileId => new ProjectOperationMemoryMetadata({
+          profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+          database: await databases.get(profileId),
+        }),
         createTwinBindingReceiptStore: (profileId) => {
           if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
           return new TwinBindingReceipts({ profileId, installationId: config.installationId,
@@ -681,6 +716,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
     },
     quiesceOwnedResources: async () => {
       try { await state?.extensionOperations?.dispose() } finally { await workers.disposeAll() }
+      await memoryDatabases?.close()
     },
   }, { loadCancellation, loadCurrentUserSid, loadRegistrationFileBindings })
   if (state === undefined) {

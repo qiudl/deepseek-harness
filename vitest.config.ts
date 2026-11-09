@@ -276,7 +276,12 @@ const liveshareRemoteBuild = fileURLToPath(new URL('./packages/experimental/live
 const generatedRemoteAliases = existsSync(liveshareRemoteBuild) ? {} : {
   '@deepseek-ai/dsh-experimental-liveshare/remote': fileURLToPath(new URL('./packages/experimental/liveshare/tests/generated-remote-stub.ts', import.meta.url)),
 }
-const testingAliases = { ...claudeCodeTestingAliases, ...generatedRemoteAliases }
+// The opt-in cross-checkout source fixture uses the embedding Host's Cordis singleton,
+// as a packaged DSBot plugin does; the external checkout does not install Host packages.
+const operationMemoryTestingAliases = process.env.DSH_TEST_OPERATION_MEMORY_JOINED === '1' ? {
+  '@deepseek-ai/cordis': fileURLToPath(new URL('./vendor/cordis/src/index.ts', import.meta.url)),
+} : {}
+const testingAliases = { ...claudeCodeTestingAliases, ...generatedRemoteAliases, ...operationMemoryTestingAliases }
 
 export default defineConfig({
   plugins: [pathsPlugin(), standardDecoratorPlugin()],

@@ -1,3 +1,6 @@
+import { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'
+import { parseHostProjectMemoryRequest } from './project-operation-memory-command.ts'
+import { parseHostProjectMemoryResponse } from './project-operation-read-result.ts'
 import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
 import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity } from './bot-session-identity.ts'
 import { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
@@ -1702,6 +1705,13 @@ export function matchHostSourceAnalysisOutput(value: unknown, target: HostCollab
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
+  if (row.action === 'project_operation_memory') {
+    exactKeys(row, ['action', 'request'])
+    const request = parseHostProjectMemoryJson(row.request)
+    parseHostProjectMemoryRequest(request)
+    if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 48 * 1024) reject()
+    return { action: row.action, request }
+  }
   if ((row.action === 'root_execution_journal' || row.action === 'root_feedback' || row.action === 'root_operation_origin')) {
     exactKeys(row, ['action', 'operation'])
     const operation = remoteSessionJson(row.operation)
@@ -1776,6 +1786,13 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     if (capture.kind !== 'captured' && capture.kind !== 'recovered') reject()
     const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
     return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
+  }
+  if (row.kind === 'project_operation_memory') {
+    exactKeys(row, ['kind', 'record'])
+    const record = parseHostProjectMemoryJson(row.record)
+    parseHostProjectMemoryResponse(record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 48 * 1024) reject()
+    return { kind: row.kind, record }
   }
   if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback' || row.kind === 'root_operation_origin')) {
     exactKeys(row, ['kind', 'record'])
