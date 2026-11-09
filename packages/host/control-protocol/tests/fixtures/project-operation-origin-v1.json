@@ -1,0 +1,112 @@
+{
+  "observation": {
+    "schemaVersion": 1,
+    "purpose": "project_operation_origin_observation",
+    "authorityEnvironmentId": "00000000-0000-4000-8000-000000000001",
+    "accountIssuer": "https://accounts.example.test",
+    "accountSubject": "original-account",
+    "accountBindingId": "host-account-alias",
+    "accountBindingVersion": 2,
+    "hostProfileId": "00000000-0000-4000-8000-000000000002",
+    "peer": {
+      "installationId": "original-installation",
+      "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "hostInstanceId": "instance",
+      "processNonce": "process"
+    },
+    "requestId": "00000000-0000-4000-8000-000000000003",
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issuedAt": 1000,
+    "expiresAt": 61000,
+    "binding": {
+      "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "rootTaskId": "00000000-0000-4000-8000-000000000004",
+      "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rootCommandId": "00000000-0000-4000-8000-000000000005",
+      "rootPayloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "executionCommandId": "00000000-0000-4000-8000-000000000006",
+      "deliveryId": "delivery",
+      "resultDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "invocationId": "invocation",
+      "sourceDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "source": {
+        "workspaceId": "00000000-0000-4000-8000-000000000007",
+        "sessionId": "original-session",
+        "sourceMessageId": "source-message",
+        "sourceRevision": "1"
+      }
+    },
+    "consumption": {
+      "consumptionId": "00000000-0000-4000-8000-000000000008",
+      "consumerAttemptId": "00000000-0000-4000-8000-000000000009",
+      "consumerStepId": "00000000-0000-4000-8000-00000000000a",
+      "consumptionCommitDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "turn": 2,
+      "step": 3,
+      "startEventSeq": 4,
+      "sessionEventSeq": 5,
+      "prefixEventCount": 6,
+      "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "durableEventCount": 12,
+    "durableLogDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "pairs": [
+      {
+        "callId": "call",
+        "toolName": "read",
+        "callSeq": 7,
+        "callTime": 100,
+        "callEventDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "resultSeq": 8,
+        "resultTime": 101,
+        "resultEventDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    ],
+    "signature": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "botId": "original-bot"
+  },
+  "claim": {
+    "schemaVersion": 1,
+    "purpose": "project_operation_origin_attribution",
+    "authorityEnvironmentId": "00000000-0000-4000-8000-000000000001",
+    "accountIssuer": "https://accounts.example.test",
+    "accountSubject": "original-account",
+    "accountBindingId": "host-account-alias",
+    "accountBindingVersion": 2,
+    "hostProfileId": "00000000-0000-4000-8000-000000000002",
+    "peer": {
+      "installationId": "original-installation",
+      "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "hostInstanceId": "instance",
+      "processNonce": "process"
+    },
+    "requestId": "00000000-0000-4000-8000-000000000003",
+    "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issuedAt": 1000,
+    "expiresAt": 61000,
+    "issuer": "https://cloud.example.test",
+    "keyId": "fixed-key",
+    "observationDigest": "30bc165ee8fec8eef9e5401e722c7d83f30519ac384862a8c9cd7400bf0088b8",
+    "admissionId": "00000000-0000-4000-8000-00000000000b",
+    "consumptionId": "00000000-0000-4000-8000-000000000008",
+    "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rootTaskId": "00000000-0000-4000-8000-000000000004",
+    "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "executionCommandId": "00000000-0000-4000-8000-000000000006",
+    "deliveryId": "delivery",
+    "invocationId": "invocation",
+    "sourceDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "ownerUserId": "original-root-principal",
+    "projectId": "212",
+    "bindingId": "00000000-0000-4000-8000-00000000000c",
+    "bindingGeneration": "9007199254740993",
+    "scopeVersion": "2",
+    "signature": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+    "botId": "original-bot"
+  },
+  "observationPayload": "dsh.project-operation-origin.observation/v1\u0000[1,\"project_operation_origin_observation\",\"00000000-0000-4000-8000-000000000001\",\"https://accounts.example.test\",\"original-account\",\"host-account-alias\",2,\"00000000-0000-4000-8000-000000000002\",\"original-bot\",[\"original-installation\",\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"instance\",\"process\"],\"00000000-0000-4000-8000-000000000003\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1000,61000,[\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"00000000-0000-4000-8000-000000000004\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"00000000-0000-4000-8000-000000000005\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"00000000-0000-4000-8000-000000000006\",\"delivery\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"invocation\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",[\"00000000-0000-4000-8000-000000000007\",\"original-session\",\"source-message\",\"1\"]],[\"00000000-0000-4000-8000-000000000008\",\"00000000-0000-4000-8000-000000000009\",\"00000000-0000-4000-8000-00000000000a\",\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",2,3,4,5,6,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],[12,\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"],[[\"call\",\"read\",7,100,\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",8,101,\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"]]]",
+  "attributionPayload": "slark.project-operation-origin.attribution/v1\u0000[1,\"project_operation_origin_attribution\",\"https://cloud.example.test\",\"fixed-key\",\"00000000-0000-4000-8000-000000000001\",\"https://accounts.example.test\",\"original-account\",\"host-account-alias\",2,\"00000000-0000-4000-8000-000000000002\",\"original-bot\",[\"original-installation\",\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"instance\",\"process\"],\"00000000-0000-4000-8000-000000000003\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1000,61000,\"30bc165ee8fec8eef9e5401e722c7d83f30519ac384862a8c9cd7400bf0088b8\",\"00000000-0000-4000-8000-00000000000b\",\"00000000-0000-4000-8000-000000000008\",\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"00000000-0000-4000-8000-000000000004\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"00000000-0000-4000-8000-000000000006\",\"delivery\",\"invocation\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"original-root-principal\",\"212\",\"00000000-0000-4000-8000-00000000000c\",\"9007199254740993\",\"2\"]",
+  "observationSha256": "30bc165ee8fec8eef9e5401e722c7d83f30519ac384862a8c9cd7400bf0088b8",
+  "attributionSha256": "c4a3fe621988b31f1b763b43c1431e8d3359c7975d3aa8cac5367f32ec1e0e5d",
+  "originRef": "origin:f22c5201739c7ba8c3300126ad73e1b081343bc302fdedbada69706291c498a0"
+}

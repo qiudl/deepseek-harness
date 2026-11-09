@@ -269,3 +269,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 `collaborationRootConsumption` 接受私有 `consumer_prepare`、`consumer_start` 与 `consumer_read`。独立的 `collaboration_consumption_v1` domain 在云端授权前提交稳定命令，并在唤醒原会话空闲 Agent 前一次性记录带期限的首次授权。写入确认丢失会停用当前句柄；重开和重复请求不能恢复唤醒许可。LLM 检查点先 flush 实际 Session 输入，提交其 turn/step/event 坐标，再沿原根 trace 持久记录 Provider 请求 span，最后调用适配器。历史读取可恢复消费事实，不触发派发。首次消费前缀不可变；后续助手回复观察与消费事实分离，也不证明整个任务完成。当前云端授权仍由已认证父进程负责。
 
 `continuation_read` 在独立的 `collaboration_continuation_v1` 域记录原消费步骤中首条已持久化的助手消息。它校验原消费前缀，并在日志增长和重新打开后保留首次观察 ID 与前缀。历史或 Session 身份变化会拒绝观察；写入结果不确定时必须重新打开。此读取不唤醒 Agent、不续签授权，也不证明 turn 或根任务完成。
+
+内部操作来源观察器将已完成的原生调用及结果关联到唯一原消费步骤及其未改变的持久化前缀。它排除继承的消费、后续步骤、未完成调用，以及消费了其他输入的步骤。每页最多50对事件，保留原事件摘要，不含输入或输出正文。所属读取器负责持久化屏障和实际生产者身份；这些元数据工具本身不证明主体、项目或共享权限。
