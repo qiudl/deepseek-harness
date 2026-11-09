@@ -1,4 +1,7 @@
 import type { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import type { HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
+import { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
+import { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
 import { ProjectMemoryOwnershipRetainedError } from './project-operation-memory-ownership-error.ts'
 import { HostAuthorityError } from './types.ts'
 
@@ -8,6 +11,25 @@ export class ProjectOperationMemoryDatabases {
   private closing = false
   private closingPromise: Promise<void> | undefined
   constructor(private readonly create: (profileId: string) => Promise<ProjectOperationMemoryDatabase>) {}
+  /** Project platform-independent metadata factories over this Host's actual Profile owners.
+   * @param installation - Current installation identity used by both stores.
+   * @param environments - Explicit embedding-pinned Cloud public policies.
+   * @returns Factories sharing the same Profile database and shutdown lifecycle.
+   */
+  services(
+    installation: Readonly<{ installationId: string; publicKey: string }>,
+    environments: readonly HostProjectMemoryEnvironment[],
+  ) {
+    return {
+      projectOperationMemoryEnvironments: environments,
+      createProjectOperationMemorySourceExports: async (profileId: string) => new ProjectOperationMemorySourceExports({
+        ...installation, profileId, environments, database: await this.get(profileId),
+      }),
+      createProjectOperationMemoryMetadata: async (profileId: string) => new ProjectOperationMemoryMetadata({
+        ...installation, profileId, database: await this.get(profileId),
+      }),
+    }
+  }
   /** Resolve one actual private owner; an uncertain failed owner is never replaced in the same Host lifetime.
    * @param profileId - Current Account-authorized Profile identity, never a request-selected path.
    * @returns Original asynchronous initialization; no SDK token is created or queued here.

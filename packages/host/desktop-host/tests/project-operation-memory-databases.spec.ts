@@ -1,6 +1,7 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { ProjectOperationMemoryDatabases } from '../src/project-operation-memory-databases.ts'
+import { ProjectOperationMemorySourceExports } from '../src/project-operation-memory-source-exports.ts'
 import { ProjectMemoryOwnershipRetainedError } from '../src/project-operation-memory-ownership-error.ts'
 import { memoryDatabaseFixture } from './project-operation-memory.test-support.ts'
 
@@ -14,6 +15,22 @@ async function fixture() {
 }
 // These cases use actual POSIX owner-private files. Windows metadata contracts run in the dedicated native suites.
 describe.skipIf(process.platform === 'win32')('POSIX private memory composition', () => {
+  it('shares each Profile owner and shutdown fence across platform metadata factories', async () => {
+    const { database, options } = await fixture(),
+      create = vi.fn(async () => database),
+      owners = new ProjectOperationMemoryDatabases(create),
+      services = owners.services({ installationId: options.installationId, publicKey: options.publicKey }, []),
+      metadata = await services.createProjectOperationMemoryMetadata(options.profileId)
+    expect(metadata.database).toBe(database)
+    expect(await services.createProjectOperationMemorySourceExports(options.profileId)).toBeInstanceOf(
+      ProjectOperationMemorySourceExports,
+    )
+    expect(services.projectOperationMemoryEnvironments).toEqual([])
+    expect(create).toHaveBeenCalledExactlyOnceWith(options.profileId)
+    await owners.close()
+    await expect(services.createProjectOperationMemoryMetadata(options.profileId)).rejects.toThrow()
+    await expect(services.createProjectOperationMemorySourceExports(options.profileId)).rejects.toThrow()
+  })
   it('caches one actual Profile owner and rejects new factories after confirmed shutdown', async () => {
     const { database, options } = await fixture(),
       create = vi.fn(async () => database),

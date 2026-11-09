@@ -30,6 +30,7 @@ import type {
   ProjectOperationMemoryCheckpoint as Checkpoint,
   ProjectOperationMemoryReadCommands as Commands,
   ProjectOperationMemoryConfirmation as Confirmation,
+  ProjectOperationMemoryLocalIdentity as Local,
 } from '@deepseek-ai/dsh-api-session-controller'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
@@ -271,6 +272,27 @@ export class DesktopProjectOperationMemory {
     private readonly lifetime: AbortSignal,
     private readonly now: () => number = Date.now,
   ) {}
+  private localAccount(
+    d: Readonly<{
+      authorityEnvironmentId: string
+      accountIssuer: string
+      accountSubject: string
+      accountBindingId: string
+      accountBindingVersion: number
+    }>,
+    botId: string,
+  ): Omit<Local, 'peer'> {
+    return {
+      authorityEnvironmentId: id(d.authorityEnvironmentId),
+      accountIssuer: d.accountIssuer,
+      accountSubject: id(d.accountSubject),
+      accountBindingId: id(d.accountBindingId),
+      accountBindingVersion: d.accountBindingVersion,
+      hostProfileId: id(this.profileId),
+      botId: id(botId),
+      workerId: this.workerId,
+    }
+  }
   private read(token: Token): View | null {
     const entry = this.tokens.get(token)
     if (!entry) return null
@@ -432,14 +454,7 @@ export class DesktopProjectOperationMemory {
         deadline: d.expiresAt,
         signal: active,
         local: {
-          authorityEnvironmentId: id(d.authorityEnvironmentId),
-          accountIssuer: d.accountIssuer,
-          accountSubject: id(d.accountSubject),
-          accountBindingId: id(d.accountBindingId),
-          accountBindingVersion: d.accountBindingVersion,
-          hostProfileId: id(this.profileId),
-          botId: id(source.botRootId),
-          workerId: this.workerId,
+          ...this.localAccount(d, source.botRootId),
           peer: {
             computerId: id(d.computerId),
             installationId: id(d.peer.installationId),
@@ -543,14 +558,7 @@ export class DesktopProjectOperationMemory {
         deadline: d.expiresAt,
         signal: active,
         local: {
-          authorityEnvironmentId: id(d.authorityEnvironmentId),
-          accountIssuer: d.accountIssuer,
-          accountSubject: id(d.accountSubject),
-          accountBindingId: id(d.accountBindingId),
-          accountBindingVersion: d.accountBindingVersion,
-          hostProfileId: id(this.profileId),
-          botId: id(d.scope.sourceRef.botRootId),
-          workerId: this.workerId,
+          ...this.localAccount(d, d.scope.sourceRef.botRootId),
           peer: {
             computerId: id(d.peer.computerId),
             installationId: id(d.peer.installationId),

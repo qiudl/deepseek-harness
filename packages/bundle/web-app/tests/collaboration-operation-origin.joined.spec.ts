@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { ProjectOperationMemoryDatabase } from '../../../host/desktop-host/src/project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from '../../../host/desktop-host/src/project-operation-memory-database-files.ts'
+import { ProjectOperationMemoryDatabases } from '../../../host/desktop-host/src/project-operation-memory-databases.ts'
 /** REQ-20261031-0006: explicit opt-in composition of actual Host, Cloud PostgreSQL and DSBot owners. */
 import { fork } from 'node:child_process'
 import { createPrivateKey, randomUUID } from 'node:crypto'
@@ -33,8 +34,6 @@ import { decodeHostControlFrame, encodeHostControlFrame, parseHostOperationOrigi
   parseHostBotGroupPublicKeyring, parseHostBotIdentity, parseHostTwinBindingInput, parseHostProjectMemoryRequest,
   parseHostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionJson, HostOperationOriginAttribution } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryMetadata } from '../../../host/desktop-host/src/project-operation-memory-metadata.ts'
-import { ProjectOperationMemorySourceExports } from '../../../host/desktop-host/src/project-operation-memory-source-exports.ts'
 import { TwinBindingReceipts } from '../../../host/desktop-host/src/twin-binding-receipts.ts'
 import { createPosixTwinBindingReceiptFile } from '../../../host/desktop-host/src/twin-binding-receipt-files.ts'
 import { DesktopHost } from '../../../host/desktop-host/src/desktop-host.ts'
@@ -147,6 +146,7 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
       client?: UnixHostClient
       cloudInitialized?: boolean
       database?: ProjectOperationMemoryDatabase
+      memoryDatabases?: ProjectOperationMemoryDatabases
     } = {}
     const pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>()
     const collect = (value: Buffer) => { diagnostics = (diagnostics + value.toString('utf8')).slice(-16384) }
@@ -202,7 +202,9 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
     })
     onTestFinished(async () => {
       acquired.client?.close(); await acquired.observer?.dispose(); await ctx.fiber.dispose()
-      await facility?.closeAll(); await backend?.close(); await acquired.database?.close()
+      await facility?.closeAll(); await backend?.close()
+      if (acquired.memoryDatabases) await acquired.memoryDatabases.close()
+      else await acquired.database?.close()
       server.closeAllConnections()
       if (server.listening) await new Promise<void>((resolve, reject) => server.close((error) => {
         if (error) reject(error); else resolve()
@@ -315,23 +317,17 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
       uid, pid: process.pid, processNonce: randomUUID() }) : undefined
     const database = databaseFiles ? await ProjectOperationMemoryDatabase.open(databaseFiles) : undefined
     if (database) acquired.database = database
-    const memoryMetadata = () => {
-      if (!database) throw Error('joined_actual_database_missing')
-      return new ProjectOperationMemoryMetadata({ profileId: profile.profileId, installationId: peer.installationId,
-        publicKey: peer.publicKey, database })
-    }
-    const sourceExports = () => {
-      if (!database) throw Error('joined_actual_database_missing')
-      return new ProjectOperationMemorySourceExports({ profileId: profile.profileId, installationId: peer.installationId,
-        publicKey: peer.publicKey, database, environments: [policy] })
-    }
+    const memoryDatabases = new ProjectOperationMemoryDatabases(async (selected) => {
+      if (!database || selected !== profile.profileId) throw Error('joined_actual_database_missing')
+      return database
+    })
+    acquired.memoryDatabases = memoryDatabases
     const authority = new HostControlAuthority({ host, now: Date.now, diagnostics: { record(event) { console.error('joined control rejection', event) } }, identity: {
       installationId: peer.installationId, installationPublicKey: peer.publicKey, hostInstanceId: peer.hostInstanceId,
       processNonce: peer.processNonce, installationPrivateKey, executableSignatureDigest: 'a'.repeat(64), runtimeGeneration: 1, schemaGeneration: 1,
     }, ...(memoryComposition ? {
-      trustedBotGroupKeyrings: [keyring], projectOperationMemoryEnvironments: [policy],
-      createProjectOperationMemoryMetadata: memoryMetadata,
-      createProjectOperationMemorySourceExports: sourceExports,
+      trustedBotGroupKeyrings: [keyring],
+      ...memoryDatabases.services({ installationId: peer.installationId, publicKey: peer.publicKey }, [policy]),
       createTwinBindingReceiptStore: () => new TwinBindingReceipts({ profileId: profile.profileId, installationId: peer.installationId, publicKey: peer.publicKey, file: privateFile('twin-receipts') }),
       resolveBotIdentity: async (selected: string, requested: string, signal: AbortSignal) => {
         expect(selected).toBe(profile.profileId)

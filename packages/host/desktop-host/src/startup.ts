@@ -1,9 +1,7 @@
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
-import { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { TwinBindingReceipts } from './twin-binding-receipts.ts'
 import { createPosixTwinBindingReceiptFile } from './twin-binding-receipt-files.ts'
@@ -866,16 +864,10 @@ export async function startDesktopHostApplication(
         return packagesRoot
       }),
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
-      projectOperationMemoryEnvironments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
-      createProjectOperationMemorySourceExports: async profileId => new ProjectOperationMemorySourceExports({
-        profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
-        environments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
-        database: await databases.get(profileId),
-      }),
-      createProjectOperationMemoryMetadata: async profileId => new ProjectOperationMemoryMetadata({
-        profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
-        database: await databases.get(profileId),
-      }),
+      ...databases.services(
+        { installationId: config.installationId, publicKey: config.installationPublicKey },
+        parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
+      ),
       createTwinBindingReceiptStore: (profileId) => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         const profileRoot = join(root, 'profiles', profileId)

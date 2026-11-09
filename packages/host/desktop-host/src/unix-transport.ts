@@ -4921,6 +4921,19 @@ export class UnixHostClient {
     if (response.kind !== 'project_operation_memory') throw new HostAuthorityError('unavailable')
     const record = parseHostProjectMemoryResponse(response.record)
     const command = original.commandBody
+    const recipientDigest = createHash('sha256')
+      .update(
+        'slark.project-operation-memory.recipient/v1\0' +
+          JSON.stringify([
+            d.scope.recipientRef.side,
+            d.scope.recipientRef.botRef,
+            d.scope.recipientRef.audienceKind,
+            d.scope.recipientRef.audienceRef,
+            d.scope.recipientRef.audienceVersion,
+            d.scope.recipientRef.audienceDigest,
+          ]),
+      )
+      .digest('hex')
     const verifyAck = (ack: import('@deepseek-ai/dsh-host-control-protocol').HostProjectMemoryHostAck) => {
       if (
         ack.issuer !== input.issuer ||
@@ -4931,20 +4944,7 @@ export class UnixHostClient {
         ack.bindingGeneration !== d.scope.bindingGeneration ||
         ack.scopeVersion !== d.scope.scopeVersion ||
         ack.scopeDigest !== d.scope.scopeDigest ||
-        ack.recipientDigest !==
-          createHash('sha256')
-            .update(
-              'slark.project-operation-memory.recipient/v1\0' +
-                JSON.stringify([
-                  d.scope.recipientRef.side,
-                  d.scope.recipientRef.botRef,
-                  d.scope.recipientRef.audienceKind,
-                  d.scope.recipientRef.audienceRef,
-                  d.scope.recipientRef.audienceVersion,
-                  d.scope.recipientRef.audienceDigest,
-                ]),
-            )
-            .digest('hex') ||
+        ack.recipientDigest !== recipientDigest ||
         !('deliveryId' in command) ||
         ack.deliveryId !== command.deliveryId ||
         ack.batchId !== command.batchId ||
@@ -4981,20 +4981,7 @@ export class UnixHostClient {
           proof.bindingGeneration !== d.scope.bindingGeneration ||
           proof.scopeVersion !== d.scope.scopeVersion ||
           proof.scopeDigest !== d.scope.scopeDigest ||
-          proof.recipientDigest !==
-            createHash('sha256')
-              .update(
-                'slark.project-operation-memory.recipient/v1\0' +
-                  JSON.stringify([
-                    d.scope.recipientRef.side,
-                    d.scope.recipientRef.botRef,
-                    d.scope.recipientRef.audienceKind,
-                    d.scope.recipientRef.audienceRef,
-                    d.scope.recipientRef.audienceVersion,
-                    d.scope.recipientRef.audienceDigest,
-                  ]),
-              )
-              .digest('hex') ||
+          proof.recipientDigest !== recipientDigest ||
           proof.sourceActorRef !== d.scope.sourceRef.actorRef ||
           proof.readDirectiveDigest !== hostProjectMemoryDirectiveDigest(d) ||
           proof.issuedAt < d.issuedAt ||
