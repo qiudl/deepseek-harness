@@ -28,6 +28,20 @@ import { UnixHostClient } from '../src/unix-transport.ts'
 import * as hostControl from '../src/unix-transport.ts'
 import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
 
+// The Windows paths in this fixture are virtual on every platform; diagnostics use the same mapped boundary.
+vi.mock('../src/host-diagnostics.ts', async (load) => {
+  const actual = await load<typeof import('../src/host-diagnostics.ts')>()
+  return { ...actual, createHostDiagnostics(options: Parameters<typeof actual.createHostDiagnostics>[0]) {
+    const logs = new Map<string, Buffer>()
+    return actual.createHostDiagnostics({ ...options, fileOperations: {
+      ensureDirectory() {},
+      append(path, bytes) { logs.set(path, Buffer.concat([logs.get(path) ?? Buffer.alloc(0), bytes])) },
+      length(path) { return logs.get(path)?.length },
+      replace(source, target) { const bytes = logs.get(source); if (bytes) logs.set(target, bytes); logs.delete(source) },
+    } })
+  } }
+})
+
 vi.mock('node:fs', async (load) => {
   const actual = await load<typeof import('node:fs')>()
   return { ...actual, existsSync: vi.fn(actual.existsSync) }
