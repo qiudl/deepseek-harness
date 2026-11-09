@@ -1,9 +1,13 @@
+import { resolveAccountBotSessionIdentity } from '../src/account-bot-session-identity.ts'
+import { parseHostBotSessionTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { readAccountBoundBotRooms, projectAccountNativeRoom } from '../src/account-twin-groups.ts'
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsPage, parseHostNativeRoomProjectionTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
-import { resolveAccountBotIdentity, listAccountBotRoster,
+import { resolveAccountBotIdentity, resolveAccountBotIdentityV2, listAccountBotRoster,
   prepareAccountNativeRoom, operateAccountNativeRoom } from '../src/account-bot-identity.ts'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
@@ -31,6 +35,32 @@ async function fixture() {
   const grant = () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid-token' })
   return { host, workers, ownerId, proof, bot, grant }
 }
+
+it('adds the verified local Profile to v2 only after current Account authorization', async () => {
+  const f = await fixture()
+  const signal = new AbortController().signal
+  await expect(resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.workers.resolveBotIdentity).not.toHaveBeenCalled()
+  await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof)
+  expect(await resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, signal))
+    .toEqual({ ...f.bot, host_profile_id: profileId })
+  expect(await resolveAccountBotIdentity(f.host, f.workers, f.proof, f.bot.bot_id, signal)).toEqual(f.bot)
+})
+
+it('discards v2 coordinates if the Account grant or local Profile changes during the read', async () => {
+  const f = await fixture(); await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof)
+  let current = profileId
+  const host = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { resolveBotIdentity: async () => { current = `${profileId}-replaced` as typeof profileId; return f.bot } }
+  await expect(resolveAccountBotIdentityV2(host, workers, f.proof, f.bot.bot_id, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  f.workers.resolveBotIdentity.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return f.bot })
+  await expect(resolveAccountBotIdentityV2(f.host, f.workers, f.proof, f.bot.bot_id, new AbortController().signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+})
 
 it('prepares a native room only for the current Account Profile and requested room', async () => {
   const f = await fixture()
@@ -259,4 +289,125 @@ it('rejects unavailable, stale and out-of-order worker roster pages', async () =
   await workers.disposeAll()
   await expect(workers.listBotRoster(input.profileId, '', 50, signal))
     .rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('bound-room reads require a human owner and preserve the actual authorized Profile', async () => {
+  const f = await fixture(), signal = new AbortController().signal
+  const query = parseHostBoundBotRoomsQuery({ bot_id: f.bot.bot_id, limit: 20, cursor: null })
+  const page = parseHostBoundBotRoomsPage({ state: 'page', bot_id: f.bot.bot_id, workspace_id: randomUUID(), state_revision: 1, membership_snapshot: 'a'.repeat(64), items: [], next_cursor: null })
+  const workers = { listBoundBotRooms: vi.fn(async () => page) }
+  await expect(readAccountBoundBotRooms(f.host, workers, f.proof, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  await expect(readAccountBoundBotRooms(f.host, workers, { ...f.proof, ownerId: '' }, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(workers.listBoundBotRooms).not.toHaveBeenCalled()
+  expect(await readAccountBoundBotRooms(f.host, workers, f.proof, query, signal))
+    .toEqual({ profileId: f.host.authorizeAccountModelText(f.proof), value: page })
+  workers.listBoundBotRooms.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return page })
+  await expect(readAccountBoundBotRooms(f.host, workers, f.proof, query, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+})
+it('bound-room reads and projection replies cannot outlive their Profile or cancellation', async () => {
+  const f = await fixture(); await f.grant()
+  const profileId = f.host.authorizeAccountModelText(f.proof), signal = new AbortController()
+  const query = parseHostBoundBotRoomsQuery({ bot_id: f.bot.bot_id, limit: 20, cursor: null })
+  let current = profileId
+  const host = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const workers = { listBoundBotRooms: async () => { current = profileId + '-replaced' as typeof profileId; return { state: 'bot_unavailable' as const } } }
+  await expect(readAccountBoundBotRooms(host, workers, f.proof, query, signal.signal)).rejects.toMatchObject({ code: 'stale' })
+  current = profileId
+  await expect(readAccountBoundBotRooms(host, { listBoundBotRooms: async () => { signal.abort(); return { state: 'snapshot_changed' } } }, f.proof, query, signal.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  const command = parseHostNativeRoomProjectionTarget({ challenge_nonce: 'A'.repeat(43), expires_at: 2000, binding_id: randomUUID(), binding_generation: '1', command_request_id: randomUUID(), command: { operation: 'leave', room_id: 'room', member_id: randomUUID(), cycle: 1 } }).command
+  expect(await projectAccountNativeRoom(f.host, { operateNativeRoom: async () => ({ state: 'left', left_room_seq: 1 }) }, f.proof, command, new AbortController().signal)).toEqual({ profileId, value: { state: 'left', left_room_seq: 1 } })
+})
+
+
+it('retains the original Account and worker through final Bot/Session publication, including absence', async () => {
+  const f = await fixture()
+  const target = parseHostBotSessionTarget({ bot_id: 'bot_1', session_id: 'session_1' })
+  const signal = new AbortController().signal
+  const read = vi.fn(async () => target)
+  const assertCurrent = vi.fn()
+  const workers = { botSessionIdentityReceiver: vi.fn(() => ({ read, assertCurrent })) }
+  await expect(resolveAccountBotSessionIdentity(f.host, workers, f.proof, target, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(workers.botSessionIdentityReceiver).not.toHaveBeenCalled()
+  await f.grant()
+  const result = await resolveAccountBotSessionIdentity(f.host, workers, f.proof, target, signal)
+  expect(result.identity).toEqual({ ...target, host_profile_id: f.host.authorizeAccountModelText(f.proof) })
+  expect(read).toHaveBeenCalledWith(target, signal)
+  result.assertCurrent()
+  assertCurrent.mockImplementationOnce(() => { throw Error('original worker replaced') })
+  expect(() => { result.assertCurrent() }).toThrow('original worker replaced')
+  f.host.revokeOwner(f.ownerId)
+  expect(() => { result.assertCurrent() }).toThrow()
+  await f.grant()
+  const absentWorkers = { botSessionIdentityReceiver: () => ({ assertCurrent() {}, read: async () => null }) }
+  const absent = await resolveAccountBotSessionIdentity(f.host, absentWorkers, f.proof, target, signal)
+  expect(absent.identity).toBeNull()
+  f.host.revokeOwner(f.ownerId)
+  expect(() => { absent.assertCurrent() }).toThrow()
+})
+
+it('rejects a Bot/Session result after revocation, Profile change or cancellation', async () => {
+  const f = await fixture(); await f.grant()
+  const target = parseHostBotSessionTarget({ bot_id: 'bot_1', session_id: 'session_1' })
+  const profile = f.host.authorizeAccountModelText(f.proof)
+  let current = profile
+  const host = { authorizeCollaborationRegistration() {}, authorizeAccountModelText: () => current }
+  const controller = new AbortController()
+  const workers = { botSessionIdentityReceiver: () => ({ assertCurrent() {}, read: async () => {
+    current = `${profile}-replacement` as typeof profile
+    return target
+  } }) }
+  await expect(resolveAccountBotSessionIdentity(host, workers, f.proof, target, controller.signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  const revoked = { botSessionIdentityReceiver: () => ({ assertCurrent() {}, read: async () => {
+    f.host.revokeOwner(f.ownerId); return null
+  } }) }
+  await expect(resolveAccountBotSessionIdentity(f.host, revoked, f.proof, target, controller.signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  await f.grant()
+  const cancelled = { botSessionIdentityReceiver: () => ({ assertCurrent() {}, read: async () => {
+    controller.abort(); return target
+  } }) }
+  await expect(resolveAccountBotSessionIdentity(f.host, cancelled, f.proof, target, controller.signal)).rejects.toThrow()
+})
+
+
+it('pins the original supervised worker and rejects mismatched sessions, replacement and old producers', async () => {
+  const target = parseHostBotSessionTarget({ bot_id: 'bot_1', session_id: 'session_1' })
+  const read = vi.fn(async () => target)
+  let supported = true
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+    ...(supported ? { resolveBotSessionIdentity: read } : {}),
+  }))
+  onTestFinished(() => workers.disposeAll())
+  const input = { profileId: 'profile', profileRoot: '/owned', credentialHandle: 'keychain:test', pluginRoots: [] }
+  const signal = new AbortController().signal
+  expect(() => workers.botSessionIdentityReceiver(input.profileId)).toThrow('unavailable')
+  await workers.start(input)
+  const original = workers.botSessionIdentityReceiver(input.profileId)
+  expect(await original.read(target, signal)).toEqual(target)
+  read.mockResolvedValueOnce(parseHostBotSessionTarget({ ...target, session_id: 'other' }))
+  await expect(original.read(target, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  read.mockImplementationOnce(async () => { await workers.dispose(input.profileId); return target })
+  await expect(original.read(target, signal)).rejects.toMatchObject({ code: 'stale' })
+  await workers.start(input)
+  expect(() => { original.assertCurrent() }).toThrow('stale')
+  await workers.dispose(input.profileId)
+  supported = false
+  await workers.start(input)
+  expect(() => workers.botSessionIdentityReceiver(input.profileId)).toThrow('upgrade_required')
+})
+
+
+it('refuses a different association at the Account reader boundary', async () => {
+  const f = await fixture(); await f.grant()
+  const target = parseHostBotSessionTarget({ bot_id: 'bot_1', session_id: 'session_1' })
+  for (const wrong of [{ ...target, bot_id: 'other' }, { ...target, session_id: 'other' }]) {
+    const workers = { botSessionIdentityReceiver: () => ({ assertCurrent() {},
+      read: async () => parseHostBotSessionTarget(wrong) }) }
+    await expect(resolveAccountBotSessionIdentity(f.host, workers, f.proof, target, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
 })

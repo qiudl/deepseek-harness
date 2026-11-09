@@ -85,9 +85,23 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_identity` 在读取选定 Profile worker 的前后校验当前连接的 Account 绑定和 issuer/subject。worker 私有 token 仅到达 Profile 本地的 `dsBotSlarkExternalGroup` 服务；插件缺失、Bot 不存在或插件不是唯一 writer 时返回缺失。worker 被替换或 Account 撤权时拒绝读取。结果不含聊天内容，也不授权 Slark 群操作。
 
+`profile.bot_identity_v2` 沿用相同 Account 与 worker 校验，将 Host 选定的本地 Profile 作为 `host_profile_id` 返回。已配置 Bot 身份解析器时声明单独能力；`UnixHostClient.resolveBotIdentityV2` 要求此能力并校验返回的 Bot 与 Profile，原方法保持可用。
+
+`profile.bot_session_identity` 从选定 Account Profile 的私有 producer 读取准确的当前 Bot/Session 关联。父进程在发送结果前再次核验原 Account、Profile 和 worker，缺失结果也须核验；客户端在整个调用中固定认证 Host peer。macOS 与 Windows 共用 worker 接线。缺少支持时要求升级；此坐标观察不授权来源正文、记忆或设备执行。
+
+`UnixHostClient.operateTwinBinding` 要求独立的 `profile.twin_binding` 能力。Host 仅在当前 Bot 解析器、私有回执存储及固定 Cloud 公钥集合均已装配时声明此能力。它在持久提交和返回前核验准确签名 offer、当前 Account/Profile/Bot 与有效期。Profile 的纯元数据回执集合跨重试、重启保留首份签名 Ack，拒绝同键改目标，完整集合最多 10,000 条回执和 16 MiB。未知格式、无效签名或不安全私有文件均拒绝，保留原内容。
+
+POSIX 提交同步回执文件及目录；恢复读取在返回先前已发布的 Ack 前完成该持久性屏障。Windows 恢复通过原生 write-through 原语重发布相同、已验证的原字节，并复核 SID、DACL 和重解析点证据，不创建新 consent 或签名。Slark 仍须重查当前权限，并原子激活绑定及两方向 consent；Host 的 acknowledged 事实本身不会开放新能力。
+
 `profile.native_room` 通过当前 Account Profile worker 为已有 DS Bot 房间准备独立的桥接 Source。请求由 worker 私有 token 保护。Host 校验准确的房间和 Source 字段，拒绝已替换的 worker，重新检查 Account 授权，并用安装密钥签署房间与 Source 映射。客户端校验签名及当前 Account/Host 身份；超时的写入可能已经提交，调用方须以相同房间 ID 重试核对。
 
 `profile.native_room_operation` 向当前 worker 转发有界的房间命令。Host 在调用前后检查当前连接的 Account 授权、worker 代际及命令与响应的准确范围。`messages` 和 `turns` 每页最多返回三条。写入响应丢失时，调用方须以同一房间和成员周期对账。对于 `turns`，Host 在完成这些检查后签署所选页面，Unix 客户端验证签名及当前 Host 身份后才返回。
+
+`profile.bound_bot_rooms` 通过当前获授权 Account 的实际 Profile，读取当前 DS Bot 插件中某个 Bot 参加的原生群。私有 worker 只收到 Bot 和有界分页选择条件。安装密钥签署的页面绑定调用方新挑战值、原绑定选择条件、Account、Profile、Host 进程及完整页面；挑战值须在 30 秒内到期。成员快照变化、Bot 不可用或插件能力缺失均不能当作完整空目录。绑定选择条件只是回显上下文，不代表 Host 已验证 Slark 绑定。Slark 接受证明前必须另验当前绑定及已登记的实时 Host；目录本身不授权后续模型调用。
+
+`profile.native_room_retirement` 通过专用 worker 操作关闭完整原成员身份。它在 await 前后检查当前 Account/Profile 和 worker 归属，再签署 durable left 边界以及两个原请求 ID 和命令。client 另验实际 peer、挑战值有效期、target 和签名。能力缺失要求升级；恢复保留原身份，不回落普通 leave。清理不要求原 Bot 仍在目录中。
+
+`profile.native_room_projection` 在相同 Account 和挑战值检查下，签署原生加入或离开命令的成功响应，包含原请求 ID、成员 ID 和周期。冲突或接收结果未知时不产生成功证明。恢复保留原命令；离开清理不要求原 Bot 仍在目录中。这两个方法分别协商独立能力，旧原生群响应结构保持不变。
 
 私有 Bot 群 worker 桥支持单条结果补读、准确的结果确认和成员周期撤权。worker 令牌及当前代际围栏仍留在 Host 内部。`profile.bot_group_result_page` 在重新核验原 Slark 投递凭据及当前 Account、群成员资格后补读结果。`profile.bot_group_result_ack` 在 Slark 记录回执后，使用同一有效凭据清理对应结果。成员周期撤权仍无公开控制方法。
 
@@ -186,6 +200,10 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate`。macOS 组合使用已有代次检查；持久化数据缺失或不安全时拒绝，不执行初始化，也不启动 worker。异步读取结束后，在签名或返回观察结果前再次核对连接及注册表身份/代次。Windows 组合未安装此读取器，因此省略两项能力；客户端在发送材料证明前拒绝不支持的 Host。
 
 这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
+
+原生群准备在整个阶段捕获同一个准确的 Profile worker。父进程在每次签名及发布响应前，同步重新检查当前 Account、选定 Profile、nonce 和原 worker；异步 helper 先前的检查不足以代替此步骤。同 Profile 的替代 worker 不能证明之前的观察。macOS 和 Windows 启动装配均安装这个受检查的 receiver。worker 缺少支持时要求升级。[准备协议](../control-protocol/README.zh.md#wire-contract) 定义独立签名结果，不授予 Cloud 群成员资格、模型执行或设备权限。
+
+默认 Host worker 跨 Profile 和控制连接共享 8 个未结束原生操作名额。调用取消及原有读写截止时间只结束等待，不释放已接收的操作。私有接收器须在 service 实际结束后返回匹配收据，才释放名额；收据缺失或 HTTP 断链时，名额保留到原进程实际退出。进程错误使 worker 不可用，`done` 和关闭流程仍等待实际退出。外部注入的 worker factory 自行负责生命周期保证。参见[私有接收器规则](../../bundle/web-app/README.zh.md#understand-the-implementation)。
 
 ## 模型体验
 

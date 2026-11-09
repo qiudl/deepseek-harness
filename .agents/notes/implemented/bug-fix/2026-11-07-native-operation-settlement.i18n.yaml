@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-07-native-operation-settlement.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-11-07-native-operation-settlement.md
+/agent-note-native-operation-settlement:
+  en: d4f503a97f98ed43
+  zh: 02cb3f4a9afdc4bd
+/agent-note-native-operation-settlement/problem:
+  en: 228b5f31d7fdcc49
+  zh: 8396b9301b9b8cfb
+/agent-note-native-operation-settlement/decision:
+  en: 17d31e58554c20f7
+  zh: de62b58f5d957913
+/agent-note-native-operation-settlement/alternatives-considered:
+  en: 9a4a3a9c4be99e91
+  zh: be632acb54b89add
+/agent-note-native-operation-settlement/verification:
+  en: 462bfbbd4d1ac194
+  zh: f958c80c1cbb8959
+/agent-note-native-operation-settlement/consequences:
+  en: e5a4d38e06b2d669
+  zh: d2d52e23b0dea44d

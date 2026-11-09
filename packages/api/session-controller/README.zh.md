@@ -30,6 +30,8 @@ kind: "package-reference"
 
 Client 创建 Session 时会转发请求的 Agent preset、专用协作标记和显式精确采用标记。请求精确采用的调用方必须提供 Session 身份；其他调用方必须使用 Host 返回的身份。
 
+同进程插件在依赖 `create({ sessionId, exactAdopt: true })` 前，应检查 Host provider 的只读属性 `supportsExactAdopt === true`。读取此能力不会打开 Session。精确接管会恢复指定身份，包括已开始的 Session；遇到 writer、目录或 preset 冲突则报告失败，不创建替代会话。旧 provider 缺少此能力时，插件必须先要求升级，才能安全重试保持身份的创建操作；用未识别的标志试探支持情况可能创建其他 Session。此能力不通过 Remote 暴露。
+
 控制器通过可选服务方法 `agentPresets.presetForSession(session)` 读取 Session 已记录的预设。null 结果表示未记录预设；服务缺席表示控制器无法获知预设身份。
 
 历史页与 follow opening 快照为每个持久 Session 事件携带一条 `{ type: 'event', event: SessionWireEvent }` record。Client 把每条已接受 record 保留为一个持久 `SessionEventLikeEntry`；Assistant token 边界保留在 `assistant/message` 或 `assistant/attempt` 的紧凑流内。工具参数、结果内容、失败信息和 `tool/result.data.meta` 原样通过；控制器不解析工具定义、不运行展示转换器，也不附加 UI 数据。

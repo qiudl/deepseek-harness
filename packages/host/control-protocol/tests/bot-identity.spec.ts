@@ -1,7 +1,47 @@
 import { expect, it } from 'vitest'
-import { parseHostBotIdentity, parseHostBotIdentityTarget,
+import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '../src/bot-identity.ts'
 import { decodeHostControlFrame, encodeHostControlFrame } from '../src/index.ts'
+
+it('keeps the Host-local Profile in a separate strict identity version', () => {
+  const original = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }
+  const identity = { ...original, host_profile_id: '40000000-0000-4000-8000-000000000004' }
+  expect(parseHostBotIdentityV2(identity)).toEqual(identity)
+  expect(parseHostBotIdentityV2(null)).toBeNull()
+  expect(() => parseHostBotIdentity(identity)).toThrow()
+  let read = false
+  const accessor = { ...identity }
+  Object.defineProperty(accessor, 'host_profile_id', { get() { read = true; return identity.host_profile_id }, enumerable: true })
+  for (const invalid of [1, [], Object.create(null), accessor, { ...identity, [Symbol('hidden')]: true },
+    { actor_ref: identity.actor_ref, display_name: identity.display_name, host_profile_id: identity.host_profile_id, other: 'bad' },
+    original, { ...identity, host_profile_id: 'cloud-profile' },
+    { ...identity, host_profile_id: '../other' }, { ...identity, cloud_profile_id: identity.host_profile_id },
+    { ...identity, actor_ref: 'deepseek-bot:other' }, { ...identity, private_chat: 'secret' }]) {
+    expect(() => parseHostBotIdentityV2(invalid)).toThrow()
+  }
+  expect(read).toBe(false)
+})
+
+it('roundtrips identity v2 without letting a caller supply the Host Profile', () => {
+  const request = { version: 1, type: 'request', request_id: '10000000-0000-4000-8000-000000000001',
+    method: 'profile.bot_identity_v2', params: {
+      client_instance_id: '10000000-0000-4000-8000-000000000001',
+      host_instance_id: '20000000-0000-4000-8000-000000000002', process_nonce: 'A'.repeat(43),
+      jti: '30000000-0000-4000-8000-000000000003', issued_at: 1000, expires_at: 2000,
+      authority_environment_id: '40000000-0000-4000-8000-000000000004',
+      account_binding_handle: 'binding:bot', authority_binding_version: 1,
+      account_issuer: 'https://accounts.example.test', account_subject: '50000000-0000-4000-8000-000000000005',
+      bot_id: 'bot_1',
+    } }
+  const result = { version: 1, type: 'result', request_id: request.request_id, method: request.method,
+    result: { identity: { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot',
+      host_profile_id: '60000000-0000-4000-8000-000000000006' } } }
+  for (const frame of [request, result]) {
+    expect(encodeHostControlFrame(decodeHostControlFrame(`${JSON.stringify(frame)}\n`))).toBe(`${JSON.stringify(frame)}\n`)
+  }
+  expect(() => decodeHostControlFrame(`${JSON.stringify({ ...request,
+    params: { ...request.params, host_profile_id: result.result.identity.host_profile_id } })}\n`)).toThrow()
+})
 
 it('accepts only an exact public Bot identity with a derived actor reference', () => {
   const identity = { bot_id: 'bot_1', actor_ref: 'deepseek-bot:bot_1', display_name: 'My Bot' }

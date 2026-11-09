@@ -12,6 +12,102 @@ const sessionId = SessionId('original-session')
 const groupId = '22222222-2222-4222-8222-222222222222'
 afterEach(() => { cleanup(); vi.restoreAllMocks(); Reflect.deleteProperty(window, '__DSH_DESKTOP_HOST__') })
 
+it('updates a retained original line when a later poll has no new messages', async () => {
+  let tick: (() => void) | undefined
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
+    if (timeout === 20_000) tick ??= callback
+    return 1 as never
+  })
+  const firstId = '33333333-3333-4333-8333-333333333333'
+  const unrelated = '44444444-4444-4444-8444-444444444444'
+  let reads = 0
+  const page = vi.fn(async (command: { operation: string; after_seq?: number; attention_after_id?: string }) => {
+    if (command.operation !== 'page') return { state: 'pending_empty' as const }
+    reads++
+    return { state: 'page' as const, items: reads === 1 ? [{ id: firstId, seq: 1, actor_kind: 'human',
+      actor_ref: 'owner', body: 'Original request', created_at: 1 }] : [], next_seq: 1,
+    has_more: false, last_seq: 1,
+    attention_updates: reads === 1 ? [] : [{ id: firstId, reason_code: 'binding_source_revoked' as const },
+      { id: unrelated, reason_code: 'binding_source_ambiguous' as const }],
+    attention_next_id: reads === 2 ? unrelated : null }
+  })
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const, last_seq: 1 })),
+  collaborationGroupMessages: page }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const original = await screen.findByText('Original request')
+  expect(original.closest('article')?.querySelector('[role="status"]')).toBeNull()
+  await act(async () => { tick?.() })
+  await waitFor(() => { expect(original.closest('article')?.textContent)
+    .toContain('The binding used for this request has ended.') })
+  expect(screen.getAllByText('Original request')).toHaveLength(1)
+  expect(document.querySelector(`[data-group-message-id="${unrelated}"]`)).toBeNull()
+  await act(async () => { tick?.() })
+  await waitFor(() => { expect(page.mock.calls.some(([command]) => command.operation === 'page' &&
+    command.after_seq === 1 && command.attention_after_id === unrelated)).toBe(true) })
+  await act(async () => { tick?.() })
+  await waitFor(() => { expect(reads).toBe(4) })
+  const last = page.mock.calls.filter(([command]) => command.operation === 'page').at(-1)![0]
+  expect(last.attention_after_id).toBeUndefined()
+})
+
+it('renders the initial ambiguity on the exact original line without a result or retry action', async () => {
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const, last_seq: 1 })),
+  collaborationGroupMessages: vi.fn(async (command: { operation: string }) => command.operation !== 'page'
+    ? { state: 'pending_empty' as const }
+    : { state: 'page' as const, items: [{ id: '33333333-3333-4333-8333-333333333333', seq: 1,
+      actor_kind: 'human', actor_ref: 'owner', body: 'Choose a bot', created_at: 1,
+      attention: { reason_code: 'binding_source_ambiguous' as const } }],
+    next_seq: 1, has_more: false, last_seq: 1 }) }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const line = await screen.findByText('Choose a bot')
+  await waitFor(() => { expect(line.closest('article')?.querySelector('[role="status"]')?.textContent)
+    .toBe('This twin has multiple bot bindings. Send a new request from the intended bot.') })
+  expect(line.closest('article')?.querySelector('button')).toBeNull()
+  expect(line.closest('article')?.querySelector('[data-task-id]')).toBeNull()
+})
+
+it('polls original-line attention while older message pages still need an explicit load', async () => {
+  let tick: (() => void) | undefined
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
+    if (timeout === 20_000) tick ??= callback
+    return 1 as never
+  })
+  const id = '33333333-3333-4333-8333-333333333333'
+  let reads = 0
+  const page = vi.fn(async (command: { operation: string; after_seq?: number }) => {
+    if (command.operation !== 'page') return { state: 'pending_empty' as const }
+    reads++
+    return { state: 'page' as const, items: [{ id: reads === 1 ? id : '44444444-4444-4444-8444-444444444444',
+      seq: reads === 1 ? 1 : 2, actor_kind: 'human', actor_ref: 'owner',
+      body: reads === 1 ? 'Visible original' : 'Unloaded history', created_at: 1 }],
+    next_seq: reads === 1 ? 1 : 2, has_more: true, last_seq: 100,
+    attention_updates: reads === 1 ? [] : [{ id, reason_code: 'binding_source_revoked' as const }],
+    attention_next_id: null }
+  })
+  const host = { collaborationGroupPreparation: vi.fn(async () => ({ state: 'group_active' as const,
+    group_id: groupId, workspace_id: workspaceId, session_id: sessionId, version: 2 as const, last_seq: 100 })),
+  collaborationGroupMessages: page }
+  Reflect.set(window, '__DSH_DESKTOP_HOST__', host)
+  render(<GroupChatDock {...({ sessionId, host, workspaceId: () => workspaceId,
+    t: makeTranslate(en) } as Parameters<typeof GroupChatDock>[0])} />)
+  const line = await screen.findByText('Visible original')
+  await act(async () => { tick?.() })
+  await waitFor(() => { expect(line.closest('article')?.textContent)
+    .toContain('The binding used for this request has ended.') })
+  expect(screen.queryByText('Unloaded history')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Load more group messages' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Load more group messages' }))
+  await screen.findByText('Unloaded history')
+  const requests = page.mock.calls.filter(([command]) => command.operation === 'page')
+  expect(requests.map(([command]) => command.after_seq)).toEqual([0, 1, 1])
+})
+
 it('pages group messages inside the original Session and follows a recorded send', async () => {
   let tick: (() => void) | undefined
   vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => {
@@ -39,21 +135,21 @@ it('pages group messages inside the original Session and follows a recorded send
     session_id: sessionId, after_seq: 0, limit: 50 })
   act(() => { tick?.() })
   await waitFor(() => { expect(preparation).toHaveBeenCalledTimes(2) })
-  expect(pageCalls()).toHaveLength(1)
+  await waitFor(() => { expect(pageCalls()).toHaveLength(2) })
   fireEvent.click(screen.getByRole('button', { name: 'Load more group messages' }))
   await waitFor(() => { expect(screen.getByText('message 2')).toBeTruthy() })
   window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', { detail: null }))
   window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
     detail: { workspace_id: workspaceId, session_id: 'other' },
   }))
-  expect(pageCalls()).toHaveLength(2)
+  expect(pageCalls()).toHaveLength(3)
   window.dispatchEvent(new CustomEvent('dsh-slark-group-message-recorded', {
     detail: { workspace_id: workspaceId, session_id: sessionId, group_id: groupId },
   }))
   await waitFor(() => { expect(screen.getByText('message 3')).toBeTruthy() })
   expect(screen.getByText('helper-bot')).toBeTruthy()
   expect(screen.getByText('message 3').closest('article')?.querySelector('time')).toBeNull()
-  expect(pageCalls()).toHaveLength(3)
+  expect(pageCalls()).toHaveLength(4)
 })
 
 it('shows an Agent result under the exact committed group message with its actor and time', async () => {

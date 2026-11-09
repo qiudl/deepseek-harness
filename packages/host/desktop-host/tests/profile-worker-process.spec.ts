@@ -643,6 +643,12 @@ describe('dsh web Profile worker', () => {
       let assetReads = 0
       const server = createServer(async (request, response) => {
         const url = new URL(request.url, 'http://127.0.0.1')
+        if (url.pathname === '/flood' && request.headers.cookie === cookieName + '=' + cookieValue) {
+          process.stdout.write('x'.repeat(1024 * 1024), () => {
+            process.stderr.write('y'.repeat(1024 * 1024), () => response.end('drained'))
+          })
+          return
+        }
         if (url.pathname === '/internal/desktop-workspace-model-selection') {
           if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_WORKSPACE_MODEL_TOKEN) {
             response.writeHead(403).end()
@@ -829,6 +835,13 @@ describe('dsh web Profile worker', () => {
       new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
     await expect(worker.remoteUiRead?.('asset/read', { args: { url: '/plugins/??large/client.js&rev=1', offset: 0 } },
       new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+    const cookie = worker.bootstrapCookie
+    if (cookie === undefined) throw new Error('Web worker bootstrap cookie is missing')
+    const flood = await fetch(`${worker.viewOrigin}/flood`, {
+      headers: { cookie: `${cookie.name}=${cookie.value}` },
+      signal: AbortSignal.timeout(5_000),
+    })
+    await expect(flood.text()).resolves.toBe('drained')
   })
 
   it('rejects caller attempts to replace the selected DSH home', async () => {

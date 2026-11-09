@@ -1,0 +1,11 @@
+{
+  "capability": true,
+  "actualProfile": true,
+  "validInstallationSignature": true,
+  "originalOnRetry": true,
+  "noNewWorker": true,
+  "profileFilesUnchanged": true,
+  "originalAfterRestart": true,
+  "oldPeerRetained": true,
+  "allWorkerReadsAuthorized": true
+}

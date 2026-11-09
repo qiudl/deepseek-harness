@@ -906,6 +906,43 @@ export interface ProfileBotIdentityResult {
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentity | null }
 }
 
+/** Account-bound Bot lookup whose local Profile is derived by the Host, never its caller. */
+export interface ProfileBotIdentityV2Request extends Omit<ProfileBotIdentityRequest, 'method'> {
+  readonly method: 'profile.bot_identity_v2'
+}
+
+/** Separate Profile-bearing response; the released three-field result remains unchanged. */
+export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_identity_v2'
+  readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
+}
+
+/** Account-scoped observation of an exact original Bot/Session association. */
+export interface ProfileBotSessionIdentityRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & import('./bot-session-identity.ts').HostBotSessionCoordinates
+}
+
+/** The Parent-selected local Profile and private producer coordinates, or absence. */
+export interface ProfileBotSessionIdentityResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly result: { readonly identity: import('./bot-session-identity.ts').HostAccountBotSessionIdentity | null }
+}
+
+/** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
+export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.twin_binding'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & {
+    readonly input: import('./twin-binding.ts').HostTwinBindingInput
+  }
+}
+
+/** The original durable acknowledgement or an explicitly absent receipt. */
+export interface ProfileTwinBindingResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.twin_binding'
+  readonly result: import('./twin-binding.ts').HostTwinBindingResult
+}
+
 /** Account-bound page of public Bot identities in the selected Profile. */
 export interface ProfileBotRosterRequest {
   readonly version: 1
@@ -955,6 +992,82 @@ export interface ProfileNativeRoomResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.native_room'
   readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
+}
+
+/** Current Account Profile reads a nonce-bound native participation page. */
+export interface ProfileBoundBotRoomsRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostBoundBotRoomsTarget
+  }
+}
+/** Independently signed current page, or an explicit incomplete read. */
+export interface ProfileBoundBotRoomsResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly result: import('./bound-bot-rooms.ts').HostBoundBotRoomsResult
+}
+/** Current Account Profile projects an original Cloud member command. */
+export interface ProfileNativeRoomProjectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomProjectionTarget
+  }
+}
+/** Signature acknowledges the original native join/leave and exact member cycle only. */
+export interface ProfileNativeRoomProjectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomProjectionProof }
+}
+
+/** Current Account Profile retires one exact original native member cycle. */
+export interface ProfileNativeRoomRetirementRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomRetirementTarget
+  }
+}
+/** Signature guarantees durable retirement of the original paired commands. */
+export interface ProfileNativeRoomRetirementResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomRetirementProof }
+}
+
+/** Current Account Profile prepares or attests one original bound-Bot room Source. */
+export interface ProfileNativeRoomPreparationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./native-room-preparation.ts').HostNativeRoomPreparationTarget
+  }
+}
+
+/** Independent stage outcome; unavailable facts never become a signed success. */
+export interface ProfileNativeRoomPreparationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly result: { readonly outcome: import('./native-room-preparation.ts').HostNativeRoomPreparationOutcome }
 }
 
 /** Account-bound member and message operation for an existing native room. */
@@ -2403,8 +2516,22 @@ export type HostControlFrame =
   | ProfileCollaborationRegistrationResult
   | ProfileBotIdentityRequest
   | ProfileBotIdentityResult
+  | ProfileBotIdentityV2Request
+  | ProfileBotIdentityV2Result
+  | ProfileBotSessionIdentityRequest
+  | ProfileBotSessionIdentityResult
+  | ProfileTwinBindingRequest
+  | ProfileTwinBindingResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileBoundBotRoomsRequest
+  | ProfileBoundBotRoomsResult
+  | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomRetirementRequest
+  | ProfileNativeRoomProjectionResult
+  | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationRequest
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

@@ -30,6 +30,8 @@ Desktop analytics follows the [product collection policy](../../client/product-a
 
 Client Session creation forwards the requested Agent preset, dedicated collaboration marker, and explicit exact-adoption flag. A caller requesting exact adoption must provide a Session identity; otherwise it must use the identity returned by the Host.
 
+Same-process plugins check the Host provider's read-only `supportsExactAdopt === true` before relying on `create({ sessionId, exactAdopt: true })`. This capability read opens no Session. Exact adoption restores the named identity, including a started Session, or reports a writer, directory, or preset conflict without creating a replacement. An older provider without this capability requires an upgrade before a plugin can safely retry identity-preserving creation; passing an unrecognized flag to probe support can create a different Session. This capability is not exposed through Remote.
+
 The controller reads a Session's recorded preset through the optional `agentPresets.presetForSession(session)` service method. A null result means no preset was recorded; an absent service means preset identity is unavailable to the controller.
 
 History pages and follow opening snapshots carry one `{ type: 'event', event: SessionWireEvent }` record per durable Session event. The Client retains each accepted record as one durable `SessionEventLikeEntry`; Assistant token boundaries remain inside the compact stream on `assistant/message` or `assistant/attempt`. Tool arguments, result content, failures, and `tool/result.data.meta` pass through unchanged; the controller does not resolve a Tool definition, run a presenter, or attach UI data.

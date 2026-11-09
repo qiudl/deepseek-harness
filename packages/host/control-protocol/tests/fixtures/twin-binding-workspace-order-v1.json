@@ -1,0 +1,798 @@
+[
+  {
+    "name": "prefix-valid",
+    "accepted": true,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a!",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "10d011aa1934de195c412a2bd5f07fc90eb65af2ca870cb961414e83042a4ed0"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a!",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "1e282acada03008e54c831b0f15d9ef7af69d8b1a4d7463a1bd0ea19aae5c543"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "prefix-reversed",
+    "accepted": false,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a!",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "fce4411c30a6f3087fa34e94a391429c0790e9dec8bc63bb0f0b7e8b4ef39a3b"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a!",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "03fb13576cdfc2fb5ae9c3f889002b6cd8f7f183fa12b6d175ef10b1652c83b9"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "quote-valid",
+    "accepted": true,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a\"",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a#",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "dcb22b61da5e6c78aea4731b0d59ace3bb1bceaf2b97fe9f3ae38c9ed9368403"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a\"",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a#",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "746e44e250c6b21e80d69955b4a50cf87db077afab3b6aa847724497460f9e31"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "quote-reversed",
+    "accepted": false,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a#",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a\"",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "b19b58f211b222aac60464b0065a78d905bab3a1907230405a56e89719f40f26"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a#",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a\"",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "91d39550825a78399b30a2b5882aa1d83ae55f95f590bee11b23064b4205dc6f"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "same-workspace-grants-valid",
+    "accepted": true,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "3c580606d0cfabb6e01cf01143834842fda787bdbb7a508eb8b42eb66066af32"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "7a54c8181f37af28f20f0d89cbba031f561a13f1c7e7ae8c17f2feb3c6df1f9e"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "same-workspace-grants-reversed",
+    "accepted": false,
+    "offer": {
+      "presentationVersion": "v1",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "directions": [
+        {
+          "direction": "dsh_to_slark",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "dsh",
+              "actorRef": "deepseek-bot:ai-proj-operator",
+              "hostProfileId": "00000003-0000-4000-8000-000000000003",
+              "botRootId": "ai-proj-operator",
+              "providerId": "dsh-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "slark",
+              "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000004-0000-4000-8000-000000000004",
+              "generation": "1",
+              "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "5a6b542f91ecf405e8c8eeeed1f93f1013043bf7d83f984a02dd5e3ecb906dfc"
+          }
+        },
+        {
+          "direction": "slark_to_dsh",
+          "scope": {
+            "bindingId": "00000002-0000-4000-8000-000000000002",
+            "bindingGeneration": "1",
+            "scopeVersion": "1",
+            "projectId": "ai-proj",
+            "twinAgentId": "twin-ai-proj",
+            "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+            "sourceRef": {
+              "side": "slark",
+              "actorRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+              "hostProfileId": null,
+              "botRootId": null,
+              "providerId": "slark-project-operation-v1",
+              "providerVersion": "1"
+            },
+            "recipientRef": {
+              "side": "dsh",
+              "botRef": "deepseek-bot:ai-proj-operator",
+              "audienceKind": "owner_private",
+              "audienceRef": "human:test",
+              "audienceVersion": "1",
+              "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+            },
+            "deviceGrantRefs": [
+              {
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              },
+              {
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              }
+            ],
+            "workspaceRefs": [
+              {
+                "workspaceId": "a",
+                "grantId": "00000009-0000-4000-8000-000000000009",
+                "expectedEpoch": "2"
+              },
+              {
+                "workspaceId": "a",
+                "grantId": "00000006-0000-4000-8000-000000000006",
+                "expectedEpoch": "2"
+              }
+            ],
+            "historyFrom": 100,
+            "historyTo": 200,
+            "timeZone": "UTC",
+            "materialKinds": [
+              "operation",
+              "result"
+            ],
+            "retentionConsentRef": {
+              "id": "00000005-0000-4000-8000-000000000005",
+              "generation": "1",
+              "consentDigest": "d44fcbaf08ca9a6dec55344e330544c6c763db6bf04cd9a5ef20cc5df24eda90",
+              "presentationVersion": "v1"
+            },
+            "scopeDigest": "366544d1f6db30f3ce2ec7dd66c2aeb8f4781c6c9f645ae081201e301ab27b91"
+          }
+        }
+      ]
+    }
+  }
+]

@@ -1,3 +1,5 @@
+import { handleDesktopNativeRoomRetirementRequest } from './desktop-native-room-retirement.ts'
+import { handleDesktopBoundBotRoomsRequest } from './desktop-bound-bot-rooms.ts'
 import { bindDesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import { DesktopRemoteTerminalStreams } from './desktop-remote-terminal-stream.ts'
 import { handleDesktopRootJournalRequest } from './desktop-collaboration-source.ts'
@@ -46,8 +48,10 @@ import { handleDesktopCollaborationArchiveStateRequest } from './desktop-collabo
 import { handleDesktopCollaborationArchiveTransitionRequest } from './desktop-collaboration-archive-transition.ts'
 import { handleDesktopGroupInputFenceRequest } from './desktop-group-input-fence.ts'
 import { handleDesktopBotIdentityRequest } from './desktop-bot-identity.ts'
+import { handleDesktopBotSessionIdentityRequest, type DesktopBotSessionIdentityProvider } from './desktop-bot-session-identity.ts'
 import { handleDesktopBotRosterRequest } from './desktop-bot-roster.ts'
 import { handleDesktopNativeRoomRequest } from './desktop-native-room.ts'
+import { handleDesktopNativeRoomPreparationRequest, readDesktopNativeRoomPreparation } from './desktop-native-room-preparation.ts'
 import { handleDesktopNativeRoomOperationRequest } from './desktop-native-room-operations.ts'
 import { handleDesktopBotGroupRequest } from './desktop-bot-group.ts'
 import { handleDesktopCollaborationArchiveIntentRequest } from './desktop-collaboration-archive-intent.ts'
@@ -273,6 +277,49 @@ export function apply(ctx: Context, config: Config): void {
   const sourceToken = process.env.DSH_PROFILE_SOURCE_TOKEN
   if (sourceToken && /^[A-Za-z0-9_-]{43}$/u.test(sourceToken)) {
     ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-preparation',
+      handler: (req, res) => handleDesktopNativeRoomPreparationRequest(req, res, sourceToken,
+        (target, signal) => readDesktopNativeRoomPreparation(ctx, target, signal)),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bound-bot-rooms',
+      handler: (req, res) => handleDesktopBoundBotRoomsRequest(req, res, sourceToken,
+        async (query, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            roomsForBot?: (input: { botId: string; limit: number; cursor: string | null }) => Promise<unknown>
+          }
+          if (!service?.roomsForBot) return { state: 'upgrade_required' }
+          const result = await service.roomsForBot({ botId: query.bot_id, limit: query.limit, cursor: query.cursor })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-native-room-retirement',
+      handler: (req, res) => handleDesktopNativeRoomRetirementRequest(req, res, sourceToken,
+        async (command, signal) => {
+          signal.throwIfAborted()
+          const service = ctx.get('dsBotSlarkNativeRoom') as undefined | {
+            retireAgent?: (input: {
+              roomId: string
+              groupId: string
+              memberId: string
+              cycle: number
+              projectId: string
+              agentId: string
+              name: string
+            }) => Promise<unknown>
+          }
+          if (!service?.retireAgent) return { state: 'upgrade_required' }
+          const result = await service.retireAgent({ roomId: command.room_id, groupId: command.group_id,
+            memberId: command.member_id, cycle: command.cycle, projectId: command.project_id,
+            agentId: command.agent_id, name: command.name })
+          signal.throwIfAborted()
+          return result
+        }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-native-room',
       handler: (req, res) => handleDesktopNativeRoomRequest(req, res, sourceToken,
         async (roomId, signal) => {
@@ -399,6 +446,11 @@ export function apply(ctx: Context, config: Config): void {
         signal.throwIfAborted()
         return result
       }),
+    }))
+    ctx.effect(() => ctx.webServer.register({
+      kind: 'exact', path: '/internal/desktop-bot-session-identity',
+      handler: (req, res) => handleDesktopBotSessionIdentityRequest(req, res, sourceToken,
+        () => ctx.get('dsBotSlarkExternalGroup') as DesktopBotSessionIdentityProvider | undefined),
     }))
     ctx.effect(() => ctx.webServer.register({
       kind: 'exact', path: '/internal/desktop-bot-identity',

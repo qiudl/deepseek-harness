@@ -1,0 +1,12 @@
+{
+  "capabilities": { "v1": true, "v2": true },
+  "identity": { "bot_id": "bot_1", "actor_ref": "deepseek-bot:bot_1", "display_name": "Fixture Bot" },
+  "profileMatchesAuthorizedSelection": true,
+  "workerReadsMatchAuthorization": true,
+  "legacyHasNoProfile": true,
+  "missingIsNull": true,
+  "wrongAccountRejected": true,
+  "readStartedNoWorker": true,
+  "profileFilesUnchanged": true,
+  "oldHostUpgradeRequired": true
+}

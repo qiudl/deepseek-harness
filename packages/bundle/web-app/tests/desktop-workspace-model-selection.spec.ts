@@ -116,7 +116,14 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
+  const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
+    state_revision: 1, membership_snapshot: 'a'.repeat(64),
+    items: [{ room_id: 'room_1', member_set_digest: 'b'.repeat(64) }], next_cursor: null }
+  const roomsForBot = vi.fn(async (_query: { botId: string; limit: number; cursor: string | null }) => inventoryPage)
+  const retireAgent = vi.fn(async () => ({ state: 'left', left_room_seq: 0 }))
   const nativeRoom = {
+    roomsForBot: roomsForBot as typeof roomsForBot | undefined,
+    retireAgent: retireAgent as typeof retireAgent | undefined,
     prepare: vi.fn(async () => ({ room_id: 'room_1', source: {
       workspace_id: target.workspace_id, session_id: 'bridge_1',
       source_message_id: 'source_1', source_revision: '1',
@@ -236,6 +243,16 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'sendLocalBotChat')
   expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { sendLocalBotChat: sender })
+  const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
+  try {
+    const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ bot_id: 'bot_1', session_id: target.session_id }),
+    })
+    expect(absentSessionIdentity.status).toBe(200)
+    expect(await absentSessionIdentity.json()).toBeNull()
+    expect(legacyIdentity).not.toHaveBeenCalled()
+  } finally { legacyIdentity.mockRestore() }
   const botResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })
@@ -322,7 +339,30 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     resultDigest: 'a'.repeat(64), chunkIndex: 0, chunkCount: 1, chunkText: 'Hello', chunkDigest: 'b'.repeat(64) })
   await roomCommand({ operation: 'leave', ...roomBase })
   expect(nativeRoom.leaveAgent).toHaveBeenCalledWith({ roomId: 'room_1', memberId: roomBase.member_id, cycle: 1 })
+  const postInventory = (credential = token) => fetch(
+    `http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bound-bot-rooms`,
+    { method: 'POST', headers: { authorization: `Bearer ${credential}` },
+      body: JSON.stringify({ bot_id: 'operator', limit: 20, cursor: null }) })
+  expect((await postInventory('wrong')).status).toBe(403)
+  expect(roomsForBot).not.toHaveBeenCalled()
+  const inventory = await postInventory()
+  expect(inventory.status).toBe(200)
+  expect(await inventory.json()).toEqual(inventoryPage)
+  expect(roomsForBot).toHaveBeenCalledExactlyOnceWith({ botId: 'operator', limit: 20, cursor: null })
+  nativeRoom.roomsForBot = undefined
+  expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
+  nativeRoom.roomsForBot = roomsForBot
+  const retirement = { operation: 'join', ...roomBase, group_id: groupId,
+    project_id: 'project', agent_id: 'agent', name: 'Original frozen name' }
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'left', left_room_seq: 0 })
+  expect(retireAgent).toHaveBeenCalledWith({ roomId: 'room_1', groupId,
+    memberId: roomBase.member_id, cycle: 1, projectId: 'project', agentId: 'agent', name: 'Original frozen name' })
+  nativeRoom.retireAgent = undefined
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'upgrade_required' })
+  nativeRoom.retireAgent = retireAgent
   disposeNativeRoom()
+  expect(await (await postNative('-retirement', retirement)).json()).toEqual({ state: 'upgrade_required' })
+  expect(await (await postInventory()).json()).toEqual({ state: 'upgrade_required' })
   expect((await postNative('', { room_id: 'room_1' })).status).toBe(422)
   expect((await postNative('-operations', { operation: 'messages', ...roomBase,
     after_seq: 1, limit: 2 })).status).toBe(422)

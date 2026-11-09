@@ -26,6 +26,32 @@ export type ProfileAccessScope = 'connected' | 'local_profile' | 'offline_local'
 /** Clock dependency used to make expiry decisions deterministic. */
 export interface HostClock { now(): number }
 
+/** One original worker retained through the parent's final synchronous signing checks. */
+export interface NativeRoomPreparationReceiver {
+  /** Reject a closed supervisor or replacement of this exact worker. */
+  assertCurrent(): void
+  /** Read one phase; caller cancellation does not certify actual operation settlement.
+   * @param target Original binding and phase selector.
+   * @param signal Caller cancellation, separate from actual execution settlement.
+   * @returns Unsigned observations from this retained worker only.
+   */
+  read(target: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationTarget,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationWorkerRead>
+}
+
+/** Retains one original worker until the Parent publishes its coordinate observation. */
+export interface BotSessionIdentityReceiver {
+  /** Reject disposal or replacement of the captured worker. */
+  assertCurrent(): void
+  /** Read the exact requested association from that worker.
+   * @param target Original Bot and Session selectors.
+   * @param signal Caller cancellation.
+   * @returns Observed coordinates or explicit absence.
+   */
+  read(target: import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates,
+    signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>
+}
+
 /** Closed Host authority errors; arbitrary local exception text never crosses IPC. */
 export type HostAuthorityErrorCode =
   | 'invalid_input'
@@ -111,14 +137,30 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Observe one exact Bot/Session association through the private Profile producer. */
+  readonly resolveBotSessionIdentity?: (botId: string, sessionId: string, signal: AbortSignal) =>
+  Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>
   /** Read one Bot identity only when the Profile plugin holds its exclusive writer lock. */
   readonly resolveBotIdentity?: (botId: string, signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null>
   /** Page public Bot identities only from the selected exclusive-writer Profile. */
   readonly listBotRoster?: (afterBotId: string, limit: number, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null>
+  /** Read a private participation page from the selected exclusive-writer Profile. */
+  readonly listBoundBotRooms?: (query: import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsQuery,
+    signal: AbortSignal) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBoundBotRoomsRead>
+  /** Persist a fence for the complete original member identity without joining it. */
+  readonly retireNativeRoom?: (
+    command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomRetirementCommand,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomRetirementReply>
   /** Prepare a native room's bridge Source in the selected Profile writer. */
   readonly prepareNativeRoom?: (roomId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null>
+  /** Observe one guarded preparation phase; no signing authority enters the worker. */
+  readonly prepareNativeRoomPhase?: (
+    target: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationTarget,
+    signal: AbortSignal,
+  ) => Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomPreparationWorkerRead>
   /** Run one native room member or message operation in the selected Profile writer. */
   readonly operateNativeRoom?: (
     command: import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomCommand,

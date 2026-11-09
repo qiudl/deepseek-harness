@@ -63,6 +63,8 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
     let disposed = false, groupId: string | undefined, preparedGroupId: string | undefined
     let activationRequestId: string | undefined, activationBusy = false, cursor = 0, hasMore = false, busy = false
     let items: readonly Message[] = []
+    const itemPositions = new Map<string, number>()
+    let attentionCursor: string | undefined
     const current = () => !disposed && window.__DSH_DESKTOP_HOST__ === host && workspaceId() === selectedWorkspace
       && !!selectedWorkspace
     const publish = (state: Snapshot['state'], loading = false, readFailed = false) => {
@@ -105,7 +107,7 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
       } catch { /* Keep the pending key for another explicit recovery attempt. */ }
       finally { if (current() && groupId === expectedGroupId) setRecovering(false) }
     }
-    const page = async () => {
+    const page = async (attentionOnly = false) => {
       const workspace = workspaceId()
       if (!current() || !workspace || !groupId || busy || !host.collaborationGroupMessages) return
       const expectedGroupId = groupId
@@ -113,12 +115,29 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
       publish('active', true)
       try {
         const result = await host.collaborationGroupMessages({ operation: 'page',
-          workspace_id: workspace, session_id: sessionId, after_seq: cursor, limit: 50 })
+          workspace_id: workspace, session_id: sessionId, after_seq: cursor, limit: attentionOnly ? 1 : 50,
+          ...(attentionCursor ? { attention_after_id: attentionCursor } : {}) })
         if (!current() || groupId !== expectedGroupId || workspaceId() !== workspace) return
         if (result.state !== 'page') { publish('active', false, true); return }
-        items = [...items, ...result.items]
-        cursor = result.next_seq
-        hasMore = result.has_more
+        if (!attentionOnly && result.items.length) {
+          for (const [offset, item] of result.items.entries()) itemPositions.set(item.id, items.length + offset)
+          items = [...items, ...result.items]
+        }
+        let changed: Message[] | undefined
+        for (const update of result.attention_updates ?? []) {
+          const index = itemPositions.get(update.id)
+          if (index === undefined) continue
+          const item = (changed ?? items)[index]
+          if (!item || item.attention?.reason_code === update.reason_code) continue
+          changed ??= [...items]
+          changed[index] = { ...item, attention: { reason_code: update.reason_code } }
+        }
+        if (changed) items = changed
+        attentionCursor = result.attention_next_id ?? undefined
+        if (!attentionOnly) {
+          cursor = result.next_seq
+          hasMore = result.has_more
+        }
         publish('active')
       } catch { publish('active', false, true) }
       finally { busy = false }
@@ -134,7 +153,8 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         if (result.state === 'missing') {
           groupId = undefined; preparedGroupId = undefined; activationRequestId = undefined
           setActivationFailed(false)
-          items = []; publish('missing'); return
+          cursor = 0; items = []; itemPositions.clear(); attentionCursor = undefined
+          publish('missing'); return
         }
         if (result.state === 'preparing') {
           if (preparedGroupId !== result.group_id) {
@@ -142,6 +162,7 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
             setActivationFailed(false)
           }
           groupId = undefined; preparedGroupId = result.group_id; cursor = 0; items = []
+          itemPositions.clear(); attentionCursor = undefined
           publish('preparing'); return
         }
         if (result.state !== 'group_active') { publish('unavailable'); return }
@@ -149,10 +170,11 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
         setActivationFailed(false)
         if (groupId !== result.group_id) {
           groupId = result.group_id; cursor = 0; hasMore = true; items = []
+          itemPositions.clear(); attentionCursor = undefined
           setRecordedPending(null)
           publish('active')
           await page()
-        } else if (!hasMore) await page()
+        } else await page(hasMore)
         await checkPending()
       } catch { publish('unavailable') }
     }
@@ -224,6 +246,10 @@ export function GroupChatDock({ sessionId, host, workspaceId, subscribeWorkspace
             {time && <time dateTime={time.toISOString()}>{time.toLocaleString()}</time>}
           </header>
           <p>{item.body}</p>
+          {item.attention && <p className={css.workStatus} role="status">
+            {t(item.attention.reason_code === 'binding_source_ambiguous'
+              ? 'group.bindingSourceAmbiguous' : 'group.bindingSourceRevoked')}
+          </p>}
           {group && <GroupWorkResult group={group} t={t} />}
         </article>
       })}

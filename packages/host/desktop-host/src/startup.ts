@@ -1,4 +1,6 @@
 import { rootWorkerOperations } from './root-worker-operations.ts'
+import { TwinBindingReceipts } from './twin-binding-receipts.ts'
+import { createPosixTwinBindingReceiptFile } from './twin-binding-receipt-files.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { parseHostBotGroupPublicKeyring,
   type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
@@ -838,9 +840,20 @@ export async function startDesktopHostApplication(
         return packagesRoot
       }),
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
+      createTwinBindingReceiptStore: (profileId) => {
+        if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+        const profileRoot = join(root, 'profiles', profileId)
+        ownerDirectory(profileRoot, uid)
+        return new TwinBindingReceipts({ profileId, installationId: config.installationId,
+          publicKey: config.installationPublicKey,
+          file: createPosixTwinBindingReceiptFile(join(profileRoot, 'twin-binding-receipts'), uid) })
+      },
       listBotRoster: (profileId, afterBotId, limit, signal) =>
         workers.listBotRoster(profileId, afterBotId, limit, signal),
+      listBoundBotRooms: workers.listBoundBotRooms.bind(workers),
+      retireNativeRoom: workers.retireNativeRoom.bind(workers),
       prepareNativeRoom: (profileId, roomId, signal) => workers.prepareNativeRoom(profileId, roomId, signal),
+      nativeRoomPreparationReceiver: workers.nativeRoomPreparationReceiver.bind(workers),
       operateNativeRoom: workers.operateNativeRoom.bind(workers),
       operateBotGroup: workers.operateBotGroup.bind(workers),
       trustedBotGroupKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
