@@ -188,7 +188,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
     || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !listBoundBotRooms || !retireNativeRoom)
     throw new Error('missing private worker capability')
-  return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
+  return { factory, worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
@@ -657,6 +657,29 @@ it('reads exact Bot/Session coordinates through the actual child and rejects tok
     await expect(resolve(coordinates.bot_id, coordinates.session_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
     expect(cancel).toHaveBeenCalledOnce()
   } finally { response.mockRestore() }
+})
+
+it('discards Bot/Session coordinates when the worker stops after its private read settles', async () => {
+  const coordinates = { bot_id: 'bot_1', session_id: 'session_1' }
+  const h = await harness(undefined, 'staged', groupValue, null, undefined, undefined, undefined, coordinates)
+  const resolve = h.worker.resolveBotSessionIdentity
+  if (!resolve) throw Error('missing Bot/Session reader')
+  const post: unknown = Reflect.get(h.factory, 'postPrivateProfileResource')
+  if (typeof post !== 'function') throw Error('missing private Profile resource reader')
+  let observed: unknown
+  Reflect.set(h.factory, 'postPrivateProfileResource', async (...args: unknown[]) => {
+    observed = await Reflect.apply(post, h.factory, args)
+    h.worker.abort()
+    return observed
+  })
+  try {
+    const signal = new AbortController().signal
+    await expect(resolve(coordinates.bot_id, coordinates.session_id, signal))
+      .rejects.toMatchObject({ code: 'unavailable' })
+    expect(observed).toEqual(coordinates)
+    expect(signal.aborted).toBe(false)
+    await h.worker.done
+  } finally { Reflect.deleteProperty(h.factory, 'postPrivateProfileResource') }
 })
 
 it.each([null, { bot_id: 'bot_1', session_id: 'session_1' }])('retains the Bot/Session deadline through response cleanup for %j', async (identity) => {

@@ -171,6 +171,24 @@ it('rejects v2 response tampering, pre-abort and a missing live worker', async (
   await expect(f.client.resolveBotIdentityV2(input)).rejects.toMatchObject({ code: 'upgrade_required' })
 })
 
+it('rejects a direct Bot/Session identity request after its advertised receiver disappears', async () => {
+  const f = await fixture()
+  await f.grant()
+  const input = { ...f.input, issuer: f.account.issuer, subject: f.account.subject,
+    botId: f.bot.bot_id, sessionId: 'session_1' }
+  expect(await f.client.resolveBotSessionIdentity(input)).toEqual({ bot_id: input.botId,
+    session_id: input.sessionId, host_profile_id: f.profile.profileId })
+  const request = f.seen.find(frame => frame.type === 'request' && frame.method === 'profile.bot_session_identity')
+  if (!request || request.type !== 'request' || request.method !== 'profile.bot_session_identity')
+    throw Error('missing authenticated Bot/Session identity request')
+  const options: unknown = Reflect.get(f.authority, 'options')
+  if (!options || typeof options !== 'object') throw Error('missing Host options')
+  Reflect.deleteProperty(options, 'botSessionIdentityReceiver')
+  expect(await f.session.handleRequest({ ...request, request_id: randomUUID() as typeof request.request_id,
+    params: { ...request.params, jti: randomUUID() as typeof request.params.jti } }))
+    .toMatchObject({ type: 'error', method: 'profile.bot_session_identity', error: { code: 'upgrade_required' } })
+})
+
 it('prepares a native room through the Account-authorized Host transport', async () => {
   const f = await fixture()
   const input = { ...f.input, issuer: f.account.issuer,
