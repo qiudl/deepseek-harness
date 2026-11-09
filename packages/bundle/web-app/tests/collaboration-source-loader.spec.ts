@@ -1,3 +1,4 @@
+import { nativePreparationLoaderChecks } from './native-room-preparation-loader.test-support.ts'
 import RemoteAccessService from '@deepseek-ai/dsh-api-remote-access'
 import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto'
 import { HostControlAuthority } from '../../../host/desktop-host/src/unix-transport.ts'
@@ -46,7 +47,8 @@ class FixtureAdapter extends LlmAdapter {
   async * stream(_options: GenerateOptions): AsyncIterable<StreamChunk> { yield { type: 'finish', reason: { kind: 'stop' } } }
 }
 
-it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-analysis', 'root-submission', 'source-only', 'native-preparation', 'analysis', 'analysis-extension', 'analysis-profile', 'analysis-missing-domain', 'delivery', 'reference'] as const)('loads the Source owners and reads their journal through real HTTP (%s)', async (mode) => {
+  const sourceOnly = mode === 'source-only' || mode === 'native-preparation'
   const rootAnalysis = mode === 'root-capture' || mode === 'root-analysis' || mode === 'root-analysis-failure' || mode === 'root-analysis-budget'
   const directory = await mkdtemp(join(tmpdir(), 'req0004-source-loader-'))
   const cwd = await realpath(directory), ctx = new Context(), token = 'A'.repeat(43)
@@ -84,14 +86,14 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
   ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'fixture', model: 'selected' }) } as never)
   ctx.provide('attachments', { imageLimits: { maxImageBytes: 1, maxImagesPerMessage: 1, maxMessageImageBytes: 1,
     maxImagePixels: 1, maxImageDimension: 1, mediaTypes: ['image/png'] } } as never)
-  if (mode !== 'source-only') ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
+  if (!sourceOnly) ctx.provide('fileUploads', { registerAgentResolver: () => () => {} } as never)
   ctx.provide('fs', {} as never)
   const header: SessionHeader = { version: SESSION_FORMAT_VERSION, id: SessionId('source-session'), cwd, createdAt: 1, isSeeded: false }
   ctx.provide('sessionPersistence', testSessionPersistence(ctx, { list: async () => [header],
     inspect: async () => ({ meta: header, events: [] }) }) as never)
   installSessionReadTestServices(ctx)
   const plugins = {
-    ...(mode === 'source-only' ? { commands: CommandRuntime, uploads: FileUploads } : {}),
+    ...(sourceOnly ? { commands: CommandRuntime, uploads: FileUploads } : {}),
     storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
     controller: SessionController, web: WebApp,
     extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
@@ -182,7 +184,7 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
       { type: 'message_stop' },
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(''))
   })
-  const adapter = mode === 'source-only' || mode === 'delivery' || mode === 'reference' || mode === 'analysis-missing-domain' ? new FixtureAdapter() : new DeepSeekAdapter({
+  const adapter = sourceOnly || mode === 'delivery' || mode === 'reference' || mode === 'analysis-missing-domain' ? new FixtureAdapter() : new DeepSeekAdapter({
     options: () => resolveAdapterOptions({ baseURL: origin, models: [{ id: 'selected' }] }),
     resolveAuth: async () => ({ headers: { 'x-api-key': 'fixture-source-key' } }), resolveUserId: () => '00000000-0000-4000-8000-000000000001' as AnonymousUserId,
     // Malformed external extension JSON must not introduce tools into the logged Source analysis request.
@@ -207,6 +209,11 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
       source_span: { source_message_id: 'message-1', source_revision: '1', start: 0, end: 6 },
       display_snapshot: { agent_name: 'Guide', project_name: 'qiu-slark' },
       binding: { kind: 'resolved' as const, target: { project_id: '212', agent_id: 'guide' }, capability_snapshot: 'a'.repeat(64) } }] }
+  if (mode === 'native-preparation') {
+    await nativePreparationLoaderChecks(ctx, origin, workspace.id, sessionId)
+    expect(stream).not.toHaveBeenCalled()
+    return
+  }
   const factory = new DshWebProfileWorkerFactory({
     nodeExecutablePath: process.execPath,
     dshEntrypointPath: process.execPath,

@@ -1,5 +1,10 @@
+import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
+import type { NativeRoomPreparationReceiver } from '../src/types.ts'
+import { readFileSync } from 'node:fs'
+import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationProof, parseHostCollaborationSourceSnapshot, encodeHostNativeRoomPreparationProofPayload, type HostNativeRoomPreparationTarget, type HostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
+import { verifyNativeRoomPreparationSignatures } from '../src/native-room-preparation-signing.ts'
 import { parseHostNativeRoomRetirementTarget, encodeHostNativeRoomRetirementProofPayload, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
-import { generateKeyPairSync, randomUUID, verify } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,8 +50,29 @@ async function fixture(supported = true) {
     command.operation === 'join' ? { state: 'joined', joined_room_seq: 7 } : { state: 'left', left_room_seq: 9 })
   const retire = vi.fn(async (_profileId: string, _command: unknown, _signal: AbortSignal): Promise<HostNativeRoomRetirementReply> =>
     ({ state: 'left', left_room_seq: 0 }))
+  const sourceFixture = JSON.parse(readFileSync(new URL('../../control-protocol/tests/fixtures/native-room-preparation-v1.json', import.meta.url), 'utf8')) as {
+    cases: { result: { outcome: { proof: { output: { source_snapshot: unknown } } } } }[] }
+  const snapshot = parseHostCollaborationSourceSnapshot(sourceFixture.cases[0]!.result.outcome.proof.output.source_snapshot)
+  const phase = vi.fn(async (_profileId: string, target: HostNativeRoomPreparationTarget,
+    _signal: AbortSignal): Promise<HostNativeRoomPreparationWorkerRead> => {
+    const observation = { bot_id: target.bot_id, room_id: target.room_id, workspace_id: target.workspace_id,
+      member_set_digest: target.member_set_digest, source: snapshot.descriptor }
+    return target.operation === 'prepare_source' ? { state: 'observed', operation: target.operation, observation, source_snapshot: snapshot }
+      : target.operation === 'attest_source' ? { state: 'observed', operation: target.operation, observation }
+        : { state: 'observed', operation: target.operation, observation, activation_fence: {
+          workspace_id: target.workspace_id, session_id: snapshot.descriptor.session_id,
+          group_id: target.activation_challenge.group_id, group_version: target.activation_challenge.group_version } }
+  })
+  const preparation = parseHostNativeRoomPreparationTarget({ operation: 'prepare_source', challenge_nonce: 'A'.repeat(43),
+    expires_at: 2000, binding_id: randomUUID(), binding_generation: '9007199254740993', computer_id: 'original-computer',
+    slark_audience: 'https://slark.example.test', expected_profile_id: profile.profileId, bot_id: 'operator', room_id: 'room-1',
+    workspace_id: snapshot.descriptor.workspace_id, member_set_digest: 'b'.repeat(64), expected_source: null })
+  const receiver = vi.fn((profileId: string): NativeRoomPreparationReceiver => ({
+    read: (target, signal) => phase(profileId, target, signal), assertCurrent() {},
+  }))
   const authority = new HostControlAuthority({ identity, host, now: clock.now, profilePersistenceGeneration: () => 1,
-    ...(supported ? { listBoundBotRooms: list, operateNativeRoom: operate, retireNativeRoom: retire } : {}) })
+    ...(supported ? { listBoundBotRooms: list, operateNativeRoom: operate,
+      retireNativeRoom: retire, nativeRoomPreparationReceiver: receiver } : {}) })
   const lifetime = new AbortController(), session = authority.openSession(ownerId, lifetime.signal)
   onTestFinished(() => { lifetime.abort(); session.close() })
   const seen: HostControlFrame[] = []
@@ -65,7 +91,8 @@ async function fixture(supported = true) {
     join_command_request_id: projection.command_request_id, join_command: projection.command,
     leave_command_request_id: randomUUID(), leave_command: { operation: 'leave', room_id: projection.command.room_id,
       member_id: projection.command.member_id, cycle: projection.command.cycle } })
-  return { client, host, ownerId, profile, keys, page, list, operate, retire, retirement, time, input, target, projection, seen,
+  return { client, host, ownerId, profile, keys, preparation, snapshot, phase, receiver, page, list, operate, retire, retirement,
+    time, input, target, projection, seen,
     grant: () => host.ensureAccountProfile({ ...account, ownerId, accountAccessToken: 'valid' }),
     alter: (next: typeof alter) => { alter = next } }
 }
@@ -284,3 +311,121 @@ it.skipIf(process.platform === 'win32').each(['closed', 'peer', 'cancel', 'metho
       .rejects.toMatchObject(mode === 'cancel' ? { name: 'AbortError' } : { code: 'unavailable' })
   },
 )
+
+
+it.skipIf(process.platform === 'win32')('runs each new phase with original artifacts and verifies both domains through the SDK', async () => {
+  const f = await fixture()
+  await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(f.phase).not.toHaveBeenCalled()
+  await f.grant()
+  const { operation: _operation, expected_source: _expected, ...base } = f.preparation.operation === 'prepare_source' ? f.preparation : (() => { throw Error('wrong phase') })()
+  const descriptor = f.snapshot.descriptor
+  const challenge = { request_id: randomUUID(), challenge_nonce: 'A'.repeat(43), expires_at: 2000,
+    audience: base.slark_audience, environment_id: f.input.authorityEnvironmentId,
+    account_issuer: f.input.issuer, account_subject: f.input.subject,
+    workspace_id: descriptor.workspace_id, session_id: descriptor.session_id }
+  const targets = [f.preparation,
+    parseHostNativeRoomPreparationTarget({ ...base, operation: 'attest_source', source_challenge: {
+      ...challenge, source_message_id: descriptor.source_message_id, source_revision: '1', snapshot_digest: descriptor.snapshot_digest, host_epoch: '1' } }),
+    parseHostNativeRoomPreparationTarget({ ...base, operation: 'attest_activation', source: descriptor,
+      activation_challenge: { ...challenge, group_id: randomUUID(), group_version: 1 } })]
+  for (const target of targets) {
+    const result = await f.client.prepareNativeRoomPhase({ ...f.input, target })
+    expect(result.state).toBe('prepared')
+    if (result.state !== 'prepared') throw Error('missing proof')
+    expect(result.proof.host_profile_id).toBe(f.profile.profileId)
+    expect(result.proof.target).toEqual(target)
+    expect(verifyNativeRoomPreparationSignatures(result.proof, (payload, signature) =>
+      verify(null, payload, f.keys.publicKey, Buffer.from(signature, 'base64url')))).toBe(true)
+    expect(f.phase).toHaveBeenLastCalledWith(f.profile.profileId, target, expect.any(AbortSignal))
+  }
+  expect(f.list).not.toHaveBeenCalled(); expect(f.operate).not.toHaveBeenCalled(); expect(f.retire).not.toHaveBeenCalled()
+})
+
+it.skipIf(process.platform === 'win32')('preserves phase inability, rejects old capabilities before dispatch and prevents signing after revocation', async () => {
+  const f = await fixture(); await f.grant()
+  for (const state of ['membership_changed', 'not_prepared', 'recovery_required', 'bot_unavailable', 'room_unavailable', 'source_conflict', 'too_large'] as const) {
+    f.phase.mockResolvedValueOnce({ state })
+    expect(await f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).toEqual({ state })
+  }
+  f.phase.mockResolvedValueOnce({ state: 'upgrade_required' })
+  await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'upgrade_required' })
+  const old = await fixture(false); await old.grant(); const before = old.seen.length
+  await expect(old.client.prepareNativeRoomPhase({ ...old.input, target: old.preparation })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.seen).toHaveLength(before)
+  Reflect.set(old.client.inspection, 'capabilities', [...old.client.inspection.capabilities, 'profile.native_room_preparation'])
+  await expect(old.client.prepareNativeRoomPhase({ ...old.input, target: old.preparation })).rejects.toMatchObject({ code: 'upgrade_required' })
+  expect(old.phase).not.toHaveBeenCalled()
+  f.phase.mockImplementationOnce(async () => { f.host.revokeOwner(f.ownerId); return { state: 'not_prepared' } })
+  await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'unauthorized' })
+})
+
+it.skipIf(process.platform === 'win32')('rejects target substitution and old-artifact forgery despite a valid outer signature', async () => {
+  const f = await fixture(); await f.grant()
+  for (const kind of ['target', 'old-signature'] as const) {
+    f.alter((frame) => {
+      if (frame.type !== 'result' || frame.method !== 'profile.native_room_preparation' || frame.result.outcome.state !== 'prepared') return frame
+      const proof = frame.result.outcome.proof
+      if (proof.output.operation !== 'prepare_source') throw Error('wrong artifact')
+      const unsigned = parseHostNativeRoomPreparationProof(kind === 'target'
+        ? { ...proof, target: { ...proof.target, binding_generation: '2' } }
+        : { ...proof, output: { ...proof.output, native_room_assertion: { ...proof.output.native_room_assertion, signature: 'A'.repeat(86) } } })
+      const changed = parseHostNativeRoomPreparationProof({ ...unsigned,
+        signature: sign(null, encodeHostNativeRoomPreparationProofPayload(unsigned), f.keys.privateKey).toString('base64url') })
+      return { ...frame, result: { outcome: { state: 'prepared', proof: changed } } }
+    })
+    await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  }
+})
+
+it.skipIf(process.platform === 'win32')('refuses Account revocation between the helper post-I/O check and parent signing', async () => {
+  const f = await fixture(); await f.grant()
+  const authorize = f.host.authorizeAccountModelText.bind(f.host), phase = f.phase.getMockImplementation()
+  if (!phase) throw Error('missing original phase fixture')
+  let phaseComplete = false, queued = false, revoked = false
+  f.phase.mockImplementationOnce(async (...args) => {
+    const read = await phase(...args)
+    phaseComplete = true
+    return read
+  })
+  vi.spyOn(f.host, 'authorizeAccountModelText').mockImplementation((account) => {
+    const profile = authorize(account)
+    if (phaseComplete && !queued) {
+      queued = true
+      queueMicrotask(() => { f.host.revokeOwner(f.ownerId); revoked = true })
+    }
+    return profile
+  })
+  await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'unauthorized' })
+  expect(revoked).toBe(true)
+})
+
+it.skipIf(process.platform === 'win32')('refuses the original worker after disposal in the final Account-to-parent continuation', async () => {
+  const f = await fixture(); await f.grant()
+  const phase = f.phase.getMockImplementation()
+  if (!phase) throw Error('missing original phase fixture')
+  const done = Promise.withResolvers<undefined>(), abort = vi.fn(() => { done.resolve(undefined) })
+  let readComplete = false, queued = false, disposing: Promise<void> | undefined
+  const workers = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort, done: done.promise,
+    prepareNativeRoomPhase: async (target, signal) => {
+      const value = await phase(f.profile.profileId, target, signal)
+      readComplete = true
+      return value
+    } }))
+  onTestFinished(() => workers.disposeAll())
+  await workers.start({ profileId: f.profile.profileId, profileRoot: '/synthetic-fixture', credentialHandle: 'fixture', pluginRoots: [] })
+  f.receiver.mockImplementation(profileId => workers.nativeRoomPreparationReceiver(profileId))
+  const authorize = f.host.authorizeAccountModelText.bind(f.host)
+  vi.spyOn(f.host, 'authorizeAccountModelText').mockImplementation((account) => {
+    const profile = authorize(account)
+    if (readComplete && !queued) {
+      queued = true
+      queueMicrotask(() => { disposing = workers.disposeAll() })
+    }
+    return profile
+  })
+  try {
+    await expect(f.client.prepareNativeRoomPhase({ ...f.input, target: f.preparation })).rejects.toMatchObject({ code: 'stale' })
+    expect(abort).toHaveBeenCalledOnce()
+  } finally { await disposing }
+})

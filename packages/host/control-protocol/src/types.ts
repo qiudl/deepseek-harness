@@ -917,6 +917,18 @@ export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResul
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
 }
 
+/** Account-scoped observation of an exact original Bot/Session association. */
+export interface ProfileBotSessionIdentityRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & import('./bot-session-identity.ts').HostBotSessionCoordinates
+}
+
+/** The Parent-selected local Profile and private producer coordinates, or absence. */
+export interface ProfileBotSessionIdentityResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly result: { readonly identity: import('./bot-session-identity.ts').HostAccountBotSessionIdentity | null }
+}
+
 /** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
 export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
   readonly method: 'profile.twin_binding'
@@ -1036,6 +1048,26 @@ export interface ProfileNativeRoomRetirementResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.native_room_retirement'
   readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomRetirementProof }
+}
+
+/** Current Account Profile prepares or attests one original bound-Bot room Source. */
+export interface ProfileNativeRoomPreparationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./native-room-preparation.ts').HostNativeRoomPreparationTarget
+  }
+}
+
+/** Independent stage outcome; unavailable facts never become a signed success. */
+export interface ProfileNativeRoomPreparationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly result: { readonly outcome: import('./native-room-preparation.ts').HostNativeRoomPreparationOutcome }
 }
 
 /** Account-bound member and message operation for an existing native room. */
@@ -2487,6 +2519,8 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotIdentityV2Request
   | ProfileBotIdentityV2Result
+  | ProfileBotSessionIdentityRequest
+  | ProfileBotSessionIdentityResult
   | ProfileTwinBindingRequest
   | ProfileTwinBindingResult
   | ProfileBotRosterRequest
@@ -2497,6 +2531,8 @@ export type HostControlFrame =
   | ProfileNativeRoomRetirementRequest
   | ProfileNativeRoomProjectionResult
   | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationRequest
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

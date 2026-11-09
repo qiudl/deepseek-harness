@@ -1,4 +1,4 @@
-import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsPage } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsPage, parseHostNativeRoomPreparationTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { expect, it, onTestFinished } from 'vitest'
 import type { HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
@@ -131,4 +131,36 @@ it('retirement uses only the current worker and has no ordinary-operation fallba
   onTestFinished(() => old.disposeAll())
   await old.start(profile)
   await expect(old.retireNativeRoom(profile.profileId, join, controller.signal)).rejects.toMatchObject({ code: 'upgrade_required' })
+})
+
+
+it('retains the exact preparation receiver across replacement and refuses missing worker capability', async () => {
+  const target = parseHostNativeRoomPreparationTarget({ operation: 'prepare_source', challenge_nonce: 'A'.repeat(43),
+    expires_at: Date.now() + 60_000, binding_id: '10000000-0000-4000-8000-000000000001', binding_generation: '1',
+    computer_id: 'fixture-computer', slark_audience: 'https://slark.example.test', expected_profile_id: '20000000-0000-4000-8000-000000000002',
+    bot_id: 'operator', room_id: 'room-1', workspace_id: '30000000-0000-4000-8000-000000000003', member_set_digest: 'a'.repeat(64), expected_source: null })
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const done = Promise.withResolvers<undefined>()
+    return { closeNotifications() {}, abort() { done.resolve(undefined) }, done: done.promise,
+      prepareNativeRoomPhase: async () => ({ state: 'bot_unavailable' }) }
+  })
+  onTestFinished(() => workers.disposeAll())
+  expect(() => workers.nativeRoomPreparationReceiver(profile.profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
+  await workers.start(profile)
+  const original = workers.nativeRoomPreparationReceiver(profile.profileId)
+  expect(await original.read(target, new AbortController().signal)).toEqual({ state: 'bot_unavailable' })
+  const cancelled = new AbortController(); cancelled.abort()
+  await expect(original.read(target, cancelled.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  await workers.dispose(profile.profileId)
+  await workers.start(profile)
+  expect(() =>{  original.assertCurrent() }).toThrow(expect.objectContaining({ code: 'stale' }))
+  await expect(original.read(target, new AbortController().signal)).rejects.toMatchObject({ code: 'stale' })
+  expect(await workers.nativeRoomPreparationReceiver(profile.profileId).read(target, new AbortController().signal))
+    .toEqual({ state: 'bot_unavailable' })
+  await workers.disposeAll()
+  expect(() => workers.nativeRoomPreparationReceiver(profile.profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
+  const old = new ProfileWorkerSupervisor(async () => ({ closeNotifications() {}, abort() {}, done: Promise.resolve() }))
+  onTestFinished(() => old.disposeAll())
+  await old.start(profile)
+  expect(() => old.nativeRoomPreparationReceiver(profile.profileId)).toThrow(expect.objectContaining({ code: 'upgrade_required' }))
 })

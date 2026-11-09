@@ -1,10 +1,13 @@
+import { parseHostBotSessionIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import type { BotSessionIdentityReceiver } from './types.ts'
 import { parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomPreparationWorkerRead, matchHostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBoundBotRoomsQuery, HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec, NativeRoomPreparationReceiver } from './types.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -49,6 +52,26 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
     return result
+  }
+
+  /** Retain the exact Profile worker through final coordinate publication.
+   * @param profileId Account Profile selected by the Parent.
+   * @returns A private reader and synchronous guard for that original worker.
+   */
+  botSessionIdentityReceiver(profileId: string): BotSessionIdentityReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.resolveBotSessionIdentity) throw new HostAuthorityError('upgrade_required')
+    const read = worker.resolveBotSessionIdentity.bind(worker)
+    const assertCurrent = () => { this.assertCurrentWorker(profileId, worker) }
+    return { assertCurrent, read: async (target, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = parseHostBotSessionIdentity(await read(target.bot_id, target.session_id, signal))
+      signal.throwIfAborted(); assertCurrent()
+      if (result !== null && (result.bot_id !== target.bot_id || result.session_id !== target.session_id))
+        throw new HostAuthorityError('profile_mismatch')
+      return result
+    } }
   }
 
   /**
@@ -109,6 +132,24 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
     return binding
+  }
+
+  /** Capture one live worker through the parent's final proof publication.
+   * @param profileId Authorized Account Profile.
+   * @returns Phase reader and synchronous guard for that exact worker generation.
+   */
+  nativeRoomPreparationReceiver(profileId: string): NativeRoomPreparationReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.prepareNativeRoomPhase) throw new HostAuthorityError('upgrade_required')
+    const read = worker.prepareNativeRoomPhase.bind(worker)
+    const assertCurrent = () => { this.assertCurrentWorker(profileId, worker) }
+    return { assertCurrent, read: async (target, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const value = await read(target, signal)
+      signal.throwIfAborted(); assertCurrent()
+      return matchHostNativeRoomPreparationWorkerRead(parseHostNativeRoomPreparationWorkerRead(value), target)
+    } }
   }
 
   /**

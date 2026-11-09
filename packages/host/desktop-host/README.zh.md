@@ -85,6 +85,8 @@ Host 仅在同一连接继续持有 Profile 授权时组装 `profile.skillhub_pa
 
 `profile.bot_identity_v2` 沿用相同 Account 与 worker 校验，将 Host 选定的本地 Profile 作为 `host_profile_id` 返回。已配置 Bot 身份解析器时声明单独能力；`UnixHostClient.resolveBotIdentityV2` 要求此能力并校验返回的 Bot 与 Profile，原方法保持可用。
 
+`profile.bot_session_identity` 从选定 Account Profile 的私有 producer 读取准确的当前 Bot/Session 关联。父进程在发送结果前再次核验原 Account、Profile 和 worker，缺失结果也须核验；客户端在整个调用中固定认证 Host peer。macOS 与 Windows 共用 worker 接线。缺少支持时要求升级；此坐标观察不授权来源正文、记忆或设备执行。
+
 `UnixHostClient.operateTwinBinding` 要求独立的 `profile.twin_binding` 能力。Host 仅在当前 Bot 解析器、私有回执存储及固定 Cloud 公钥集合均已装配时声明此能力。它在持久提交和返回前核验准确签名 offer、当前 Account/Profile/Bot 与有效期。Profile 的纯元数据回执集合跨重试、重启保留首份签名 Ack，拒绝同键改目标，完整集合最多 10,000 条回执和 16 MiB。未知格式、无效签名或不安全私有文件均拒绝，保留原内容。
 
 POSIX 提交同步回执文件及目录；恢复读取在返回先前已发布的 Ack 前完成该持久性屏障。Windows 恢复通过原生 write-through 原语重发布相同、已验证的原字节，并复核 SID、DACL 和重解析点证据，不创建新 consent 或签名。Slark 仍须重查当前权限，并原子激活绑定及两方向 consent；Host 的 acknowledged 事实本身不会开放新能力。
@@ -196,6 +198,8 @@ Web worker 工厂为仅限父 Host 的 `captureCollaborationReferenceSelection` 
 Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.recovery_materials.describe` 和 `profile.recovery_materials.validate`。macOS 组合使用已有代次检查；持久化数据缺失或不安全时拒绝，不执行初始化，也不启动 worker。异步读取结束后，在签名或返回观察结果前再次核对连接及注册表身份/代次。Windows 组合未安装此读取器，因此省略两项能力；客户端在发送材料证明前拒绝不支持的 Host。
 
 这些[仅供 Main 使用的恢复方法](../control-protocol/README.zh.md#wire-contract) 校验唯一 Account handle、包含 issuer 的注册表身份及解锁校验器，不改注册表记录、绑定、授权或 Profile 文件。历史 null 校验器需要受支持的升级路径，恢复不会接受或重写它。绑定与持久化代次只是观察值，不是当前在线权限。导入方 Main 负责所选身份检查、操作时效、safeStorage 提交以及后续离线 worker 恢复。
+
+原生群准备在整个阶段捕获同一个准确的 Profile worker。父进程在每次签名及发布响应前，同步重新检查当前 Account、选定 Profile、nonce 和原 worker；异步 helper 先前的检查不足以代替此步骤。同 Profile 的替代 worker 不能证明之前的观察。macOS 和 Windows 启动装配均安装这个受检查的 receiver。worker 缺少支持时要求升级。[准备协议](../control-protocol/README.zh.md#wire-contract) 定义独立签名结果，不授予 Cloud 群成员资格、模型执行或设备权限。
 
 默认 Host worker 跨 Profile 和控制连接共享 8 个未结束原生操作名额。调用取消及原有读写截止时间只结束等待，不释放已接收的操作。私有接收器须在 service 实际结束后返回匹配收据，才释放名额；收据缺失或 HTTP 断链时，名额保留到原进程实际退出。进程错误使 worker 不可用，`done` 和关闭流程仍等待实际退出。外部注入的 worker factory 自行负责生命周期保证。参见[私有接收器规则](../../bundle/web-app/README.zh.md#understand-the-implementation)。
 

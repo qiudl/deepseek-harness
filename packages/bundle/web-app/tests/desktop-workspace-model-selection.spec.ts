@@ -243,6 +243,16 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'sendLocalBotChat')
   expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { sendLocalBotChat: sender })
+  const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
+  try {
+    const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}` },
+      body: JSON.stringify({ bot_id: 'bot_1', session_id: target.session_id }),
+    })
+    expect(absentSessionIdentity.status).toBe(200)
+    expect(await absentSessionIdentity.json()).toBeNull()
+    expect(legacyIdentity).not.toHaveBeenCalled()
+  } finally { legacyIdentity.mockRestore() }
   const botResponse = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-identity`, {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: JSON.stringify({ bot_id: 'bot_1' }),
   })

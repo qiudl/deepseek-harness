@@ -1,11 +1,15 @@
 import { parseHostBotGroupPublicKeyring, type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { NativeRoomDrain } from './native-room-drain.ts'
+import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationWorkerRead,
+  matchHostNativeRoomPreparationWorkerRead, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES,
+  type HostNativeRoomPreparationTarget, type HostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSessionTarget, parseHostBotSessionIdentity, type HostBotSessionCoordinates } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
@@ -309,6 +313,8 @@ export class DshWebProfileWorkerFactory {
       viewOrigin,
       generation,
       bootstrapCookie,
+      resolveBotSessionIdentity: (botId, sessionId, signal) => this.resolveBotSessionIdentity(
+        viewOrigin, sourceToken, botId, sessionId, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
@@ -319,6 +325,8 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
         viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled, actualExit.signal),
+      prepareNativeRoomPhase: (target, signal) => this.prepareNativeRoomPhase(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled, actualExit.signal),
       operateNativeRoom: (command, signal) => this.operateNativeRoom(
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       operateBotGroup: (command, signal) => this.operateBotGroup(
@@ -522,7 +530,10 @@ export class DshWebProfileWorkerFactory {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    const result = await this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    signal.throwIfAborted()
+    if (active.aborted || stopped()) throw new HostAuthorityError('unavailable')
+    return result
   }
 
   private async postNativeProfileResource<T>(
@@ -540,6 +551,23 @@ export class DshWebProfileWorkerFactory {
       if (error instanceof HostAuthorityError || signal.aborted) throw error
       throw new HostAuthorityError('unavailable')
     }
+  }
+
+  private async resolveBotSessionIdentity(
+    viewOrigin: string, token: string, botId: string, sessionId: string,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotSessionCoordinates | null> {
+    const target = parseHostBotSessionTarget({ bot_id: botId, session_id: sessionId })
+    const result = await this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bot-session-identity',
+      target, 10_000, 2048, signal, stopped, (bytes) => {
+        const identity = parseHostBotSessionIdentity(JSON.parse(bytes.toString('utf8')))
+        if (identity !== null && (identity.bot_id !== target.bot_id || identity.session_id !== target.session_id))
+          throw new HostAuthorityError('profile_mismatch')
+        return identity
+      })
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    return result
   }
 
   private async resolveBotIdentity(
@@ -607,6 +635,14 @@ export class DshWebProfileWorkerFactory {
         if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
         return binding
       })
+  }
+
+  private async prepareNativeRoomPhase(viewOrigin: string, token: string, input: HostNativeRoomPreparationTarget,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal): Promise<HostNativeRoomPreparationWorkerRead> {
+    const target = parseHostNativeRoomPreparationTarget(input)
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room-preparation',
+      target, 60_000, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, signal, stopped, exited, bytes =>
+        matchHostNativeRoomPreparationWorkerRead(parseHostNativeRoomPreparationWorkerRead(JSON.parse(bytes.toString('utf8'))), target))
   }
 
   private async operateBotGroup(

@@ -32,6 +32,15 @@ export {
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
 export type { HostControlProtocolFailure } from './codec.js'
+export { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationProof,
+  parseHostNativeRoomPreparationOutcome, parseHostNativeRoomPreparationObservation,
+  encodeHostNativeRoomPreparationProofPayload } from './native-room-preparation.ts'
+export { parseHostNativeRoomBindingRead, parseHostNativeRoomPreparationWorkerRead,
+  matchHostNativeRoomPreparationWorkerRead } from './native-room-preparation-worker.ts'
+export type { HostNativeRoomBindingRead, HostNativeRoomPreparationWorkerRead } from './native-room-preparation-worker.ts'
+export type { HostNativePreparationComputerId, HostNativeRoomPreparationTarget, HostNativeRoomPreparationObservation,
+  HostNativeRoomPreparationOutput, HostNativeRoomPreparationProof, HostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
+export type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
 export { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementTarget,
   parseHostNativeRoomRetirementReply, parseHostNativeRoomRetirementProof,
   encodeHostNativeRoomRetirementProofPayload } from './bound-bot-rooms.ts'
@@ -52,8 +61,15 @@ export type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult,
 export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'
+export { parseHostBotSessionTarget, parseHostBotSessionIdentity, parseHostAccountBotSessionIdentity } from './bot-session-identity.ts'
+export type { HostBotSessionCoordinates, HostBotSessionBotId, HostBotSessionId, HostAccountBotSessionIdentity } from './bot-session-identity.ts'
 export { parseHostTwinBindingOffer, encodeHostTwinBindingOffer,
   hostTwinBindingOfferDigest, hostTwinBindingCommandDigest } from './twin-binding-offer.ts'
+export { createHostProjectOperationEvent, parseHostProjectOperationEvent,
+  encodeHostProjectOperationEventPayload } from './project-operation-event.ts'
+export type { HostProjectOperationEvent, HostProjectOperationContent, HostProjectOperationDependency,
+  HostProjectOperationLocator, HostProjectOperationEventId, HostProjectOperationProjectId,
+  HostProjectOperationReference, HostProjectOperationVersion, HostProjectOperationSequence } from './project-operation-event.ts'
 export type { HostTwinBindingOffer, HostTwinBindingScope,
   HostTwinBindingOfferContext } from './twin-binding-offer.ts'
 export { parseHostTwinBindingInput, parseHostTwinBindingDirective, parseHostTwinBindingAck,
@@ -67,6 +83,7 @@ export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
+  ProfileBotSessionIdentityRequest, ProfileBotSessionIdentityResult,
   ProfileTwinBindingRequest, ProfileTwinBindingResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
