@@ -462,6 +462,65 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
     expect(f.database.usage().permanent.actual_rows).toBe(3)
   })
 
+  it.each(['delivery_committed', 'reconciliation_only'] as const)(
+    'reserves maximal JSON-escaped receipt reasons for %s before admitting the original Ack',
+    async (stage) => {
+      const capacity = 200000,
+        f = await fixture({
+          permanentRows: 100,
+          permanentBytes: capacity,
+          transientRows: 4096,
+          transientBytes: 16 * 1024 * 1024,
+        }),
+        original = f.page(
+          '0',
+          '20',
+          'delta_page',
+          Array.from({ length: 20 }, (_, i) => f.event('event-' + String(i), String(i + 1))),
+        ),
+        ack = original.ack(),
+        reason = '"'.repeat(256),
+        dispositions = original.command.events.map(e => ({
+          sourceEventId: e.sourceEventId,
+          sourceRevision: e.sourceRevision,
+          state: stage === 'delivery_committed' ? 'reference_only' : 'rejected',
+          rightId: null,
+          rightGeneration: null,
+          reason,
+        }))
+      // References permit printable ASCII except path separators. Quotes are the sole
+      // accepted JSON-expanding character; controls, Unicode and backslashes are closed.
+      expect(Buffer.byteLength(JSON.stringify(reason))).toBe(514)
+      for (const invalid of ['\\'.repeat(256), '/'.repeat(256), '\u0000', '\n', '\u007f', 'é', '\ud800', '"'.repeat(257)])
+        expect(() => f.finalize(original, stage, { dispositions: [{ ...dispositions[0], reason: invalid }] })).toThrow()
+      const selected = f.finalize(original, stage, { dispositions })
+      expect(parseHostProjectMemoryCommand('apply', { phase: 'finalize', ...selected.command })).toMatchObject({
+        cloudMaterialReceipt: { stage, dispositions },
+      })
+      const reserved = f.database.usage().permanent.charged_bytes
+      f.database.put(
+        'plan',
+        'unrelated-admitted-reservation',
+        { fixture: 'full-ledger' },
+        { rows: 1, bytes: capacity - reserved },
+        () => {},
+      )
+      expect(f.database.usage().permanent.charged_bytes).toBe(capacity)
+      expect(original.ack()).toEqual(ack)
+      expect(selected.run().status).toBe(stage === 'delivery_committed' ? 'activated' : 'reconciliation_only')
+      expect(selected.run().status).toBe(stage === 'delivery_committed' ? 'already_activated' : 'reconciliation_only')
+      expect(f.open().read(f.d, original.command)).toMatchObject({
+        hostApplyAck: ack,
+        cloudMaterialReceipt: selected.command.cloudMaterialReceipt,
+        effectiveState: stage === 'delivery_committed' ? 'active' : 'reconciliation_only',
+      })
+      expect(f.open().committedCheckpoint(f.d, f.checkpoint('0')).sequence).toBe(
+        stage === 'delivery_committed' ? '20' : '0',
+      )
+      expect(f.database.usage().permanent.charged_bytes).toBeLessThanOrEqual(capacity)
+    },
+  )
+
   it('rejects replaced owners, absent manifest authority and changed signed private frontier metadata', async () => {
     const f = await fixture(),
       page = f.page('0', '2')

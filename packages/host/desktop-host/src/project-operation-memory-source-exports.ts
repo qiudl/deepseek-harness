@@ -320,10 +320,13 @@ export class ProjectOperationMemorySourceExports {
   private futureBytes(d: HostProjectMemoryDirective, c: HostProjectMemoryStage, record: Record): number {
     const a = record.ack
     // Encoding upper bound only: this template is never stored, signed, verified or published as a receipt.
+    // Wire references are 1..256 printable ASCII characters, excluding slash/backslash.
+    // A quote is permitted and occupies two UTF-8 bytes in JSON, the maximum accepted
+    // expansion. Cover the full wire keyId bound too, although pinned keyring IDs are narrower.
     const receipt = {
       schemaVersion: 1,
       issuer: d.issuer,
-      keyId: 'k'.repeat(256),
+      keyId: '"'.repeat(256),
       authorityEnvironmentId: d.authorityEnvironmentId,
       deliveryId: a.deliveryId,
       batchId: a.batchId,
@@ -345,7 +348,7 @@ export class ProjectOperationMemorySourceExports {
         state: 'reference_only',
         rightId: null,
         rightGeneration: null,
-        reason: 'r'.repeat(256),
+        reason: '"'.repeat(256),
       })),
       committedAt: Number.MAX_SAFE_INTEGER,
       signature: 'A'.repeat(86),
