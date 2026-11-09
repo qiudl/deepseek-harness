@@ -77,6 +77,7 @@ it('admits the actual nested confirmation envelope and fifty bounded reference e
 })
 
 it('rejects unsafe values and property access without executing getters', () => {
+  const parsedUnsafeObject: unknown = JSON.parse('{"__proto__":{}}')
   const getter = vi.fn(() => 'forbidden'),
     object = Object.defineProperty({}, 'value', { enumerable: true, get: getter }),
     array = Object.defineProperty([], '0', { enumerable: true, get: getter })
@@ -95,7 +96,7 @@ it('rejects unsafe values and property access without executing getters', () => 
     Object.assign([], { [Symbol('extra')]: 1 }),
     { [Symbol('key')]: 1 },
     Object.defineProperty({}, 'hidden', { value: 1 }),
-    JSON.parse('{"__proto__":{}}') as unknown,
+    parsedUnsafeObject,
     new Proxy({}, { ownKeys: () => ['phantom'], getOwnPropertyDescriptor: () => undefined }),
     { constructor: 1 },
     { prototype: 1 },
