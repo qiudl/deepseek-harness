@@ -1,9 +1,11 @@
+import { operateAccountProjectOperationMemoryRecipient } from './account-project-operation-memory-recipient.ts'
+import type { ProjectOperationMemoryRecipientImports } from './project-operation-memory-recipient-imports.ts'
+import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
 import { projectOperationMemoryEventsDigest } from './project-operation-memory-metadata.ts'
 /** Account-authorized private memory source publication; Root admission is not an export permission. */
-import { verify, createHash } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import {
-  encodeHostProjectMemoryDirective,
   parseHostProjectMemoryRequest,
   parseHostProjectMemorySourceProof,
   encodeHostProjectMemorySourceProof,
@@ -69,6 +71,10 @@ export interface AccountProjectOperationMemoryOptions {
   readonly host: Pick<DesktopHost, 'authorizeCollaborationRegistration' | 'authorizeAccountModelText'>
   readonly peer: Pick<HostProjectMemoryPeer, 'installationId' | 'publicKey' | 'hostInstanceId' | 'processNonce'>
   readonly environments: readonly HostProjectMemoryEnvironment[]
+  /** Independent recipient owner; omission keeps reverse metadata unavailable. */
+  readonly recipientImports?: (profileId: string) =>
+    ProjectOperationMemoryRecipientImports | Promise<ProjectOperationMemoryRecipientImports>
+  readonly resolveRecipientBot?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
   readonly sourceExports?: (
     profileId: string,
   ) => ProjectOperationMemorySourceExports | Promise<ProjectOperationMemorySourceExports>
@@ -81,41 +87,8 @@ export interface AccountProjectOperationMemoryOptions {
   readonly sign: (payload: Buffer) => string
   readonly now: () => number
 }
-/** Verify the exact configured memory purpose and Cloud key before any source call.
- * @param environments - Signed embedding policies.
- * @param directive - Strict parsed candidate permission.
- * @param now - Actual admission/publication clock.
- * @returns Nothing; unrelated purposes, environments, intervals and signatures reject.
- */
-export function verifyProjectOperationMemoryDirective(
-  environments: readonly HostProjectMemoryEnvironment[],
-  directive: HostProjectMemoryDirective,
-  now: number,
-): void {
-  const d = directive,
-    policy = environments.find(
-      e => e.keyring.environmentId === d.authorityEnvironmentId && e.keyring.issuer === d.issuer,
-    )
-  if (!policy) throw new HostAuthorityError('unavailable')
-  const key = policy.keyring.keys.find(k => k.kid === d.keyId)
-  if (
-    !key ||
-    d.audience !== policy.audience ||
-    d.environmentKey !== policy.environmentKey ||
-    !Number.isSafeInteger(now) ||
-    now < d.issuedAt ||
-    now >= d.expiresAt ||
-    d.issuedAt < key.validFrom ||
-    d.expiresAt > key.validUntil ||
-    !verify(
-      null,
-      Buffer.from(encodeHostProjectMemoryDirective(d)),
-      key.publicKeyPem,
-      Buffer.from(d.signature, 'base64url'),
-    )
-  )
-    throw new HostAuthorityError('unauthorized')
-}
+export { verifyProjectOperationMemoryDirective } from './project-operation-memory-signatures.ts'
+import { verifyProjectOperationMemoryDirective } from './project-operation-memory-signatures.ts'
 /** Execute a signed source-only read and sign its bounded actual metadata after the final Account fence.
  * @param options - Host-owned fixed keys, installation signer, actual worker and durable metadata stores.
  * @param account - Current authenticated Main connection's exact Account.
@@ -141,9 +114,6 @@ export async function operateAccountProjectOperationMemory(
   const profileId = authorize()
   const guard = () => {
     if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
-    verifyProjectOperationMemoryDirective(options.environments, d, options.now())
-  }
-  try {
     if (
       d.authorityEnvironmentId !== account.authorityEnvironmentId ||
       d.accountIssuer !== account.issuer ||
@@ -156,14 +126,15 @@ export async function operateAccountProjectOperationMemory(
       )
     )
       throw new HostAuthorityError('unauthorized')
+    verifyProjectOperationMemoryDirective(options.environments, d, options.now())
+  }
+  try {
     guard()
-    if (d.direction !== 'dsh_to_slark' || d.scope.sourceRef.side !== 'dsh')
-      return parseHostProjectMemoryJson({
-        status: 'error',
-        code: 'capability_unavailable',
-        requestId: d.requestId,
-        retryable: false,
-      })
+    if (d.direction === 'slark_to_dsh') {
+      const result = await operateAccountProjectOperationMemoryRecipient(options, profileId, request, signal, guard)
+      guard()
+      return parseHostProjectMemoryJson(parseHostProjectMemoryResponse(result))
+    }
     if (
       d.scope.sourceRef.hostProfileId !== profileId ||
       !d.scope.sourceRef.botRootId ||

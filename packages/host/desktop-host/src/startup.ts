@@ -1,3 +1,4 @@
+import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
@@ -498,17 +499,22 @@ export async function startDesktopHostApplication(
       pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
-    const databases = new ProjectOperationMemoryDatabases(async (profileId) => {
+    const memoryFiles = (profileId: string, role: 'source' | 'recipient') => {
       requiredProfile(registry, profileId)
       const profileRoot = join(root, 'profiles', profileId)
       ownerDirectory(profileRoot, uid)
-      return ProjectOperationMemoryDatabase.open(await ProjectOperationMemoryDatabaseFiles.posix({
-        root: join(profileRoot, 'project-operation-memory-sqlite-v1'),
-        legacyRoots: [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')],
+      return ProjectOperationMemoryDatabaseFiles.posix({
+        root: join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : 'project-operation-memory-recipient-sqlite-v1'),
+        ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const } : {}),
+        legacyRoots: role === 'source' ? [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')] : [],
         profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
         uid, pid: process.pid, processNonce: config.processNonce,
-      }))
-    })
+      })
+    }
+    const databases = new ProjectOperationMemoryDatabases(
+      async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
+      async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
+    )
     memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)

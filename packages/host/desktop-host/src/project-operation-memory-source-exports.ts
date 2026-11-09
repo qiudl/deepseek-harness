@@ -1,3 +1,4 @@
+import { projectMemoryReceiptReservation } from './project-operation-memory-signatures.ts'
 /** Body-free source-export staging and finalization under the single Host writer. */
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import {
@@ -319,40 +320,7 @@ export class ProjectOperationMemorySourceExports {
   }
   private futureBytes(d: HostProjectMemoryDirective, c: HostProjectMemoryStage, record: Record): number {
     const a = record.ack
-    // Encoding upper bound only: this template is never stored, signed, verified or published as a receipt.
-    // Wire references are 1..256 printable ASCII characters, excluding slash/backslash.
-    // A quote is permitted and occupies two UTF-8 bytes in JSON, the maximum accepted
-    // expansion. Cover the full wire keyId bound too, although pinned keyring IDs are narrower.
-    const receipt = {
-      schemaVersion: 1,
-      issuer: d.issuer,
-      keyId: '"'.repeat(256),
-      authorityEnvironmentId: d.authorityEnvironmentId,
-      deliveryId: a.deliveryId,
-      batchId: a.batchId,
-      bindingId: a.bindingId,
-      bindingGeneration: a.bindingGeneration,
-      scopeVersion: a.scopeVersion,
-      scopeDigest: a.scopeDigest,
-      recipientDigest: a.recipientDigest,
-      readDirectiveDigest: a.readDirectiveDigest,
-      sourceProofDigest: a.sourceProofDigest,
-      applyDirectiveDigest: a.applyDirectiveDigest,
-      hostApplyAckDigest: hostProjectMemoryHostAckDigest(a),
-      batchDigest: a.batchDigest,
-      checkpoint: a.checkpoint,
-      stage: 'reconciliation_only',
-      dispositions: c.events.map(e => ({
-        sourceEventId: e.sourceEventId,
-        sourceRevision: e.sourceRevision,
-        state: 'reference_only',
-        rightId: null,
-        rightGeneration: null,
-        reason: '"'.repeat(256),
-      })),
-      committedAt: Number.MAX_SAFE_INTEGER,
-      signature: 'A'.repeat(86),
-    }
+    const receipt = projectMemoryReceiptReservation(d, a, c.events)
     return (
       projectMemoryRecordBytes('delivery', this.recordKey(d, c.deliveryId), {
         ...record,

@@ -5,7 +5,7 @@ import {
   encodeHostTwinBindingAck, hostTwinBindingOfferDigest, hostTwinBindingCommandDigest,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostTwinBindingAck, HostTwinBindingOffer,
-  HostTwinBindingDirective } from '@deepseek-ai/dsh-host-control-protocol'
+  HostTwinBindingDirective, HostTwinBindingScope } from '@deepseek-ai/dsh-host-control-protocol'
 import { HostAuthorityError } from './types.ts'
 
 /** Maximum complete private receipt collection size in bytes. */
@@ -49,7 +49,11 @@ export class TwinBindingReceipts {
     this.publicKey = createPublicKey({ key: Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'),
       Buffer.from(options.publicKey, 'base64url')]), format: 'der', type: 'spki' })
   }
-  private validate(value: unknown): Stored {
+  /** Validate original stored confirmation bytes; this fact is not a current grant.
+   * @param value - Original stored Offer and installation Ack.
+   * @returns Fully validated historical confirmation, without changing or signing it.
+   */
+  validateConfirmation(value: unknown): Stored {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return unavailable()
     const row = value as Record<string, unknown>
     if (Object.keys(row).sort().join(',') !== 'ack,offer') return unavailable()
@@ -76,7 +80,7 @@ export class TwinBindingReceipts {
       if (Object.keys(row).sort().join(',') !== 'profileId,receipts,version' || row.version !== 1
         || row.profileId !== this.options.profileId || !Array.isArray(row.receipts)
         || row.receipts.length > this.maximumReceipts) return unavailable()
-      const receipts = row.receipts.map(item => this.validate(item)), seen = new Set<string>()
+      const receipts = row.receipts.map(item => this.validateConfirmation(item)), seen = new Set<string>()
       for (const item of receipts) {
         const key = stableKey(item.ack)
         if (seen.has(key)) return unavailable()
@@ -85,6 +89,22 @@ export class TwinBindingReceipts {
       this.options.file.ensureDurable(bytes)
       return receipts
     } catch { return unavailable() }
+  }
+  /** Find the exact originally confirmed reverse scope in the bounded immutable receipt collection.
+   * @param scope - Current signed reverse scope to match against original direction1, never a replacement consent.
+   * @param owner - Current signed original owner.
+   * @param environment - Current signed authority environment.
+   * @returns Original Offer/Ack or absence; no source database is opened.
+   */
+  confirmedRecipient(scope: HostTwinBindingScope, owner: string, environment: string): Stored | null {
+    const matches = this.all().filter(item => item.ack.ownerUserId === owner && item.ack.authorityEnvironmentId === environment &&
+      item.offer.bindingId === scope.bindingId && item.offer.bindingGeneration === scope.bindingGeneration &&
+        item.offer.scopeVersion === scope.scopeVersion)
+    if (matches.length > 1) return conflict()
+    const original = matches[0]
+    if (!original) return null
+    if (JSON.stringify(original.offer.directions[1].scope) !== JSON.stringify(scope)) return conflict()
+    return original
   }
   private matches(ack: HostTwinBindingAck, request: HostTwinBindingDirective): void {
     if (ack.accountBindingId !== request.accountBindingId || ack.accountBindingVersion !== request.accountBindingVersion
@@ -114,7 +134,7 @@ export class TwinBindingReceipts {
   commit(offer: HostTwinBindingOffer, candidate: HostTwinBindingAck,
     assertCurrent: () => void): HostTwinBindingAck {
     let next: Stored, all: Stored[]
-    try { next = this.validate({ offer, ack: candidate }); all = this.all() } catch { return unavailable() }
+    try { next = this.validateConfirmation({ offer, ack: candidate }); all = this.all() } catch { return unavailable() }
     assertCurrent()
     const prior = all.find(item => stableKey(item.ack) === stableKey(next.ack))
     if (prior) {

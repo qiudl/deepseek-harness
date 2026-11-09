@@ -1,3 +1,4 @@
+import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
@@ -436,16 +437,21 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const accountAccessVerifier = new DshAccountAccessTokenVerifier(trust.accountAccessKeyring, {
         now: () => clock.now(),
       })
-      const databases = new ProjectOperationMemoryDatabases(async (profileId) => {
+      const memoryFiles = (profileId: string, role: 'source' | 'recipient') => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         const profileRoot = win32.join(config.root, 'profiles', profileId)
-        return ProjectOperationMemoryDatabase.open(await ProjectOperationMemoryDatabaseFiles.windows({
-          root: win32.join(profileRoot, 'project-operation-memory-sqlite-v1'),
-          legacyRoots: [win32.join(profileRoot, 'project-operation-memory'), win32.join(profileRoot, 'project-operation-memory-source-exports')],
+        return ProjectOperationMemoryDatabaseFiles.windows({
+          root: win32.join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : 'project-operation-memory-recipient-sqlite-v1'),
+          ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const } : {}),
+          legacyRoots: role === 'source' ? [win32.join(profileRoot, 'project-operation-memory'), win32.join(profileRoot, 'project-operation-memory-source-exports')] : [],
           profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
           userSid, pid: process.pid, processNonce: config.processNonce, bindings,
-        }))
-      })
+        })
+      }
+      const databases = new ProjectOperationMemoryDatabases(
+        async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
+        async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
+      )
       memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
       const registryFiles = createWindowsProfileRegistryFileAuthority({

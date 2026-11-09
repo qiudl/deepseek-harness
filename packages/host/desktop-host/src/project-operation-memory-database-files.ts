@@ -1,7 +1,7 @@
 import { ProjectMemoryOwnershipRetainedError } from './project-operation-memory-ownership-error.ts'
 /** Private files and bootstrap publication owned by the same Host as the memory database. */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, unlinkSync } from 'node:fs'
+import { closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readSync, unlinkSync } from 'node:fs'
 import { isAbsolute, join, win32 } from 'node:path'
 import { acquireSingleHostLock } from './single-instance.ts'
 import { acquireWindowsSingleHostLock } from './windows-single-instance.ts'
@@ -24,6 +24,7 @@ type Marker = Readonly<{
   databaseId: string
   state: 'pending' | 'published'
   mainFileIdentity: string | null
+  storePurpose?: 'recipient_import'
 }>
 type Guard = { state: 'created' | 'existing'; inspect(): { byteLength: bigint; fileIdentity: string }; release(): void }
 type PlatformFiles = {
@@ -49,12 +50,14 @@ const exists = (path: string): boolean => {
     throw error
   }
 }
-function marker(value: unknown, identity: Identity): Marker {
+function marker(value: unknown, identity: Identity, purpose: 'recipient_import' | undefined): Marker {
   if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return invalid()
   const r = value as { [key: string]: unknown }
   if (
     Object.keys(r).sort().join(',') !==
-      'databaseId,installationId,mainFileIdentity,profileId,publicKeyDigest,state,version' ||
+      (purpose === undefined ? 'databaseId,installationId,mainFileIdentity,profileId,publicKeyDigest,state,version'
+        : 'databaseId,installationId,mainFileIdentity,profileId,publicKeyDigest,state,storePurpose,version') ||
+    (purpose !== undefined && r.storePurpose !== purpose) ||
     r.version !== 1 ||
     r.profileId !== identity.profileId ||
     r.installationId !== identity.installationId ||
@@ -68,6 +71,26 @@ function marker(value: unknown, identity: Identity): Marker {
   )
     return invalid()
   return r as Marker
+}
+
+/** Inspect only the fixed header under the held private main identity, before creating SQLite sidecars. */
+function recipientHeader(path: string, main: Guard, allowUncheckpointed: boolean): void {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    main.inspect()
+    const bytes = Buffer.alloc(100), size = readSync(fd, bytes, 0, bytes.length, 0)
+    const held = fstatSync(fd, { bigint: true }), current = lstatSync(path, { bigint: true })
+    if (held.dev !== current.dev || held.ino !== current.ino) return invalid()
+    main.inspect()
+    if (size !== bytes.length || !bytes.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) return invalid()
+    const appId = bytes.readUInt32BE(68), version = bytes.readUInt32BE(60)
+    if (appId !== 0x44534d32 || version !== 1) {
+      // A fresh bootstrap or already-held WAL may own the initial schema before main checkpoint.
+      if (!allowUncheckpointed || appId !== 0 || version !== 0) return invalid()
+    }
+  } finally {
+    try { closeSync(fd) } catch (error) { throw new ProjectMemoryOwnershipRetainedError(error) }
+  }
 }
 
 /** Nontransferable private-file owner; only these platform factories construct it. */
@@ -86,6 +109,10 @@ export class ProjectOperationMemoryDatabaseFiles {
   }
   get databaseId(): string {
     return this.snapshot.databaseId
+  }
+  /** Known source-v1 absence or exact recipient-only purpose, validated before acquiring any SQLite sidecar. */
+  get storePurpose(): 'source_export' | 'recipient_import' {
+    return this.snapshot.storePurpose === undefined ? 'source_export' : this.snapshot.storePurpose
   }
   get published(): boolean {
     return this.snapshot.state === 'published'
@@ -144,6 +171,7 @@ export class ProjectOperationMemoryDatabaseFiles {
   private static async prepare(
     platform: PlatformFiles,
     identity: Identity,
+    purpose: 'recipient_import' | undefined,
   ): Promise<ProjectOperationMemoryDatabaseFiles> {
     const opened: Guard[] = []
     try {
@@ -166,11 +194,12 @@ export class ProjectOperationMemoryDatabaseFiles {
           databaseId: randomUUID(),
           state: 'pending',
           mainFileIdentity: null,
+          ...(purpose === undefined ? {} : { storePurpose: purpose }),
         }
         platform.marker.write(Buffer.from(JSON.stringify(current)), platform.assertOwner)
       } else {
         if (bytes.length > 16384) return invalid()
-        current = marker(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), identity)
+        current = marker(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), identity, purpose)
         platform.marker.ensureDurable(bytes)
       }
       const main = platform.acquire(current.state === 'published' ? 'existing' : 'create_or_open', '')
@@ -186,6 +215,21 @@ export class ProjectOperationMemoryDatabaseFiles {
         current = { ...current, mainFileIdentity: initial.fileIdentity }
         platform.marker.write(Buffer.from(JSON.stringify(current)), platform.assertOwner)
       }
+      const existingSidecars = new Map<string, Guard>()
+      if (purpose === 'recipient_import') {
+        for (const suffix of ['-wal', '-shm'] as const) {
+          try {
+            const file = platform.acquire('existing', suffix)
+            existingSidecars.set(suffix, file)
+            opened.push(file)
+          } catch (error) {
+            const value = error as NodeJS.ErrnoException & { win32Code?: number }
+            if (value.code !== 'ENOENT' && value.win32Code !== 2 && value.win32Code !== 3) throw error
+          }
+        }
+        if (initial.byteLength !== 0n)
+          recipientHeader(platform.path, main, current.state === 'pending' || existingSidecars.size === 2)
+      }
       if (current.state === 'published' && platform.journalExists()) return invalid()
       if (current.state === 'pending') {
         // SQLite may use a rollback journal while first switching a fresh database to WAL.
@@ -199,9 +243,9 @@ export class ProjectOperationMemoryDatabaseFiles {
       }
       const sidecars: Guard[] = []
       for (const suffix of ['-wal', '-shm'] as const) {
-        const file = platform.acquire('create_or_open', suffix)
+        const file = existingSidecars.get(suffix) ?? platform.acquire('create_or_open', suffix)
         sidecars.push(file)
-        opened.push(file)
+        if (!existingSidecars.has(suffix)) opened.push(file)
       }
       const result = new ProjectOperationMemoryDatabaseFiles(platform, current, main, sidecars, identity.publicKey)
       result.assertCurrent()
@@ -227,6 +271,7 @@ export class ProjectOperationMemoryDatabaseFiles {
     options: Identity & {
       root: string
       legacyRoots: readonly string[]
+      storePurpose?: 'recipient_import'
       uid: number
       pid: number
       processNonce: string
@@ -349,6 +394,7 @@ export class ProjectOperationMemoryDatabaseFiles {
         releaseOwner: () => lease.release(),
       },
       options,
+      options.storePurpose,
     )
   }
   /** Acquire exact SID/DACL metadata handles; no SQLite body is read by the native filesystem carrier.
@@ -359,6 +405,7 @@ export class ProjectOperationMemoryDatabaseFiles {
     options: Identity & {
       root: string
       legacyRoots: readonly string[]
+      storePurpose?: 'recipient_import'
       userSid: string
       pid: number
       processNonce: string
@@ -457,6 +504,7 @@ export class ProjectOperationMemoryDatabaseFiles {
         },
       },
       options,
+      options.storePurpose,
     )
   }
 }
