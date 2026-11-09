@@ -472,6 +472,7 @@ export async function startDesktopHostApplication(
   executableArtifact(config.dshEntrypointPath, uid)
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const workerFactory = new DshWebProfileWorkerFactory({
+    operationOriginKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
     ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })

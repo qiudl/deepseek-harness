@@ -817,6 +817,8 @@ The backends that consume this contract are on [persistence.md](persistence.md).
 
 The optional `application` selects a registered file handler without changing the system default; `workspacePathApplications({ path })` returns current handlers, names, icons, and default selection after Host path verification.
 
+The optional `projectOperationOrigins` reader supplies historical original Root principal/project references for exact native events. Its opaque token is usable only during the awaited `project-operation/origin` event and before cancellation or the verified Cloud deadline. Consumers acknowledge only complete committed or idempotent reference revisions; no acknowledgment leaves a gap for fresh reconciliation. The [Session Controller](../../packages/api/session-controller/README.md) owns capture and the [Web App](../../packages/bundle/web-app/README.md) owns private verification and publication.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -824,6 +826,22 @@ The optional `application` selects a registered file handler without changing th
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxprojectoperationorigins--projectoperationorigins"></a>
+
+### `ctx.projectOperationOrigins` — `ProjectOperationOrigins`
+
+Read-only consumer seam; no public method can mint or retain a live token.
+
+```ts cordis-catalog
+/** Read original references during publication.
+ * @param token - Token supplied by the current origin event.
+ * @returns Immutable references, or null after publication or for another provider's token.
+ */
+read(token: ProjectOperationOriginToken): readonly ProjectOperationOriginReference[] | null
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
 
 <a id="ctxsessioncontroller--sessioncontroller"></a>
 
@@ -965,6 +983,13 @@ async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<Co
  * @returns Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.
  */
 async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >
+
+/** Capture the exact original consumed-step prefix through the Profile's real persistence barrier.
+ * @param value - Original root, frozen execution and delivery; no caller event metadata.
+ * @param signal - Authenticated parent request lifetime.
+ * @returns Original durable Root/consumption and raw prefix for the private observer only.
+ */
+async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{ root: CollaborationRootSubmission record: Extract<CollaborationConsumptionRecord, { state: 'consumed' }> events: readonly import('@deepseek-ai/dsh-session').SessionEvent[] inheritedEventCount: number consumptionCommitDigest: string }>
 
 /**
  * Read one durable Source from the owning Profile without model preparation or Agent activation.
@@ -1490,6 +1515,28 @@ One Agent changed running state.
 Types: [SessionId](core.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
+
+<a id="project-operation-events"></a>
+
+### `project-operation/*` events
+
+<a id="project-operationorigin--serial"></a>
+
+#### `project-operation/origin` — serial
+
+Await consumers within the authenticated bind request; tokens expire before it returns.
+
+```ts cordis-catalog
+/** Await consumers within the authenticated bind request; tokens expire before it returns.
+ * @mode serial
+ * @param token - Opaque token readable only from this publication's provider.
+ * @param signal - Original authenticated request and Profile lifetime.
+ * @returns True only after all matching reference revisions commit or already match; otherwise false or no acknowledgment.
+ */
+'project-operation/origin'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
 
 <a id="session-events"></a>
 

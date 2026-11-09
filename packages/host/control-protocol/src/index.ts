@@ -333,3 +333,8 @@ export type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 
 export { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 export type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+
+export { parseHostOperationOriginResult, parseHostOperationOriginCommand,
+  parseHostOperationOriginObservation, parseHostOperationOriginAttribution,
+  encodeHostOperationOriginObservation, encodeHostOperationOriginAttribution, hostOperationOriginReference } from './project-operation-origin.ts'
+export type { HostOperationOriginCommand, HostOperationOriginObservation, HostOperationOriginAttribution, HostOperationOriginPair } from './project-operation-origin.ts'

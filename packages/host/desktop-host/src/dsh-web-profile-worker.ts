@@ -1,3 +1,4 @@
+import { parseHostBotGroupPublicKeyring, type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { NativeRoomDrain } from './native-room-drain.ts'
 import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationWorkerRead,
   matchHostNativeRoomPreparationWorkerRead, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES,
@@ -56,6 +57,7 @@ type RemoteUiAssetCache = { entries?: Map<string, Promise<RemoteUiAssetEntry>> }
 const REMOTE_UI_ASSET_CACHE_ENTRIES = 4
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
+  'DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS',
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -80,6 +82,7 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 
 /** Launch configuration for `dsh --profile web` Profile workers. */
 export interface DshWebProfileWorkerFactoryOptions {
+  readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
   readonly pnpmEntrypointPath?: string
@@ -162,9 +165,11 @@ async function exchangeBootstrap(
 
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
 export class DshWebProfileWorkerFactory {
+  private readonly operationOriginKeyrings: readonly HostBotGroupPublicKeyring[]
   private generation = 0
   private readonly nativeDrain = new NativeRoomDrain()
   constructor(private readonly options: DshWebProfileWorkerFactoryOptions) {
+    this.operationOriginKeyrings = (options.operationOriginKeyrings ?? []).map(parseHostBotGroupPublicKeyring)
     if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)
       || options.pnpmEntrypointPath !== undefined && !isAbsolute(options.pnpmEntrypointPath)) throw new HostAuthorityError('invalid_input')
   }
@@ -194,6 +199,7 @@ export class DshWebProfileWorkerFactory {
         ...spec.env,
         DSH_HOME: root,
         DSH_PROFILE_ID: spec.profileId,
+        DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: JSON.stringify(this.operationOriginKeyrings),
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,

@@ -307,3 +307,18 @@ The personal `settings.apply` command admits only the existing update, replace, 
 The personal `credentials.apply` command admits only exact set/unset operations. Reference names retain the existing grammar and are capped at 128 characters; write-only values are capped at 16 KiB. The existing credential provider owns storage. Success has no returned value, known refusal details name only the reference, and neither provider values nor private diagnostics are echoed.
 
 Controlled terminal calls retain the original Gateway arguments and reject cross-Session input; shell input and lifecycle changes require the current Host-issued Session proof.
+
+The private `root_operation_origin` handler requires Unix-supplied current Account/Profile/peer metadata and the actual Bot producer descriptor. It retains a bounded pending observation, verifies original durable events and both installation and pinned Cloud signatures, then publishes an opaque token through the awaited attribution event. The public reader exposes metadata only and invalidates tokens at cancellation, claim expiry or event settlement. An absent or unready consumer returns published=false for a future fresh reconcile.
+
+The opt-in `tests/collaboration-operation-origin.joined.spec.ts` composes the actual Loader, AgentLoop, native tool execution, JSONL persistence, Host Account/Profile authorizer and installation signer, Cloud restricted-role PostgreSQL services, and the selected DSBot production store/observer. It verifies original admission and consumption, two atomic reference revisions, rejected replay and an idempotent fresh-proof retry without extra execution. The versioned `tests/fixtures/dsbot-operation-origin.test-support.mjs` imports production DSBot modules from the explicitly selected repository; it contains no copied observer implementation. Select reviewed DSBot merge `f989287c1e806884647d64c826359b3dce3d9a3c`, a Slark checkout containing `project-operation-origin.joined-bridge.test-support.ts`, and a dedicated loopback test database. Missing cross-repository paths skip this opt-in composition; the ordinary Loader regression still runs. Enrollment, model responses and the in-process framed transport are synthetic test inputs. Physical Unix sockets, the complete Desktop Main reconcile flow, two computers and staging acceptance require separate verification.
+
+```sh
+DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT=/path/to/dsbot \
+DSH_TEST_OPERATION_ORIGIN_DSBOT_COMMIT=f989287c1e806884647d64c826359b3dce3d9a3c \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT=/path/to/slark \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_BRIDGE=/absolute/path/to/project-operation-origin.joined-bridge.test-support.ts \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_NODE=/path/to/node22/bin/node \
+PROJECT_OPERATION_ORIGIN_OWNER_URL=postgresql://postgres@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+/path/to/node26/bin/node node_modules/vitest/vitest.mjs run packages/bundle/web-app/tests/collaboration-operation-origin.joined.spec.ts
+```

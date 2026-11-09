@@ -272,3 +272,5 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
 
 受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。
+
+内部操作来源编解码器分别使用安装观察和云端归属签名域。它们绑定实际Account/Profile/Bot、原Root/消费记录和精确的原生事件摘要；观察JSON上限32KiB，包含在原64KiB帧内。稳定的原始来源引用不包含新nonce、签名、时间或增长的历史。解析只验证语法；原记录关联、固定密钥验证和认证请求范围内的provider仍由调用者负责。独立 `profile.project_operation_origin` 能力控制私有分析传输中的闭合 `root_operation_origin` read/bind 操作。Unix 提供实际 Account/Profile/peer 字段，调用者不能覆盖。读取页在32KiB内包含至多50对完整事件，并返回最后一对的结果序号。空页使用 null 观察和游标及 eof=true。绑定仅在消费者确认后返回 published=true。来源范围版本允许规范的零，绑定代次仍须为正数；不暴露记忆能力。

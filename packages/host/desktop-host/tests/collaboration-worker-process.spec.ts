@@ -1,6 +1,7 @@
 import { parseHostNativeRoomRetirementCommand } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: original Profile worker communication through public handles. */
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync } from 'node:crypto'
+import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
@@ -63,7 +64,8 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
   botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 },
-  botSessionIdentity: { bot_id: string; session_id: string } | null = null) {
+  botSessionIdentity: { bot_id: string; session_id: string } | null = null,
+  operationOriginKeyrings: readonly HostBotGroupPublicKeyring[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -76,6 +78,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   writeFileSync(executable, `
     import { createServer } from 'node:http'
     import { writeFileSync } from 'node:fs'
+    writeFileSync(${JSON.stringify(join(root, 'origin-keyrings.json'))}, process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
     const descriptor = ${JSON.stringify(descriptor)}
     const snapshot = ${JSON.stringify(snapshot)}
     const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
@@ -167,7 +170,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     })
     process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)) })
   `, { mode: 0o600 })
-  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: executable,
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+    dshEntrypointPath: executable, operationOriginKeyrings,
     attestListener: async (pid, origin) => {
       expect(pid).toBeGreaterThan(0)
       expect((await fetch(origin)).status).toBe(401)
@@ -627,6 +631,18 @@ it.each([
   else expect(await result).toEqual(reply)
 })
 
+it('REQ-0006 passes pinned nonsecret Cloud keys through the real reserved worker environment', async () => {
+  const cloud = generateKeyPairSync('ed25519'), ring: HostBotGroupPublicKeyring = { version: 1, environmentId: archiveTarget.environment_id,
+    issuer: 'https://cloud.test', keys: [{ kid: 'dsh-assertion-current', publicKeyPem: cloud.publicKey.export({ format: 'pem', type: 'spki' }).toString(), validFrom: 1, validUntil: 2000 }] }
+  vi.stubEnv('DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS', 'untrusted-ambient')
+  try {
+    const h = await harness(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [ring])
+    expect(JSON.parse(readFileSync(join(h.root, 'origin-keyrings.json'), 'utf8'))).toEqual([ring])
+  } finally { vi.unstubAllEnvs() }
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+  await expect(factory.create({ profileId: 'profile', profileRoot: tmpdir(), credentialHandle: 'fixture', pluginRoots: [],
+    env: { DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: '[]' } })).rejects.toMatchObject({ code: 'invalid_input' })
+})
 
 it('reads exact Bot/Session coordinates through the actual child and rejects token, target and size mismatches', async () => {
   const coordinates = { bot_id: 'bot_1', session_id: 'session_1' }

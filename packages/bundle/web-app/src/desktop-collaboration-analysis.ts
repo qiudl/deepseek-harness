@@ -79,6 +79,8 @@ export class DesktopCollaborationAnalysis {
    * @param feedback - Profile-owned original Session consumption with persisted evidence.
    * @param consumption - Durable one-shot consumer commands and controlled original Agent continuation.
    * @param planning - Original-model preparation and independent fresh-attempt journal factories.
+   * @param captureGroupRoot - Captures the original group Root.
+   * @param operationOrigin - Private original-event read and scoped binding owner.
    * @param readSource - Current owning Session membership reader for ordinary Source output recovery.
    */
   constructor(
@@ -93,12 +95,22 @@ export class DesktopCollaborationAnalysis {
     private readonly consumption?: SessionController['collaborationRootConsumption'],
     private readonly readSource?: SessionController['readCollaborationSourceSnapshot'],
     private readonly captureGroupRoot?: SessionController['captureCollaborationGroupRoot'],
+    private readonly operationOrigin?: (value: unknown, signal: AbortSignal) => Promise<unknown>,
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
         // An immutable root always retains the same Source digest, including after admission.
         if ([...this.pending].some(p => !p.controller.signal.aborted && p.sourceDigest === root.source_digest)) throw Error('collaboration_root_planning_original_alive')
       }, lifetime)
+  }
+  /** Execute private original-event observation under the current authenticated parent request.
+   * @param value - Unix-authenticated Account, peer and distinct origin operation.
+   * @param signal - Parent cancellation scope.
+   * @returns Metadata observation or awaited publication status.
+   */
+  async rootOperationOrigin(value: unknown, signal: AbortSignal): Promise<unknown> {
+    if (this.closing || !this.operationOrigin) throw Error('collaboration_operation_origin_unavailable')
+    return this.operationOrigin(value, AbortSignal.any([signal, this.lifetime]))
   }
   /** Read or enqueue original Session feedback under the private parent lifetime.
    * @param operation - Exact root, execution, delivery and observed Session prefix.
@@ -718,7 +730,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('invalid')
       row = parsed as Record<string, unknown>
-      const keys = (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
+      const keys = row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
         (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
           : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
             : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
@@ -756,31 +768,32 @@ export async function handleDesktopCollaborationAnalysisRequest(
           : row.action === 'release_captured_root' ? await owner.releaseCapturedRoot(row.input, row.binding_key, controller.signal)
             : row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
               : row.action === 'prepare_clarification' ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
-                : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
-                  row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
-                    : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
-                      : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
-                        row.binding_key, controller.signal)
-                        : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
-                          row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
-                          : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
-                            : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
-                              : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
-                                : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
-                                  : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
-                                    : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
-                                      : row.action === 'prepare_root'
-                                        ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
-                                          row.resume_binding_key as string | undefined)
-                                        : row.action === 'prepare'
-                                          ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal,
+                : row.action === 'root_operation_origin' ? await owner.rootOperationOrigin(row, controller.signal)
+                  : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
+                    row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
+                      : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
+                        : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
+                          row.binding_key, controller.signal)
+                          : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
+                            row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
+                            : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
+                              : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
+                                : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
+                                  : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
+                                    : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
+                                      : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
+                                        : row.action === 'prepare_root'
+                                          ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
                                             row.resume_binding_key as string | undefined)
-                                          : await owner.dispatch(
-                                            row.attempt_request_id as string,
-                                            row.binding_key,
-                                            row.grant as CollaborationAnalysisDispatchGrant,
-                                            controller.signal,
-                                          )
+                                          : row.action === 'prepare'
+                                            ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal,
+                                              row.resume_binding_key as string | undefined)
+                                            : await owner.dispatch(
+                                              row.attempt_request_id as string,
+                                              row.binding_key,
+                                              row.grant as CollaborationAnalysisDispatchGrant,
+                                              controller.signal,
+                                            )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

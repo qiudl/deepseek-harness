@@ -1,3 +1,4 @@
+import { DesktopOperationOrigin, parseOperationOriginKeyrings } from './desktop-operation-origin.ts'
 import { handleDesktopNativeRoomRetirementRequest } from './desktop-native-room-retirement.ts'
 import { handleDesktopBoundBotRoomsRequest } from './desktop-bound-bot-rooms.ts'
 import { bindDesktopRemoteGateway } from './desktop-remote-gateway.ts'
@@ -235,6 +236,7 @@ export function apply(ctx: Context, config: Config): void {
       }))
     })
   }
+  const operationOriginKeyrings = parseOperationOriginKeyrings(process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
   const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
   if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
     ctx.inject(['sessionController'], (sessionCtx) => {
@@ -245,6 +247,9 @@ export function apply(ctx: Context, config: Config): void {
             : sessionCtx.sessionController.acceptCollaborationRoot(command.target, command.receipt, signal)),
       }))
       const lifetime = new AbortController()
+      const origins = new DesktopOperationOrigin(sessionCtx, sessionCtx.sessionController, operationOriginKeyrings,
+        process.env.DSH_PROFILE_ID ?? '', lifetime.signal)
+      sessionCtx.provide('projectOperationOrigins', origins.reader)
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
         async () => {
@@ -266,6 +271,7 @@ export function apply(ctx: Context, config: Config): void {
         (input, signal) => sessionCtx.sessionController.collaborationRootConsumption(input, signal),
         (target, signal) => sessionCtx.sessionController.readCollaborationSourceSnapshot(target, signal),
         (input, signal) => sessionCtx.sessionController.captureCollaborationGroupRoot(input, signal),
+        (input, signal) => origins.execute(input, signal),
       )
       sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({

@@ -8,7 +8,7 @@ import type { UnixHostServerOptions } from './unix-transport.ts'
  * @returns Server callbacks and the capabilities those callbacks implement.
  */
 export function rootWorkerOperations(workers: ProfileWorkerSupervisor): Pick<UnixHostServerOptions,
-  'botSessionIdentityReceiver' | 'rootJournal' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+  'botSessionIdentityReceiver' | 'rootJournal' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported' | 'projectOperationOriginSupported'
   | 'inspectRootPlanningAttempt' | 'inspectCollaborationRoot' | 'inspectCollaborationSource' | 'readCollaborationSourceSnapshot'> {
   return {
     botSessionIdentityReceiver: workers.botSessionIdentityReceiver.bind(workers),
@@ -17,6 +17,7 @@ export function rootWorkerOperations(workers: ProfileWorkerSupervisor): Pick<Uni
     rootExecutionSupported: true,
     rootFeedbackSupported: true,
     rootContinuationSupported: true,
+    projectOperationOriginSupported: true,
     inspectRootPlanningAttempt: workers.inspectRootPlanningAttempt.bind(workers),
     inspectCollaborationRoot: workers.inspectCollaborationRoot.bind(workers),
     inspectCollaborationSource: workers.inspectCollaborationSource.bind(workers),

@@ -1,6 +1,8 @@
+export { observeOriginalCollaborationOperations } from './collaboration-operation-origin.ts'
+export type { ProjectOperationOrigins, ProjectOperationOriginToken, ProjectOperationOriginReference } from './project-operation-origins.ts'
 export type { CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { openCollaborationContinuationJournal, collaborationContinuationCommit, type CollaborationContinuationResult } from './collaboration-continuation-journal.ts'
-import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
+import type { CollaborationConsumptionResult, CollaborationConsumptionRecord } from './collaboration-consumption-journal.ts'
 import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'
 import { createCollaborationFeedbackMessage, observeCollaborationFeedback, installCollaborationFeedbackCheckpoint, parseCollaborationFeedbackOperation } from './collaboration-feedback.ts'
 import type { CollaborationFeedbackObservation } from './collaboration-feedback.ts'
@@ -973,6 +975,41 @@ export class SessionController extends TypertRemoteService {
     if (result.kind === 'continuation') return result
     const commit = result.record ? collaborationConsumptionCommit(result.record) : undefined
     return { ...result, ...(commit ? { commit } : {}) }
+  }
+
+  /** Capture the exact original consumed-step prefix through the Profile's real persistence barrier.
+   * @param value - Original root, frozen execution and delivery; no caller event metadata.
+   * @param signal - Authenticated parent request lifetime.
+   * @returns Original durable Root/consumption and raw prefix for the private observer only.
+   */
+  async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{
+    root: CollaborationRootSubmission
+    record: Extract<CollaborationConsumptionRecord, { state: 'consumed' }>
+    events: readonly import('@deepseek-ai/dsh-session').SessionEvent[]
+    inheritedEventCount: number
+    consumptionCommitDigest: string
+  }> {
+    const command = parseCollaborationFeedbackOperation(value)
+    if (command.action !== 'consumer_read') throw Error('collaboration_operation_origin_command')
+    const result = await this.collaborationRootConsumption(command, signal)
+    if (result.kind !== 'consumer' || result.record?.state !== 'consumed') throw Error('collaboration_operation_origin_not_consumed')
+    const root = await this.readCollaborationRoot(command.target, signal)
+    const persistence = this.ctx.get('sessionPersistence')
+    if (!persistence) throw Error('collaboration_operation_origin_persistence')
+    const sessionId = SessionId(command.target.session_id), session = this.ctx.sessions.get(sessionId), count = session?.seq
+    if (count !== undefined) { await persistence.flush(); signal.throwIfAborted() }
+    const handle = await persistence.open(sessionId, 'read', { signal })
+    try {
+      const { events } = await handle.read(0, count, { signal })
+      if (count === undefined) await persistence.flush()
+      else if (events.length !== count) throw Error('collaboration_operation_origin_prefix')
+      await this.inspectCollaborationMembership(sessionId, WorkspaceId(command.target.workspace_id), signal)
+      if (this.ctx.sessions.get(sessionId) !== session) throw Error('collaboration_operation_origin_session')
+      signal.throwIfAborted()
+      return { root, record: result.record, events, inheritedEventCount: handle.inheritedEventCount,
+        consumptionCommitDigest: (collaborationConsumptionCommit(result.record) as
+          NonNullable<ReturnType<typeof collaborationConsumptionCommit>>).host_journal_commit.content_digest }
+    } finally { await handle.close() }
   }
 
   private async openConsumptionJournal() {

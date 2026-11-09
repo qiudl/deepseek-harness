@@ -340,6 +340,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Validates bounded browser audio before provider dispatch.',
   },
   {
+    key: 'projectOperationOrigins',
+    pkg: 'api-session-controller',
+    title: 'Scoped original operation attribution reader',
+    mode: 'seam',
+    implementations: ['web-app'],
+    consumers: ['ds-bot (external)'],
+    note: 'Reads immutable historical references during an awaited authenticated origin publication; the external DSBot observer commits matching metadata revisions without execution, retention, or export authority.',
+  },
+  {
     key: 'sessionController',
     pkg: 'api-session-controller',
     title: 'Host Session Remote controller',

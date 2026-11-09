@@ -305,3 +305,18 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
 
 受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。
+
+私有 `root_operation_origin` 处理器要求 Unix 提供当前 Account/Profile/peer 元数据，并读取实际 Bot 生产者描述。它保留有界的待绑定观察，验证原持久化事件、安装签名和固定 Cloud 签名，再通过等待中的归属事件发布不透明 token。公开读取器仅返回元数据，并在取消、claim 过期或事件结束时使 token 失效。消费者缺失或未就绪时返回 published=false，等待后续全新核对。
+
+可选 `tests/collaboration-operation-origin.joined.spec.ts` 联合实际 Loader、AgentLoop、原生工具执行、JSONL 持久化、Host Account/Profile 授权器及安装签名器、Cloud 受限角色 PostgreSQL 服务，以及选定的 DSBot 生产 store/observer。它验证原始准入与消费、两个原子引用修订、重放拒绝及不增加执行的新证明幂等重试。已版本化的 `tests/fixtures/dsbot-operation-origin.test-support.mjs` 从明确选定的仓库导入生产 DSBot 模块，不复制观察器实现。请选择已评审 DSBot 合并提交 `f989287c1e806884647d64c826359b3dce3d9a3c`、包含 `project-operation-origin.joined-bridge.test-support.ts` 的 Slark 检出及专用回环测试数据库。跨仓库路径缺失时跳过此可选联调；普通 Loader 回归仍会执行。注册身份、模型响应和进程内分帧传输属于合成测试输入。物理 Unix socket、完整 Desktop Main 核对流程、双电脑及 staging 验收需要独立验证。
+
+```sh
+DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT=/path/to/dsbot \
+DSH_TEST_OPERATION_ORIGIN_DSBOT_COMMIT=f989287c1e806884647d64c826359b3dce3d9a3c \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT=/path/to/slark \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_BRIDGE=/absolute/path/to/project-operation-origin.joined-bridge.test-support.ts \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_NODE=/path/to/node22/bin/node \
+PROJECT_OPERATION_ORIGIN_OWNER_URL=postgresql://postgres@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+/path/to/node26/bin/node node_modules/vitest/vitest.mjs run packages/bundle/web-app/tests/collaboration-operation-origin.joined.spec.ts
+```
