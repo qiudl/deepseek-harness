@@ -28,6 +28,20 @@ import { UnixHostClient } from '../src/unix-transport.ts'
 import * as hostControl from '../src/unix-transport.ts'
 import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
 
+// The Windows paths in this fixture are virtual on every platform; diagnostics use the same mapped boundary.
+vi.mock('../src/host-diagnostics.ts', async (load) => {
+  const actual = await load<typeof import('../src/host-diagnostics.ts')>()
+  return { ...actual, createHostDiagnostics(options: Parameters<typeof actual.createHostDiagnostics>[0]) {
+    const logs = new Map<string, Buffer>()
+    return actual.createHostDiagnostics({ ...options, fileOperations: {
+      ensureDirectory() {},
+      append(path, bytes) { logs.set(path, Buffer.concat([logs.get(path) ?? Buffer.alloc(0), bytes])) },
+      length(path) { return logs.get(path)?.length },
+      replace(source, target) { const bytes = logs.get(source); if (bytes) logs.set(target, bytes); logs.delete(source) },
+    } })
+  } }
+})
+
 vi.mock('node:fs', async (load) => {
   const actual = await load<typeof import('node:fs')>()
   return { ...actual, existsSync: vi.fn(actual.existsSync) }
@@ -216,6 +230,36 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('projects only explicit public memory policy JSON into the actual worker factory', async () => {
+    const state = fixture(), keys = generateKeyPairSync('ed25519')
+    const policy = { audience: 'urn:slark:project-memory:v1', environmentKey: 'staging', keyring: {
+      version: 1, environmentId: randomUUID(), issuer, keys: [{ kid: 'dsh-assertion-memory-test',
+        publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }), validFrom: 1, validUntil: 2_000_000_000_000 }],
+    } }
+    const app = await startWindowsDesktopHostApplication({ ...state.options,
+      projectOperationMemoryEnvironmentsJson: JSON.stringify([policy]),
+    }, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    expect(state.dependencies.createProfileWorkerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      projectOperationMemoryEnvironments: [policy],
+    }))
+  })
+
+  it('rejects ambiguous, unknown or private memory policy carrier inputs before starting transport', async () => {
+    for (const input of [
+      { projectOperationMemoryEnvironmentsJson: '[]', projectOperationMemoryEnvironments: [] },
+      { projectOperationMemoryEnvironmentsJson: '{}' },
+      { projectOperationMemoryEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:project-memory:v1',
+        environmentKey: 'staging', keyring: {}, privateKeyPem: 'forbidden' }]) },
+    ]) {
+      const state = fixture()
+      await expect(startWindowsDesktopHostApplication({ ...state.options, ...input }, undefined, state.dependencies))
+        .rejects.toThrow()
+      expect(state.startTransport).not.toHaveBeenCalled()
+      expect(state.dependencies.createProfileWorkerFactory).not.toHaveBeenCalled()
+    }
+  })
+
   it('composes twin receipt storage only for a registry-resolved Profile and a fixed native private path', async () => {
     const Original = hostControl.HostControlAuthority
     let captured: ConstructorParameters<typeof Original>[0] | undefined

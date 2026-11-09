@@ -1,3 +1,9 @@
+import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
+import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
+import { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
+import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
+import { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { TwinBindingReceipts } from './twin-binding-receipts.ts'
 import { createPosixTwinBindingReceiptFile } from './twin-binding-receipt-files.ts'
@@ -121,6 +127,8 @@ export interface Config {
   readonly accountKeyringSha256: string
   /** Public assertion keys projected from the embedding's signed Slark environment profile. */
   readonly botGroupPublicKeyringsJson?: string
+  /** Explicit signed embedding memory audience/environment policies; omission disables memory authority. */
+  readonly projectOperationMemoryEnvironmentsJson?: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -162,6 +170,7 @@ export const Config: z<Config> = z.object({
   accountKeyringPath: z.string().required(),
   accountKeyringSha256: z.string().required(),
   botGroupPublicKeyringsJson: z.string(),
+  projectOperationMemoryEnvironmentsJson: z.string(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -294,6 +303,8 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
     deviceIndexKeyPath: config.deviceIndexKeyPath,
     accountKeyringPath: config.accountKeyringPath,
     accountKeyringSha256: config.accountKeyringSha256,
+    ...(config.projectOperationMemoryEnvironmentsJson === undefined ? {}
+      : { projectOperationMemoryEnvironmentsJson: config.projectOperationMemoryEnvironmentsJson }),
     installationPrivateKeyPath: config.installationPrivateKeyPath,
     installationPublicKey: config.installationPublicKey,
     installationId: config.installationId,
@@ -468,11 +479,13 @@ export async function startDesktopHostApplication(
   ownerDirectory(root, uid)
   let ownership: SingleHostLock | undefined
   let server: UnixHostServer | undefined
+  let memoryDatabases: ProjectOperationMemoryDatabases | undefined
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const workerFactory = new DshWebProfileWorkerFactory({
     operationOriginKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
+    projectOperationMemoryEnvironments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
     ...(config.pnpmEntrypointPath === undefined ? {} : { pnpmEntrypointPath: config.pnpmEntrypointPath }),
   })
@@ -487,6 +500,18 @@ export async function startDesktopHostApplication(
       pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
+    const databases = new ProjectOperationMemoryDatabases(async (profileId) => {
+      requiredProfile(registry, profileId)
+      const profileRoot = join(root, 'profiles', profileId)
+      ownerDirectory(profileRoot, uid)
+      return ProjectOperationMemoryDatabase.open(await ProjectOperationMemoryDatabaseFiles.posix({
+        root: join(profileRoot, 'project-operation-memory-sqlite-v1'),
+        legacyRoots: [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')],
+        profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+        uid, pid: process.pid, processNonce: config.processNonce,
+      }))
+    })
+    memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)
     const transferStore = new FileOwnerMigrationTransferStore(join(migrationRoot, 'transfers'), uid)
@@ -841,6 +866,16 @@ export async function startDesktopHostApplication(
         return packagesRoot
       }),
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
+      projectOperationMemoryEnvironments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
+      createProjectOperationMemorySourceExports: async profileId => new ProjectOperationMemorySourceExports({
+        profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+        environments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
+        database: await databases.get(profileId),
+      }),
+      createProjectOperationMemoryMetadata: async profileId => new ProjectOperationMemoryMetadata({
+        profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
+        database: await databases.get(profileId),
+      }),
       createTwinBindingReceiptStore: (profileId) => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         const profileRoot = join(root, 'profiles', profileId)
@@ -992,21 +1027,24 @@ export async function startDesktopHostApplication(
     server = dependencies.createServer?.(serverOptions) ?? new UnixHostServer(serverOptions)
     await server.start()
     publishRegistration(config, socketPath, uid)
-    let closed = false
+    let closing: Promise<void> | undefined
     return {
       host, server, workers, commandAuthority,
-      async close() {
-        if (closed) return
-        closed = true
-        await server?.close()
-        await workers.disposeAll()
-        await ownership?.release()
+      close() {
+        return closing ??= (async () => {
+          await server?.close()
+          await workers.disposeAll()
+          await databases.close()
+          await ownership?.release()
+        })()
       },
     }
   } catch (error) {
     await server?.close().catch(() => undefined)
     /* v8 ignore next -- no worker can exist before server.start succeeds; worker failures are owned by supervisor tests. */
     await workers.disposeAll().catch(() => undefined)
+    // A live or uncertain SQLite owner must retain the outer Host lease.
+    await memoryDatabases?.close()
     await ownership?.release().catch(() => undefined)
     throw error
   }

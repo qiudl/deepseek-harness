@@ -1,3 +1,4 @@
+import { ProjectMemoryOwnershipRetainedError } from './project-operation-memory-ownership-error.ts'
 import { randomUUID } from 'node:crypto'
 import type {
   WindowsHostPathAccessEntry,
@@ -34,6 +35,7 @@ const FILE_READ_ATTRIBUTES = 0x00000080
 const GENERIC_READ = 0x80000000
 const GENERIC_WRITE = 0x40000000
 const FILE_SHARE_READ = 0x00000001
+const FILE_SHARE_WRITE = 0x00000002
 const CREATE_NEW = 1
 const OPEN_EXISTING = 3
 const OPEN_ALWAYS = 4
@@ -399,6 +401,55 @@ export async function loadWindowsHostRegistrationFileBindings(
         if (created === 0 && Number(getLastError()) !== ERROR_ALREADY_EXISTS) lastError('CreateDirectoryW')
       })
       return withStable(path, true, handle => inspect(handle, path))
+    },
+    acquirePrivateDatabaseFile(path, sddl, mode = 'create_or_open') {
+      let handle: bigint | undefined
+      let state: 'created' | 'existing' = 'existing'
+      try {
+        if (mode === 'create_or_open') securityDescriptor(sddl, (descriptor) => {
+          const created = createFile(path, GENERIC_WRITE | READ_CONTROL | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            { nLength: securityAttributes.size, lpSecurityDescriptor: descriptor, bInheritHandle: 0 },
+            CREATE_NEW, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, null) as NativePointer
+          if (!validHandle(created)) {
+            const code = Number(getLastError())
+            if (code === ERROR_FILE_EXISTS || code === ERROR_ALREADY_EXISTS) return
+            throw new WindowsHostRegistrationNativeError('CreateFileW', code)
+          }
+          handle = created
+          state = 'created'
+          if (Number(flushFileBuffers(handle)) === 0) lastError('FlushFileBuffers')
+        })
+        if (handle === undefined) {
+          const existing = createFile(path, READ_CONTROL | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, null, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, null) as NativePointer
+          if (!validHandle(existing)) lastError('CreateFileW')
+          handle = existing as bigint
+        }
+        const held = handle
+        let released = false
+        const inspectCurrent = () => {
+          if (released) invalidData('database_file_released')
+          const evidence = inspect(held, path), size = Buffer.alloc(8), identity = Buffer.alloc(52)
+          if (Number(getFileInformation(held, identity)) === 0) lastError('GetFileInformationByHandle')
+          if (Number(getFileSize(held, size)) === 0) lastError('GetFileSizeEx')
+          const byteLength = size.readBigInt64LE()
+          if (byteLength < 0n) invalidData('GetFileSizeEx')
+          const index = (BigInt(identity.readUInt32LE(44)) << 32n) | BigInt(identity.readUInt32LE(48))
+          return { evidence, byteLength, fileIdentity: String(identity.readUInt32LE(28)) + ':' + String(index) }
+        }
+        return { state, ...inspectCurrent(), inspect: inspectCurrent,
+          release() {
+            if (released) return
+            checkedClose(held)
+            released = true
+          } }
+      } catch (error) {
+        if (handle !== undefined) {
+          try { checkedClose(handle) } catch (closeError) { throw new ProjectMemoryOwnershipRetainedError(closeError) }
+        }
+        throw error
+      }
     },
     createPrivateFile(path, contents, sddl) {
       let handle: bigint | undefined

@@ -320,3 +320,5 @@ PROJECT_OPERATION_ORIGIN_OWNER_URL=postgresql://postgres@127.0.0.1:52044/slark_r
 PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
 /path/to/node26/bin/node node_modules/vitest/vitest.mjs run packages/bundle/web-app/tests/collaboration-operation-origin.joined.spec.ts
 ```
+
+私有记忆请求 owner 在使用请求内对象 token 调用实际来源 producer 前，校验固定 Cloud purpose、环境、准确 Account 和本地 peer。公开 reader 仅在捕获的 producer 和生命周期仍有效时返回同一不可变授权，不公开 token 工厂。原确认 anchor 捕获与来源读取分离；每次等待中的来源调用均受取消和签名截止时间约束。来源回复只含引用元数据、明确空缺或缺失证据。负责签名的 Host 在发布前独立复查 Account；worker 生命周期本身不等同于 Account 撤销订阅。独立的 64 KiB memory JSON 封套接纳嵌套确认 offer 和有界页面，不改变其他 Session JSON 限制。此路径不导入模型上下文、不保留正文，也不授予原生执行权限。

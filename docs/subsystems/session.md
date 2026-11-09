@@ -819,6 +819,8 @@ The optional `application` selects a registered file handler without changing th
 
 The optional `projectOperationOrigins` reader supplies historical original Root principal/project references for exact native events. Its opaque token is usable only during the awaited `project-operation/origin` event and before cancellation or the verified Cloud deadline. Consumers acknowledge only complete committed or idempotent reference revisions; no acknowledgment leaves a gap for fresh reconciliation. The [Session Controller](../../packages/api/session-controller/README.md) owns capture and the [Web App](../../packages/bundle/web-app/README.md) owns private verification and publication.
 
+The optional `projectOperationMemoryAuthorizations.read(token)` service resolves a deeply immutable `ProjectOperationMemoryAuthorization` only for its live, opaque `ProjectOperationMemoryAuthorizationToken`. The private Host owns token creation and revokes it permanently on cancellation, deadline or provider replacement. `source_read` permits the five source read operations; `binding_activation_anchor` permits original confirmation metadata capture only. The original anchor remains historical while each new read plan pins the actual current source revision. Tokens cannot be queued or used to mint a SourceProof. Retained-recipient operations and public memory capability advertisement remain unavailable in this owner-private implementation.
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -826,6 +828,23 @@ The optional `projectOperationOrigins` reader supplies historical original Root 
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxprojectoperationmemoryauthorizations--projectoperationmemoryauthorizations"></a>
+
+### `ctx.projectOperationMemoryAuthorizations` — `ProjectOperationMemoryAuthorizations`
+
+Read-only request owner; no public mint, assertion callback, queue or transferable grant exists.
+
+```ts cordis-catalog
+/** Read while the captured request, local provider/worker and deadline remain live.
+ * The owning Host separately rechecks actual Account before publication.
+ * @param token - Opaque object supplied by the private authenticated Host call.
+ * @returns Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.
+ */
+read(token: ProjectOperationMemoryAuthorizationToken): ProjectOperationMemoryAuthorization | null
+```
+
+Source: [`packages/api/session-controller/src/project-operation-memory-authorizations.ts`](../../packages/api/session-controller/src/project-operation-memory-authorizations.ts)
 
 <a id="ctxprojectoperationorigins--projectoperationorigins"></a>
 

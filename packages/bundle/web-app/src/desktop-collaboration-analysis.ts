@@ -81,6 +81,7 @@ export class DesktopCollaborationAnalysis {
    * @param planning - Original-model preparation and independent fresh-attempt journal factories.
    * @param captureGroupRoot - Captures the original group Root.
    * @param operationOrigin - Private original-event read and scoped binding owner.
+   * @param operationMemory - Private memory source and confirmation-anchor owner; never model admission.
    * @param readSource - Current owning Session membership reader for ordinary Source output recovery.
    */
   constructor(
@@ -96,6 +97,10 @@ export class DesktopCollaborationAnalysis {
     private readonly readSource?: SessionController['readCollaborationSourceSnapshot'],
     private readonly captureGroupRoot?: SessionController['captureCollaborationGroupRoot'],
     private readonly operationOrigin?: (value: unknown, signal: AbortSignal) => Promise<unknown>,
+    private readonly operationMemory?: {
+      execute(value: unknown, signal: AbortSignal): Promise<unknown>
+      captureAnchor(value: unknown, signal: AbortSignal): Promise<unknown>
+    },
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
@@ -111,6 +116,17 @@ export class DesktopCollaborationAnalysis {
   async rootOperationOrigin(value: unknown, signal: AbortSignal): Promise<unknown> {
     if (this.closing || !this.operationOrigin) throw Error('collaboration_operation_origin_unavailable')
     return this.operationOrigin(value, AbortSignal.any([signal, this.lifetime]))
+  }
+  /** Await one private source read or confirmation-anchor capture under the existing worker lifecycle.
+   * @param value - Parent-authenticated request metadata, not a caller permission.
+   * @param signal - Authenticated request cancellation.
+   * @param capture - Select metadata-only original confirmation capture.
+   * @returns Bounded controlled source metadata, never a public token mint.
+   */
+  async projectOperationMemory(value: unknown, signal: AbortSignal, capture: boolean): Promise<unknown> {
+    if (this.closing || !this.operationMemory) throw Error('project_operation_memory_unavailable')
+    const active = AbortSignal.any([signal, this.lifetime])
+    return capture ? this.operationMemory.captureAnchor(value, active) : this.operationMemory.execute(value, active)
   }
   /** Read or enqueue original Session feedback under the private parent lifetime.
    * @param operation - Exact root, execution, delivery and observed Session prefix.
@@ -730,17 +746,19 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('invalid')
       row = parsed as Record<string, unknown>
-      const keys = row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
-        (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
-          : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
-            : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
-              : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
-                ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
+      const keys = row.action === 'project_operation_memory' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation', 'anchor', 'plan', 'currentCommittedCheckpoint']
+        : row.action === 'project_operation_memory_anchor' ? ['action', 'input', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation']
+          : row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
+            (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
+              : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
+                : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
+                  : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
+                    ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
                   ((row.action === 'prepare' || row.action === 'prepare_root') && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
-                : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
-                  : row.action === 'dispatch'
-                    ? ['action', 'attempt_request_id', 'binding_key', 'grant']
-                    : []
+                    : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
+                      : row.action === 'dispatch'
+                        ? ['action', 'attempt_request_id', 'binding_key', 'grant']
+                        : []
       if (
         !keys.length ||
         Object.keys(row).length !== keys.length ||
@@ -768,32 +786,35 @@ export async function handleDesktopCollaborationAnalysisRequest(
           : row.action === 'release_captured_root' ? await owner.releaseCapturedRoot(row.input, row.binding_key, controller.signal)
             : row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
               : row.action === 'prepare_clarification' ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
-                : row.action === 'root_operation_origin' ? await owner.rootOperationOrigin(row, controller.signal)
-                  : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
-                    row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
-                      : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
-                        : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
-                          row.binding_key, controller.signal)
-                          : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
-                            row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
-                            : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
-                              : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
-                                : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
-                                  : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
-                                    : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
-                                      : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
-                                        : row.action === 'prepare_root'
-                                          ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
-                                            row.resume_binding_key as string | undefined)
-                                          : row.action === 'prepare'
-                                            ? await owner.prepare(row.input as CollaborationSourceInput, row.binding_key, controller.signal,
+                : row.action === 'project_operation_memory' || row.action === 'project_operation_memory_anchor'
+                  ? await owner.projectOperationMemory(row, controller.signal, row.action === 'project_operation_memory_anchor')
+                  : row.action === 'root_operation_origin' ? await owner.rootOperationOrigin(row, controller.signal)
+                    : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
+                      row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
+                        : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
+                          : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
+                            row.binding_key, controller.signal)
+                            : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
+                              row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
+                              : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
+                                : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
+                                  : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
+                                    : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
+                                      : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
+                                        : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
+                                          : row.action === 'prepare_root'
+                                            ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
                                               row.resume_binding_key as string | undefined)
-                                            : await owner.dispatch(
-                                              row.attempt_request_id as string,
-                                              row.binding_key,
-                                              row.grant as CollaborationAnalysisDispatchGrant,
-                                              controller.signal,
-                                            )
+                                            : row.action === 'prepare'
+                                              ? await owner.prepare(row.input as CollaborationSourceInput,
+                                                row.binding_key, controller.signal,
+                                                row.resume_binding_key as string | undefined)
+                                              : await owner.dispatch(
+                                                row.attempt_request_id as string,
+                                                row.binding_key,
+                                                row.grant as CollaborationAnalysisDispatchGrant,
+                                                controller.signal,
+                                              )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

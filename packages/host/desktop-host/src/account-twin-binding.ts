@@ -1,10 +1,11 @@
+import type { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 /** REQ-20261031-0006 / Task26151: consent confirmation is separate from every execution or memory grant. */
 import { verify } from 'node:crypto'
 import {
   parseHostTwinBindingInput, parseHostTwinBindingAck, encodeHostTwinBindingDirective, encodeHostTwinBindingAck,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupPublicKeyring, HostTwinBindingAck, HostTwinBindingPeer,
-  HostTwinBindingResult } from '@deepseek-ai/dsh-host-control-protocol'
+  HostTwinBindingResult, HostTwinBindingInput } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotIdentityV2, type BotIdentityAccount } from './account-bot-identity.ts'
 import type { DesktopHost } from './desktop-host.ts'
 import type { ProfileWorkerSupervisor } from './worker-supervisor.ts'
@@ -27,6 +28,11 @@ export async function operateAccountTwinBinding(options: {
   store(profileId: string): TwinBindingReceipts
   sign(payload: Buffer): string
   now(): number
+  memory?: {
+    metadata(profileId: string): ProjectOperationMemoryMetadata | Promise<ProjectOperationMemoryMetadata>
+    capture(profileId: string, input: HostTwinBindingInput,
+      confirmation: ReturnType<ProjectOperationMemoryMetadata['begin']>['confirmation'], signal: AbortSignal): Promise<unknown>
+  }
 }, account: BotIdentityAccount, value: unknown, signal: AbortSignal): Promise<HostTwinBindingResult> {
   let input
   try { input = parseHostTwinBindingInput(value) } catch { throw new HostAuthorityError('invalid_input') }
@@ -55,8 +61,12 @@ export async function operateAccountTwinBinding(options: {
   const guard = () => {
     if (authorizedProfile() !== profileId) throw new HostAuthorityError('profile_mismatch')
   }
+  const memory = await options.memory?.metadata(profileId)
+  guard()
   if (command.operation === 'receipt') {
     const ack = options.store(profileId).read(d)
+    const pending = memory?.confirmation(d)
+    if (ack && pending?.anchor) memory?.acknowledge(pending.confirmation.anchorId, ack, guard)
     guard()
     return ack ? { state: 'acknowledged', ack } : { state: 'missing' }
   }
@@ -71,6 +81,20 @@ export async function operateAccountTwinBinding(options: {
     return identity
   }
   const identity = await currentBot()
+  const receiptStore = options.store(profileId), prior = receiptStore.read(d)
+  if (prior) {
+    const pending = memory?.confirmation(d)
+    if (pending?.anchor) memory?.acknowledge(pending.confirmation.anchorId, prior, guard)
+    await currentBot(); guard()
+    return { state: 'acknowledged', ack: prior }
+  }
+  const intent = memory?.begin(command.offer, d, guard)
+  let captured = false
+  if (intent && options.memory) {
+    const anchor = await options.memory.capture(profileId, input, intent.confirmation, signal)
+    guard()
+    if (anchor !== null) { memory?.capture(intent.confirmation.anchorId, anchor, guard); captured = true }
+  }
   const unsigned: HostTwinBindingAck = {
     schemaVersion: 1, purpose: 'twin_binding_acknowledged',
     authorityEnvironmentId: d.authorityEnvironmentId, ownerUserId: d.ownerUserId,
@@ -84,7 +108,8 @@ export async function operateAccountTwinBinding(options: {
   const candidate = parseHostTwinBindingAck({ ...unsigned,
     signature: options.sign(Buffer.from(encodeHostTwinBindingAck(unsigned))) })
   guard()
-  const ack = options.store(profileId).commit(command.offer, candidate, guard)
+  const ack = receiptStore.commit(command.offer, candidate, guard)
+  if (captured && intent) memory?.acknowledge(intent.confirmation.anchorId, ack, guard)
   await currentBot()
   guard()
   return { state: 'acknowledged', ack }

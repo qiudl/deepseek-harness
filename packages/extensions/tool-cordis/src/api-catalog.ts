@@ -2416,6 +2416,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'projectOperationMemoryAuthorizations',
+    summary: 'Read-only request owner; no public mint, assertion callback, queue or transferable grant exists.',
+    description: 'Read-only request owner; no public mint, assertion callback, queue or transferable grant exists.',
+    methods: [
+      {
+        signature: 'read(token: ProjectOperationMemoryAuthorizationToken): ProjectOperationMemoryAuthorization | null',
+        description: 'Read while the captured request, local provider/worker and deadline remain live. The owning Host separately rechecks actual Account before publication.',
+        parameters: [{ name: 'token', description: 'Opaque object supplied by the private authenticated Host call.' }],
+        returns: 'Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.',
+      },
+    ],
+  },
+  {
     key: 'projectOperationOrigins',
     summary: 'Read-only consumer seam; no public method can mint or retain a live token.',
     description: 'Read-only consumer seam; no public method can mint or retain a live token.',
@@ -7936,6 +7949,74 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectionSnapshot',
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: SessionSeqCursor;\n    values: Partial<SessionProjectionMap>;\n}',
+  },
+  {
+    name: 'ProjectOperationMemoryActivationAnchor',
+    declaration: 'export type ProjectOperationMemoryActivationAnchor = Readonly<{\n    anchorId: ProjectOperationMemoryId;\n    confirmationDigest: ProjectOperationMemoryDigest;\n    journalEpoch: ProjectOperationMemoryId;\n    activationSequence: ProjectOperationMemorySequence;\n    syncStartSequence: ProjectOperationMemorySequence;\n    sourceAuthorityVersion: ProjectOperationMemoryVersion;\n    ownership: ProjectOperationMemoryOwnership;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryAnchorAuthorization',
+    declaration: 'export type ProjectOperationMemoryAnchorAuthorization = Common & Readonly<{\n    purpose: \'binding_activation_anchor\';\n    mode: \'source_export\';\n    operation: null;\n    command: null;\n    readDirectiveDigest: null;\n    local: ProjectOperationMemoryLocalIdentity & Readonly<{\n        peer: ProjectOperationMemoryPeer & Readonly<{\n            hostRegistryId: null;\n            hostEpoch: null;\n        }>;\n    }>;\n    confirmation: ProjectOperationMemoryConfirmation;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryAuthorization',
+    declaration: 'export type ProjectOperationMemoryAuthorization = ProjectOperationMemoryAnchorAuthorization | ProjectOperationMemorySourceAuthorization | ProjectOperationMemoryRetainedAuthorization;',
+  },
+  {
+    name: 'ProjectOperationMemoryAuthorizationToken',
+    declaration: 'export interface ProjectOperationMemoryAuthorizationToken {\n    readonly [tokenBrand]: true;\n}',
+  },
+  {
+    name: 'ProjectOperationMemoryCheckpoint',
+    declaration: 'export type ProjectOperationMemoryCheckpoint = Readonly<{\n    journalEpoch: ProjectOperationMemoryId;\n    sequence: ProjectOperationMemorySequence;\n    scopeDigest: ProjectOperationMemoryDigest;\n    recipientDigest: ProjectOperationMemoryDigest;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryConfirmation',
+    declaration: 'export type ProjectOperationMemoryConfirmation = Readonly<{\n    requestId: ProjectOperationMemoryId;\n    offerDigest: ProjectOperationMemoryDigest;\n    payloadDigest: ProjectOperationMemoryDigest;\n    anchorId: ProjectOperationMemoryId;\n    confirmationDigest: ProjectOperationMemoryDigest;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryDigest',
+    declaration: 'export type ProjectOperationMemoryDigest = Branded<\'ProjectOperationMemoryDigest\'>;',
+  },
+  {
+    name: 'ProjectOperationMemoryId',
+    declaration: 'export type ProjectOperationMemoryId = Branded<\'ProjectOperationMemoryId\'>;',
+  },
+  {
+    name: 'ProjectOperationMemoryLocalIdentity',
+    declaration: 'export type ProjectOperationMemoryLocalIdentity = Readonly<{\n    authorityEnvironmentId: ProjectOperationMemoryId;\n    accountIssuer: string;\n    accountSubject: ProjectOperationMemoryId;\n    accountBindingId: ProjectOperationMemoryId;\n    accountBindingVersion: number;\n    hostProfileId: ProjectOperationMemoryId;\n    botId: ProjectOperationMemoryId;\n    workerId: ProjectOperationMemoryId;\n    peer: ProjectOperationMemoryPeer;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryOwnership',
+    declaration: 'export type ProjectOperationMemoryOwnership = Readonly<{\n    hostProfileId: ProjectOperationMemoryId;\n    botId: ProjectOperationMemoryId;\n    actorRef: ProjectOperationMemoryId;\n    sessionIds: readonly SessionId[];\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryPeer',
+    declaration: 'export type ProjectOperationMemoryPeer = Readonly<{\n    computerId: ProjectOperationMemoryId;\n    installationId: ProjectOperationMemoryId;\n    hostRegistryId: ProjectOperationMemoryId | null;\n    hostEpoch: ProjectOperationMemoryVersion | null;\n    publicKey: string;\n    hostInstanceId: ProjectOperationMemoryId;\n    processNonce: string;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryReadCommands',
+    declaration: 'export type ProjectOperationMemoryReadCommands = Readonly<{\n    prepare_snapshot: Prepare | Resume;\n    history_page: Page & Readonly<{\n        snapshotId: ProjectOperationMemoryId;\n    }>;\n    delta_page: Page;\n    search: Readonly<{\n        query: string;\n        queryDigest: ProjectOperationMemoryDigest;\n        limit: number;\n        maxBytes: number;\n        cursor: ProjectOperationMemoryId | null;\n    }>;\n    evidence: Readonly<{\n        sourceEventId: ProjectOperationMemoryId;\n        sourceRevision: ProjectOperationMemoryVersion;\n        rightId: ProjectOperationMemoryId | null;\n        rightGeneration: ProjectOperationMemoryVersion | null;\n        offset: number;\n        maxBytes: number;\n    }>;\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemoryReadOperation',
+    declaration: 'export type ProjectOperationMemoryReadOperation = \'prepare_snapshot\' | \'history_page\' | \'delta_page\' | \'search\' | \'evidence\';',
+  },
+  {
+    name: 'ProjectOperationMemoryRetainedAuthorization',
+    declaration: 'export type ProjectOperationMemoryRetainedAuthorization = Common & Readonly<{\n    purpose: \'retained_read\';\n    mode: \'retained_recipient\';\n    operation: \'search\' | \'evidence\';\n    command: ProjectOperationMemoryReadCommands[\'search\'] | ProjectOperationMemoryReadCommands[\'evidence\'];\n    readDirectiveDigest: ProjectOperationMemoryDigest;\n    authorityDigest: ProjectOperationMemoryDigest;\n    consentVersions: readonly Readonly<{\n        id: ProjectOperationMemoryId;\n        generation: ProjectOperationMemoryVersion;\n    }>[];\n    materialVersions: readonly Readonly<{\n        rightId: ProjectOperationMemoryId;\n        generation: ProjectOperationMemoryVersion;\n        sourceRevision: ProjectOperationMemoryVersion;\n    }>[];\n    originProofDigests: readonly ProjectOperationMemoryDigest[];\n}>;',
+  },
+  {
+    name: 'ProjectOperationMemorySequence',
+    declaration: 'export type ProjectOperationMemorySequence = Branded<\'ProjectOperationMemorySequence\'>;',
+  },
+  {
+    name: 'ProjectOperationMemorySourceAuthorization',
+    declaration: 'export type ProjectOperationMemorySourceAuthorization = Common & Readonly<{\n    purpose: \'source_read\';\n    mode: \'source_export\';\n    readDirectiveDigest: ProjectOperationMemoryDigest;\n    authorityDigest: ProjectOperationMemoryDigest;\n    local: ProjectOperationMemoryLocalIdentity & Readonly<{\n        peer: ProjectOperationMemoryPeer & Readonly<{\n            hostRegistryId: ProjectOperationMemoryId;\n            hostEpoch: ProjectOperationMemoryVersion;\n        }>;\n    }>;\n    confirmation: ProjectOperationMemoryConfirmation & Readonly<{\n        ackDigest: ProjectOperationMemoryDigest;\n    }>;\n    anchor: ProjectOperationMemoryActivationAnchor;\n    expectedSourceAuthorityVersion: ProjectOperationMemoryVersion | null;\n    expectedJournalEpoch: ProjectOperationMemoryId | null;\n    currentCommittedCheckpoint?: ProjectOperationMemoryCheckpoint;\n}> & {\n    [O in ProjectOperationMemoryReadOperation]: Readonly<{\n        operation: O;\n        command: ProjectOperationMemoryReadCommands[O];\n    }>;\n}[ProjectOperationMemoryReadOperation];',
+  },
+  {
+    name: 'ProjectOperationMemoryVersion',
+    declaration: 'export type ProjectOperationMemoryVersion = Branded<\'ProjectOperationMemoryVersion\'>;',
   },
   {
     name: 'ProjectOperationOriginReference',

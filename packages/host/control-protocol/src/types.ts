@@ -1411,6 +1411,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
   | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
   | Readonly<{ action: 'root_operation_origin'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'project_operation_memory'; request: HostRemoteSessionJson }>
   | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
@@ -1431,7 +1432,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
 /** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
 export type HostCollaborationAnalysisResult =
-  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback' | 'root_operation_origin'; record: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback' | 'root_operation_origin' | 'project_operation_memory'; record: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>

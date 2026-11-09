@@ -33,6 +33,20 @@ export interface WindowsHostPrivatePathEvidence {
 
 /** Native filesystem operations; every returned fact must be handle-derived. */
 export interface WindowsHostRegistrationFileBindings {
+  /** Hold a private SQLite file without reading its contents or blocking SQLite read/write sharing.
+   * @param path - Fixed Host-derived main, WAL or SHM path; never a request path.
+   * @param securityDescriptor - Protected owner descriptor used only for atomic creation, never to repair an existing file.
+   * @param mode - Open-only for published main databases; creation is restricted to a known bootstrap or sidecar.
+   * @returns Same-held-handle creation state, byte length and evidence; release failure retains ownership.
+   */
+  acquirePrivateDatabaseFile?(this: void, path: string, securityDescriptor: string, mode?: 'create_or_open' | 'existing'): {
+    readonly state: 'created' | 'existing'
+    readonly evidence: WindowsHostPrivatePathEvidence
+    readonly byteLength: bigint
+    readonly fileIdentity: string
+    inspect(): { readonly evidence: WindowsHostPrivatePathEvidence; readonly byteLength: bigint; readonly fileIdentity: string }
+    release(): void
+  }
   /**
    * Read one existing path through a directory-capable handle without creating or repairing it.
    * Missing paths and access failures throw; returned evidence is not migration admission.
