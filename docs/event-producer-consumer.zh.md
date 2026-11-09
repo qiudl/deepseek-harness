@@ -68,6 +68,7 @@
 | `plugin-manager/operation` | `parallel` | [`packages/boot/plugin-manager/src/types.ts:419`](../packages/boot/plugin-manager/src/types.ts) | [`plugin-manager`](../packages/boot/plugin-manager) (`parallel`) | - |
 | `plugin-manager/update-state` | `emit` | [`packages/boot/plugin-manager/src/types.ts:447`](../packages/boot/plugin-manager/src/types.ts) | [`plugin-manager`](../packages/boot/plugin-manager) (`emit`) | `remotes` |
 | `plugin-market/changed` | `emit` | [`packages/boot/plugin-market/src/types.ts:168`](../packages/boot/plugin-market/src/types.ts) | [`plugin-market`](../packages/boot/plugin-market) (`emit`) | `remotes` |
+| `project-operation/origin` | `serial` | [`packages/api/session-controller/src/project-operation-origins.ts:44`](../packages/api/session-controller/src/project-operation-origins.ts) | [`web-app`](../packages/bundle/web-app) (`serial`) | - |
 | `schedule/changed` | `emit` | [`packages/schedule/schedule/src/types.ts:484`](../packages/schedule/schedule/src/types.ts) | [`schedule`](../packages/schedule/schedule) (`emit`) | `remotes` |
 | `schedule/resolve-agent` | `waterfall` | [`packages/schedule/schedule/src/index.ts:74`](../packages/schedule/schedule/src/index.ts) | [`schedule`](../packages/schedule/schedule) (`waterfall`) | `server` |
 | `session-telemetry/record` | `waterfall` | [`packages/session/session-telemetry/src/index.ts:44`](../packages/session/session-telemetry/src/index.ts) | [`session-telemetry`](../packages/session/session-telemetry) (`waterfall`) | - |

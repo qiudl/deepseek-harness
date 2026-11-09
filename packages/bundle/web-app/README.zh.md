@@ -314,7 +314,7 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT=/path/to/dsbot \
 DSH_TEST_OPERATION_ORIGIN_DSBOT_COMMIT=f989287c1e806884647d64c826359b3dce3d9a3c \
 DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT=/path/to/slark \
-DSH_TEST_OPERATION_ORIGIN_CLOUD_BRIDGE=/path/to/slark/packages/server/src/dsh/project-operation-origin.joined-bridge.test-support.ts \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_BRIDGE=/absolute/path/to/project-operation-origin.joined-bridge.test-support.ts \
 DSH_TEST_OPERATION_ORIGIN_CLOUD_NODE=/path/to/node22/bin/node \
 PROJECT_OPERATION_ORIGIN_OWNER_URL=postgresql://postgres@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
 PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
