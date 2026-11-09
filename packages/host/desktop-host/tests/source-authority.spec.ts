@@ -1,6 +1,7 @@
+import { parseHostOperationOriginObservation, encodeHostOperationOriginObservation } from '@deepseek-ai/dsh-host-control-protocol'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { createHash, generateKeyPairSync, randomUUID, verify, sign } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
@@ -38,6 +39,7 @@ async function fixture(
   sourceLiveResumeSupported = false,
   rootContinuationSupported = false,
   rootCaptureSupported = false,
+  projectOperationOriginSupported = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-collaboration-registration-'))
   onTestFinished(() => {
@@ -127,6 +129,7 @@ async function fixture(
     rootExecutionSupported,
     rootFeedbackSupported,
     rootContinuationSupported,
+    projectOperationOriginSupported,
     rootAnalysisSupported,
     rootCaptureSupported,
     rootAnalysisRecoverySupported,
@@ -1851,4 +1854,40 @@ it.each(['read', 'old', 'foreign', 'source', 'revoked', 'cancelled'] as const)('
   if (mode === 'read') expect(await pending).toEqual({ kind: 'root_diagnostic', evidence: diagnostic })
   else await expect(pending).rejects.toThrow()
   expect(calls).toBe(mode === 'old' ? 0 : 1)
+})
+
+it('REQ-0006 registers a distinct origin purpose and signs only actual Account/peer/original coordinates', async () => {
+  const f = await fixture(false, false, false, false, false, false, false, false, true,
+    false, false, false, false, false, false, false, false, true)
+  await f.grant()
+  const raw: unknown = JSON.parse(readFileSync(new URL('../../control-protocol/tests/fixtures/project-operation-origin-v1.json', import.meta.url), 'utf8'))
+  if (!raw || typeof raw !== 'object' || !('observation' in raw)) throw Error('origin fixture')
+  const original = parseHostOperationOriginObservation(raw.observation)
+  const actualAccount = { authorityEnvironmentId: f.account.authorityEnvironmentId, accountIssuer: f.account.issuer,
+    accountSubject: f.account.subject, accountBindingId: f.account.accountBindingHandle,
+    accountBindingVersion: f.account.authorityBindingVersion, hostProfileId: f.profile.profileId }
+  const actualPeer = { installationId: f.identity.installationId, publicKey: f.identity.installationPublicKey,
+    hostInstanceId: f.identity.hostInstanceId, processNonce: f.identity.processNonce }
+  const observation = { ...original, ...actualAccount, peer: actualPeer }
+  const b = original.binding, operation = { action: 'read', target: { namespace_id: b.namespaceId, command_id: b.rootCommandId,
+    workspace_id: b.source.workspaceId, session_id: b.source.sessionId, source_message_id: b.source.sourceMessageId, source_revision: '1' },
+  selection: { plan_id: 'plan', expected_plan_revision: '1', candidate_digest: 'a'.repeat(64), task_id: 'task', task_revision: '1', task_digest: 'b'.repeat(64), expected_scope_version: '0' },
+  delivery_id: b.deliveryId, request_id: original.requestId, nonce: original.nonce, after_result_seq: null }
+  const page = { observation, eof: true, next_result_seq: original.pairs.at(-1)!.resultSeq }
+  f.setAnalysis(async (profile, command) => {
+    expect(profile).toBe(f.profile.profileId); expect(command.actualAccount).toEqual(actualAccount)
+    expect(command.actualPeer).toEqual(actualPeer)
+    return page
+  })
+  const result = await f.client.collaborationAnalysis({ ...f.account, command: { action: 'root_operation_origin', operation } })
+  if (result.kind !== 'root_operation_origin' || !result.record || typeof result.record !== 'object' || !('observation' in result.record)) throw Error('origin result')
+  const signed = parseHostOperationOriginObservation(result.record.observation)
+  expect(verify(null, Buffer.from(encodeHostOperationOriginObservation(signed)), f.keys.publicKey, Buffer.from(signed.signature, 'base64url'))).toBe(true)
+  for (const changed of [{ ...observation, accountBindingId: 'foreign' }, { ...observation, peer: { ...actualPeer, processNonce: 'foreign' } },
+    { ...observation, nonce: 'b'.repeat(64) }, { ...observation, binding: { ...observation.binding, deliveryId: 'foreign' } }]) {
+    f.setAnalysis(async () => ({ ...page, observation: changed }))
+    await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'root_operation_origin', operation } })).rejects.toThrow()
+  }
+  f.setAnalysis(async () => { f.host.revokeOwner(f.ownerId); return page })
+  await expect(f.client.collaborationAnalysis({ ...f.account, command: { action: 'root_operation_origin', operation } })).rejects.toThrow()
 })

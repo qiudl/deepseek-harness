@@ -326,3 +326,5 @@ macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查
 客户端和 Host 独立检查 `profile.root_continuation` 能力后才接受 `continuation_read`。原 Profile 返回已提交的观察后，Host 校验其中嵌套消费的 namespace、投递和 Source 坐标，并使用当前 Account 与安装/进程绑定签署独立观察域。回复前撤销 Account 权限会阻止签名。
 
 声明 `profile.remote_ui_stream.session_list` 能力时，完整 Session 列表快照使用现有远程 UI 游标。游标在 512 KiB 单项上限内保留所有列表投影；旧版 Host 继续直接读取。
+
+`profile.project_operation_origin` 在现有当前 Account/Profile 授权器下控制独立的私有来源 read/bind 用途。Unix 提供实际安装 peer，仅为匹配原 Root/delivery/Source 的观察字段签名。启动通过 worker 工厂保留的 `DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS` 环境项明确传递已验证的非秘密 Cloud 公钥环；拒绝 Profile 环境覆盖。worker 验证 claim 并负责限域发布。Account 撤销独立于 worker 生命周期阻止新请求；已受理的有界元数据修订可以结束，但不授予执行或导出权限。

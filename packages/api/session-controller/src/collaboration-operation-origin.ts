@@ -1,5 +1,6 @@
 /** REQ-20261031-0006 / Task26557: original consumed-step metadata, without attribution or permission. */
 import { createHash } from 'node:crypto'
+import { RUN_CODE_NAME } from '@deepseek-ai/dsh-tools'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { CollaborationConsumptionRecord } from './collaboration-consumption-journal.ts'
 import { collaborationJournalDigest, encodeCollaborationJournalJson } from './collaboration-source-journal.ts'
@@ -41,8 +42,8 @@ export function observeOriginalCollaborationOperations(record: CollaborationCons
     || collaborationJournalDigest(events.slice(0, evidence.session_prefix.event_count)) !== evidence.session_prefix.log_digest)
     return fail('prefix_changed')
   const start = events[step.start_event_seq], consumed = events[evidence.session_event_seq]
-  if (start.type !== 'step/start' || start.data.turn !== step.turn || start.data.step !== step.step
-    || consumed.type !== 'user/message' || consumed.data.id !== record.binding.message_id) return fail('consumption_changed')
+  if (start?.type !== 'step/start' || start.data.turn !== step.turn || start.data.step !== step.step
+    || consumed?.type !== 'user/message' || consumed.data.id !== record.binding.message_id) return fail('consumption_changed')
   const calls = new Map<string, Extract<SessionEvent, { type: 'tool/call' }>>()
   const seen = new Set<string>(), pairs: OriginalCollaborationOperationPair[] = []
   let eof = true
@@ -61,6 +62,7 @@ export function observeOriginalCollaborationOperations(record: CollaborationCons
         || event.data.message.source.callId !== call.data.callId)
         return fail('result_changed')
       calls.delete(call.data.callId)
+      if (call.data.name === RUN_CODE_NAME) continue
       if (afterResultSeq !== null && event.seq <= afterResultSeq) continue
       if (pairs.length === 50) { eof = false; continue }
       pairs.push({ callId: call.data.callId, toolName: call.data.name,

@@ -1,3 +1,4 @@
+import { parseHostOperationOriginCommand, parseHostOperationOriginObservation, encodeHostOperationOriginObservation } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof, encodeHostNativeRoomRetirementProofPayload, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply, type HostNativeRoomRetirementTarget, type HostNativeRoomRetirementProof, type ProfileNativeRoomRetirementRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostBoundBotRoomsProof,
   encodeHostBoundBotRoomsProofPayload, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof,
@@ -434,6 +435,7 @@ export interface UnixHostServerOptions {
   /** Private original-Session feedback receiver is composed in the Profile. */
   readonly rootFeedbackSupported?: boolean
   readonly rootContinuationSupported?: boolean
+  readonly projectOperationOriginSupported?: boolean
   readonly rootPlanningSupported?: boolean
   readonly collaborationAnalysis?:
   (profileId: string, command: HostRemoteSessionJson, signal: AbortSignal) => Promise<HostRemoteSessionJson>
@@ -623,7 +625,7 @@ export type HostControlAuthorityOptions = Pick<
   UnixHostServerOptions,
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
-    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported'
+    | 'modelClaimTransaction' | 'modelClaimRecovery' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported' | 'projectOperationOriginSupported'
     | 'prepareNativeRoom' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -2144,6 +2146,7 @@ export class HostControlAuthority {
           const binding = createHash('sha256').update(JSON.stringify(['dsh-analysis-binding-v1', identity.installationId,
             identity.installationPublicKey, identity.hostInstanceId, identity.processNonce, profileId, account])).digest('hex')
           const command = frame.params.command
+          if (command.action === 'root_operation_origin' && !this.options.projectOperationOriginSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'root_feedback' && command.operation && typeof command.operation === 'object'
             && 'action' in command.operation && command.operation.action === 'continuation_read' && !this.options.rootContinuationSupported) throw new HostAuthorityError('upgrade_required')
           if (command.action === 'root_feedback' && !this.options.rootFeedbackSupported) throw new HostAuthorityError('upgrade_required')
@@ -2170,7 +2173,13 @@ export class HostControlAuthority {
               this.options.rootLiveResumeSupported ? { resume_binding_key:resumeBinding } : {}),
             ...((command.action === 'prepare' || command.action === 'resume_source') && this.options.sourceLiveResumeSupported
               ? { resume_binding_key: sourceResumeBinding } : {}) }
-          const value = await execute(profileId, payload, context.signal)
+          const actualAccount = { authorityEnvironmentId: account.authorityEnvironmentId, accountIssuer: account.issuer,
+            accountSubject: account.subject, accountBindingId: account.accountBindingHandle,
+            accountBindingVersion: account.authorityBindingVersion, hostProfileId: profileId }
+          const actualPeer = { installationId: identity.installationId, publicKey: identity.installationPublicKey,
+            hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce }
+          const value = await execute(profileId, command.action === 'root_operation_origin'
+            ? { ...payload, actualAccount, actualPeer } : payload, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const signOutput = (dispatch: unknown, outputDigest: string) => {
             const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version: 1,
@@ -2184,7 +2193,32 @@ export class HostControlAuthority {
             return { ...unsigned, signature }
           }
           let result: HostCollaborationAnalysisResult
-          if (command.action === 'root_feedback') {
+          if (command.action === 'root_operation_origin') {
+            const operation = parseHostOperationOriginCommand(command.operation)
+            if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HostAuthorityError('unavailable')
+            let record: unknown = value
+            if (operation.action === 'read') {
+              if (!('observation' in value) || !('eof' in value) || !('next_result_seq' in value)
+                || Object.keys(value).length !== 3 || typeof value.eof !== 'boolean') throw new HostAuthorityError('unavailable')
+              if (value.observation !== null) {
+                const observation = parseHostOperationOriginObservation(value.observation), b = observation.binding
+                if (Object.entries(actualAccount).some(([k, v]) => Reflect.get(observation, k) !== v)
+                  || Object.entries(actualPeer).some(([k, v]) => Reflect.get(observation.peer, k) !== v)
+                  || observation.requestId !== operation.request_id || observation.nonce !== operation.nonce
+                  || b.namespaceId !== operation.target.namespace_id || b.rootCommandId !== operation.target.command_id
+                  || b.deliveryId !== operation.delivery_id || b.source.workspaceId !== operation.target.workspace_id
+                  || b.source.sessionId !== operation.target.session_id || b.source.sourceMessageId !== operation.target.source_message_id
+                  || b.source.sourceRevision !== operation.target.source_revision
+                  || observation.expiresAt <= clock() || observation.issuedAt > clock()) throw new HostAuthorityError('unavailable')
+                const signature = sign(null, Buffer.from(encodeHostOperationOriginObservation(observation)),
+                  privateKeyObject(identity.installationPrivateKey)).toString('base64url')
+                record = { ...value, observation: { ...observation, signature } }
+              }
+            } else if (Object.keys(value).length !== 1 || !('published' in value) || typeof value.published !== 'boolean')
+              throw new HostAuthorityError('unavailable')
+            result = parseHostCollaborationAnalysisResult({ kind: 'root_operation_origin', record })
+          }
+          else if (command.action === 'root_feedback') {
             let record: unknown = value
             if (value && typeof value === 'object' && 'kind' in value && (value.kind === 'consumer' || value.kind === 'continuation') && 'commit' in value && value.commit !== null) {
               const op = command.operation
@@ -2875,6 +2909,7 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis && this.options.rootLookupSupported ? ['profile.root_lookup'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootLiveResumeSupported ? ['profile.root_live_resume'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported ? ['profile.root_feedback'] : []),
+          ...(this.options.collaborationAnalysis && this.options.projectOperationOriginSupported ? ['profile.project_operation_origin'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported && this.options.rootContinuationSupported ? ['profile.root_continuation'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootExecutionSupported ? ['profile.root_execution_journal'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootPlanningSupported && this.options.inspectRootPlanningAttempt
@@ -4372,6 +4407,7 @@ export class UnixHostClient {
     active.throwIfAborted()
     const command = parseHostCollaborationAnalysisCommand(input.command)
     if (!this.inspection.capabilities.includes('profile.collaboration_analysis' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
+    if (command.action === 'root_operation_origin' && !this.inspection.capabilities.includes('profile.project_operation_origin' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if ((command.action === 'prepare_root_attempt' || command.action === 'read_root_attempt' || command.action === 'dispatch_root_attempt')
       && !this.inspection.capabilities.includes('profile.root_planning_attempt' as HostControlCapability)) throw new HostAuthorityError('upgrade_required')
     if (command.action === 'root_feedback' && command.operation && typeof command.operation === 'object' && 'action' in command.operation
@@ -4419,7 +4455,7 @@ export class UnixHostClient {
             Buffer.from(receipt.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
       }
     }
-    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    const expected = command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'root_operation_origin' ? 'root_operation_origin' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
     if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
       Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')

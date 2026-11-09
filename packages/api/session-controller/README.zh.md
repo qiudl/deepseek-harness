@@ -270,4 +270,4 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 `continuation_read` 在独立的 `collaboration_continuation_v1` 域记录原消费步骤中首条已持久化的助手消息。它校验原消费前缀，并在日志增长和重新打开后保留首次观察 ID 与前缀。历史或 Session 身份变化会拒绝观察；写入结果不确定时必须重新打开。此读取不唤醒 Agent、不续签授权，也不证明 turn 或根任务完成。
 
-内部操作来源观察器将已完成的原生调用及结果关联到唯一原消费步骤及其未改变的持久化前缀。它排除继承的消费、后续步骤、未完成调用，以及消费了其他输入的步骤。每页最多50对事件，保留原事件摘要，不含输入或输出正文。所属读取器负责持久化屏障和实际生产者身份；这些元数据工具本身不证明主体、项目或共享权限。
+私有操作来源捕获通过当前 Profile 成员关系检查和固定 JSONL 持久化屏障读取实际 Root 与已消费日志。仅原消费步骤中已完成的原生调用及结果符合条件；保留的 PTC `run_code` 程序保持为空缺；继承的消费、后续步骤、未完成调用和输入歧义保留为空缺。可选 `projectOperationOrigins.read(token)` 服务仅在等待中的 `project-operation/origin` 事件内返回不可变历史引用。取消、已验证的 Cloud 截止时间或事件结束均使 token 失效；消费者确认要求所有匹配修订已提交或已存在相同引用。这些引用不证明材料依赖，也不授予执行、保留或导出权限。

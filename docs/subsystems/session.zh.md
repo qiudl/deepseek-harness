@@ -821,6 +821,8 @@ interface PluginRecord {
 
 可选的 `application` 指定文件关联应用，不修改系统默认值；`workspacePathApplications({ path })` 在校验 Host 路径后返回当前关联应用、名称、图标和默认项。
 
+可选 `projectOperationOrigins` 读取器为精确的原生事件提供原 Root 主体及项目的历史引用。不透明 token 仅能在等待中的 `project-operation/origin` 事件内、取消或已验证的 Cloud 截止时间之前使用。消费者仅确认完整提交或幂等匹配的引用修订；未确认时保留空缺，等待全新核对。[Session Controller](../../packages/api/session-controller/README.zh.md) 负责捕获，[Web App](../../packages/bundle/web-app/README.zh.md) 负责私有验证及发布。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -828,6 +830,22 @@ interface PluginRecord {
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxprojectoperationorigins--projectoperationorigins"></a>
+
+### `ctx.projectOperationOrigins` — `ProjectOperationOrigins`
+
+Read-only consumer seam; no public method can mint or retain a live token.
+
+```ts cordis-catalog
+/** Read original references during publication.
+ * @param token - Token supplied by the current origin event.
+ * @returns Immutable references, or null after publication or for another provider's token.
+ */
+read(token: ProjectOperationOriginToken): readonly ProjectOperationOriginReference[] | null
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
 
 <a id="ctxsessioncontroller--sessioncontroller"></a>
 
@@ -969,6 +987,13 @@ async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<Co
  * @returns Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.
  */
 async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >
+
+/** Capture the exact original consumed-step prefix through the Profile's real persistence barrier.
+ * @param value - Original root, frozen execution and delivery; no caller event metadata.
+ * @param signal - Authenticated parent request lifetime.
+ * @returns Original durable Root/consumption and raw prefix for the private observer only.
+ */
+async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{ root: CollaborationRootSubmission record: Extract<CollaborationConsumptionRecord, { state: 'consumed' }> events: readonly import('@deepseek-ai/dsh-session').SessionEvent[] inheritedEventCount: number consumptionCommitDigest: string }>
 
 /**
  * Read one durable Source from the owning Profile without model preparation or Agent activation.
@@ -1494,6 +1519,28 @@ One Agent changed running state.
 Types: [SessionId](core.zh.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
+
+<a id="project-operation-events"></a>
+
+### `project-operation/*` events
+
+<a id="project-operationorigin--serial"></a>
+
+#### `project-operation/origin` — serial
+
+Await consumers within the authenticated bind request; tokens expire before it returns.
+
+```ts cordis-catalog
+/** Await consumers within the authenticated bind request; tokens expire before it returns.
+ * @mode serial
+ * @param token - Opaque token readable only from this publication's provider.
+ * @param signal - Original authenticated request and Profile lifetime.
+ * @returns True only after all matching reference revisions commit or already match; otherwise false or no acknowledgment.
+ */
+'project-operation/origin'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
 
 <a id="session-events"></a>
 

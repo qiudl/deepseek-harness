@@ -1,3 +1,4 @@
+import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { TwinBindingReceipts } from './twin-binding-receipts.ts'
 import { createWindowsTwinBindingReceiptFile } from './twin-binding-receipt-files.ts'
@@ -135,6 +136,7 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   readonly maximumJournalBytes: number
   /** Explicit receipt capacity enables MCP extensions; omission retains the existing local-only composition. */
   readonly maximumExtensionReceiptBytes?: number
+  readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly profileReadyTimeoutMs: number
   readonly profileAbortTimeoutMs: number
 }
@@ -359,6 +361,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
       ?? (() => loadWindowsProfileListenerAttestor({ ...nativeOptions, loadKoffi }))
   )()
   const profileWorkerOptions = {
+    ...(config.operationOriginKeyrings === undefined ? {} : { operationOriginKeyrings: config.operationOriginKeyrings }),
     nodeExecutablePath: config.nodeExecutablePath,
     dshEntrypointPath: config.dshEntrypointPath,
     attestListener,

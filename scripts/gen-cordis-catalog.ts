@@ -123,6 +123,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   forgePanel: 'forge.md',
   forgeSession: 'forge.md',
   sessionController: 'session.md',
+  projectOperationOrigins: 'session.md',
   sessionSkillCatalog: 'skills.md',
   sessions: 'session.md',
   settings: 'settings.md',
@@ -229,6 +230,7 @@ export const SERVICE_WALK_EXEMPTIONS: Record<string, string> = {
  * {@link EVENT_WALK_EXEMPTIONS} names each one with its documentation owner.
  */
 export const EVENT_SCOPE_PAGE: Record<string, string> = {
+  'project-operation': 'session.md',
   'app-boot': 'boot.md',
   hmr: 'boot.md',
   'plugin-manager': 'boot.md',
@@ -487,6 +489,9 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   SessionForkRequest: 'session.md',
   SessionForkValue: 'session.md',
   SessionId: 'core.md',
+  ProjectOperationOriginToken: 'session.md',
+  ProjectOperationOriginReference: 'session.md',
+  CollaborationConsumptionRecord: 'session.md',
   SessionLogOffset: 'session.md',
   SessionSeq: 'session.md',
   SessionSeqCursor: 'session.md',

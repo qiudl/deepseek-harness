@@ -2416,6 +2416,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'projectOperationOrigins',
+    summary: 'Read-only consumer seam; no public method can mint or retain a live token.',
+    description: 'Read-only consumer seam; no public method can mint or retain a live token.',
+    methods: [
+      {
+        signature: 'read(token: ProjectOperationOriginToken): readonly ProjectOperationOriginReference[] | null',
+        description: 'Read original references during publication.',
+        parameters: [{ name: 'token', description: 'Token supplied by the current origin event.' }],
+        returns: 'Immutable references, or null after publication or for another provider\'s token.',
+      },
+    ],
+  },
+  {
     key: 'ptcRuntime',
     summary: 'Registers one `ctx.ptcRuntime` implementation.',
     description: 'Registers one `ctx.ptcRuntime` implementation. Program, budget, abort, and substrate failures resolve in PtcRunResult; only Service Definition contract misuse rejects. Implementations bridge structured-cloneable bindings, materialize each declared namespace rejection class, treat programs as hostile peers, isolate distinct state owners, and terminate and await in-flight runs during disposal.',
@@ -2683,6 +2696,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Execute a private durable consumer command under authenticated Main\'s current authority.',
         parameters: [{ name: 'value', description: 'Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
         returns: 'Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.',
+      },
+      {
+        signature: 'async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{ root: CollaborationRootSubmission record: Extract<CollaborationConsumptionRecord, { state: \'consumed\' }> events: readonly import(\'@deepseek-ai/dsh-session\').SessionEvent[] inheritedEventCount: number consumptionCommitDigest: string }>',
+        description: 'Capture the exact original consumed-step prefix through the Profile\'s real persistence barrier.',
+        parameters: [{ name: 'value', description: 'Original root, frozen execution and delivery; no caller event metadata.' }, { name: 'signal', description: 'Authenticated parent request lifetime.' }],
+        returns: 'Original durable Root/consumption and raw prefix for the private observer only.',
       },
       {
         signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
@@ -5283,6 +5302,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [],
   },
   {
+    name: 'project-operation/origin',
+    mode: 'serial',
+    signature: '\'project-operation/origin\'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>',
+    summary: 'Await consumers within the authenticated bind request; tokens expire before it returns.',
+    description: 'Await consumers within the authenticated bind request; tokens expire before it returns.',
+    parameters: [{ name: 'token', description: 'Opaque token readable only from this publication\'s provider.' }, { name: 'signal', description: 'Original authenticated request and Profile lifetime.' }],
+  },
+  {
     name: 'schedule/changed',
     mode: 'emit',
     signature: '\'schedule/changed\'(): void',
@@ -6041,6 +6068,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationRootSubmission',
     declaration: 'export type CollaborationRootSubmission = Readonly<z.infer<typeof recordSchema>>;',
+  },
+  {
+    name: 'CollaborationRootTaskId',
+    declaration: 'export type CollaborationRootTaskId = Branded<\'CollaborationRootTaskId\'>;',
   },
   {
     name: 'CollaborationSourceBody',
@@ -6875,6 +6906,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface HostConnectionRpc {\n    handle(channel: string, handler: ConnectionRpcHandler): () => Promise<void>;\n    intercept(channel: \'/api\', matches: ConnectionRpcEndpointMatcher, handler: ConnectionRpcHandler): () => Promise<void>;\n}',
   },
   {
+    name: 'HostProfileId',
+    declaration: 'export type HostProfileId = Branded<\'HostProfileId\'>;',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -7595,6 +7630,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type OptionalSessionSeq = SessionSeq | null;',
   },
   {
+    name: 'OriginalCollaborationOperationPair',
+    declaration: 'export interface OriginalCollaborationOperationPair {\n    readonly callId: string;\n    readonly toolName: string;\n    readonly callSeq: number;\n    readonly callTime: number;\n    readonly callEventDigest: string;\n    readonly resultSeq: number;\n    readonly resultTime: number;\n    readonly resultEventDigest: string;\n}',
+  },
+  {
     name: 'OTelEventRecord',
     declaration: 'export interface OTelEventRecord {\n    eventName: string;\n    body: string;\n    timestamp: number;\n    severityNumber?: SeverityNumber;\n    attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>;\n}',
   },
@@ -7897,6 +7936,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectionSnapshot',
     declaration: 'export interface ProjectionSnapshot {\n    asOfSeq: SessionSeqCursor;\n    values: Partial<SessionProjectionMap>;\n}',
+  },
+  {
+    name: 'ProjectOperationOriginReference',
+    declaration: 'export type ProjectOperationOriginReference = Omit<OriginalCollaborationOperationPair, \'callId\'> & Readonly<{\n    callId: ToolCallId;\n    authorityRef: Branded<\'ProjectOperationOriginRef\'>;\n    ownerUserId: Branded<\'ProjectOperationOwnerUserId\'>;\n    projectId: Branded<\'ProjectOperationProjectId\'>;\n    hostProfileId: Branded<\'HostProfileId\'>;\n    botId: Branded<\'ProjectOperationBotId\'>;\n    sessionId: SessionId;\n    turn: number;\n    step: number;\n    startEventSeq: number;\n    rootRef: CollaborationRootTaskId;\n    invocationRef: Branded<\'ProjectOperationInvocationId\'>;\n    taskRef: null;\n}>;',
+  },
+  {
+    name: 'ProjectOperationOriginToken',
+    declaration: 'export interface ProjectOperationOriginToken {\n    readonly [tokenBrand]: true;\n}',
   },
   {
     name: 'PromptAssembly',

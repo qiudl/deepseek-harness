@@ -14,7 +14,7 @@ import { collaborationJournalDigest as hash } from '../src/collaboration-source-
 const cleanups: (() => Promise<void>)[] = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
 import { freshConsumerGrant as grant } from './collaboration-consumption-fixture.ts'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SessionSeq } from '@deepseek-ai/dsh-session'
 import { observeCollaborationFeedback } from '../src/collaboration-feedback.ts'
 import { observeOriginalCollaborationOperations } from '../src/collaboration-operation-origin.ts'
 const signal = new AbortController().signal
@@ -218,7 +218,7 @@ async function operationFixture() {
     if (settle) session.append('tool/result', { turn: 1, step,
       message: { id: MessageId('result-' + id), role: 'tool', toolCallId: callId,
         source: { kind: 'tool', callId }, content: [{ type: 'text', text: 'PRIVATE_OUTPUT' }], isError: false } },
-    { surfaceOp: 'append', sourceEventSeqs: [session.seq - 1] })
+    { surfaceOp: 'append', sourceEventSeqs: [SessionSeq(session.seq - 1)] })
   }
   return { ...f, session, record, native }
 }

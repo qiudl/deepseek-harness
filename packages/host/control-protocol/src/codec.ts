@@ -1,3 +1,4 @@
+import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
 import type { ProfileNativeRoomRetirementRequest, ProfileNativeRoomRetirementResult } from './types.ts'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
@@ -1697,10 +1698,11 @@ export function matchHostSourceAnalysisOutput(value: unknown, target: HostCollab
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
-  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback')) {
+  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback' || row.action === 'root_operation_origin')) {
     exactKeys(row, ['action', 'operation'])
     const operation = remoteSessionJson(row.operation)
-    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > 8192) reject()
+    if (row.action === 'root_operation_origin') parseHostOperationOriginCommand(operation)
+    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > (row.action === 'root_operation_origin' ? 48 * 1024 : 8192)) reject()
     return { action: row.action, operation }
   }
   if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
@@ -1771,10 +1773,11 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
     return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
   }
-  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback')) {
+  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback' || row.kind === 'root_operation_origin')) {
     exactKeys(row, ['kind', 'record'])
     const record = remoteSessionJson(row.record)
-    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 8192) reject()
+    if (row.kind === 'root_operation_origin') parseHostOperationOriginResult(record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > (row.kind === 'root_operation_origin' ? 40 * 1024 : 8192)) reject()
     return { kind: row.kind, record }
   }
   if (row.kind === 'root_attempt_evidence') {

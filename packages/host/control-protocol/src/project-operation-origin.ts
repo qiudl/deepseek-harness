@@ -1,5 +1,6 @@
 /** REQ-20261031-0006 / Task26557: source attribution only, independent of all execution and memory grants. */
 import { createHash } from 'node:crypto'
+import { parseHostRootSubmissionTarget } from './root-authority.ts'
 import { exactReceiptFields } from './collaboration-receipt-fields.ts'
 
 type Peer = Readonly<{
@@ -124,6 +125,11 @@ const version = (value: unknown) => {
   if (BigInt(result) > 9223372036854775807n) return fail()
   return result
 }
+const scopeVersion = (value: unknown) => {
+  const result = text(value, /^(0|[1-9][0-9]{0,18})$/u)
+  if (BigInt(result) > 9223372036854775807n) return fail()
+  return result
+}
 const base64 = (value: unknown, size: number) => {
   const result = text(value, /^[A-Za-z0-9_-]+$/u), bytes = Buffer.from(result, 'base64url')
   if (bytes.length !== size || bytes.toString('base64url') !== result) return fail()
@@ -213,7 +219,7 @@ export function parseHostOperationOriginAttribution(value: unknown): HostOperati
     invocationId: id(r.invocationId), sourceDigest: digest(r.sourceDigest),
     ownerUserId: id(r.ownerUserId), projectId: id(r.projectId), bindingId: uuid(r.bindingId),
     bindingGeneration: version(r.bindingGeneration),
-    scopeVersion: version(r.scopeVersion), signature: base64(r.signature, 64) })
+    scopeVersion: scopeVersion(r.scopeVersion), signature: base64(r.signature, 64) })
 }
 const peerFields = (p: Peer) => [p.installationId, p.publicKey, p.hostInstanceId, p.processNonce]
 /** Encode all observation fields except its signature in the independent literal tuple order.
@@ -256,4 +262,63 @@ export function hostOperationOriginReference(claim: HostOperationOriginAttributi
     observation.binding.namespaceId, claim.admissionId, c.consumptionId, c.consumptionCommitDigest,
     observation.binding.source.sessionId, observation.hostProfileId, observation.botId, c.turn, c.step, c.startEventSeq,
     pair.callSeq, pair.callEventDigest, pair.resultSeq, pair.resultEventDigest])).digest('hex')
+}
+
+/** Closed private observer request; current Account and installation are added by Unix transport. */
+export type HostOperationOriginCommand = Readonly<{
+  target: import('./root-authority.ts').HostRootSubmissionTarget
+  selection: Readonly<{
+    plan_id: string
+    expected_plan_revision: string
+    candidate_digest: string
+    task_id: string
+    task_revision: string
+    task_digest: string
+    expected_scope_version: string
+  }>
+  delivery_id: string
+}> & (Readonly<{ action: 'read'; request_id: string; nonce: string; after_result_seq: number | null }>
+  | Readonly<{ action: 'bind'; observation: HostOperationOriginObservation; attribution: HostOperationOriginAttribution }>)
+/** Parse a distinct private purpose without accepting Account, peer or attribution overrides.
+ * @param value - Untrusted Main operation.
+ * @returns Strict original Root/task/delivery request.
+ */
+export function parseHostOperationOriginCommand(value: unknown): HostOperationOriginCommand {
+  const action: unknown = value && typeof value === 'object' ? Object.getOwnPropertyDescriptor(value, 'action')?.value : undefined
+  if (action !== 'read' && action !== 'bind') return fail()
+  const r = exact(value, ['action', 'target', 'selection', 'delivery_id',
+    ...(action === 'read' ? ['request_id', 'nonce', 'after_result_seq'] : ['observation', 'attribution'])])
+  const s = exact(r.selection, ['plan_id', 'expected_plan_revision', 'candidate_digest', 'task_id', 'task_revision', 'task_digest', 'expected_scope_version'])
+  const scope = text(s.expected_scope_version, /^(0|[1-9][0-9]{0,18})$/u)
+  if (BigInt(scope) > 9223372036854775807n) return fail()
+  const common = { target: parseHostRootSubmissionTarget(r.target), selection: Object.freeze({ plan_id: id(s.plan_id),
+    expected_plan_revision: version(s.expected_plan_revision), candidate_digest: digest(s.candidate_digest), task_id: id(s.task_id),
+    task_revision: version(s.task_revision), task_digest: digest(s.task_digest), expected_scope_version: scope }),
+  delivery_id: id(r.delivery_id) }
+  return Object.freeze(action === 'read' ? { ...common, action, request_id: uuid(r.request_id), nonce: digest(r.nonce),
+    after_result_seq: r.after_result_seq === null ? null : integer(r.after_result_seq) }
+    : { ...common, action, observation: parseHostOperationOriginObservation(r.observation),
+      attribution: parseHostOperationOriginAttribution(r.attribution) })
+}
+
+/** Parse a complete metadata response without treating a successful transport as consumer acknowledgment.
+ * @param value - Untrusted origin-purpose record.
+ * @returns Exact observation page or actual awaited consumer publication status.
+ */
+export function parseHostOperationOriginResult(value: unknown): Readonly<{ published: boolean }>
+  | Readonly<{ observation: HostOperationOriginObservation | null; eof: boolean; next_result_seq: number | null }> {
+  if (value && typeof value === 'object' && Object.hasOwn(value, 'published')) {
+    const r = exact(value, ['published'])
+    if (typeof r.published !== 'boolean') return fail()
+    return Object.freeze({ published: r.published })
+  }
+  const r = exact(value, ['observation', 'eof', 'next_result_seq'])
+  if (typeof r.eof !== 'boolean') return fail()
+  if (r.observation === null) {
+    if (!r.eof || r.next_result_seq !== null) return fail()
+    return Object.freeze({ observation: null, eof: true, next_result_seq: null })
+  }
+  const observation = parseHostOperationOriginObservation(r.observation)
+  if (r.next_result_seq !== (observation.pairs[observation.pairs.length - 1] as HostOperationOriginPair).resultSeq) return fail()
+  return Object.freeze({ observation, eof: r.eof, next_result_seq: integer(r.next_result_seq) })
 }

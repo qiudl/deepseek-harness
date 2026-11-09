@@ -1,3 +1,5 @@
+import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from '../src/project-operation-origin.ts'
+import { parseHostCollaborationAnalysisCommand, parseHostCollaborationAnalysisResult } from '../src/codec.ts'
 /** Original-operation signatures bind exact source events, independently of short-lived claims. */
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
@@ -121,4 +123,43 @@ it('rejects invalid Account, identity and lifetime encodings in both purposes', 
     expect(() => parseHostOperationOriginObservation({ ...observation, ...patch })).toThrow('invalid_project_operation_origin')
     expect(() => parseHostOperationOriginAttribution({ ...claim, ...patch })).toThrow('invalid_project_operation_origin')
   }
+})
+
+function originCommand() {
+  const { observation } = fixture(), b = observation.binding
+  return { action: 'read' as const, target: { namespace_id: b.namespaceId, command_id: b.rootCommandId,
+    workspace_id: b.source.workspaceId, session_id: b.source.sessionId, source_message_id: b.source.sourceMessageId, source_revision: '1' },
+  selection: { plan_id: 'plan', expected_plan_revision: '1', candidate_digest: a, task_id: 'task', task_revision: '1',
+    task_digest: b.resultDigest, expected_scope_version: '0' }, delivery_id: b.deliveryId,
+  request_id: observation.requestId, nonce: observation.nonce, after_result_seq: null }
+}
+it('keeps the observer purpose closed and distinct from feedback authority', () => {
+  const operation = originCommand(), { observation, claim } = fixture()
+  expect(parseHostOperationOriginCommand(operation)).toEqual(operation)
+  const bind = { action: 'bind', target: operation.target, selection: operation.selection, delivery_id: operation.delivery_id,
+    observation, attribution: claim }
+  expect(parseHostOperationOriginCommand(bind)).toEqual(bind)
+  expect(parseHostCollaborationAnalysisCommand({ action: 'root_operation_origin', operation: bind })).toEqual({ action: 'root_operation_origin', operation: bind })
+  expect(parseHostCollaborationAnalysisResult({ kind: 'root_operation_origin', record: { published: true } })).toEqual({ kind: 'root_operation_origin', record: { published: true } })
+  for (const changed of [{ ...operation, actualAccount: {} }, { ...operation, action: 'consumer_read' },
+    { ...operation, after_result_seq: -1 }, { ...operation, request_id: 'caller' }, { ...operation, nonce: 'bad' },
+    { ...operation, selection: { ...operation.selection, expected_scope_version: '9223372036854775808' } },
+    { ...operation, selection: { ...operation.selection, task_revision: '0' } }, { ...operation, target: { ...operation.target, caller: 'override' } },
+    null, 1, { ...bind, ownerUserId: 'caller' }]) expect(() => parseHostOperationOriginCommand(changed)).toThrow()
+  expect(parseHostOperationOriginCommand({ ...operation, after_result_seq: 8 })).toMatchObject({ after_result_seq: 8 })
+})
+
+it('accepts actual zero source scope and rejects noncanonical versions and incomplete pages', () => {
+  const { observation, claim } = fixture()
+  expect(parseHostOperationOriginAttribution({ ...claim, scopeVersion: '0' }).scopeVersion).toBe('0')
+  for (const patch of [{ scopeVersion: '00' }, { scopeVersion: '-1' }, { scopeVersion: '9223372036854775808' }, { bindingGeneration: '0' }, { bindingGeneration: '9223372036854775808' }])
+    expect(() => parseHostOperationOriginAttribution({ ...claim, ...patch })).toThrow()
+  for (const published of [true, false]) expect(parseHostOperationOriginResult({ published })).toEqual({ published })
+  expect(parseHostOperationOriginResult({ observation: null, eof: true, next_result_seq: null }))
+    .toEqual({ observation: null, eof: true, next_result_seq: null })
+  const page = { observation, eof: false, next_result_seq: observation.pairs.at(-1)!.resultSeq }
+  expect(parseHostOperationOriginResult(page)).toEqual(page)
+  for (const value of [null, { published: 'true' }, { published: true, owner: 'caller' },
+    { ...page, next_result_seq: 999 }, { ...page, eof: 1 }, { observation: null, eof: false, next_result_seq: null },
+    { observation: null, eof: true, next_result_seq: 8 }]) expect(() => parseHostOperationOriginResult(value)).toThrow()
 })
