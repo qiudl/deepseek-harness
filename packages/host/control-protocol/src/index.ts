@@ -338,3 +338,19 @@ export { parseHostOperationOriginResult, parseHostOperationOriginCommand,
   parseHostOperationOriginObservation, parseHostOperationOriginAttribution,
   encodeHostOperationOriginObservation, encodeHostOperationOriginAttribution, hostOperationOriginReference } from './project-operation-origin.ts'
 export type { HostOperationOriginCommand, HostOperationOriginObservation, HostOperationOriginAttribution, HostOperationOriginPair } from './project-operation-origin.ts'
+
+export { parseHostProjectMemoryDirective, parseHostProjectMemorySourceProof, parseHostProjectMemoryProjectionProof,
+  parseHostProjectMemoryHostAck, parseHostProjectMemoryReceipt, encodeHostProjectMemoryDirective,
+  encodeHostProjectMemorySourceProof, encodeHostProjectMemoryProjectionProof, encodeHostProjectMemoryHostAck,
+  encodeHostProjectMemoryReceipt, hostProjectMemoryDirectiveDigest, hostProjectMemorySourceProofDigest,
+  hostProjectMemoryHostAckDigest, hostProjectMemoryReceiptDigest } from './project-operation-memory.ts'
+export type { HostProjectMemoryOperation, HostProjectMemoryReadOperation, HostProjectMemoryCheckpoint, HostProjectMemoryPeer,
+  HostProjectMemoryDirective, HostProjectMemorySourceProof, HostProjectMemoryMaterialVersion, HostProjectMemoryProjectionProof,
+  HostProjectMemoryHostAck, HostProjectMemoryDisposition, HostProjectMemoryReceipt } from './project-operation-memory.ts'
+export { parseHostProjectMemoryCommand, parseHostProjectMemoryRequest, hostProjectMemoryQueryDigest,
+  hostProjectMemoryCommandDigest, hostProjectMemoryBatchDigest } from './project-operation-memory-command.ts'
+export type { HostProjectMemoryCommands, HostProjectMemoryStage, HostProjectMemoryCommand, HostProjectMemoryRequest } from './project-operation-memory-command.ts'
+export { parseHostProjectMemoryReadResult, parseHostProjectMemoryReadEnvelope, hostProjectMemoryReadResultDigest,
+  parseHostProjectMemoryFinalizeResult, parseHostProjectMemoryReceiptResult } from './project-operation-read-result.ts'
+export type { HostProjectMemoryCoverage, HostProjectMemoryReadResults, HostProjectMemoryReadResult, HostProjectMemoryReadEnvelope,
+  HostProjectMemoryFinalizeResult, HostProjectMemoryReceiptResult } from './project-operation-read-result.ts'

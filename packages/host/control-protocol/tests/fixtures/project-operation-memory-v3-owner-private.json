@@ -1,0 +1,1387 @@
+{
+  "contract": "Doc21558 v5 frozen v3 owner-private subset / Task26581; tuples independently authored from declared fields, not production encoders",
+  "wire": [
+    {
+      "name": "directive",
+      "value": {
+        "schemaVersion": 1,
+        "purpose": "project_operation_memory",
+        "issuer": "https://cloud.example",
+        "keyId": "key_1",
+        "requestId": "0000000c-0000-4000-8000-00000000000c",
+        "nonce": "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        "issuedAt": 1000,
+        "expiresAt": 16000,
+        "audience": "dsh_host",
+        "environmentKey": "test",
+        "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+        "ownerUserId": "human:test",
+        "accountIssuer": "https://accounts.dsh.colorbuyai.com",
+        "accountSubject": "0000000d-0000-4000-8000-00000000000d",
+        "accountBindingId": "binding_handle",
+        "accountBindingVersion": 1,
+        "scope": {
+          "bindingId": "00000002-0000-4000-8000-000000000002",
+          "bindingGeneration": "1",
+          "scopeVersion": "1",
+          "projectId": "ai-proj",
+          "twinAgentId": "twin-ai-proj",
+          "twinAuthorityDigest": "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+          "sourceRef": {
+            "side": "dsh",
+            "actorRef": "deepseek-bot:ai-proj-operator",
+            "hostProfileId": "00000003-0000-4000-8000-000000000003",
+            "botRootId": "ai-proj-operator",
+            "providerId": "dsh-project-operation-v1",
+            "providerVersion": "1"
+          },
+          "recipientRef": {
+            "side": "slark",
+            "botRef": "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+            "audienceKind": "owner_private",
+            "audienceRef": "human:test",
+            "audienceVersion": "1",
+            "audienceDigest": "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+          },
+          "deviceGrantRefs": [
+            {
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "workspaceRefs": [
+            {
+              "workspaceId": "00000007-0000-4000-8000-000000000007",
+              "grantId": "00000006-0000-4000-8000-000000000006",
+              "expectedEpoch": "2"
+            }
+          ],
+          "historyFrom": 100,
+          "historyTo": 200,
+          "timeZone": "UTC",
+          "materialKinds": [
+            "operation",
+            "result"
+          ],
+          "retentionConsentRef": {
+            "id": "00000004-0000-4000-8000-000000000004",
+            "generation": "1",
+            "consentDigest": "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+            "presentationVersion": "v1"
+          },
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738"
+        },
+        "authorityDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "peer": {
+          "computerId": "computer_1",
+          "installationId": "0000000a-0000-4000-8000-00000000000a",
+          "hostRegistryId": "registry_1",
+          "hostEpoch": "1",
+          "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+          "hostInstanceId": "0000000b-0000-4000-8000-00000000000b",
+          "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        },
+        "direction": "dsh_to_slark",
+        "operation": "prepare_snapshot",
+        "commandDigest": "5af7555efa732eee3fce094fa961fc4a1bc5c70b867f12979351bb198b0197a0",
+        "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+      },
+      "fields": [
+        1,
+        "project_operation_memory",
+        "https://cloud.example",
+        "key_1",
+        "0000000c-0000-4000-8000-00000000000c",
+        "BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ",
+        1000,
+        16000,
+        "dsh_host",
+        "test",
+        "00000001-0000-4000-8000-000000000001",
+        "human:test",
+        "https://accounts.dsh.colorbuyai.com",
+        "0000000d-0000-4000-8000-00000000000d",
+        "binding_handle",
+        1,
+        [
+          "00000002-0000-4000-8000-000000000002",
+          "1",
+          "1",
+          "ai-proj",
+          "twin-ai-proj",
+          "f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d",
+          [
+            "dsh",
+            "deepseek-bot:ai-proj-operator",
+            "00000003-0000-4000-8000-000000000003",
+            "ai-proj-operator",
+            "dsh-project-operation-v1",
+            "1"
+          ],
+          [
+            "slark",
+            "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+            "owner_private",
+            "human:test",
+            "1",
+            "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+          ],
+          [
+            [
+              "00000006-0000-4000-8000-000000000006",
+              "2"
+            ]
+          ],
+          [
+            [
+              "00000007-0000-4000-8000-000000000007",
+              "00000006-0000-4000-8000-000000000006",
+              "2"
+            ]
+          ],
+          100,
+          200,
+          "UTC",
+          [
+            "operation",
+            "result"
+          ],
+          [
+            "00000004-0000-4000-8000-000000000004",
+            "1",
+            "300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7",
+            "v1"
+          ],
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738"
+        ],
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        [
+          "computer_1",
+          "0000000a-0000-4000-8000-00000000000a",
+          "registry_1",
+          "1",
+          "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+          "0000000b-0000-4000-8000-00000000000b",
+          "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        ],
+        "dsh_to_slark",
+        "prepare_snapshot",
+        "5af7555efa732eee3fce094fa961fc4a1bc5c70b867f12979351bb198b0197a0"
+      ],
+      "preimage": "slark.project-operation-memory-directive/v1\u0000[1,\"project_operation_memory\",\"https://cloud.example\",\"key_1\",\"0000000c-0000-4000-8000-00000000000c\",\"BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQ\",1000,16000,\"dsh_host\",\"test\",\"00000001-0000-4000-8000-000000000001\",\"human:test\",\"https://accounts.dsh.colorbuyai.com\",\"0000000d-0000-4000-8000-00000000000d\",\"binding_handle\",1,[\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"ai-proj\",\"twin-ai-proj\",\"f1c7de6602576ffd495255f30e62a7f66b4362a5d1761bf65bfba7179fb2773d\",[\"dsh\",\"deepseek-bot:ai-proj-operator\",\"00000003-0000-4000-8000-000000000003\",\"ai-proj-operator\",\"dsh-project-operation-v1\",\"1\"],[\"slark\",\"slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956\",\"owner_private\",\"human:test\",\"1\",\"4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62\"],[[\"00000006-0000-4000-8000-000000000006\",\"2\"]],[[\"00000007-0000-4000-8000-000000000007\",\"00000006-0000-4000-8000-000000000006\",\"2\"]],100,200,\"UTC\",[\"operation\",\"result\"],[\"00000004-0000-4000-8000-000000000004\",\"1\",\"300d06af3be185edf104a6d75fc43cee875b271d3ff58751d08fe48a3575d3b7\",\"v1\"],\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\"],\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",[\"computer_1\",\"0000000a-0000-4000-8000-00000000000a\",\"registry_1\",\"1\",\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"0000000b-0000-4000-8000-00000000000b\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],\"dsh_to_slark\",\"prepare_snapshot\",\"5af7555efa732eee3fce094fa961fc4a1bc5c70b867f12979351bb198b0197a0\"]",
+      "digest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2"
+    },
+    {
+      "name": "sourceProof",
+      "value": {
+        "schemaVersion": 1,
+        "purpose": "project_operation_memory_source",
+        "side": "dsh",
+        "issuer": "https://host.example",
+        "keyId": "key_1",
+        "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+        "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "bindingId": "00000002-0000-4000-8000-000000000002",
+        "bindingGeneration": "1",
+        "scopeVersion": "1",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "operation": "prepare_snapshot",
+        "resultDigest": "cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba",
+        "sourceActorRef": "deepseek-bot:ai-proj-operator",
+        "sourceAuthorityVersion": "1",
+        "journalEpoch": "journal_1",
+        "snapshotId": "snapshot_1",
+        "issuedAt": 1001,
+        "expiresAt": 15000,
+        "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+      },
+      "fields": [
+        1,
+        "project_operation_memory_source",
+        "dsh",
+        "https://host.example",
+        "key_1",
+        "00000001-0000-4000-8000-000000000001",
+        "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "00000002-0000-4000-8000-000000000002",
+        "1",
+        "1",
+        "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "prepare_snapshot",
+        "cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba",
+        "deepseek-bot:ai-proj-operator",
+        "1",
+        "journal_1",
+        "snapshot_1",
+        1001,
+        15000
+      ],
+      "preimage": "dsh.project-operation-memory-source-proof/v1\u0000[1,\"project_operation_memory_source\",\"dsh\",\"https://host.example\",\"key_1\",\"00000001-0000-4000-8000-000000000001\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"prepare_snapshot\",\"cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba\",\"deepseek-bot:ai-proj-operator\",\"1\",\"journal_1\",\"snapshot_1\",1001,15000]",
+      "digest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1"
+    },
+    {
+      "name": "projectionProof",
+      "value": {
+        "schemaVersion": 1,
+        "purpose": "project_operation_memory_retained_read",
+        "servingSide": "slark",
+        "issuer": "https://cloud.example",
+        "keyId": "key_1",
+        "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+        "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "operation": "search",
+        "resultDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "consentVersions": [
+          {
+            "id": "00000004-0000-4000-8000-000000000004",
+            "generation": "1"
+          }
+        ],
+        "materialVersions": [
+          {
+            "rightId": "00000010-0000-4000-8000-000000000010",
+            "generation": "1",
+            "sourceRevision": "9007199254740993"
+          }
+        ],
+        "originProofDigests": [
+          "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1"
+        ],
+        "issuedAt": 1001,
+        "expiresAt": 15000,
+        "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+      },
+      "fields": [
+        1,
+        "project_operation_memory_retained_read",
+        "slark",
+        "https://cloud.example",
+        "key_1",
+        "00000001-0000-4000-8000-000000000001",
+        "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "search",
+        "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        [
+          [
+            "00000004-0000-4000-8000-000000000004",
+            "1"
+          ]
+        ],
+        [
+          [
+            "00000010-0000-4000-8000-000000000010",
+            "1",
+            "9007199254740993"
+          ]
+        ],
+        [
+          "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1"
+        ],
+        1001,
+        15000
+      ],
+      "preimage": "slark.project-operation-memory-retained-read/v1\u0000[1,\"project_operation_memory_retained_read\",\"slark\",\"https://cloud.example\",\"key_1\",\"00000001-0000-4000-8000-000000000001\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"search\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",[[\"00000004-0000-4000-8000-000000000004\",\"1\"]],[[\"00000010-0000-4000-8000-000000000010\",\"1\",\"9007199254740993\"]],[\"bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1\"],1001,15000]",
+      "digest": null
+    },
+    {
+      "name": "hostAck",
+      "value": {
+        "schemaVersion": 1,
+        "issuer": "https://host.example",
+        "keyId": "key_1",
+        "participantRole": "source_export",
+        "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+        "batchId": "0000000f-0000-4000-8000-00000000000f",
+        "bindingId": "00000002-0000-4000-8000-000000000002",
+        "bindingGeneration": "1",
+        "scopeVersion": "1",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "applyDirectiveDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "0",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "peer": {
+          "computerId": "computer_1",
+          "installationId": "0000000a-0000-4000-8000-00000000000a",
+          "hostRegistryId": "registry_1",
+          "hostEpoch": "1",
+          "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+          "hostInstanceId": "0000000b-0000-4000-8000-00000000000b",
+          "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        },
+        "durableAt": 1200,
+        "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+      },
+      "fields": [
+        1,
+        "https://host.example",
+        "key_1",
+        "source_export",
+        "0000000e-0000-4000-8000-00000000000e",
+        "0000000f-0000-4000-8000-00000000000f",
+        "00000002-0000-4000-8000-000000000002",
+        "1",
+        "1",
+        "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        [
+          "journal_1",
+          "0",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        [
+          "computer_1",
+          "0000000a-0000-4000-8000-00000000000a",
+          "registry_1",
+          "1",
+          "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+          "0000000b-0000-4000-8000-00000000000b",
+          "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+        ],
+        1200
+      ],
+      "preimage": "dsh.project-operation-memory-apply-ack/v1\u0000[1,\"https://host.example\",\"key_1\",\"source_export\",\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\",[\"journal_1\",\"0\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\"],[\"computer_1\",\"0000000a-0000-4000-8000-00000000000a\",\"registry_1\",\"1\",\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",\"0000000b-0000-4000-8000-00000000000b\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],1200]",
+      "digest": "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565"
+    },
+    {
+      "name": "receipt",
+      "value": {
+        "schemaVersion": 1,
+        "issuer": "https://cloud.example",
+        "keyId": "key_1",
+        "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+        "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+        "batchId": "0000000f-0000-4000-8000-00000000000f",
+        "bindingId": "00000002-0000-4000-8000-000000000002",
+        "bindingGeneration": "1",
+        "scopeVersion": "1",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "applyDirectiveDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "hostApplyAckDigest": "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565",
+        "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "0",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "stage": "delivery_committed",
+        "dispositions": [
+          {
+            "sourceEventId": "event_1",
+            "sourceRevision": "9007199254740993",
+            "state": "retained",
+            "rightId": "00000010-0000-4000-8000-000000000010",
+            "rightGeneration": "1",
+            "reason": null
+          }
+        ],
+        "committedAt": 1300,
+        "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+      },
+      "fields": [
+        1,
+        "https://cloud.example",
+        "key_1",
+        "00000001-0000-4000-8000-000000000001",
+        "0000000e-0000-4000-8000-00000000000e",
+        "0000000f-0000-4000-8000-00000000000f",
+        "00000002-0000-4000-8000-000000000002",
+        "1",
+        "1",
+        "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+        "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565",
+        "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        [
+          "journal_1",
+          "0",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        "delivery_committed",
+        [
+          [
+            "event_1",
+            "9007199254740993",
+            "retained",
+            "00000010-0000-4000-8000-000000000010",
+            "1",
+            null
+          ]
+        ],
+        1300
+      ],
+      "preimage": "slark.project-operation-memory-material-receipt/v1\u0000[1,\"https://cloud.example\",\"key_1\",\"00000001-0000-4000-8000-000000000001\",\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\",[\"journal_1\",\"0\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\"],\"delivery_committed\",[[\"event_1\",\"9007199254740993\",\"retained\",\"00000010-0000-4000-8000-000000000010\",\"1\",null]],1300]",
+      "digest": "9539443fd15e4ee2db9571f15d00819b66ffc9bd09f084ec2244aec8458fa522"
+    }
+  ],
+  "commands": [
+    {
+      "operation": "prepare_snapshot",
+      "body": {
+        "requestId": "0000000c-0000-4000-8000-00000000000c",
+        "expectedScopeVersion": "1",
+        "mode": "history"
+      },
+      "fields": [
+        "0000000c-0000-4000-8000-00000000000c",
+        "1",
+        "history"
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"prepare_snapshot\",[\"0000000c-0000-4000-8000-00000000000c\",\"1\",\"history\"]]",
+      "digest": "5af7555efa732eee3fce094fa961fc4a1bc5c70b867f12979351bb198b0197a0"
+    },
+    {
+      "operation": "prepare_snapshot",
+      "body": {
+        "requestId": "0000000c-0000-4000-8000-00000000000c",
+        "expectedScopeVersion": "1",
+        "mode": "resume",
+        "resumeOperation": "history_page",
+        "journalEpoch": "journal_1",
+        "snapshotId": "snapshot_1",
+        "throughSequence": "1",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "0",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "queryDigest": null
+      },
+      "fields": [
+        "0000000c-0000-4000-8000-00000000000c",
+        "1",
+        "resume",
+        "history_page",
+        "journal_1",
+        "snapshot_1",
+        "1",
+        [
+          "journal_1",
+          "0",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        null
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"prepare_snapshot\",[\"0000000c-0000-4000-8000-00000000000c\",\"1\",\"resume\",\"history_page\",\"journal_1\",\"snapshot_1\",\"1\",[\"journal_1\",\"0\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\"],null]]",
+      "digest": "c971bcefb2ab48cc244996f730c9b4db5d77728c185fcd292c3b596615e6c161"
+    },
+    {
+      "operation": "history_page",
+      "body": {
+        "snapshotId": "snapshot_1",
+        "journalEpoch": "journal_1",
+        "afterCursor": null,
+        "throughSequence": "1",
+        "pageSize": 50,
+        "maxBytes": 32768
+      },
+      "fields": [
+        "snapshot_1",
+        "journal_1",
+        null,
+        "1",
+        50,
+        32768
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"history_page\",[\"snapshot_1\",\"journal_1\",null,\"1\",50,32768]]",
+      "digest": "b36b34cef9788c6a3dc8c8ee211d9c33da390d60c517da9022883e968c42d1c4"
+    },
+    {
+      "operation": "delta_page",
+      "body": {
+        "journalEpoch": "journal_1",
+        "afterCursor": null,
+        "throughSequence": "1",
+        "pageSize": 50,
+        "maxBytes": 32768
+      },
+      "fields": [
+        "journal_1",
+        null,
+        "1",
+        50,
+        32768
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"delta_page\",[\"journal_1\",null,\"1\",50,32768]]",
+      "digest": "6e2638b50128bd1fbd3712e82551d07a0eb03dfab6e74c06bec158cdf3b3ae1e"
+    },
+    {
+      "operation": "search",
+      "body": {
+        "query": " 原文\n目标 ",
+        "queryDigest": "f9f182d7983d047d0da82ddf1462a5afe77ce056e1a2864b45cafaaf8b1580c4",
+        "limit": 20,
+        "maxBytes": 32768,
+        "cursor": null
+      },
+      "fields": [
+        " 原文\n目标 ",
+        "f9f182d7983d047d0da82ddf1462a5afe77ce056e1a2864b45cafaaf8b1580c4",
+        20,
+        32768,
+        null
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"search\",[\" 原文\\n目标 \",\"f9f182d7983d047d0da82ddf1462a5afe77ce056e1a2864b45cafaaf8b1580c4\",20,32768,null]]",
+      "digest": "29c1baff0bb2e6b86ec934a470d459906a440708e130b4ba47b42b5e64abce8f"
+    },
+    {
+      "operation": "evidence",
+      "body": {
+        "sourceEventId": "event_1",
+        "sourceRevision": "9007199254740993",
+        "rightId": null,
+        "rightGeneration": null,
+        "offset": 0,
+        "maxBytes": 16384
+      },
+      "fields": [
+        "event_1",
+        "9007199254740993",
+        null,
+        null,
+        0,
+        16384
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"evidence\",[\"event_1\",\"9007199254740993\",null,null,0,16384]]",
+      "digest": "52aa770973a64570c14d54a773840a2707a132397da0cf4730db3471072fb518"
+    },
+    {
+      "operation": "apply",
+      "body": {
+        "phase": "stage",
+        "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+        "batchId": "0000000f-0000-4000-8000-00000000000f",
+        "participantRole": "source_export",
+        "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        "sourceProof": {
+          "schemaVersion": 1,
+          "purpose": "project_operation_memory_source",
+          "side": "dsh",
+          "issuer": "https://host.example",
+          "keyId": "key_1",
+          "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+          "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "bindingId": "00000002-0000-4000-8000-000000000002",
+          "bindingGeneration": "1",
+          "scopeVersion": "1",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+          "operation": "prepare_snapshot",
+          "resultDigest": "cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba",
+          "sourceActorRef": "deepseek-bot:ai-proj-operator",
+          "sourceAuthorityVersion": "1",
+          "journalEpoch": "journal_1",
+          "snapshotId": "snapshot_1",
+          "issuedAt": 1001,
+          "expiresAt": 15000,
+          "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+        },
+        "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        "events": [
+          {
+            "originSide": "dsh",
+            "originActorRef": "deepseek-bot:ai-proj-operator",
+            "sourceEventId": "event_1",
+            "sourceRevision": "9007199254740993",
+            "sourceSequence": "1",
+            "projectId": "ai-proj",
+            "occurredAt": 150,
+            "kind": "operation",
+            "taskRef": "task_1",
+            "stepRef": null,
+            "invocationRef": null,
+            "evidenceRef": null,
+            "sourcePolicy": "owner_native_operation_fact_v1",
+            "sourceLocator": null,
+            "materialDependencies": [],
+            "content": {
+              "goalSummary": "目标",
+              "operationSummary": "execute",
+              "outcome": "claimed",
+              "resultSummary": "",
+              "failureCode": null,
+              "unfinishedRefs": [],
+              "verification": "unverified"
+            },
+            "payloadDigest": "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a"
+          }
+        ],
+        "expectedCheckpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "0",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        }
+      },
+      "fields": [
+        "stage",
+        "0000000e-0000-4000-8000-00000000000e",
+        "0000000f-0000-4000-8000-00000000000f",
+        "source_export",
+        "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+        [
+          1,
+          "project_operation_memory_source",
+          "dsh",
+          "https://host.example",
+          "key_1",
+          "00000001-0000-4000-8000-000000000001",
+          "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "00000002-0000-4000-8000-000000000002",
+          "1",
+          "1",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+          "prepare_snapshot",
+          "cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba",
+          "deepseek-bot:ai-proj-operator",
+          "1",
+          "journal_1",
+          "snapshot_1",
+          1001,
+          15000,
+          "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+        ],
+        "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+        "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        [
+          [
+            "dsh",
+            "deepseek-bot:ai-proj-operator",
+            "event_1",
+            "9007199254740993",
+            "1",
+            "ai-proj",
+            150,
+            "operation",
+            "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a",
+            "task_1",
+            null,
+            null,
+            null,
+            "owner_native_operation_fact_v1",
+            null,
+            [],
+            [
+              "目标",
+              "execute",
+              "claimed",
+              "",
+              null,
+              [],
+              "unverified"
+            ]
+          ]
+        ],
+        [
+          "journal_1",
+          "0",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ]
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"apply\",[\"stage\",\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"source_export\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",[1,\"project_operation_memory_source\",\"dsh\",\"https://host.example\",\"key_1\",\"00000001-0000-4000-8000-000000000001\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"prepare_snapshot\",\"cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba\",\"deepseek-bot:ai-proj-operator\",\"1\",\"journal_1\",\"snapshot_1\",1001,15000,\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\"],\"bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\",[[\"dsh\",\"deepseek-bot:ai-proj-operator\",\"event_1\",\"9007199254740993\",\"1\",\"ai-proj\",150,\"operation\",\"e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a\",\"task_1\",null,null,null,\"owner_native_operation_fact_v1\",null,[],[\"目标\",\"execute\",\"claimed\",\"\",null,[],\"unverified\"]]],[\"journal_1\",\"0\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\"]]]",
+      "digest": "6c2a1f268e730366b27873d777bf7f2feaac7e3f613c870499a0e30c79f4e88b"
+    },
+    {
+      "operation": "apply",
+      "body": {
+        "phase": "finalize",
+        "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+        "batchId": "0000000f-0000-4000-8000-00000000000f",
+        "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        "cloudMaterialReceipt": {
+          "schemaVersion": 1,
+          "issuer": "https://cloud.example",
+          "keyId": "key_1",
+          "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+          "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+          "batchId": "0000000f-0000-4000-8000-00000000000f",
+          "bindingId": "00000002-0000-4000-8000-000000000002",
+          "bindingGeneration": "1",
+          "scopeVersion": "1",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+          "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+          "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+          "applyDirectiveDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "hostApplyAckDigest": "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565",
+          "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+          "checkpoint": {
+            "journalEpoch": "journal_1",
+            "sequence": "0",
+            "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+            "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+          },
+          "stage": "delivery_committed",
+          "dispositions": [
+            {
+              "sourceEventId": "event_1",
+              "sourceRevision": "9007199254740993",
+              "state": "retained",
+              "rightId": "00000010-0000-4000-8000-000000000010",
+              "rightGeneration": "1",
+              "reason": null
+            }
+          ],
+          "committedAt": 1300,
+          "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+        }
+      },
+      "fields": [
+        "finalize",
+        "0000000e-0000-4000-8000-00000000000e",
+        "0000000f-0000-4000-8000-00000000000f",
+        "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+        [
+          1,
+          "https://cloud.example",
+          "key_1",
+          "00000001-0000-4000-8000-000000000001",
+          "0000000e-0000-4000-8000-00000000000e",
+          "0000000f-0000-4000-8000-00000000000f",
+          "00000002-0000-4000-8000-000000000002",
+          "1",
+          "1",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+          "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+          "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+          "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565",
+          "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+          [
+            "journal_1",
+            "0",
+            "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+            "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+          ],
+          "delivery_committed",
+          [
+            [
+              "event_1",
+              "9007199254740993",
+              "retained",
+              "00000010-0000-4000-8000-000000000010",
+              "1",
+              null
+            ]
+          ],
+          1300,
+          "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+        ]
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"apply\",[\"finalize\",\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\",[1,\"https://cloud.example\",\"key_1\",\"00000001-0000-4000-8000-000000000001\",\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"00000002-0000-4000-8000-000000000002\",\"1\",\"1\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\",\"12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2\",\"bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\",[\"journal_1\",\"0\",\"46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738\",\"80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198\"],\"delivery_committed\",[[\"event_1\",\"9007199254740993\",\"retained\",\"00000010-0000-4000-8000-000000000010\",\"1\",null]],1300,\"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw\"]]]",
+      "digest": "95edc62e7167c698060d6bcf02fd3f9e6906a9927ee7f704035aeaee73d06195"
+    },
+    {
+      "operation": "receipt",
+      "body": {
+        "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+        "batchId": "0000000f-0000-4000-8000-00000000000f",
+        "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0"
+      },
+      "fields": [
+        "0000000e-0000-4000-8000-00000000000e",
+        "0000000f-0000-4000-8000-00000000000f",
+        "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0"
+      ],
+      "preimage": "slark.project-operation-memory.command/v1\u0000[\"receipt\",[\"0000000e-0000-4000-8000-00000000000e\",\"0000000f-0000-4000-8000-00000000000f\",\"ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0\"]]",
+      "digest": "3dbc24b6f92d48652d0e8647b58b1279942453c941657050841a742fe9a818cc"
+    }
+  ],
+  "readResults": [
+    {
+      "operation": "prepare_snapshot",
+      "value": {
+        "journalEpoch": "journal_1",
+        "snapshotId": "snapshot_1",
+        "historyCut": {
+          "from": 100,
+          "to": 200,
+          "timeZone": "UTC"
+        },
+        "syncStartSequence": "0",
+        "activationSequence": "0",
+        "throughSequence": "1",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "0",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "coverage": {
+          "state": "complete",
+          "fromSequence": "0",
+          "scannedThroughSequence": "0",
+          "throughSequence": "1",
+          "gaps": []
+        },
+        "resumeCursor": null
+      },
+      "fields": [
+        "journal_1",
+        "snapshot_1",
+        [
+          100,
+          200,
+          "UTC"
+        ],
+        "0",
+        "0",
+        "1",
+        [
+          "journal_1",
+          "0",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        [
+          "complete",
+          "0",
+          "0",
+          "1",
+          []
+        ],
+        null
+      ],
+      "digest": "cd102297fe25f3a7ce286906d4b1743f62770edb3389ed74fa2a3d1dd23640ba"
+    },
+    {
+      "operation": "history_page",
+      "value": {
+        "events": [
+          {
+            "originSide": "dsh",
+            "originActorRef": "deepseek-bot:ai-proj-operator",
+            "sourceEventId": "event_1",
+            "sourceRevision": "9007199254740993",
+            "sourceSequence": "1",
+            "projectId": "ai-proj",
+            "occurredAt": 150,
+            "kind": "operation",
+            "taskRef": "task_1",
+            "stepRef": null,
+            "invocationRef": null,
+            "evidenceRef": null,
+            "sourcePolicy": "owner_native_operation_fact_v1",
+            "sourceLocator": null,
+            "materialDependencies": [],
+            "content": {
+              "goalSummary": "目标",
+              "operationSummary": "execute",
+              "outcome": "claimed",
+              "resultSummary": "",
+              "failureCode": null,
+              "unfinishedRefs": [],
+              "verification": "unverified"
+            },
+            "payloadDigest": "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a"
+          }
+        ],
+        "scannedThroughSequence": "1",
+        "throughSequence": "1",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "1",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "nextCursor": null,
+        "eof": true,
+        "coverage": {
+          "state": "complete",
+          "fromSequence": "0",
+          "scannedThroughSequence": "1",
+          "throughSequence": "1",
+          "gaps": []
+        }
+      },
+      "fields": [
+        [
+          [
+            "dsh",
+            "deepseek-bot:ai-proj-operator",
+            "event_1",
+            "9007199254740993",
+            "1",
+            "ai-proj",
+            150,
+            "operation",
+            "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a",
+            "task_1",
+            null,
+            null,
+            null,
+            "owner_native_operation_fact_v1",
+            null,
+            [],
+            [
+              "目标",
+              "execute",
+              "claimed",
+              "",
+              null,
+              [],
+              "unverified"
+            ]
+          ]
+        ],
+        "1",
+        "1",
+        [
+          "journal_1",
+          "1",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        null,
+        true,
+        [
+          "complete",
+          "0",
+          "1",
+          "1",
+          []
+        ]
+      ],
+      "digest": "1b12753bdb310721cae9e84dbdedc4120839ffc77df384e8de94a57e73c5ea1b"
+    },
+    {
+      "operation": "delta_page",
+      "value": {
+        "events": [
+          {
+            "originSide": "dsh",
+            "originActorRef": "deepseek-bot:ai-proj-operator",
+            "sourceEventId": "event_1",
+            "sourceRevision": "9007199254740993",
+            "sourceSequence": "1",
+            "projectId": "ai-proj",
+            "occurredAt": 150,
+            "kind": "operation",
+            "taskRef": "task_1",
+            "stepRef": null,
+            "invocationRef": null,
+            "evidenceRef": null,
+            "sourcePolicy": "owner_native_operation_fact_v1",
+            "sourceLocator": null,
+            "materialDependencies": [],
+            "content": {
+              "goalSummary": "目标",
+              "operationSummary": "execute",
+              "outcome": "claimed",
+              "resultSummary": "",
+              "failureCode": null,
+              "unfinishedRefs": [],
+              "verification": "unverified"
+            },
+            "payloadDigest": "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a"
+          }
+        ],
+        "scannedThroughSequence": "1",
+        "throughSequence": "1",
+        "checkpoint": {
+          "journalEpoch": "journal_1",
+          "sequence": "1",
+          "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        },
+        "nextCursor": null,
+        "eof": true,
+        "coverage": {
+          "state": "complete",
+          "fromSequence": "0",
+          "scannedThroughSequence": "1",
+          "throughSequence": "1",
+          "gaps": []
+        }
+      },
+      "fields": [
+        [
+          [
+            "dsh",
+            "deepseek-bot:ai-proj-operator",
+            "event_1",
+            "9007199254740993",
+            "1",
+            "ai-proj",
+            150,
+            "operation",
+            "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a",
+            "task_1",
+            null,
+            null,
+            null,
+            "owner_native_operation_fact_v1",
+            null,
+            [],
+            [
+              "目标",
+              "execute",
+              "claimed",
+              "",
+              null,
+              [],
+              "unverified"
+            ]
+          ]
+        ],
+        "1",
+        "1",
+        [
+          "journal_1",
+          "1",
+          "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+          "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+        ],
+        null,
+        true,
+        [
+          "complete",
+          "0",
+          "1",
+          "1",
+          []
+        ]
+      ],
+      "digest": "03a57b0e7768b0080933d95f1bddbd319cb151e2b0aa46ab795b6502a83d110b"
+    },
+    {
+      "operation": "search",
+      "value": {
+        "items": [
+          {
+            "originSide": "dsh",
+            "originActorRef": "deepseek-bot:ai-proj-operator",
+            "sourceEventId": "event_1",
+            "sourceRevision": "9007199254740993",
+            "kind": "operation",
+            "snippet": "目标",
+            "rightId": "00000010-0000-4000-8000-000000000010",
+            "rightGeneration": "1"
+          }
+        ],
+        "searchSnapshotId": "search_1",
+        "resumeRef": {
+          "journalEpoch": "journal_1",
+          "snapshotId": "search_1",
+          "throughSequence": "1",
+          "checkpoint": {
+            "journalEpoch": "journal_1",
+            "sequence": "1",
+            "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+            "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+          },
+          "queryDigest": "f9f182d7983d047d0da82ddf1462a5afe77ce056e1a2864b45cafaaf8b1580c4"
+        },
+        "nextCursor": null,
+        "eof": true,
+        "coverage": {
+          "state": "complete",
+          "fromSequence": "0",
+          "scannedThroughSequence": "1",
+          "throughSequence": "1",
+          "gaps": []
+        },
+        "materialVersions": [
+          {
+            "rightId": "00000010-0000-4000-8000-000000000010",
+            "generation": "1",
+            "sourceRevision": "9007199254740993"
+          }
+        ]
+      },
+      "fields": [
+        [
+          [
+            "dsh",
+            "deepseek-bot:ai-proj-operator",
+            "event_1",
+            "9007199254740993",
+            "operation",
+            "目标",
+            "00000010-0000-4000-8000-000000000010",
+            "1"
+          ]
+        ],
+        "search_1",
+        [
+          "journal_1",
+          "search_1",
+          "1",
+          [
+            "journal_1",
+            "1",
+            "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+            "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+          ],
+          "f9f182d7983d047d0da82ddf1462a5afe77ce056e1a2864b45cafaaf8b1580c4"
+        ],
+        null,
+        true,
+        [
+          "complete",
+          "0",
+          "1",
+          "1",
+          []
+        ],
+        [
+          [
+            "00000010-0000-4000-8000-000000000010",
+            "1",
+            "9007199254740993"
+          ]
+        ]
+      ],
+      "digest": "4c79a29d71035e238b1370d5d4e3ffb59370861a7963bb6e8e1c4b0440caa749"
+    },
+    {
+      "operation": "evidence",
+      "value": {
+        "status": "ready",
+        "sourceEventId": "event_1",
+        "sourceRevision": "9007199254740993",
+        "payloadDigest": "354b28c85333456866931a77eacdf6cd18d80b79981ccf1f4ca927b84fd99302",
+        "offset": 0,
+        "totalBytes": 6,
+        "chunkDigest": "354b28c85333456866931a77eacdf6cd18d80b79981ccf1f4ca927b84fd99302",
+        "bytesBase64url": "5Y6f5paH",
+        "nextOffset": null,
+        "eof": true
+      },
+      "fields": [
+        "ready",
+        "event_1",
+        "9007199254740993",
+        "354b28c85333456866931a77eacdf6cd18d80b79981ccf1f4ca927b84fd99302",
+        0,
+        6,
+        "354b28c85333456866931a77eacdf6cd18d80b79981ccf1f4ca927b84fd99302",
+        "5Y6f5paH",
+        null,
+        true
+      ],
+      "digest": "4be0c81f0bbb402d95387e6bcec3a6181da88f7d1529cf75ae4628feacc634c9"
+    },
+    {
+      "operation": "evidence",
+      "value": {
+        "status": "missing"
+      },
+      "fields": [
+        "missing"
+      ],
+      "digest": "cabcf20ed64303fc1517d77f3e6d68a3ce5442a1136bf5327ef1f3941045f722"
+    }
+  ],
+  "recipient": {
+    "fields": [
+      "slark",
+      "slark-agent:85a6ae2bc227334a3ffe934963b27f12815026c669980beb3ca801981c339956",
+      "owner_private",
+      "human:test",
+      "1",
+      "4834ddb1290043bdd1907fd4a1a61463103f8a5c5c9786ba217eb9fcdacd1c62"
+    ],
+    "digest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+  },
+  "batch": {
+    "context": {
+      "direction": "dsh_to_slark",
+      "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+    },
+    "fields": [
+      "0000000e-0000-4000-8000-00000000000e",
+      "0000000f-0000-4000-8000-00000000000f",
+      "source_export",
+      "dsh_to_slark",
+      "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+      "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+      "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+      [
+        [
+          "dsh",
+          "deepseek-bot:ai-proj-operator",
+          "event_1",
+          "9007199254740993",
+          "1",
+          "ai-proj",
+          150,
+          "operation",
+          "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a",
+          "task_1",
+          null,
+          null,
+          null,
+          "owner_native_operation_fact_v1",
+          null,
+          [],
+          [
+            "目标",
+            "execute",
+            "claimed",
+            "",
+            null,
+            [],
+            "unverified"
+          ]
+        ]
+      ],
+      [
+        "journal_1",
+        "0",
+        "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+      ]
+    ],
+    "digest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0"
+  },
+  "event": {
+    "originSide": "dsh",
+    "originActorRef": "deepseek-bot:ai-proj-operator",
+    "sourceEventId": "event_1",
+    "sourceRevision": "9007199254740993",
+    "sourceSequence": "1",
+    "projectId": "ai-proj",
+    "occurredAt": 150,
+    "kind": "operation",
+    "taskRef": "task_1",
+    "stepRef": null,
+    "invocationRef": null,
+    "evidenceRef": null,
+    "sourcePolicy": "owner_native_operation_fact_v1",
+    "sourceLocator": null,
+    "materialDependencies": [],
+    "content": {
+      "goalSummary": "目标",
+      "operationSummary": "execute",
+      "outcome": "claimed",
+      "resultSummary": "",
+      "failureCode": null,
+      "unfinishedRefs": [],
+      "verification": "unverified"
+    },
+    "payloadDigest": "e1eeb05f4203dff99ac6929f1f30a407a48f06d09a9445ddee5c6190802d479a"
+  },
+  "finalizeResult": {
+    "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+    "batchId": "0000000f-0000-4000-8000-00000000000f",
+    "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+    "status": "activated",
+    "checkpoint": {
+      "journalEpoch": "journal_1",
+      "sequence": "0",
+      "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+    },
+    "activatedAt": 1400
+  },
+  "receiptResult": {
+    "status": "found",
+    "hostApplyAck": {
+      "schemaVersion": 1,
+      "issuer": "https://host.example",
+      "keyId": "key_1",
+      "participantRole": "source_export",
+      "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+      "batchId": "0000000f-0000-4000-8000-00000000000f",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+      "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+      "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+      "applyDirectiveDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+      "checkpoint": {
+        "journalEpoch": "journal_1",
+        "sequence": "0",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+      },
+      "peer": {
+        "computerId": "computer_1",
+        "installationId": "0000000a-0000-4000-8000-00000000000a",
+        "hostRegistryId": "registry_1",
+        "hostEpoch": "1",
+        "publicKey": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+        "hostInstanceId": "0000000b-0000-4000-8000-00000000000b",
+        "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      },
+      "durableAt": 1200,
+      "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+    },
+    "cloudMaterialReceipt": {
+      "schemaVersion": 1,
+      "issuer": "https://cloud.example",
+      "keyId": "key_1",
+      "authorityEnvironmentId": "00000001-0000-4000-8000-000000000001",
+      "deliveryId": "0000000e-0000-4000-8000-00000000000e",
+      "batchId": "0000000f-0000-4000-8000-00000000000f",
+      "bindingId": "00000002-0000-4000-8000-000000000002",
+      "bindingGeneration": "1",
+      "scopeVersion": "1",
+      "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+      "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198",
+      "readDirectiveDigest": "12e338e9ee47faa4a483b6f1bbfdd5e468b81b0cced5eef88ae150c1653b40d2",
+      "sourceProofDigest": "bc04b116a0ac23d6d034fc4c23064c74f02742543595ff2323048df661839be1",
+      "applyDirectiveDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "hostApplyAckDigest": "eef733ad12372145c990ebbd585be09e514b7b7d4ac48cc4fbe723b1b98ee565",
+      "batchDigest": "ecba2ea12b6156ff86d3762cd83187fd5869be4f1f26ae10a84ff091647f1be0",
+      "checkpoint": {
+        "journalEpoch": "journal_1",
+        "sequence": "0",
+        "scopeDigest": "46b2c3bf8b17fbbaa6eff0c570cdd8ec72c13c5dcaf76f3bae98f24062fba738",
+        "recipientDigest": "80ce40ba2ad4aae38a29d21e21fe0229e87ae35b2cbd6f20b886f9b98ec6b198"
+      },
+      "stage": "delivery_committed",
+      "dispositions": [
+        {
+          "sourceEventId": "event_1",
+          "sourceRevision": "9007199254740993",
+          "state": "retained",
+          "rightId": "00000010-0000-4000-8000-000000000010",
+          "rightGeneration": "1",
+          "reason": null
+        }
+      ],
+      "committedAt": 1300,
+      "signature": "AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
+    },
+    "effectiveState": "active"
+  }
+}

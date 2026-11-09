@@ -143,6 +143,22 @@ function scope(value: unknown, context: HostTwinBindingOfferContext): HostTwinBi
 }
 
 /**
+ * Parse one confirmed owner-private scope with its exact consent and scope digests.
+ * @param value - Untrusted complete scope.
+ * @param context - Owner and environment obtained from the separate signed directive.
+ * @returns Detached scope; current relationship and source authorization remain separate checks.
+ */
+export function parseHostTwinBindingScope(value: unknown, context: HostTwinBindingOfferContext): HostTwinBindingScope {
+  return scope(value, { ownerUserId: id(context.ownerUserId), authorityEnvironmentId: uuid(context.authorityEnvironmentId) })
+}
+/**
+ * Encode a parsed scope's declared-order fields, excluding its own scopeDigest.
+ * @param value - Previously parsed owner-private scope.
+ * @returns Nested arrays used by confirmed-scope and directive bytes.
+ */
+export function hostTwinBindingScopeFields(value: HostTwinBindingScope): unknown[] { return scopeArray(value) }
+
+/**
  * Recompute all consent and scope bytes, including the same project/twin/owner and both Bot endpoints.
  * The caller still verifies the signed directive and independently proves the local DSH Profile/Bot.
  * @param value - Untrusted complete bidirectional offer.
