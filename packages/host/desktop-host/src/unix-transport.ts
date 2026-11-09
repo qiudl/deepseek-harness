@@ -1,3 +1,4 @@
+import type { ProjectOperationMemoryRecipientImports } from './project-operation-memory-recipient-imports.ts'
 import type { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
 import { parseHostProjectMemoryJson, parseHostProjectMemoryRequest, parseHostProjectMemoryResponse, encodeHostProjectMemorySourceProof, hostProjectMemoryDirectiveDigest, encodeHostProjectMemoryHostAck } from '@deepseek-ai/dsh-host-control-protocol'
 import { operateAccountProjectOperationMemory } from './account-project-operation-memory.ts'
@@ -374,6 +375,9 @@ export interface UnixHostServerOptions {
   /** Separate private sidecar; original twin-binding receipt bytes remain unchanged. */
   readonly createProjectOperationMemorySourceExports?: (profileId: string) =>
     ProjectOperationMemorySourceExports | Promise<ProjectOperationMemorySourceExports>
+  /** Independent reverse metadata store; the original confirmation reader is owned by this Host. */
+  readonly createProjectOperationMemoryRecipientImports?: (profileId: string, confirmations: TwinBindingReceipts) =>
+    ProjectOperationMemoryRecipientImports | Promise<ProjectOperationMemoryRecipientImports>
   readonly createProjectOperationMemoryMetadata?: (profileId: string) =>
     ProjectOperationMemoryMetadata | Promise<ProjectOperationMemoryMetadata>
   readonly createTwinBindingReceiptStore?: (profileId: string) => TwinBindingReceipts
@@ -650,7 +654,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'botSessionIdentityReceiver' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported' | 'projectOperationOriginSupported'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
-    | 'createTwinBindingReceiptStore' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments'
+    | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
@@ -2203,11 +2207,16 @@ export class HostControlAuthority {
             hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce }
           if (command.action === 'project_operation_memory') {
             const metadata = this.options.createProjectOperationMemoryMetadata
+            const recipient = this.options.createProjectOperationMemoryRecipientImports,
+              confirmations = this.options.createTwinBindingReceiptStore
             const record = await operateAccountProjectOperationMemory({ host: this.options.host,
               peer: actualPeer as Parameters<typeof operateAccountProjectOperationMemory>[0]['peer'],
               environments: this.options.projectOperationMemoryEnvironments ?? [],
               ...(this.options.createProjectOperationMemorySourceExports
                 ? { sourceExports: this.options.createProjectOperationMemorySourceExports } : {}),
+              ...(recipient && confirmations
+                ? { recipientImports: (profile: string) => recipient(profile, confirmations(profile)) } : {}),
+              ...(this.options.resolveBotIdentity ? { resolveRecipientBot: this.options.resolveBotIdentity } : {}),
               metadata: (profile) => { if (!metadata) throw new HostAuthorityError('unavailable'); return metadata(profile) },
               execute: (profile, input, signal) => execute(profile, input, signal), now: clock,
               sign: payload => sign(null, payload, privateKeyObject(identity.installationPrivateKey)).toString('base64url'),

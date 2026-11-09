@@ -515,3 +515,59 @@ it.skipIf(process.platform === 'win32')(
     await expect(ProjectOperationMemoryDatabaseFiles.windows({ ...win.options, legacyRoots: [old] })).rejects.toThrow()
   },
 )
+
+it.each([2, 3, 5])('checks recipient existing Windows sidecars without creating on native failure %s', async (code) => {
+  const f = windowsFixture(), acquire = f.options.bindings.acquirePrivateDatabaseFile
+  if (!acquire) throw Error('missing native fixture')
+  f.options.bindings.acquirePrivateDatabaseFile = (path, descriptor, mode) => {
+    if (mode === 'existing' && (path.endsWith('-wal') || path.endsWith('-shm')))
+      throw Object.assign(Error('native existing-sidecar result'), { win32Code: code })
+    return acquire(path, descriptor, mode)
+  }
+  const result = ProjectOperationMemoryDatabaseFiles.windows({ ...f.options, storePurpose: 'recipient_import' })
+  if (code === 5) {
+    await expect(result).rejects.toThrow('native existing-sidecar result')
+    expect([...f.rows.keys()].some(path => path.endsWith('-wal') || path.endsWith('-shm'))).toBe(false)
+  } else {
+    const files = await result
+    expect(files.storePurpose).toBe('recipient_import')
+    files.releaseSidecars(); await files.releaseAfterDatabaseClose()
+  }
+  expect(f.held).toBe(false)
+})
+it.skipIf(process.platform === 'win32').each(['dev', 'ino', 'close'] as const)(
+  'holds recipient header identity and retains ownership on uncertain header close: %s', async (fault) => {
+    const f = fixture(), options = { ...f.options, storePurpose: 'recipient_import' as const }
+    const { ProjectOperationMemoryRecipientDatabase } = await import('../src/project-operation-memory-recipient-database.ts')
+    const db = await ProjectOperationMemoryRecipientDatabase.open(await ProjectOperationMemoryDatabaseFiles.posix(options))
+    await db.close()
+    const native = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const held = new Set<number>()
+    let headerFd: number | undefined
+    const open = vi.spyOn(fs, 'openSync').mockImplementation((...args) => {
+      const fd = native.openSync(...args)
+      held.add(fd)
+      if (String(args[0]).endsWith('memory.v1.sqlite') && args[1] === (fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW))
+        headerFd = fd
+      return fd
+    })
+    const stat = vi.spyOn(fs, 'fstatSync').mockImplementation((...args) => {
+      if (args[0] === headerFd && fault !== 'close') {
+        const value = native.fstatSync(args[0], { bigint: true })
+        return { ...value, [fault]: value[fault] + 1n }
+      }
+      return Reflect.apply(native.fstatSync, native, args)
+    })
+    const close = vi.spyOn(fs, 'closeSync').mockImplementation((fd) => {
+      if (fd === headerFd && fault === 'close') throw Error('header close uncertain')
+      native.closeSync(fd); held.delete(fd)
+    })
+    try {
+      await expect(ProjectOperationMemoryDatabaseFiles.posix(options)).rejects.toThrow(
+        fault === 'close' ? 'project_memory_ownership_retained' : 'unavailable')
+      if (fault === 'close') await expect(ProjectOperationMemoryDatabaseFiles.posix(options)).rejects.toThrow()
+    } finally {
+      close.mockRestore(); stat.mockRestore(); open.mockRestore()
+      for (const fd of held) native.closeSync(fd)
+    }
+  })
