@@ -727,6 +727,43 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve a current Slark target and a separately unlocked legacy Account source.
+   * @param input - Current target authority and one-time source unlock proof.
+   * @returns The exact source and target Profile IDs.
+   */
+  authorizeSlarkImportPreview(input: {
+    readonly authorityEnvironmentId: string
+    readonly accountBindingHandle: string
+    readonly authorityBindingVersion: number
+    readonly ownerId: string
+    readonly issuer: string
+    readonly subject: string
+    readonly sourceIssuer: string
+    readonly sourceSubject: string
+    readonly sourceKeyHandle: string
+    readonly sourceUnlockMaterial: string
+  }): { readonly sourceProfileId: PersonProfileId; readonly targetProfileId: PersonProfileId } {
+    const targetProfileId = this.authorizeAccountModelText(input)
+    const target = this.options.registry.resolveProfile(targetProfileId)
+    const binding = target?.accountBindings?.[0]
+    if (!target || target.accountBindings?.length !== 1 || !binding?.authorityBindingScope
+      || binding.authorityEnvironmentId !== input.authorityEnvironmentId
+      || binding.handle !== input.accountBindingHandle
+      || binding.authorityBindingVersion !== input.authorityBindingVersion
+      || !this.options.registry.matchesAccountIdentity(target, input)) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    const source = this.options.registry.resolveUniqueAccountByKeyHandle(input.sourceKeyHandle)
+    if (source.profileId === targetProfileId || source.accountBindings.some(item => item.authorityBindingScope !== undefined)
+      || !this.options.registry.matchesAccountIdentity(source,
+        { issuer: input.sourceIssuer, subject: input.sourceSubject })) {
+      throw new HostAuthorityError('profile_mismatch')
+    }
+    this.options.registry.verifyUnlock(source, input.sourceKeyHandle, input.sourceUnlockMaterial)
+    return { sourceProfileId: source.profileId, targetProfileId }
+  }
+
+  /**
    * Authorize the exact challenged Account using this connection's token-verified binding.
    * @param input - Current binding, connection owner and expected Account identity.
    * @returns Nothing; mismatched identity or a revoked/unverified grant throws.

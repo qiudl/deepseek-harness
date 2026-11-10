@@ -148,4 +148,27 @@ describe('Slark Account Profile admission', () => {
     expect(registry.matchesAccountIdentity(registry.resolveProfile(scoped.profileId)!, { issuer, subject: 'someone-else' })).toBe(false)
   })
 
+  it('requires a verified Slark grant and old Account key proof before import preview', async () => {
+    const { host, registry } = fixture()
+    const old = await registry.registerAccount({ issuer, subject, keyHandle: 'keychain:old', unlockMaterial })
+    const preview = {
+      authorityEnvironmentId: environmentId, accountBindingHandle: input.accountBindingHandle,
+      authorityBindingVersion: input.authorityBindingVersion, ownerId: input.ownerId,
+      issuer, subject, sourceIssuer: issuer, sourceSubject: subject,
+      sourceKeyHandle: 'keychain:old', sourceUnlockMaterial: unlockMaterial,
+    }
+    expect(() => host.authorizeSlarkImportPreview(preview)).toThrow('unauthorized')
+    const scoped = await host.ensureSlarkAccountProfile(input)
+    expect(host.authorizeSlarkImportPreview(preview)).toEqual({
+      sourceProfileId: old.profileId, targetProfileId: scoped.profileId,
+    })
+    expect(() => host.authorizeSlarkImportPreview({ ...preview, sourceUnlockMaterial: Buffer.alloc(32, 8).toString('base64url') }))
+      .toThrow('unauthorized')
+    expect(() => host.authorizeSlarkImportPreview({ ...preview, sourceKeyHandle: input.keyHandle }))
+      .toThrow('profile_mismatch')
+    expect(() => host.authorizeSlarkImportPreview({ ...preview, subject: 'wrong-person' }))
+      .toThrow('profile_mismatch')
+    expect(() => host.authorizeSlarkImportPreview({ ...preview, sourceSubject: 'wrong-old-person' }))
+      .toThrow('profile_mismatch')
+  })
 })
