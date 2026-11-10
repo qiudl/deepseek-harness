@@ -318,6 +318,7 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   RuntimeEntryPreparation: 'session.md',
 
   CollaborationExecutionCommandId: 'session.md',
+  CollaborationTaskDurableCut: 'session.md',
   Principal: 'typert.md',
   PrincipalMap: 'typert.md',
   RemoteAccessResource: 'typert.md',

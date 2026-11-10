@@ -241,7 +241,10 @@ export class DesktopTaskCoordination {
       floorDigest: d.floorDigest, inventoryId: snapshot.ack.inventoryId, inventoryDigest: snapshot.ack.inventoryDigest,
       totalCount: snapshot.items.length, items, nextCursor, eof, coverage: { native: snapshot.complete ? 'complete' : 'unknown',
         device: 'unsupported' },
-      quiescence: inFlight ? 'in_flight' : 'unknown', observedAt: this.now(), hostProfileId: this.profileId,
+      quiescence: inFlight ? 'in_flight' : snapshot.complete
+        && this.native.quiescent(this.journal.associations(d.floorDigest).map(value => value.commandId))
+        && snapshot.items.every(item => item.disposition === 'terminal_receipted' || item.disposition === 'cancelled_before_effect')
+        ? 'quiescent' : 'unknown', observedAt: this.now(), hostProfileId: this.profileId,
       workerId: this.workerId, peer: d.peer, signature: placeholder })
     return parseHostTaskCoordinationReply({ ok: true, peer: d.peer, record: { status: 'observed', observation } })
   }
@@ -329,11 +332,16 @@ export class DesktopTaskCoordination {
     const commandIds = associations.map(value => value.commandId), associatedCommands = new Set(commandIds)
     const jobs = this.journal.jobs(commandIds), trackedCommands = new Set(jobs.map(job => job.commandId))
     const attempts = new Set(jobs.map(job => JSON.stringify([job.commandId, job.jobId])))
-    for (const call of this.native.calls(commandIds)) items.push({ kind: 'native_call', itemId: call.itemId,
-      commandId: call.commandId, invocationId: call.invocationId, sessionId: call.sessionId, turn: call.turn, step: call.step,
-      callId: call.callId, state: call.state, callSeq: null, callDigest: null, resultSeq: null, resultDigest: null,
-      disposition: call.state === 'unknown' ? 'effect_unknown' : call.state === 'settled' ? 'terminal_receipted'
-        : call.bodyEntered ? 'running' : 'not_started' } as HostTaskCoordinationInventoryItem)
+    for (const call of this.native.calls(commandIds)) {
+      const evidence = this.native.evidence(call.itemId)
+      items.push({ kind: 'native_call', itemId: call.itemId,
+        commandId: call.commandId, invocationId: call.invocationId, sessionId: call.sessionId, turn: call.turn, step: call.step,
+        callId: call.callId, state: call.state, callSeq: evidence?.callSeq ?? null, callDigest: evidence?.callDigest ?? null,
+        resultSeq: evidence?.resultSeq ?? null, resultDigest: evidence?.resultDigest ?? null,
+        disposition: call.state === 'unknown' || call.state === 'settled' && !evidence ? 'effect_unknown'
+          : call.state === 'settled' ? call.bodyEntered ? 'terminal_receipted' : 'cancelled_before_effect'
+            : call.bodyEntered ? 'running' : 'not_started' } as HostTaskCoordinationInventoryItem)
+    }
     for (const job of jobs) items.push({ kind: 'controller_job', ...job,
       disposition: job.state === 'unknown' ? 'effect_unknown' : job.state === 'settled' ? 'terminal_receipted'
         : job.state === 'queued' ? 'not_started' : 'running' } as HostTaskCoordinationInventoryItem)

@@ -326,3 +326,5 @@ PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_re
 ```
 
 私有记忆请求 owner 在使用请求内对象 token 调用实际来源 producer 前，校验固定 Cloud purpose、环境、准确 Account 和本地 peer。公开 reader 仅在捕获的 producer 和生命周期仍有效时返回同一不可变授权，不公开 token 工厂。原确认 anchor 捕获与来源读取分离；每次等待中的来源调用均受取消和签名截止时间约束。来源回复只含引用元数据、明确空缺或缺失证据。负责签名的 Host 在发布前独立复查 Account；worker 生命周期本身不等同于 Account 撤销订阅。独立的 64 KiB memory JSON 封套接纳嵌套确认 offer 和有界页面，不改变其他 Session JSON 限制。此路径不导入模型上下文、不保留正文，也不授予原生执行权限。
+
+任务 drain 观察通过实际 Controller 和 Session 持久化读取器取得原调用、结果摘要及终态证据。Native 执行在等待 wrapper 期间保留原取消信号，即使 wrapper 替换执行信号也不改变屏障。只有同一受监控 worker 的原取消结果与 turn 结束均持久化后，未进入正文的取消才可报告 quiescent。已进入正文的调用保留终态回执元数据，但缺少真实子进程或 provider 结算能力时，整体 quiescence 仍为 unknown。不受支持的 Slark 投影仍为 unavailable；空库存、租约过期及 Promise 返回均不能开放关闭下限。

@@ -1,3 +1,6 @@
+import { collaborationTaskDurabilityProjection, collaborationTaskEventDigest } from './collaboration-task-durability.ts'
+import type { CollaborationTaskDurabilityState } from './collaboration-task-durability.ts'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { collaborationFeedbackMessageId } from './collaboration-feedback.ts'
 import type {} from './runtime-entry-consumer-host.ts'
 import { RuntimeEntryConsumer } from './runtime-entry-consumer.ts'
@@ -28,7 +31,7 @@ import type { CollaborationRootCommandId } from './collaboration-root-journal.ts
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { inboxProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, Service, FiberState, symbols } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
@@ -313,6 +316,7 @@ export class SessionController extends TypertRemoteService {
     canonicalDigest: string
     account?: CollaborationTaskCurrentAccount
     execution?: CollaborationTaskExecution }>()
+  private collaborationTaskDurability!: ProjectionHandle<CollaborationTaskDurabilityState>
   private collaborationTaskJournal?: Promise<CollaborationTaskCoordinationJournal>
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
   private runtimeEntryFeedbackMetadata?: Promise<RuntimeEntryFeedbackMetadataJournal>
@@ -330,6 +334,49 @@ export class SessionController extends TypertRemoteService {
           return live.execution
       }
       return null
+    }, captureDurable: async (commandId: CollaborationTaskExecution['commandId'], agent: Agent) => {
+      const selected = [...this.collaborationConsumerLive.entries()].find(([, value]) => value.commandId === commandId
+        && value.sessionId === agent.id), live = selected?.[1]
+      const loop = ctx.get('agentLoop'), persistence = ctx.get('sessionPersistence'), session = agent.session
+      const sameService = (left: object | undefined, right: object | undefined) => left !== undefined && right !== undefined
+        && (Reflect.get(left, symbols.original) ?? left) === (Reflect.get(right, symbols.original) ?? right)
+      const current = () => ctx.fiber.state === FiberState.ACTIVE && ctx.agents.get(agent.id) === agent
+        && ctx.sessions.get(agent.id) === session && sameService(ctx.get('agentLoop'), loop)
+        && sameService(ctx.get('sessionPersistence'), persistence)
+      const retained = () => selected !== undefined && this.collaborationConsumerLive.get(selected[0]) === live
+      if (!live?.execution || !loop || !persistence || !current() || !retained()) return null
+      const durable = await loop.readOriginalInvocationEntrySession(agent)
+      if (!durable || !durable.isCurrent() || !durable.prefixLogDigest || !current() || !retained()) return null
+      const state = this.collaborationTaskDurability.stateOf(session)
+      if (!state.complete || state.turn !== live.execution.turn || state.end && state.end.seq >= durable.logOffset
+        || state.pairs.some(pair => pair.callSeq >= durable.logOffset
+          || pair.resultSeq !== null && pair.resultSeq >= durable.logOffset)) return null
+      // Projection selects bounded coordinates; the original reader independently verifies the stored bytes.
+      const handle = await persistence.open(agent.id, 'read', { signal: this.collaborationLifetime.signal })
+      try {
+        for (const pair of state.pairs) {
+          if (pair.callSeq < handle.inheritedEventCount) return null
+          const call = (await handle.read(pair.callSeq, 1)).events[0]
+          if (call?.type !== 'tool/call' || call.data.turn !== state.turn || call.data.step !== state.step
+            || call.data.callId !== pair.callId || call.data.name !== pair.toolName
+            || collaborationTaskEventDigest(call) !== pair.callDigest) return null
+          if (pair.resultSeq !== null) {
+            const result = (await handle.read(pair.resultSeq, 1)).events[0]
+            if (result?.type !== 'tool/result' || result.data.turn !== state.turn || result.data.step !== state.step
+              || result.data.message.toolCallId !== pair.callId || result.data.message.source.callId !== pair.callId
+              || collaborationTaskEventDigest(result) !== pair.resultDigest
+              || pair.abortedBeforeDispatch !== (result.data.message.isError === true && result.data.error?.code === 'ABORTED_BEFORE_DISPATCH')) return null
+          }
+        }
+        if (state.end) {
+          const end = (await handle.read(state.end.seq, 1)).events[0]
+          if (end?.type !== 'turn/end' || end.data.turn !== state.turn || end.data.reason.kind !== state.end.kind
+            || collaborationTaskEventDigest(end) !== state.end.digest) return null
+        }
+      } finally { await handle.close() }
+      if (!current() || !retained() || !durable.isCurrent()) return null
+      return Object.freeze({ turn: live.execution.turn, eventCount: durable.logOffset,
+        prefixDigest: durable.prefixLogDigest, state, isCurrent: () => current() && durable.isCurrent() })
     } }))
     // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
@@ -398,6 +445,7 @@ export class SessionController extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
+    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     ctx.typert.resources.register('session', { resolve: resolveSessionResource })
     this.agents = new ApiSessionAgentController(ctx)
     this.agents.initialize()

@@ -6,6 +6,8 @@
 
 源码：[`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
 
+`CollaborationTaskDurableCut` 是 Host 专用的同 worker 持久前缀见证：原调用、结果事件引用及当前 turn 结束，均与实际已加载 Session 和存储事件核对，不含消息正文或执行许可。终态前缀不能证明异步子进程或 provider 已结束；除非所有受监控正文均在 dispatch 前取消且原取消结果与 turn 结束均已持久化，否则整体 quiescence 保持 unknown。
+
 ## `SessionEventMap`：事件词汇
 
 仅追加的事件类型。可通过声明合并扩展：插件通过 declaration merging 声明额外的事件类型。例如[压缩（compaction） seam](compaction.zh.md) 添加了 `compaction/start` / `compaction/summary` / `compaction/end`，`@deepseek-ai/dsh-hook-protocol` 为钩子桥接添加了仅记录日志的 `hook/invoked` / `hook/result` 记录。与 `compaction/*` 一样，这些都不是 `SurfaceEventType`（没有 `surfaceOp`）。生成的[持久化日志事件目录](../persistence-catalog.zh.md)列举了所有成员（核心与合并扩展的），包含其 payload、surface 标记与声明位置。
@@ -846,9 +848,16 @@ Optional observation service provided only by the actual SessionController consu
  * @returns The original live request fact, or null outside that consuming turn.
  */
 read(sessionId: SessionId, turn: number): CollaborationTaskExecution | null
+
+/** Capture metadata through the actual loaded Session writer, never a caller prefix or a cold restoration.
+ * @param commandId - Original command currently owned by this consumer lifecycle.
+ * @param agent - Actual already-loaded Agent belonging to that lifecycle.
+ * @returns Exact durable prefix and folded event references, or null when unsupported/current ownership is lost.
+ */
+captureDurable?(commandId: CollaborationExecutionCommandId, agent: Agent): Promise<CollaborationTaskDurableCut | null>
 ```
 
-Types: [SessionId](core.zh.md)
+Types: [Agent](core.zh.md) · [SessionId](core.zh.md)
 
 Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
 

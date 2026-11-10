@@ -6,6 +6,8 @@ The in-memory, event-sourced model of [dsh-session](../../packages/core/session)
 
 Source: [`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
 
+`CollaborationTaskDurableCut` is a Host-only same-worker durable prefix witness: original call/result event references and the current turn end, checked against the actual loaded Session and stored events. It contains no message body or execution permission. A terminal prefix does not settle asynchronous children/providers; whole-task quiescence remains unknown unless every tracked body was cancelled before dispatch with its original durable cancellation result and turn end.
+
 ## `SessionEventMap` — the event vocabulary
 
 The append-only event types. Merge-extensible: a plugin declares extra event types via declaration merging — e.g. the [compaction seam](compaction.md) adds `compaction/start` / `compaction/summary` / `compaction/end`, and `@deepseek-ai/dsh-hook-protocol` adds log-only `hook/invoked` / `hook/result` records for a hook bridge. Like `compaction/*`, these are NOT `SurfaceEventType`s (no `surfaceOp`). The generated [persistence log event catalog](../persistence-catalog.md) enumerates every member — core and merged — with its payload, surface badge, and declaration site.
@@ -842,9 +844,16 @@ Optional observation service provided only by the actual SessionController consu
  * @returns The original live request fact, or null outside that consuming turn.
  */
 read(sessionId: SessionId, turn: number): CollaborationTaskExecution | null
+
+/** Capture metadata through the actual loaded Session writer, never a caller prefix or a cold restoration.
+ * @param commandId - Original command currently owned by this consumer lifecycle.
+ * @param agent - Actual already-loaded Agent belonging to that lifecycle.
+ * @returns Exact durable prefix and folded event references, or null when unsupported/current ownership is lost.
+ */
+captureDurable?(commandId: CollaborationExecutionCommandId, agent: Agent): Promise<CollaborationTaskDurableCut | null>
 ```
 
-Types: [SessionId](core.md)
+Types: [Agent](core.md) · [SessionId](core.md)
 
 Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
 
