@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from './runtime-entry-test-code.ts'
 /** Actual driver + private SQLite effects. Origin-reader inputs here are controlled metadata, not a whole-chain positive. */
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -49,7 +50,9 @@ async function harness(actualPersistence = false) {
   ctx.llm.registerAdapter(['mock'], adapter)
   const b = binding(), agent = await ctx.agentLoop.create(SessionId(b.sessionId), { provider: 'mock', model: 'mock' })
   let authorityCurrent = true, sessionCurrent = true, compositionCurrent = true, materializeCount = 0, metadataCount = 0
+  const code = runtimeEntryTestCode(dirname(path))
   const options: RuntimeEntryFactoryOptions = { journal, workerLifetimeId: write(b).workerLifetimeId,
+    assertCurrentCode: () => { code.assertCurrentCode() },
     implementationDigest: sha, compositionDigest: sha2, registryGeneration: '1', compositionAuthorityDigest: sha,
     async readOriginalMetadata(actual, commandId) {
       metadataCount++
@@ -72,7 +75,7 @@ async function harness(actualPersistence = false) {
     expect(journal.byAttempt(b.consumerAttemptId)?.receipt.binding).toEqual(b)
     return createUserMessage({ content: [{ type: 'text', text: 'original feedback after durable entry' }], source: { kind: 'user' } })
   }
-  return { ctx, agent, adapter, b, journal, path, factory, options, materialize,
+  return { ctx, agent, adapter, b, journal, path, factory, options, materialize, code,
     setAuthorityCurrent: (value: boolean) => { authorityCurrent = value },
     setSessionCurrent: (value: boolean) => { sessionCurrent = value },
     setCompositionCurrent: (value: boolean) => { compositionCurrent = value },
@@ -275,4 +278,31 @@ describe('actual original-feedback runtime writer', () => {
     expect(result).toEqual({ kind: 'gap', reason: 'journal_failed' })
     expect(reads).toBe(1); expect(h.journal.count()).toBe(0); expect(h.adapter.requests).toHaveLength(1)
   })
+})
+
+describe('original code barriers', () => {
+  it('refuses a missing bootstrap-owned full verifier before preparing an entry', async () => {
+    const h = await harness(true)
+    Reflect.deleteProperty(h.options, 'assertCurrentCode')
+    expect(await h.factory.prepare(h.agent, h.b.consumerCommandId, new AbortController().signal)).toEqual({ kind: 'unsupported' })
+    expect(h.journal.count()).toBe(0); expect(h.counts().materializeCount).toBe(0)
+  })
+  it.each(['add', 'delete', 'replace', 'same-size-restored-mtime'])(
+    'rejects scheduled %s code drift before actual synchronous entry and body', async (change) => {
+      const h = await harness(true), prepared = await h.factory.prepare(h.agent, h.b.consumerCommandId, new AbortController().signal)
+      expect(prepared.kind).toBe('prepared'); if (prepared.kind !== 'prepared') throw Error('controlled preparation missing')
+      const path = h.code.path, original = readFileSync(path)
+      // Integer-second mtime permits an exact restoration while ctimeNs remains OS-owned.
+      const { utimesSync, renameSync } = await import('node:fs')
+      await Promise.resolve()
+      if (change === 'add') writeFileSync(join(dirname(path), 'extra'), 'extra')
+      else if (change === 'delete') unlinkSync(path)
+      else if (change === 'replace') { renameSync(path, path + '.old'); writeFileSync(path, original) }
+      else { writeFileSync(path, Buffer.alloc(original.length, 0x78)); utimesSync(path, 1700000000, 1700000000) }
+      const result = await prepared.start(h.materialize)
+      expect(result.kind).toBe('gap'); expect(h.journal.count()).toBe(0); expect(h.counts().materializeCount).toBe(0)
+      writeFileSync(path, original)
+      expect(() =>{  h.options.assertCurrentCode() }).toThrow()
+    },
+  )
 })

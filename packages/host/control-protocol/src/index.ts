@@ -410,3 +410,8 @@ export { hostTaskTargetConsumeReceiptDigest } from './task-target.ts'
 export { HOST_TASK_TARGET_PROTOCOL_VERSION, captureHostTaskTargetCall,
   hostTaskTargetCallHeader, captureHostTaskTargetResult } from './task-target-control.ts'
 export type { HostTaskTargetCall, HostTaskTargetResult, HostTaskTargetErrorCode } from './task-target-control.ts'
+export { parseHostRuntimeEntryOwnerManifest, type HostRuntimeEntryOwnerManifest, type HostRuntimeEntryOwnerId } from './runtime-entry-owner-seal.ts'
+export { parseHostRuntimeEntryInstalledOrigin, runtimeEntryResolutionDigest, type HostRuntimeEntryInstalledOrigin } from './runtime-entry-installed-origin.ts'
+export { readRuntimeOwnerTree, captureRuntimeOwnerTree, captureRuntimeOwnerPaths, type RuntimeOwnerTree, type RuntimeOwnerTreeBudget, type RuntimeOwnerIdentitySnapshot, type RuntimeOwnerTreeSnapshot } from './runtime-entry-owner-tree.ts'
+export { readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners, captureHostRuntimeEntryOwners, runtimeEntrySealedRuntimeRoot, assertRuntimeEntryLoadedNativeBinding, type HostRuntimeEntryOwnerVerification, type RuntimeEntryOwnerLookup } from './runtime-entry-owner-verification.ts'
+export type { HostRuntimeEntrySealedOriginsConfiguration, HostRuntimeEntryPinnedOriginsConfiguration } from './runtime-entry-bootstrap.ts'

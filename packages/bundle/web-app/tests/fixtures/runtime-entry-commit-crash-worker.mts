@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from '../../../../api/session-controller/tests/runtime-entry-test-code.ts'
 /** Task26733: actual local Root/execution/consumer + Agent/JSONL/driver COMMIT/readback.
  * Only Cloud admission/grant transport and model output are controlled. Never creates a Source claim or Right.
  * Parent SIGKILL is the only exit after the checkpoint; no close/unlink/release handler runs. */
@@ -45,6 +46,7 @@ journal.commitOriginalInvocationEntry = (input, current) => {
 }
 const factory = new RuntimeEntryFactory({ journal, workerLifetimeId: randomUUID(), implementationDigest: '1'.repeat(64),
   compositionDigest: '2'.repeat(64), registryGeneration: '1', compositionAuthorityDigest: '3'.repeat(64),
+  assertCurrentCode: runtimeEntryTestCode(root).assertCurrentCode,
   readOriginalMetadata: async (actual, commandId) => {
     if (!captured || actual !== agent || commandId !== captured.binding.consumerCommandId) throw Error('wrong original metadata request')
     return captured

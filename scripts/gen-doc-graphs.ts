@@ -108,6 +108,15 @@ const GROUP_ORDER = [
 
 const SERVICE_ROLES: ServiceRole[] = [
   {
+    key: 'runtimeEntryInstalledOrigin',
+    pkg: 'web-app',
+    title: 'Launcher-owned loaded source identity',
+    mode: 'core',
+    implementations: ['dsh (CLI)'],
+    consumers: ['web-app'],
+    note: 'The original root Context owns the pre-import observer; Web reads the same first registration without execution or source-export permission.',
+  },
+  {
     key: 'actionCards',
     pkg: 'action-cards',
     title: 'Optional action cards',

@@ -1,13 +1,14 @@
 /** Actual worker bootstrap for the native metadata lane. Private request contexts never expose proof or token seeding. */
 import { createHash, createPublicKey, verify } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { FiberState, symbols, type Context } from '@deepseek-ai/cordis'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import type {} from '@deepseek-ai/dsh-agent-loop'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { ProjectOperationOrigins, ProjectOperationRuntimeEntryPublication, ProjectOperationMemorySourceAuthorization } from '@deepseek-ai/dsh-api-session-controller'
+import type { ProjectOperationOrigins, ProjectOperationRuntimeEntryPublication,
+  ProjectOperationMemorySourceAuthorization } from '@deepseek-ai/dsh-api-session-controller'
 import type { RuntimeEntryConsumerHost } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer-host'
 import type { RuntimeEntryConsumerOriginal } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer'
 import { RuntimeEntryJournal, readRuntimeEntryEffect, readRuntimeEntryWitnessByAttempt } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-journal'
@@ -15,11 +16,16 @@ import type { RuntimeEntryOriginalMetadata } from '@deepseek-ai/dsh-api-session-
 import { parseHostRuntimeEntryOriginsJson, type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryConsumerGrant, parseRuntimeEntryMetadataAuthorization, encodeRuntimeEntryMetadataAuthorization,
   type RuntimeEntryMetadataAuthorization } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRuntimeEntryInstalledOrigin, HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryObservation, parseRuntimeEntryAttribution, encodeRuntimeEntryAttribution,
-  runtimeEntryAttributionDigest, runtimeEntryObservationDigest, runtimeEntrySourceEventMappingDigest, runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
+  runtimeEntryAttributionDigest, runtimeEntryObservationDigest, runtimeEntrySourceEventMappingDigest,
+  runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseTaskCoordinationActualAccount, parseTaskCoordinationActualPeer } from './desktop-task-coordination.ts'
+import { createRuntimeResolutionLookup } from '@deepseek-ai/dsh-app-boot'
+import { readHostRuntimeEntryOwnerManifest, captureHostRuntimeEntryOwners, captureRuntimeOwnerPaths, runtimeEntrySealedRuntimeRoot,
+  assertRuntimeEntryLoadedNativeBinding } from '@deepseek-ai/dsh-host-control-protocol'
+import type { DesktopRuntimeEntryInstalledOrigin } from '@deepseek-ai/dsh-web-app/installed-origin'
 import { DesktopRuntimeEntryOrigin } from './desktop-runtime-entry-origin.ts'
 function unavailable(): never { throw Error('runtime_entry_unavailable') }
 function original(value: unknown): unknown {
@@ -44,18 +50,45 @@ interface OriginalContext {
   readonly publication: ProjectOperationRuntimeEntryPublication | null
   original?: RuntimeEntryOriginalMetadata
 }
-/** Actual file hashes, not module names, define this optional implementation. */
-function artifacts(c: HostRuntimeEntryOriginsConfiguration): void {
-  let total = 0
-  for (const pin of c.artifactPins) {
-    const before = lstatSync(pin.path)
-    if (!before.isFile() || before.isSymbolicLink() || realpathSync(pin.path) !== pin.path || before.size > 64 * 1024 * 1024) unavailable()
-    total += before.size
-    if (total > 128 * 1024 * 1024 || createHash('sha256').update(readFileSync(pin.path)).digest('hex') !== pin.sha256) unavailable()
-    const after = lstatSync(pin.path)
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) unavailable()
+/** Complete content checks are retained by this actual worker, never a module cache or caller inventory. */
+function captureArtifacts(c: HostRuntimeEntryOriginsConfiguration, ctx: Context) {
+  if (c.schemaVersion === 3) {
+    const resolution = ctx.get('pluginPackages')?.resolution
+    if (!resolution?.profileDir || resolution.linkedRoots.some(root => root.name === 'ds-bot')) unavailable()
+    const resource = captureRuntimeOwnerPaths([c.manifest.path, dirname(c.manifest.path)])
+    const m = readHostRuntimeEntryOwnerManifest(c)
+    const owners = captureHostRuntimeEntryOwners(m, runtimeEntrySealedRuntimeRoot(c), realpathSync(resolution.profileDir),
+      createRuntimeResolutionLookup(resolution))
+    let stale = false
+    const assertCurrent = (): void => {
+      if (stale) unavailable()
+      try {
+        if (ctx.get('pluginPackages')?.resolution !== resolution) unavailable()
+        resource.assertCurrent(); owners.assertCurrent(); assertRuntimeEntryLoadedNativeBinding(m)
+      } catch { stale = true; unavailable() }
+    }
+    assertCurrent()
+    return Object.freeze({ assertCurrent, verifyFullCurrent() {
+      assertCurrent()
+      try { readHostRuntimeEntryOwnerManifest(c); owners.verifyFullCurrent(); assertCurrent() }
+      catch { stale = true; unavailable() }
+    } })
   }
+  const verify = (): void => {
+    let total = 0
+    for (const pin of c.artifactPins) {
+      const before = lstatSync(pin.path)
+      if (!before.isFile() || before.isSymbolicLink() || realpathSync(pin.path) !== pin.path
+        || before.size > 64 * 1024 * 1024) unavailable()
+      total += before.size
+      if (total > 128 * 1024 * 1024 || createHash('sha256').update(readFileSync(pin.path)).digest('hex') !== pin.sha256) unavailable()
+      const after = lstatSync(pin.path)
+      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) unavailable()
+    }
+  }
+  verify()
+  return Object.freeze({ assertCurrent: verify, verifyFullCurrent: verify })
 }
 /** Create only a cold original-attempt locator, independently of Native writer availability.
  * @param ctx - Actual injected SessionController owner; requests cannot supply a reader or record.
@@ -66,7 +99,7 @@ function artifacts(c: HostRuntimeEntryOriginsConfiguration): void {
  */
 export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: HostRuntimeEntryOriginsConfiguration,
   profileId: string, lifetime: AbortSignal): (operation: unknown, signal: AbortSignal) => Promise<{ entryId: string | null }> {
-  artifacts(configuration)
+  const artifacts = captureArtifacts(configuration, ctx)
   const root = process.env.DSH_HOME, controller = ctx.sessionController
   if (!root || realpathSync(root) !== root || !profileId) unavailable()
   const path = join(root, 'runtime-entry.sqlite')
@@ -74,9 +107,9 @@ export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: Ho
     const current = (): void => {
       signal.throwIfAborted(); lifetime.throwIfAborted()
       if (ctx.fiber.state !== FiberState.ACTIVE || original(ctx.get('sessionController')) !== original(controller)) unavailable()
-      artifacts(configuration)
+      artifacts.assertCurrent()
     }
-    current()
+    current(); artifacts.verifyFullCurrent()
     const command = parseRuntimeEntryOriginCommand(operation)
     const record = await controller.inspectRuntimeEntryConsumer(command, AbortSignal.any([signal, lifetime]))
     current()
@@ -90,6 +123,8 @@ export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: Ho
 
 /** One real boot owner: actual providers, driver, exclusive private journal and original authenticated request context. */
 export class DesktopRuntimeEntryHost {
+  private readonly artifactGuard: ReturnType<typeof captureArtifacts>
+  private readonly installedSource: DesktopRuntimeEntryInstalledOrigin | undefined
   private readonly contexts = new Map<string, OriginalContext>()
   private readonly journal: RuntimeEntryJournal
   private readonly journalPath: string
@@ -109,7 +144,8 @@ export class DesktopRuntimeEntryHost {
   constructor(private readonly ctx: Context, private readonly configuration: HostRuntimeEntryOriginsConfiguration,
     private readonly keyrings: readonly HostBotGroupPublicKeyring[], private readonly profileId: string,
     private readonly workerId: string, private readonly lifetime: AbortSignal) {
-    artifacts(configuration)
+    this.artifactGuard = captureArtifacts(configuration, ctx)
+    this.installedSource = ctx.get('runtimeEntryInstalledOrigin')
     const root = process.env.DSH_HOME
     if (!root || realpathSync(root) !== root || !profileId || !workerId || !keyrings.length) unavailable()
     this.providers = { tools: ctx.tools, loop: ctx.agentLoop, sessions: ctx.sessions, agents: ctx.agents,
@@ -122,10 +158,11 @@ export class DesktopRuntimeEntryHost {
     this.origin = new DesktopRuntimeEntryOrigin(ctx, { factoryOptions: {
       journal: this.journal, workerLifetimeId: workerId, implementationDigest: configuration.implementationDigest,
       compositionDigest: configuration.compositionDigest,
+      assertCurrentCode: () => { this.artifactGuard.verifyFullCurrent() },
       get registryGeneration() { return currentGeneration() },
       get compositionAuthorityDigest() {
         return createHash('sha256').update('dsh.runtime-entry.current-composition/v1\0' + JSON.stringify([
-          workerId, configuration.implementationDigest, configuration.compositionDigest, configuration.artifactPins, currentGeneration(),
+          workerId, configuration.implementationDigest, configuration.compositionDigest, configuration, currentGeneration(),
         ])).digest('hex')
       },
       readOriginalMetadata: async (agent, commandId, signal) => {
@@ -145,7 +182,10 @@ export class DesktopRuntimeEntryHost {
       canPrepare: (commandId?: string) => this.providersCurrent() && this.journal.canRetainMetadataAuthorization(commandId),
       readLoadedSession: (agent: Agent) => this.providers.loop.readOriginalInvocationEntrySession(agent),
       readOriginal: (commandId: string, signal: AbortSignal) => this.readOriginal(commandId, signal),
-      prepareEntry: (agent: Agent, commandId: string, signal: AbortSignal) => this.origin.prepare(agent, commandId, signal),
+      prepareEntry: (agent: Agent, commandId: string, signal: AbortSignal) => {
+        this.artifactGuard.verifyFullCurrent()
+        return this.origin.prepare(agent, commandId, signal)
+      },
     })
     ctx.effect(() => async () => {
       this.origin.close()
@@ -156,6 +196,9 @@ export class DesktopRuntimeEntryHost {
       this.contexts.clear(); this.journal.close()
     })
   }
+  /** Return the original actual registration identity to the owned parent channel.
+   * @returns Fixed code-source metadata, or null when source registration is absent or replaced. */
+  installedOrigin(): HostRuntimeEntryInstalledOrigin | null { return this.installedSource?.read() ?? null }
   /** Compose the original operation reader with this owner's opaque entry reader.
    * @param reader - Actual original historical-operation reader.
    * @returns Its one composite reader, installed before either purpose can emit an opaque token. */
@@ -191,16 +234,20 @@ export class DesktopRuntimeEntryHost {
     return effect ?? null
   }
   private providersCurrent(): boolean {
-    return !this.lifetime.aborted && this.ctx.fiber.state === FiberState.ACTIVE && this.ctx.get('runtimeEntryConsumerHost') === this.service
-      && original(this.ctx.get('tools')) === original(this.providers.tools) && original(this.ctx.get('agentLoop')) === original(this.providers.loop)
-      && original(this.ctx.get('sessions')) === original(this.providers.sessions) && original(this.ctx.get('agents')) === original(this.providers.agents)
-      && original(this.ctx.get('sessionPersistence')) === original(this.providers.persistence)
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
+    try {
+      this.artifactGuard.assertCurrent()
+      return !this.lifetime.aborted && this.ctx.fiber.state === FiberState.ACTIVE && this.ctx.get('runtimeEntryConsumerHost') === this.service
+        && original(this.ctx.get('tools')) === original(this.providers.tools) && original(this.ctx.get('agentLoop')) === original(this.providers.loop)
+        && original(this.ctx.get('sessions')) === original(this.providers.sessions) && original(this.ctx.get('agents')) === original(this.providers.agents)
+        && original(this.ctx.get('sessionPersistence')) === original(this.providers.persistence)
+    } catch { return false }
   }
   private supports(agent: Agent): boolean {
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
     if (!this.providersCurrent() || this.providers.agents.get(agent.id) !== agent
       || this.providers.sessions.get(agent.id) !== agent.session) return false
     try {
-      artifacts(this.configuration)
       const selected = this.providers.tools.inspectExecutor(agent)
       if (!(selected instanceof NativeToolExecutor) || Object.getPrototypeOf(selected) !== NativeToolExecutor.prototype) return false
       const previous = this.selected.get(agent)
@@ -210,9 +257,9 @@ export class DesktopRuntimeEntryHost {
     } catch { return false }
   }
   private contextCurrent(entry: OriginalContext): boolean {
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
     if (!this.providersCurrent() || entry.signal.aborted || entry.generation !== this.generation
       || this.contexts.get(entry.proof.metadata.binding.consumerCommandId) !== entry) return false
-    artifacts(this.configuration)
     return true
   }
   private async metadata(commandId: string, signal: AbortSignal): Promise<RuntimeEntryOriginalMetadata | undefined> {
@@ -345,6 +392,7 @@ export class DesktopRuntimeEntryHost {
    */
   async withStart<T>(proofValue: unknown, rawGrant: unknown, account: Account, peer: LocalPeer, signal: AbortSignal,
     work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    this.artifactGuard.verifyFullCurrent()
     const proof = parseRuntimeEntryMetadataAuthorization(proofValue), grant = parseRuntimeEntryConsumerGrant(rawGrant)
     this.signature(proof, true); this.identity(proof, account, peer, true)
     if (!proof.metadata.dispatchGranted || !grant.dispatch_granted || proof.metadata.binding.consumerCommandId !== grant.command_id)

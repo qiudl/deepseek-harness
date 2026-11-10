@@ -207,6 +207,8 @@ These limits describe when this boot library is a poor fit or needs special care
 - **Environment discovery is launch-scoped** — `loadLayeredEnv` reads only the invocation directory and Harness home once; it does not search parents or follow a workspace selected later. `loadEnv` remains the one-directory helper for non-product bins.
 - **A user patch replaces the whole matched config** — an id-targeted patch does not deep-merge, so a profile override restates the bundle fields it keeps.
 
+`createRuntimeResolutionLookup` reads the same Profile routing rules and effective Node import/require conditions without installing interception, importing a target, or publishing worker state. It retains the original importer and physical nested package copies; a new lookup reads changed selection. Main uses this reader independently, while the worker retains its actual active PluginPackages generation.
+
 <a id="dev-note"></a>
 ### Dev Note
 

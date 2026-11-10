@@ -29,6 +29,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u],
     plugins: [deferredTypertPlugin()],
   },
@@ -42,6 +43,7 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
     noExternal: [/^@deepseek-ai\//u, /^yaml(?:\/|$)/u, /^tar(?:\/|$)/u],
     plugins: [deferredTypertPlugin()],
   },
@@ -57,12 +59,12 @@ export default defineConfig([
     dts: false,
     clean: false,
     codeSplitting: false,
-    outputOptions: { polyfillRequire: false },
+    outputOptions: { polyfillRequire: false, inlineDynamicImports: true },
     banner: {
-      js: `import { createRequire as createBuiltinRequire, isBuiltin } from 'node:module';
+      js: `import { createRequire as createBuiltinRequire, isBuiltin as isWindowsStartupBuiltin } from 'node:module';
 const builtinRequire = createBuiltinRequire(process.execPath);
 const require = (specifier) => {
-  if (!isBuiltin(specifier)) throw new Error('Windows startup only loads bundled dependencies and Node builtins');
+  if (!isWindowsStartupBuiltin(specifier)) throw new Error('Windows startup only loads bundled dependencies and Node builtins');
   return builtinRequire(specifier);
 };`,
     },
@@ -78,6 +80,7 @@ const require = (specifier) => {
     dts: false,
     clean: false,
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
     noExternal: [/^@deepseek-ai\//u],
   },
   {
@@ -90,6 +93,7 @@ const require = (specifier) => {
     dts: false,
     clean: false,
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
     noExternal: [/^@deepseek-ai\//u],
   },
   {
@@ -102,6 +106,7 @@ const require = (specifier) => {
     dts: false,
     clean: false,
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
     noExternal: [/^@deepseek-ai\//u],
   },
   {
@@ -115,5 +120,6 @@ const require = (specifier) => {
     clean: false,
     noExternal: [/^@deepseek-ai\/(?:dsh-host-control-protocol|dsh-brand)(?:\/|$)/u],
     codeSplitting: false,
+    outputOptions: { inlineDynamicImports: true },
   },
 ])

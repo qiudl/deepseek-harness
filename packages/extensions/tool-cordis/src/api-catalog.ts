@@ -2615,6 +2615,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'runtimeEntryInstalledOrigin',
+    summary: 'Observe the actual source registration without exposing a caller mint, expected path or qualification flag.',
+    description: 'Observe the actual source registration without exposing a caller mint, expected path or qualification flag.',
+    methods: [
+      {
+        signature: 'read(): HostRuntimeEntryInstalledOrigin | null',
+        description: 'Read code-source identity only after real registration and Loader activation; this grants no Native or business permission.',
+        parameters: [],
+        returns: 'Fixed original registration metadata, or null for absent/replaced/ambiguous sources.',
+      },
+    ],
+  },
+  {
     key: 'sandbox',
     summary: 'Abstract process-sandbox service.',
     description: 'Abstract process-sandbox service. confine must return enforcing argv or fail closed at wrap or runner-execution time; silent unconfined passthrough is forbidden. Functional probes arbitrate multi-runner chains and may be skipped for a sole candidate, whose own refusal remains the fail-closed end.',
@@ -7150,6 +7163,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'HostProfileId',
     declaration: 'export type HostProfileId = Branded<\'HostProfileId\'>;',
+  },
+  {
+    name: 'HostRuntimeEntryInstalledOrigin',
+    declaration: 'export interface HostRuntimeEntryInstalledOrigin {\n    readonly schemaVersion: 1;\n    readonly profileId: HostProfileId;\n    readonly workerLifetimeId: Branded<\'RuntimeEntryWorkerLifetimeId\'>;\n    readonly entryId: Branded<\'CordisLoaderEntryId\'>;\n    readonly importSpecifier: \'ds-bot\';\n    readonly resolutionBase: string;\n    readonly packageManifestDigest: string;\n    readonly resolutionDigest: string;\n    readonly conditionsDigest: string;\n}',
   },
   {
     name: 'ImageAttachmentLimits',

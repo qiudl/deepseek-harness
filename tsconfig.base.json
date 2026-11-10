@@ -228,6 +228,7 @@
       "@deepseek-ai/dsh-agent/types": ["./packages/core/agent/src/types.ts"],
       "@deepseek-ai/dsh-agent/brand": ["./packages/core/agent/src/brand.ts"],
       "@deepseek-ai/dsh-headless/startup": ["./packages/bundle/headless/src/startup.ts"],
+      "@deepseek-ai/dsh-web-app/installed-origin": ["./packages/bundle/web-app/src/desktop-runtime-entry-installed-origin.ts"],
       "@deepseek-ai/dsh-web-app/startup": ["./packages/bundle/web-app/src/startup.ts"],
       "@deepseek-ai/dsh-client-*/client": ["./packages/client/*/src/client"],
       // One wildcard maps every @deepseek-ai/dsh-<name> to its source. Package

@@ -344,3 +344,7 @@ macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查
 反向 `recipient_import` 只在精确匹配原确认的反向 scope 且持有当前 Cloud 签名 stage 时接收引用元数据。写入首次安装 Ack 前验证当前 Account/Profile/peer 和实际 recipient Bot；暂存引用没有 search 或模型读取入口。committed finalize（包括重试）要求新的当前 Cloud publication 许可和当前 recipient Bot。撤回或 Bot 删除后，receipt 查询仍可恢复历史字节；reconciliation-only finalize 只记录审计元数据，不激活。原 proof 按记录的 stage 时刻验签，固定 receipt 按原 committedAt 验签。原 Ack 和 receipt 不更换 peer 或签名。元数据 finalize 不等于模型消费；消费仍需另一条当前 consumer handle。
 
 source、recipient 与 native source 对每个 Profile/installation 各自拥有独立私有 SQLite 文件。source-v1 精确格式保持不变；recipient 与 native source 各自使用独立 schema、application ID 和 bootstrap purpose。各自均使用持久 pending→published 引导、私有主库/WAL/SHM 文件与原子记录，接纳前预留后续 receipt 增长空间。永久 ID 与签名元数据不清理；只有严格过期的 nonce 和尚未 stage 的 source manifest 可移除。每个文件默认限制为 524,288 条永久记录/2 GiB 逻辑元数据，以及 4,096 条临时记录/16 MiB。source 每轮使用 plan 和 delivery；recipient 使用 delivery 加各个不同引用行，编码元数据字节同样计费。只有 source 推进带私有签名的连续 delta 区间；recipient 不猜缺失的 before checkpoint。未知格式拒绝打开且不替换。关闭时先停止所有已配置 factory，再等待所有 owner 结束；关闭不确定时保留 Host 所有权。物理 Windows SQLite/ACL 验收仍独立于本地 POSIX 和原生接口测试。
+
+Main 从可信安装资源独立推导 Native runtime root，并在不安装 worker hook 的条件下解析当前 Account Profile 的 `profiles/web` 包表。发布前会核对原 worker 注册来源、完整 owner 树、各 importer 的解析结果和已加载的 resolver 二进制。读取前后保留当前 Account/worker 检查，最后一次私有来源读取检测异步工作期间的替换。历史 pin 配置不再声明 `profile.runtime_entry`。安装资格不能替代当前 Source、entry 签名或记忆权限。
+
+原 Main 请求保留由可信安装与 Profile 选择的完整 owner 核验及纳秒 OS 身份快照。异步等待前后的 current 检查比对同一快照；恢复原字节不能重新授权已失败的请求。新 grant/start 接纳、发布及实际安装签名回调仍执行完整内容核验。Account、原 worker 与已加载来源检查保持独立不变；请求的 35 秒限制没有增加。

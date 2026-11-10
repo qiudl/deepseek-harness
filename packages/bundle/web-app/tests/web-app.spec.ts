@@ -1,6 +1,7 @@
 /** Web runtime URL publication, exposure warnings, and Loader/browser handoff readiness. */
 
 import { EventEmitter } from 'node:events'
+import { generateKeyPairSync } from 'node:crypto'
 import { createServer } from 'node:http'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -176,6 +177,39 @@ describe('web-app runtime glue', () => {
     expect(group.status).toBe(422)
     expect(captureGroupRoot).toHaveBeenCalledOnce()
   })
+  it.each(['native', 'task-coordination'] as const)(
+    'keeps configured %s unavailable without required tools and Sessions', async (configured) => {
+      vi.stubEnv('DSH_PROFILE_ANALYSIS_TOKEN', 'B'.repeat(43))
+      const keyring = { version: 1, environmentId: '33333333-3333-4333-8333-333333333333',
+        issuer: 'https://cloud.example.test', keys: [{ kid: 'dsh-assertion-test',
+          publicKeyPem: generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+          validFrom: 1, validUntil: 9999999999999 }] }
+      if (configured === 'native') {
+        vi.stubEnv('DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS', JSON.stringify([keyring]))
+        vi.stubEnv('DSH_PROFILE_RUNTIME_ENTRY_ORIGINS', JSON.stringify({ schemaVersion: 3,
+          implementationDigest: 'a'.repeat(64), compositionDigest: 'b'.repeat(64),
+          manifest: { path: join(tmpdir(), 'native-origins', 'owners-v3.json'), sha256: 'c'.repeat(64) } }))
+      } else {
+        vi.stubEnv('DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS', JSON.stringify([{
+          audience: 'urn:slark:task-coordination:v1', environmentKey: 'staging', keyring,
+        }]))
+      }
+      stageDist()
+      const ctx = new Context(), { server, routes } = fakeHttpServer()
+      onTestFinished(() => ctx.fiber.dispose())
+      const openJournal = vi.fn()
+      ctx.provide('webServer', server)
+      ctx.provide('sessionController', { openCollaborationTaskCoordinationJournal: openJournal } as never)
+      apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
+      await ctx.fiber.await()
+      expect(routes.has('/internal/desktop-collaboration-analysis')).toBe(false)
+      expect(ctx.get('runtimeEntryConsumerHost')).toBeUndefined()
+      expect(ctx.get('projectOperationOrigins')).toBeUndefined()
+      expect(openJournal).not.toHaveBeenCalled()
+      await ctx.fiber.dispose()
+      expect(routes.has('/internal/desktop-collaboration-analysis')).toBe(false)
+    },
+  )
   it.each(['', 'invalid', 'A'.repeat(43)])('registers private Desktop routes only for valid tokens (%s)', async (token) => {
     for (const name of ['DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_REMOTE_SESSION_TOKEN', 'DSH_PROFILE_REMOTE_UI_TOKEN']) {
       vi.stubEnv(name, token)

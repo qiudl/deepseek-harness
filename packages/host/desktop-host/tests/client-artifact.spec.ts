@@ -13,7 +13,7 @@ describe('standalone Host control client artifact', () => {
   const source = artifact()
 
   it.skipIf(source === undefined)('imports only Node builtins and loads from an otherwise empty directory', async () => {
-    const imports = [...source!.matchAll(/(?:from\s+|import\s*\()(["'])([^"']+)\1/gu)].map(match => match[2])
+    const imports = [...source!.matchAll(/(?:\bfrom\s+|\bimport\s*(?:\(\s*)?)(["'])([^"']+)\1/gu)].map(match => match[2])
     expect(imports.every(specifier => specifier?.startsWith('node:'))).toBe(true)
     expect(source).not.toMatch(/\brequire\s*\(/u)
     expect(source).not.toMatch(/createServer|UnixHostServer|ProfileRegistry|FileHostJournal|node:http|fastify/u)
