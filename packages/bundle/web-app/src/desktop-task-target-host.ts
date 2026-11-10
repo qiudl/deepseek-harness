@@ -152,16 +152,23 @@ export class DesktopTaskTargetHost {
   private prepared(descriptor: HostTaskTargetDescriptor, input: HostTaskTargetCall): HostRemoteSessionJson {
     return this.result({ ok: true, peer: descriptor.peer, record: { status: 'prepared', descriptor } }, input)
   }
+  private previousProjection(journal: PairedTaskTargetJournal, input: HostTaskTargetCall): HostRemoteSessionJson | undefined {
+    if (input.operation !== 'prepare') return unavailable()
+    const previous = journal.findProjection(input.directive)
+    if (!previous) return
+    const target = this.loaded.get(previous.itemId)
+    if (!target) return unavailable()
+    this.targetCurrent(target)
+    return this.prepared(parseHostTaskTargetDescriptor(JSON.parse(previous.descriptorJson)), input)
+  }
   private async projection(call: CapturedCall, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     const { input } = call
     if (input.operation !== 'prepare') return unavailable()
-    const d = input.directive, journal = await this.journal(); call.current()
-    const previous = journal.findProjection(d)
-    if (previous) {
-      const target = this.loaded.get(previous.itemId)
-      if (!target) return unavailable()
-      this.targetCurrent(target)
-      return this.prepared(parseHostTaskTargetDescriptor(JSON.parse(previous.descriptorJson)), input)
+    const d = input.directive
+    if (this.journalPromise) {
+      const journal = await this.journalPromise; call.current()
+      const previous = this.previousProjection(journal, input)
+      if (previous) return previous
     }
     if (this.loaded.size >= 10000) return unavailable()
     const producerValue: unknown = this.ctx.get('dsBotSlarkExternalGroup')
@@ -182,6 +189,9 @@ export class DesktopTaskTargetHost {
     call.current()
     if (!snapshot || !snapshot.prefixLogDigest || !snapshot.isCurrent() || snapshot.session !== agent.session
       || !isDeepStrictEqual(owned, { botId: d.scope.botId, sessionId: agent.id })) return unavailable()
+    const journal = await this.journal(); call.current()
+    const previous = this.previousProjection(journal, input)
+    if (previous) return previous
     const draft = { schemaVersion: 1, purpose: 'task_coordination_target_descriptor_v1', issuer: d.scope.accountIssuer,
       keyId: d.peer.installationId, scope: d.scope, transfer: d.transfer, originalStepHash: hostTaskTargetOriginalStepHash(d.originalStep),
       target: { hostProfileId: this.profileId, botId: d.scope.botId, sessionId: agent.id, commandId: randomUUID(),

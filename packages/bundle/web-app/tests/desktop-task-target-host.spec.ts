@@ -30,6 +30,7 @@ import { encodeHostTaskTargetPrepareDirective, encodeHostTaskTargetDescriptor, p
   encodeHostTaskTargetConsumeChallenge, parseHostTaskTargetConsumeReceipt, encodeHostTaskTargetConsumeReceipt,
   hostTaskReadyAdmissionDirectiveDigest, hostTaskTargetConsumeChallengeDigest,
   hostTaskStepPayloadDigest,
+  hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest,
   parseHostTaskTargetObserveDirective, encodeHostTaskTargetObserveDirective,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopTaskTargetHost } from '../src/desktop-task-target-host.ts'
@@ -164,6 +165,21 @@ it.each(['signature', 'account', 'peer', 'binding'] as const)('refuses %s before
     await expect(f.host.execute('task_target', request, account, peer, mode === 'binding' ? 'invalid' : 'd'.repeat(64), f.signal)).rejects.toThrow()
     expect(f.opens()).toBe(0); expect(f.agent.status).toBe('idle'); expect(f.agent.inbox.nextStep).toHaveLength(0)
     expect(f.journal.inventory(f.request.directive.scope)).toEqual([])
+  } finally { await f.close() }
+})
+it('refuses a signed missing Bot before opening the paired writer', async () => {
+  const f = await fixture()
+  try {
+    const scope = { ...f.request.directive.scope, botId: 'missing-bot' }
+    const changed = { ...f.request.directive, scope,
+      scopeDigest: hostTaskCoordinationScopeDigest(scope), floorDigest: hostTaskCoordinationFloorDigest(scope) }
+    const directive = parseHostTaskTargetPrepareDirective({ ...changed,
+      signature: sign(null, Buffer.from(encodeHostTaskTargetPrepareDirective(changed)), f.source.privateKey).toString('base64url') })
+    await expect(f.host.execute('task_target', { operation: 'prepare', directive }, f.account, f.localPeer,
+      'd'.repeat(64), f.signal)).rejects.toThrow('unavailable')
+    expect(f.opens()).toBe(0)
+    expect(f.journal.inventory(f.request.directive.scope)).toEqual([])
+    expect(f.adapter.requests).toHaveLength(0)
   } finally { await f.close() }
 })
 it('retains one actual exclusive Session projection and commits only Main signature bytes without waking it', async () => {
