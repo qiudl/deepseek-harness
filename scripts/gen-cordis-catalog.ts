@@ -50,6 +50,7 @@ export { REGION_BEGIN, REGION_END }
  * errors, so the partition can never silently drift from the service API.
  */
 export const SERVICE_PAGE: Record<string, string> = {
+  runtimeEntryInstalledOrigin: 'boot.md',
   collaborationTaskExecutions: 'session.md',
   collaborationTaskFloors: 'session.md',
   runtimeEntryConsumerHost: 'session.md',
@@ -303,6 +304,7 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  * appear on more than one page.
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
+  HostRuntimeEntryInstalledOrigin: 'boot.md',
   Branded: 'core.md',
   CollaborationTaskCoordinationJournal: 'session.md',
   CollaborationTaskCurrentAccount: 'session.md',

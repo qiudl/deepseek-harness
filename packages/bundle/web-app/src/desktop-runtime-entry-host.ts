@@ -7,7 +7,8 @@ import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import type {} from '@deepseek-ai/dsh-agent-loop'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import type { ProjectOperationOrigins, ProjectOperationRuntimeEntryPublication, ProjectOperationMemorySourceAuthorization } from '@deepseek-ai/dsh-api-session-controller'
+import type { ProjectOperationOrigins, ProjectOperationRuntimeEntryPublication,
+  ProjectOperationMemorySourceAuthorization } from '@deepseek-ai/dsh-api-session-controller'
 import type { RuntimeEntryConsumerHost } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer-host'
 import type { RuntimeEntryConsumerOriginal } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer'
 import { RuntimeEntryJournal, readRuntimeEntryEffect, readRuntimeEntryWitnessByAttempt } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-journal'
@@ -15,11 +16,16 @@ import type { RuntimeEntryOriginalMetadata } from '@deepseek-ai/dsh-api-session-
 import { parseHostRuntimeEntryOriginsJson, type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryConsumerGrant, parseRuntimeEntryMetadataAuthorization, encodeRuntimeEntryMetadataAuthorization,
   type RuntimeEntryMetadataAuthorization } from '@deepseek-ai/dsh-host-control-protocol'
-import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostRuntimeEntryInstalledOrigin, HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryObservation, parseRuntimeEntryAttribution, encodeRuntimeEntryAttribution,
-  runtimeEntryAttributionDigest, runtimeEntryObservationDigest, runtimeEntrySourceEventMappingDigest, runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
+  runtimeEntryAttributionDigest, runtimeEntryObservationDigest, runtimeEntrySourceEventMappingDigest,
+  runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseTaskCoordinationActualAccount, parseTaskCoordinationActualPeer } from './desktop-task-coordination.ts'
+import { createRuntimeResolutionLookup } from '@deepseek-ai/dsh-app-boot'
+import { readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners, runtimeEntrySealedRuntimeRoot,
+  assertRuntimeEntryLoadedNativeBinding } from '@deepseek-ai/dsh-host-control-protocol'
+import type { DesktopRuntimeEntryInstalledOrigin } from '@deepseek-ai/dsh-web-app/installed-origin'
 import { DesktopRuntimeEntryOrigin } from './desktop-runtime-entry-origin.ts'
 function unavailable(): never { throw Error('runtime_entry_unavailable') }
 function original(value: unknown): unknown {
@@ -45,7 +51,17 @@ interface OriginalContext {
   original?: RuntimeEntryOriginalMetadata
 }
 /** Actual file hashes, not module names, define this optional implementation. */
-function artifacts(c: HostRuntimeEntryOriginsConfiguration): void {
+function artifacts(c: HostRuntimeEntryOriginsConfiguration, ctx?: Context): void {
+  if (c.schemaVersion === 3) {
+    if (!ctx) unavailable()
+    const resolution = ctx.get('pluginPackages')?.resolution
+    if (!resolution?.profileDir || resolution.linkedRoots.some(root => root.name === 'ds-bot')) unavailable()
+    const m = readHostRuntimeEntryOwnerManifest(c)
+    assertRuntimeEntryLoadedNativeBinding(m)
+    verifyHostRuntimeEntryOwners(m, runtimeEntrySealedRuntimeRoot(c), realpathSync(resolution.profileDir),
+      createRuntimeResolutionLookup(resolution))
+    return
+  }
   let total = 0
   for (const pin of c.artifactPins) {
     const before = lstatSync(pin.path)
@@ -66,7 +82,7 @@ function artifacts(c: HostRuntimeEntryOriginsConfiguration): void {
  */
 export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: HostRuntimeEntryOriginsConfiguration,
   profileId: string, lifetime: AbortSignal): (operation: unknown, signal: AbortSignal) => Promise<{ entryId: string | null }> {
-  artifacts(configuration)
+  artifacts(configuration, ctx)
   const root = process.env.DSH_HOME, controller = ctx.sessionController
   if (!root || realpathSync(root) !== root || !profileId) unavailable()
   const path = join(root, 'runtime-entry.sqlite')
@@ -74,7 +90,7 @@ export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: Ho
     const current = (): void => {
       signal.throwIfAborted(); lifetime.throwIfAborted()
       if (ctx.fiber.state !== FiberState.ACTIVE || original(ctx.get('sessionController')) !== original(controller)) unavailable()
-      artifacts(configuration)
+      artifacts(configuration, ctx)
     }
     current()
     const command = parseRuntimeEntryOriginCommand(operation)
@@ -90,6 +106,7 @@ export function createDesktopRuntimeEntryLocator(ctx: Context, configuration: Ho
 
 /** One real boot owner: actual providers, driver, exclusive private journal and original authenticated request context. */
 export class DesktopRuntimeEntryHost {
+  private readonly installedSource: DesktopRuntimeEntryInstalledOrigin | undefined
   private readonly contexts = new Map<string, OriginalContext>()
   private readonly journal: RuntimeEntryJournal
   private readonly journalPath: string
@@ -109,7 +126,8 @@ export class DesktopRuntimeEntryHost {
   constructor(private readonly ctx: Context, private readonly configuration: HostRuntimeEntryOriginsConfiguration,
     private readonly keyrings: readonly HostBotGroupPublicKeyring[], private readonly profileId: string,
     private readonly workerId: string, private readonly lifetime: AbortSignal) {
-    artifacts(configuration)
+    artifacts(configuration, ctx)
+    this.installedSource = ctx.get('runtimeEntryInstalledOrigin')
     const root = process.env.DSH_HOME
     if (!root || realpathSync(root) !== root || !profileId || !workerId || !keyrings.length) unavailable()
     this.providers = { tools: ctx.tools, loop: ctx.agentLoop, sessions: ctx.sessions, agents: ctx.agents,
@@ -125,7 +143,7 @@ export class DesktopRuntimeEntryHost {
       get registryGeneration() { return currentGeneration() },
       get compositionAuthorityDigest() {
         return createHash('sha256').update('dsh.runtime-entry.current-composition/v1\0' + JSON.stringify([
-          workerId, configuration.implementationDigest, configuration.compositionDigest, configuration.artifactPins, currentGeneration(),
+          workerId, configuration.implementationDigest, configuration.compositionDigest, configuration, currentGeneration(),
         ])).digest('hex')
       },
       readOriginalMetadata: async (agent, commandId, signal) => {
@@ -156,6 +174,9 @@ export class DesktopRuntimeEntryHost {
       this.contexts.clear(); this.journal.close()
     })
   }
+  /** Return the original actual registration identity to the owned parent channel.
+   * @returns Fixed code-source metadata, or null when source registration is absent or replaced. */
+  installedOrigin(): HostRuntimeEntryInstalledOrigin | null { return this.installedSource?.read() ?? null }
   /** Compose the original operation reader with this owner's opaque entry reader.
    * @param reader - Actual original historical-operation reader.
    * @returns Its one composite reader, installed before either purpose can emit an opaque token. */
@@ -191,16 +212,18 @@ export class DesktopRuntimeEntryHost {
     return effect ?? null
   }
   private providersCurrent(): boolean {
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
     return !this.lifetime.aborted && this.ctx.fiber.state === FiberState.ACTIVE && this.ctx.get('runtimeEntryConsumerHost') === this.service
       && original(this.ctx.get('tools')) === original(this.providers.tools) && original(this.ctx.get('agentLoop')) === original(this.providers.loop)
       && original(this.ctx.get('sessions')) === original(this.providers.sessions) && original(this.ctx.get('agents')) === original(this.providers.agents)
       && original(this.ctx.get('sessionPersistence')) === original(this.providers.persistence)
   }
   private supports(agent: Agent): boolean {
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
     if (!this.providersCurrent() || this.providers.agents.get(agent.id) !== agent
       || this.providers.sessions.get(agent.id) !== agent.session) return false
     try {
-      artifacts(this.configuration)
+      artifacts(this.configuration, this.ctx)
       const selected = this.providers.tools.inspectExecutor(agent)
       if (!(selected instanceof NativeToolExecutor) || Object.getPrototypeOf(selected) !== NativeToolExecutor.prototype) return false
       const previous = this.selected.get(agent)
@@ -210,9 +233,10 @@ export class DesktopRuntimeEntryHost {
     } catch { return false }
   }
   private contextCurrent(entry: OriginalContext): boolean {
+    if (this.configuration.schemaVersion !== 3 || !this.installedSource?.read()) return false
     if (!this.providersCurrent() || entry.signal.aborted || entry.generation !== this.generation
       || this.contexts.get(entry.proof.metadata.binding.consumerCommandId) !== entry) return false
-    artifacts(this.configuration)
+    artifacts(this.configuration, this.ctx)
     return true
   }
   private async metadata(commandId: string, signal: AbortSignal): Promise<RuntimeEntryOriginalMetadata | undefined> {

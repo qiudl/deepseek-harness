@@ -254,6 +254,8 @@ These limits tell you what to expect in unusual setups — a source checkout, SS
 
 <a id="dev-note"></a>
 
+Native entry support requires both the trusted schema3 installation resource and the actual original DS Loader registration. Before any configured plugin is imported, the CLI creates a root-owned source observer; Web reuses that same service. Any already cached Profile package makes it unavailable. The observer retains the runtime-entry listener's real Entry/fiber ancestry, Node namespace, callback and Profile resolution generation. Replacement or disposal invalidates that capture permanently. The private installed-origin response contains code-selection metadata only; it accepts no expected paths or caller inventory. Missing qualification leaves ordinary consumption available through its original early fallback.
+
 ### Dev Note
 
 <details>

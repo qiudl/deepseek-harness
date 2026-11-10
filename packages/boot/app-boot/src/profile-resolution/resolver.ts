@@ -821,6 +821,80 @@ function throwWithoutCjsAnchor(error: unknown, anchor: string): never {
   throw error
 }
 
+/** Read-only package and module lookup using the profile router and Node's original conditions. */
+export interface RuntimeResolutionLookup {
+  /** @param specifier - Original bare package request. @param parentURL - Actual importer URL.
+   * @returns The selected physical package directory, without importing it. */
+  packageDir(specifier: string, parentURL: string): string | undefined
+  /** @param parentURL - Actual importer URL. @param specifier - Original module request.
+   * @param mode - Original Node import or require operation.
+   * @returns Actual selected URL and the Node conditions used for that operation. */
+  resolve(parentURL: string, specifier: string, mode: 'import' | 'require'): Readonly<{ url: string; conditions: readonly string[] }>
+}
+
+function cjsAnchor(cjs: CommonJsModule, native: CommonJsModule['_resolveFilename'], request: string,
+  anchor: string, paths: readonly string[], parent?: CommonJsParent, main = false, options?: CommonJsOptions): string {
+  const synthetic = new cjs(anchor)
+  if (parent !== undefined) synthetic.parent = parent
+  synthetic.filename = anchor
+  synthetic.paths = [...paths]
+  return native.call(cjs, request, synthetic, main, options)
+}
+
+/** Resolve metadata without installing global hooks, importing the selected code or publishing worker state.
+ * @param resolution - Independently computed installation/Profile package table.
+ * @returns A lookup for that fixed table; construct a new lookup to read changed package selection.
+ */
+export function createRuntimeResolutionLookup(resolution: RuntimeResolution): RuntimeResolutionLookup {
+  const { esmDefaultResolve, esmConditions, cjs, cjsConditions } = internalModules()
+  const router = new ResolutionRouter(resolution, directory => cjs._nodeModulePaths(directory))
+  const native = cjs._resolveFilename.bind(cjs)
+  const resolveEsm = (parent: string, request: string, conditions: readonly string[]): string => {
+    const state = router.routeUrl(request, parent), route = state?.route
+    if (route === undefined && request[0] === '#' && router.hasInterceptionLayerForUrl(parent)) {
+      const target = packageImportsTarget(fileURLToPath(parent), request, conditions)
+      if (target) return resolveEsm(target.parentURL, target.specifier, conditions)
+    }
+    const selected = route?.kind === 'interception' ? pathToFileURL(route.entry.declarer).href
+      : route?.kind === 'native-after-interception' ? pathToFileURL(route.parent).href : parent
+    const result = esmDefaultResolve(request, { parentURL: selected, conditions })
+    if (!result.url.startsWith('file:')) return result.url
+    return pathToFileURL(router.relocate(fileURLToPath(result.url), fileURLToPath(parent))).href
+  }
+  const resolveCjs = (parentURL: string, request: string): string => {
+    const parent = fileURLToPath(parentURL)
+    const from = (anchor: string, paths: readonly string[]) => cjsAnchor(cjs, native, request, anchor, paths)
+    const routed = (route: Exclude<ResolutionRoute, { kind: 'native' }>) => route.kind === 'interception'
+      ? from(route.entry.declarer, packageSearchPaths(route.entry, request, cjs))
+      : from(route.parent, cjs._nodeModulePaths(dirname(route.parent)))
+    const state = router.routePath(request, parent, { cacheable: true,
+      resolveNative: paths => from(parent, paths),
+      resolveEntry: (entry, after) => routed({ kind: 'interception', entry, after }),
+    })
+    let selected: string
+    if (state === undefined) {
+      const target = request[0] === '#' && router.hasInterceptionLayerForPath(parent)
+        ? packageImportsTarget(parent, request, cjsConditions) : undefined
+      if (target) return resolveEsm(target.parentURL, target.specifier, [...cjsConditions])
+      selected = from(parent, cjs._nodeModulePaths(dirname(parent)))
+    } else if (state.cjs !== undefined) selected = state.cjs
+    else if (state.route.kind === 'native') selected = from(parent, cjs._nodeModulePaths(dirname(parent)))
+    else {
+      const route = state.route
+      try { selected = routed(route) } catch (error) {
+        if (route.kind !== 'interception' || !isUnselectedPackageMiss(error)) throw error
+        selected = routed({ kind: 'native-after-interception', parent: route.after })
+      }
+    }
+    return isAbsolute(selected) ? pathToFileURL(router.relocate(selected, parent)).href : selected
+  }
+  return Object.freeze({ packageDir: (specifier: string, parentURL: string) => router.packageDir(specifier, parentURL),
+    resolve(parentURL: string, specifier: string, mode: 'import' | 'require') {
+      const conditions = Object.freeze([...new Set(mode === 'import' ? esmConditions : cjsConditions)])
+      return Object.freeze({ url: mode === 'import' ? resolveEsm(parentURL, specifier, conditions) : resolveCjs(parentURL, specifier), conditions })
+    } })
+}
+
 /**
  * Install one runtime resolution as the interception on Node's default ESM and CommonJS resolvers.
  * @param resolution - complete package table and profile scope.
@@ -949,15 +1023,10 @@ export function installRuntimeInterception(
     parent: CommonJsParent, main: boolean, options?: CommonJsOptions,
   ): string => {
     const anchor = routed.kind === 'interception' ? routed.entry.declarer : routed.parent
-    const synthetic = new cjs(anchor)
-    // Late parent assignment preserves Node's require stack without publishing this routing anchor in parent.children.
-    synthetic.parent = parent
-    synthetic.filename = anchor
-    synthetic.paths = routed.kind === 'interception'
-      ? packageSearchPaths(routed.entry, request, cjs)
+    const paths = routed.kind === 'interception' ? packageSearchPaths(routed.entry, request, cjs)
       : cjs._nodeModulePaths(dirname(anchor))
     try {
-      return originalFilename.call(cjs, request, synthetic, main, options)
+      return cjsAnchor(cjs, originalFilename, request, anchor, paths, parent, main, options)
     } catch (error) {
       return throwWithoutCjsAnchor(error, anchor)
     }

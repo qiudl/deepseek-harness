@@ -318,6 +318,10 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
       await hostCtx.plugin(PluginPackages, {
         resolution: composed.resolution,
       })
+      if (process.env.DSH_PROFILE_RUNTIME_ENTRY_ORIGINS && process.env.DSH_PROFILE_ID && process.env.DSH_PROFILE_WORKER_ID) {
+        const { DesktopRuntimeEntryInstalledOrigin } = await import('@deepseek-ai/dsh-web-app/installed-origin')
+        new DesktopRuntimeEntryInstalledOrigin(hostCtx, process.env.DSH_PROFILE_ID, process.env.DSH_PROFILE_WORKER_ID)
+      }
       // The command line and bounded exit request are launcher facts available
       // to every app plugin that injects the argument snapshot.
       provideCmdline(hostCtx, {

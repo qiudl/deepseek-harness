@@ -1,3 +1,4 @@
+import { readHostRuntimeEntryOwnerManifest } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -495,7 +496,8 @@ export async function startDesktopHostApplication(
   executableArtifact(config.dshEntrypointPath, uid)
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
   const runtimeEntryOrigins = parseHostRuntimeEntryOriginsJson(config.runtimeEntryOriginsJson)
-  if (runtimeEntryOrigins) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
+  if (runtimeEntryOrigins?.schemaVersion === 1) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
+  else if (runtimeEntryOrigins?.schemaVersion === 3) readHostRuntimeEntryOwnerManifest(runtimeEntryOrigins)
   const workerFactory = new DshWebProfileWorkerFactory({
     ...(runtimeEntryOrigins ? { runtimeEntryOrigins } : {}),
     taskCoordinationEnvironments: parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson),

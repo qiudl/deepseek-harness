@@ -4,6 +4,10 @@ English | [中文](boot.zh.md)
 
 The [boot package group](../../packages/boot/README.md) owns launcher-provided profile access and the plugin manager. [Plugin Manager](../../packages/boot/plugin-manager/README.md) documents persistence, reload and package-operation behavior.
 
+## Installed source identity
+
+`HostRuntimeEntryInstalledOrigin` contains the actual Profile and worker identities, original DS Loader entry and resolution base, and digests of its package manifest, Profile resolution and Node conditions. The launcher installs the root-owned `runtimeEntryInstalledOrigin` service before configured plugins load; it retains the first real registration. Existing Profile module caches, replacement or owner disposal make reads unavailable. This metadata grants no task execution, source export or retained-content permission.
+
 ## Management records
 
 `PluginEntryId` identifies one Loader entry; callers obtain it from `listPlugins` rather than constructing a patch id.
@@ -447,6 +451,21 @@ Source: [`packages/client/ui-plugin-manager/src/index.ts`](../../packages/client
 Current profile facts; scheduling and mutation belong to their callers.
 
 Source: [`packages/boot/app-boot/src/profile-context.ts`](../../packages/boot/app-boot/src/profile-context.ts)
+
+<a id="ctxruntimeentryinstalledorigin--desktopruntimeentryinstalledorigin"></a>
+
+### `ctx.runtimeEntryInstalledOrigin` — `DesktopRuntimeEntryInstalledOrigin`
+
+Observe the actual source registration without exposing a caller mint, expected path or qualification flag.
+
+```ts cordis-catalog
+/** Read code-source identity only after real registration and Loader activation; this grants no Native or business permission.
+ * @returns Fixed original registration metadata, or null for absent/replaced/ambiguous sources.
+ */
+read(): HostRuntimeEntryInstalledOrigin | null
+```
+
+Source: [`packages/bundle/web-app/src/desktop-runtime-entry-installed-origin.ts`](../../packages/bundle/web-app/src/desktop-runtime-entry-installed-origin.ts)
 
 <a id="app-boot-events"></a>
 

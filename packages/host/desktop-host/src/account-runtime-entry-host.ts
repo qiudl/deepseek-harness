@@ -1,8 +1,10 @@
+import { readRuntimeEntryInstalledSource, type RuntimeEntryInstalledSource } from './runtime-entry-installed-origin.ts'
 /** Actual Main Account/worker fence for native entry. Source HTTP credentials and installation signing never enter the worker. */
-import { createPublicKey, verify } from 'node:crypto'
+import { createHash, createPublicKey, verify } from 'node:crypto'
 import { join } from 'node:path'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { parseHostRemoteSessionJson, type HostRemoteSessionJson, type HostBotGroupPublicKeyring, type HostProjectMemoryEnvironment, type HostProjectMemoryDirective, runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostRemoteSessionJson, type HostRemoteSessionJson, type HostBotGroupPublicKeyring, type HostProjectMemoryEnvironment,
+  type HostProjectMemoryDirective, runtimeEntryBindingDigest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryMetadataAuthorization, encodeRuntimeEntryMetadataAuthorization, parseRuntimeEntryConsumerGrant,
   type RuntimeEntryMetadataAuthorization } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand,
@@ -63,7 +65,7 @@ function rootMatches(proof: RuntimeEntryMetadataAuthorization, query: RuntimeEnt
     || s.sourceRevision !== t.source_revision) unavailable()
 }
 function originalOrigin(options: AccountRuntimeEntryHostOptions, account: Account, profileId: string,
-  peer: RuntimeEntryMainLease['peer'], current: () => void): AccountRuntimeEntryOrigin {
+  peer: RuntimeEntryMainLease['peer'], current: () => void, source: RuntimeEntryInstalledSource): AccountRuntimeEntryOrigin {
   const root = options.profileRoot(profileId), journal = join(root, 'runtime-entry.sqlite')
   const actualAccount = { authorityEnvironmentId: account.authorityEnvironmentId, accountIssuer: account.issuer,
     accountSubject: account.subject, accountBindingId: account.accountBindingHandle,
@@ -71,7 +73,7 @@ function originalOrigin(options: AccountRuntimeEntryHostOptions, account: Accoun
   const leaseAccount = actualAccount
   return new AccountRuntimeEntryOrigin({ profileRoot: root, pluginHome: join(root, 'bot'), entryJournalPath: journal,
     implementationDigest: options.configuration.implementationDigest, compositionDigest: options.configuration.compositionDigest,
-    artifactPins: options.configuration.artifactPins, keyrings: options.keyrings,
+    artifactPins: source.artifactPins, keyrings: options.keyrings,
     captureCurrentLease: () => ({ account: leaseAccount, peer, issuer: account.issuer,
       keyId: options.peer.installationId, assertCurrent: current }),
     readOriginalMetadata: (commandId): Promise<RuntimeEntryOriginalMetadata | undefined> => {
@@ -89,6 +91,29 @@ function originalOrigin(options: AccountRuntimeEntryHostOptions, account: Accoun
   })
 }
 
+interface CurrentInstalledSource extends RuntimeEntryInstalledSource { assertWorkerCurrent(): Promise<void> }
+async function installedSource(options: AccountRuntimeEntryHostOptions, account: Account, profileId: string,
+  receiver: TaskCoordinationReceiver, bindingKey: string, signal: AbortSignal,
+  current: () => void): Promise<CurrentInstalledSource | null> {
+  current()
+  const request = parseHostRemoteSessionJson({ action: 'runtime_entry_installed_origin', binding_key: bindingKey,
+    actualAccount: { authorityEnvironmentId: account.authorityEnvironmentId, accountIssuer: account.issuer, accountSubject: account.subject,
+      accountBindingId: account.accountBindingHandle, accountBindingVersion: account.authorityBindingVersion, hostProfileId: profileId },
+    actualPeer: options.peer, actualWorkerId: receiver.workerId })
+  const response = await receiver.execute(request, signal)
+  current()
+  if (response === null) return null
+  const source = await readRuntimeEntryInstalledSource(options.configuration, options.profileRoot(profileId), profileId,
+    receiver.workerId, response)
+  current(); source.assertCurrent()
+  return Object.freeze({ ...source, async assertWorkerCurrent() {
+    current()
+    const next = await receiver.execute(request, signal)
+    current(); source.assertCurrent()
+    if (JSON.stringify(next) !== JSON.stringify(response)) unavailable()
+  } })
+}
+
 /** Execute metadata reads/start only through one captured real Account and worker request.
  * @param options - Actual Main dependencies and trusted installed closure.
  * @param account - Current authenticated connection Account.
@@ -101,7 +126,19 @@ export async function operateAccountRuntimeEntryAnalysis(options: AccountRuntime
   value: unknown, bindingKey: string, signal: AbortSignal): Promise<HostRemoteSessionJson> {
   const command = parseRuntimeEntryAnalysisCommand(value)
   return options.host.withCollaborationAccountRequest(account, signal, async (profileId, active) => {
-    const receiver = options.receiver(profileId), current = () => { active.throwIfAborted(); receiver.assertCurrent() }
+    if (options.configuration.schemaVersion !== 3 && command.action === 'root_execution_journal') {
+      active.throwIfAborted()
+      return parseHostRemoteSessionJson({ supported: false, record: null })
+    }
+    const receiver = options.receiver(profileId)
+    const captured: { source?: RuntimeEntryInstalledSource } = {}
+    const current = () => { active.throwIfAborted(); receiver.assertCurrent(); captured.source?.assertCurrent() }
+    const source = await installedSource(options, account, profileId, receiver, bindingKey, active, current)
+    if (!source) {
+      if (command.action === 'root_execution_journal') return parseHostRemoteSessionJson({ supported: false, record: null })
+      unavailable()
+    }
+    captured.source = source
     const actualAccount = { authorityEnvironmentId: account.authorityEnvironmentId, accountIssuer: account.issuer,
       accountSubject: account.subject, accountBindingId: account.accountBindingHandle,
       accountBindingVersion: account.authorityBindingVersion,
@@ -114,6 +151,7 @@ export async function operateAccountRuntimeEntryAnalysis(options: AccountRuntime
     }
     const result = await receiver.execute(parseHostRemoteSessionJson({ ...command, binding_key: bindingKey,
       actualAccount, actualPeer: options.peer, actualWorkerId: receiver.workerId }), active)
+    await source.assertWorkerCurrent()
     current()
     return result
   })
@@ -135,7 +173,11 @@ export async function operateAccountRuntimeEntryOrigin(options: AccountRuntimeEn
       accountSubject: account.subject, accountBindingId: account.accountBindingHandle,
       accountBindingVersion: account.authorityBindingVersion,
       hostProfileId: profileId }
-    const current = () => { active.throwIfAborted(); receiver.assertCurrent() }
+    const captured: { source?: RuntimeEntryInstalledSource } = {}
+    const current = () => { active.throwIfAborted(); receiver.assertCurrent(); captured.source?.assertCurrent() }
+    const source = await installedSource(options, account, profileId, receiver, bindingKey, active, current)
+    if (!source) unavailable()
+    captured.source = source
     current()
     const located = await receiver.execute(parseHostRemoteSessionJson({ action: 'runtime_entry_locate', operation: command,
       actualAccount, actualPeer: options.peer, actualWorkerId: receiver.workerId, binding_key: bindingKey }), active)
@@ -163,9 +205,10 @@ export async function operateAccountRuntimeEntryOrigin(options: AccountRuntimeEn
       accountBindingId: actualAccount.accountBindingId, accountBindingVersion: actualAccount.accountBindingVersion,
       peer: { ...(fresh?.peer ?? proof.peer), ...options.peer } })
     const peer = context.peer
-    const origin = originalOrigin(options, account, profileId, peer, current)
+    const origin = originalOrigin(options, account, profileId, peer, current, source)
     if (command.purpose === 'runtime_entry_observe') {
-      const observation = await origin.observeCandidate(entryId, active); current()
+      const observation = await origin.observeCandidate(entryId, active)
+      await source.assertWorkerCurrent(); current()
       return parseHostRemoteSessionJson({ purpose: command.purpose, observation })
     }
     if (command.observation.receipt.entryId !== entryId) unavailable()
@@ -174,6 +217,7 @@ export async function operateAccountRuntimeEntryOrigin(options: AccountRuntimeEn
     const result = await receiver.execute(parseHostRemoteSessionJson({ action: 'runtime_entry_publish', operation: command,
       actualAccount, actualPeer: options.peer, actualWorkerId: receiver.workerId, binding_key: bindingKey,
       actualPublication: projection }), active)
+    await source.assertWorkerCurrent()
     current()
     const published: unknown = result !== null && typeof result === 'object' ? Reflect.get(result, 'published') : undefined
     if (!result || typeof result !== 'object' || Array.isArray(result) || Object.keys(result).length !== 1
@@ -195,8 +239,9 @@ export async function observeAccountRuntimeEntrySource(options: AccountRuntimeEn
   environments: readonly HostProjectMemoryEnvironment[], directive: HostProjectMemoryDirective, entryId: string, signal: AbortSignal) {
   return options.host.withCollaborationAccountRequest(account, signal, async (profileId, active) => {
     const receiver = options.receiver(profileId), peer = directive.peer
+    const captured: { source?: RuntimeEntryInstalledSource } = {}
     const current = () => {
-      active.throwIfAborted(); receiver.assertCurrent()
+      active.throwIfAborted(); receiver.assertCurrent(); captured.source?.assertCurrent()
       options.host.authorizeCollaborationRegistration(account)
       if (options.host.authorizeAccountModelText(account) !== profileId) unavailable()
       verifyProjectOperationMemoryDirective(environments, directive, options.now())
@@ -211,7 +256,13 @@ export async function observeAccountRuntimeEntrySource(options: AccountRuntimeEn
     }
     current()
     if (!peer) unavailable()
-    const result = await originalOrigin(options, account, profileId, peer, current).observePublished(entryId, active)
+    const sourceKey = createHash('sha256').update('dsh.runtime-entry.source-view/v1\0'
+      + JSON.stringify([profileId, receiver.workerId, entryId])).digest('hex')
+    const source = await installedSource(options, account, profileId, receiver, sourceKey, active, current)
+    if (!source) unavailable()
+    captured.source = source
+    const result = await originalOrigin(options, account, profileId, peer, current, source).observePublished(entryId, active)
+    await source.assertWorkerCurrent()
     current(); result.assertCurrent()
     if (String(result.observation.receipt.binding.ownerUserId) !== String(directive.ownerUserId) ||
       String(result.observation.botId) !== String(directive.scope.sourceRef.botRootId) ||

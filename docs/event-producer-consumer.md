@@ -114,6 +114,7 @@ Application listeners are outside this package matrix. Desktop Host subscribes t
 | `agent/request` | [`agent-loop`](../packages/core/agent-loop) (`waterfall`) | [`compaction-basic`](../packages/compaction/compaction-basic) |
 | `internal/config` | - | [`config-editor`](../packages/boot/config-editor), [`llm-pi-ai`](../packages/llm/llm-pi-ai) |
 | `internal/dispatch` | - | [`terminal-bash`](../packages/terminal/terminal-bash) |
+| `internal/listener` | - | [`web-app`](../packages/bundle/web-app) |
 | `internal/plugin` | - | `computer-use-cua-driver-native`, `inspector`, `loader`, [`lsp-stdio`](../packages/lsp/lsp-stdio), [`mcp-client`](../packages/mcp/mcp-client), `modules` |
 | `internal/service` | - | `client-ui-forge`, `gateway` |
 | `internal/status` | - | [`agent`](../packages/core/agent), [`config-editor`](../packages/boot/config-editor), `inspector`, `translator`, [`web`](../packages/web/web) |

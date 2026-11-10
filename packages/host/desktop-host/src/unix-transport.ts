@@ -2704,7 +2704,7 @@ export class HostControlAuthority {
                     actualPeer: { installationId: identity.installationId, publicKey: identity.installationPublicKey,
                       hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce } }), signal)
                   if (captured !== null && this.options.createProjectOperationMemoryNativeSource
-                    && this.options.runtimeEntryOrigins && this.options.runtimeEntryKeyrings?.length
+                    && this.options.runtimeEntryOrigins?.schemaVersion === 3 && this.options.runtimeEntryKeyrings?.length
                     && this.options.runtimeEntryReceiver && this.options.runtimeEntryProfileRoot) {
                     const receiver = this.options.runtimeEntryReceiver(profile),
                       profileRoot = this.options.runtimeEntryProfileRoot(profile)
@@ -3095,7 +3095,8 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis && this.options.rootLiveResumeSupported ? ['profile.root_live_resume'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported ? ['profile.root_feedback'] : []),
           ...(this.options.collaborationAnalysis && this.options.projectOperationOriginSupported ? ['profile.project_operation_origin'] : []),
-          ...(this.options.runtimeEntryOrigins && this.options.runtimeEntryReceiver && this.options.runtimeEntryProfileRoot
+          ...(this.options.runtimeEntryOrigins?.schemaVersion === 3 && this.options.runtimeEntryReceiver
+            && this.options.runtimeEntryProfileRoot
             && this.options.runtimeEntryKeyrings?.length ? ['profile.runtime_entry'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootFeedbackSupported && this.options.rootContinuationSupported ? ['profile.root_continuation'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootExecutionSupported ? ['profile.root_execution_journal'] : []),

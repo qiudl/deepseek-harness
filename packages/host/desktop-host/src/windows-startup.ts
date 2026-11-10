@@ -1,3 +1,4 @@
+import { readHostRuntimeEntryOwnerManifest } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -385,7 +386,8 @@ async function startWindowsDesktopHostApplicationWithTrust(
   const taskCoordinationEnvironments = parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson
     ?? JSON.stringify(config.taskCoordinationEnvironments ?? []))
   const runtimeEntryOrigins = parseHostRuntimeEntryOriginsJson(config.runtimeEntryOriginsJson)
-  if (runtimeEntryOrigins) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
+  if (runtimeEntryOrigins?.schemaVersion === 1) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
+  else if (runtimeEntryOrigins?.schemaVersion === 3) readHostRuntimeEntryOwnerManifest(runtimeEntryOrigins)
   if (config.botGroupPublicKeyringsJson !== undefined && config.operationOriginKeyrings !== undefined) throw new HostAuthorityError('invalid_input')
   const operationOriginKeyrings = config.botGroupPublicKeyringsJson === undefined ? config.operationOriginKeyrings : (() => {
     if (Buffer.byteLength(config.botGroupPublicKeyringsJson) > 32768) throw new HostAuthorityError('invalid_input')

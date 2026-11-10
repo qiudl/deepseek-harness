@@ -4,6 +4,10 @@
 
 [boot 包组](../../packages/boot/README.zh.md)负责 launcher 提供的 profile 访问与插件管理器。[插件管理器](../../packages/boot/plugin-manager/README.zh.md)文档说明持久化、重载与包操作行为。
 
+## 已安装来源身份
+
+`HostRuntimeEntryInstalledOrigin` 包含实际 Profile 和 worker 身份、原始 DS Loader 条目与解析基点，以及包 manifest、Profile 解析和 Node 条件的摘要。启动器拥有的 `runtimeEntryInstalledOrigin` 服务在配置插件加载前开始观察首次真实注册；已有 Profile 模块缓存、替换或 owner 释放都会使读取不可用。这些元数据不授予任务执行、Source 导出或保留内容的使用权限。
+
 ## 管理记录
 
 `PluginEntryId` 标识一个 Loader 条目；调用方从 `listPlugins` 获取，不自行拼接 patch id。
@@ -447,6 +451,21 @@ Source: [`packages/client/ui-plugin-manager/src/index.ts`](../../packages/client
 Current profile facts; scheduling and mutation belong to their callers.
 
 Source: [`packages/boot/app-boot/src/profile-context.ts`](../../packages/boot/app-boot/src/profile-context.ts)
+
+<a id="ctxruntimeentryinstalledorigin--desktopruntimeentryinstalledorigin"></a>
+
+### `ctx.runtimeEntryInstalledOrigin` — `DesktopRuntimeEntryInstalledOrigin`
+
+Observe the actual source registration without exposing a caller mint, expected path or qualification flag.
+
+```ts cordis-catalog
+/** Read code-source identity only after real registration and Loader activation; this grants no Native or business permission.
+ * @returns Fixed original registration metadata, or null for absent/replaced/ambiguous sources.
+ */
+read(): HostRuntimeEntryInstalledOrigin | null
+```
+
+Source: [`packages/bundle/web-app/src/desktop-runtime-entry-installed-origin.ts`](../../packages/bundle/web-app/src/desktop-runtime-entry-installed-origin.ts)
 
 <a id="app-boot-events"></a>
 

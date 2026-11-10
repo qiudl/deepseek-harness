@@ -974,7 +974,8 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
       entry: observation.receipt.entryId,
       sourceEvents: nativePage.events.length,
       materials: materials.length,
-      artifactPins: nativeConfiguration.artifactPins.length,
+      artifactPins: nativeConfiguration.schemaVersion === 1 ? nativeConfiguration.artifactPins.length : null,
+      ownerManifest: nativeConfiguration.schemaVersion === 3 ? nativeConfiguration.manifest.sha256 : null,
     })
   },
   180000,

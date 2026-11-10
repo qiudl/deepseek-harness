@@ -207,6 +207,8 @@ Loader 结算后，app-boot 在仅 optional 条目未激活时输出警告。如
 - **环境发现以启动为界**——`loadLayeredEnv` 只读取一次调用目录与 harness home 中的 `.env`；它不搜索父目录，也不跟随之后选择的 workspace。`loadEnv` 仍是非产品 bin 使用的单目录 helper。
 - **用户 patch 会替换匹配到的整个配置**——按 id 定位的 patch 不做深度合并，因此 profile 覆盖必须重述需要保留的组合包字段。
 
+`createRuntimeResolutionLookup` 复用 Profile 路由规则和 Node 实际生效的 import/require 条件，只读解析，不安装拦截、不导入目标，也不发布 worker 状态。解析保留原 importer 和嵌套包的物理副本；重新创建 reader 才读取后续选择。Main 使用此 reader 独立核对安装来源，worker 则保留其实际活动的 PluginPackages 代际。
+
 <a id="dev-note"></a>
 ### 开发备注
 
@@ -220,3 +222,5 @@ Loader 结算后，app-boot 在仅 optional 条目未激活时输出警告。如
 `renderConfigDump` 的输出是一份可加载的 YAML 文档，其 `# ==` 来源注释与 `!!js` 原样渲染服务于 `--dump-config` 诊断。任何内容都不承诺跨包版本的字节稳定性；在程序化消费该输出之前，请决定 dump 是否成为序列化约定。JSON Schema 输出遵循单独的 [pre-stable 兼容性规则](../../../apps/cli/reference/README.zh.md#config-schema-dump)。
 
 </details>
+
+`createRuntimeResolutionLookup` 复用 Profile 路由规则和 Node 实际生效的 import/require 条件，只读解析，不安装拦截、不导入目标，也不发布 worker 状态。解析保留原 importer 和嵌套包的物理副本；重新创建 reader 才读取后续选择。Main 使用此 reader 独立核对安装来源，worker 则保留其实际活动的 PluginPackages 代际。
