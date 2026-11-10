@@ -318,3 +318,5 @@ macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查
 客户端和 Host 独立检查 `profile.root_continuation` 能力后才接受 `continuation_read`。原 Profile 返回已提交的观察后，Host 校验其中嵌套消费的 namespace、投递和 Source 坐标，并使用当前 Account 与安装/进程绑定签署独立观察域。回复前撤销 Account 权限会阻止签名。
 
 声明 `profile.remote_ui_stream.session_list` 能力时，完整 Session 列表快照使用现有远程 UI 游标。游标在 512 KiB 单项上限内保留所有列表投影；旧版 Host 继续直接读取。
+
+`profile.remote_ui_read.bot_rooms` 仅在当前 Host 与本地 SDK 均实现固定的用户 Bot 群名册读取时允许调用。缺少该能力的 Profile worker 返回 `upgrade_required`；Host 在当前视图租约下返回结果前校验插件响应。

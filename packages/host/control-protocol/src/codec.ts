@@ -1,5 +1,6 @@
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotChatRequest } from './bot-chat.ts'
+import { parseHostBotRoomListRequest } from './bot-room-list.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
 import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
@@ -1945,7 +1946,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
+    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
@@ -1960,6 +1961,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'bot/chat') parseHostBotChatRequest(args)
+    if (params.endpoint === 'bot/rooms') parseHostBotRoomListRequest(args)
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
     if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders' || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'

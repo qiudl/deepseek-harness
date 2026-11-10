@@ -56,6 +56,7 @@ import { generateDesktopModelText, handleDesktopModelRequest } from './desktop-m
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from './desktop-remote-session.ts'
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
+import type { HostBotRoomListRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -629,6 +630,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotChat) return null
           const value = await service.readLocalBotChat(botId)
+          signal.throwIfAborted()
+          return value
+        }, async (request, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            listLocalBotRooms?: (input: HostBotRoomListRequest) => Promise<unknown>
+          }
+          if (!service?.listLocalBotRooms) return null
+          const value = await service.listLocalBotRooms(request)
           signal.throwIfAborted()
           return value
         })

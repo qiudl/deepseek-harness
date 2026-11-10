@@ -311,3 +311,5 @@ macOS and Windows bind root journal, source inspection and planning-attempt insp
 `profile.root_continuation` gates `continuation_read` independently on the client and Host. After the original Profile returns a committed observation, Host verifies its nested consumption namespace, delivery and Source coordinates and signs the independent observation domain using the current Account and installation/process binding. Account revocation before the reply prevents signing.
 
 A complete Session-list snapshot uses the existing remote UI cursor when `profile.remote_ui_stream.session_list` is advertised. The cursor preserves all list projections within its 512 KiB item bound; older Hosts retain direct reads.
+
+`profile.remote_ui_read.bot_rooms` admits the fixed owner Bot room list only when this Host and local SDK both implement it. Profile workers lacking that capability return `upgrade_required`; the Host validates the plugin response before returning it under the current view lease.

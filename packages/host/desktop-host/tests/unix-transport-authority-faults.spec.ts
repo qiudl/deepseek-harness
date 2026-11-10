@@ -364,6 +364,23 @@ describe('Unix transport authority failures', () => {
     expect(missing.client.inspection.capabilities).not.toContain('profile.remote_ui_read.bot_chat')
     missing.client.close()
   })
+  it('negotiates owner Bot room pages and rejects malformed Host results', async () => {
+    const input = { ...opened, endpoint: 'bot/rooms' as const,
+      payload: { args: { afterRoomId: '', limit: 1 } } }
+    const page = { revision: 4, rooms: [{ roomId: 'room-1', displayName: 'Planning',
+      botCount: 2, pinned: false, hidden: false }], nextCursor: null }
+    const execute = vi.fn(async (): Promise<unknown> => page)
+    const old = await authorityClient({ remoteUiRead: execute })
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotRoomsSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_rooms')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    execute.mockResolvedValueOnce({ ...page, rooms: [{ ...page.rooms[0], private: 'data' }] })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
     const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
       payload: { args: { url: '/plugins/a.js', offset: 0 } } }
