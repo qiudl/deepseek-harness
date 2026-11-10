@@ -4,7 +4,8 @@ import { randomUUID, createHash } from 'node:crypto'
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readSync, unlinkSync } from 'node:fs'
 import type { Stats } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import type { DatabaseSync } from 'node:sqlite'
+import { createRequire } from 'node:module'
 import { z } from 'zod'
 import { RUNTIME_ENTRY_CONTRACT, parseRuntimeEntryBinding, parseRuntimeEntryReceipt, parseRuntimeEntryManifest,
   runtimeEntryEffectDigest, runtimeEntryManifestDigest, runtimeEntryReadbackDigest, runtimeEntryReceiptDigest,
@@ -12,6 +13,17 @@ import { RUNTIME_ENTRY_CONTRACT, parseRuntimeEntryBinding, parseRuntimeEntryRece
   type RuntimeEntryObservation, type RuntimeEntryAttribution,
   type RuntimeEntryBinding, type RuntimeEntryReceipt, type RuntimeEntryManifest } from '@deepseek-ai/dsh-host-control-protocol'
 import { createRuntimeEntryManifest, type RuntimeEntryManifestInputs } from './runtime-entry-manifest.ts'
+
+// Native entry is optional: importing the ordinary Web composition must not load SQLite.
+const require = createRequire(import.meta.url)
+let sqliteConstructor: typeof DatabaseSync | undefined
+function openDatabase(...args: ConstructorParameters<typeof DatabaseSync>): DatabaseSync {
+  if (sqliteConstructor === undefined) {
+    const sqlite = require('node:sqlite') as typeof import('node:sqlite')
+    sqliteConstructor = sqlite.DatabaseSync
+  }
+  return new sqliteConstructor(...args)
+}
 
 const PURPOSE = 0x44524531, VERSION = 2, MAX_SEQUENCE = 9223372036854775807n
 const digest = z.string().regex(/^[a-f0-9]{64}$/u)
@@ -87,7 +99,7 @@ function inspectFormat(path: string, allowEmpty: boolean, allowLegacy = false): 
     if (header.readUInt32BE(68) !== PURPOSE || (header.readUInt32BE(60) !== VERSION && !(allowLegacy && header.readUInt32BE(60) === 1))) return fail('wrong_purpose')
   } finally { closeSync(fd) }
   assertNoWal(path)
-  const db = new DatabaseSync(path, { readOnly: true })
+  const db = openDatabase(path, { readOnly: true })
   try { assertCatalog(db, allowLegacy) } finally { db.close() }
   if (!sameFile(identity, checkFile(path))) return fail('file_replaced')
   assertNoWal(path)
@@ -141,7 +153,7 @@ export function readRuntimeEntryWitness(path: string, entryId: string): RuntimeE
   const actual = resolve(path)
   const identity = inspectFormat(actual, false, true)
   if (identity === undefined) return fail('missing')
-  const db = new DatabaseSync(actual, { readOnly: true })
+  const db = openDatabase(actual, { readOnly: true })
   try {
     assertCatalog(db, true)
     const result = readWitness(db, entryId)
@@ -161,7 +173,7 @@ export function readRuntimeEntryWitnessByAttempt(path: string, attemptId: string
   z.uuid().parse(attemptId); z.uuid().parse(commandId)
   const actual = resolve(path), identity = inspectFormat(actual, false, true)
   if (identity === undefined) return fail('missing')
-  const db = new DatabaseSync(actual, { readOnly: true })
+  const db = openDatabase(actual, { readOnly: true })
   try {
     assertCatalog(db, true)
     const row = db.prepare('SELECT entry_id FROM runtime_entries WHERE consumer_attempt_id=?').get(attemptId)
@@ -204,7 +216,7 @@ function publicationPair(value: unknown, witness: RuntimeEntryWitness): RuntimeE
 export function readRuntimeEntryPublicationPair(path: string, entryId: string): RuntimeEntryPublicationPair | undefined {
   const actual = resolve(path), identity = inspectFormat(actual, false)
   if (!identity) return fail('missing')
-  const db = new DatabaseSync(actual, { readOnly: true })
+  const db = openDatabase(actual, { readOnly: true })
   try {
     assertCatalog(db)
     const row = db.prepare('SELECT pair_json,pair_digest,consumer_command_id FROM runtime_entry_publication_pairs WHERE entry_id=?').get(entryId)
@@ -231,7 +243,7 @@ export interface RuntimeEntryFrontier {
 export function readRuntimeEntryFrontier(path: string): RuntimeEntryFrontier {
   const actual = resolve(path), identity = inspectFormat(actual, false)
   if (!identity) return fail('missing')
-  const db = new DatabaseSync(actual, { readOnly: true })
+  const db = openDatabase(actual, { readOnly: true })
   try {
     assertCatalog(db)
     const head = db.prepare('SELECT journal_id,journal_epoch,sequence FROM runtime_entry_head WHERE singleton=1').get()
@@ -279,7 +291,7 @@ export function readRuntimeEntryEffect(path: string,
 export function readRuntimeEntryMetadataAuthorization(path: string, commandId: string): RuntimeEntryMetadataAuthorization | undefined {
   const actual = resolve(path), identity = inspectFormat(actual, false, true)
   if (!identity) return fail('missing')
-  const db = new DatabaseSync(actual, { readOnly: true })
+  const db = openDatabase(actual, { readOnly: true })
   try {
     if (assertCatalog(db, true) === 1) return undefined
     const row = db.prepare('SELECT authorization_json,authorization_digest FROM runtime_entry_metadata_authorizations WHERE consumer_command_id=?')
@@ -316,7 +328,7 @@ export class RuntimeEntryJournal {
       this.identity = checkFile(this.path)
       if (inspected !== undefined && !sameFile(inspected, this.identity)) fail('file_replaced')
       assertNoWal(this.path)
-      db = new DatabaseSync(this.path)
+      db = openDatabase(this.path)
       const purpose = db.prepare('PRAGMA application_id').get()?.application_id
       const count = db.prepare("SELECT count(*) AS count FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'").get()?.count
       const version = db.prepare('PRAGMA user_version').get()?.user_version
