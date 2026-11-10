@@ -7,6 +7,9 @@ A service can be a core spine service, a swappable capability seam, a bundle/com
 
 ```mermaid
 flowchart LR
+  pkg_web_app["web-app"]
+  svc_runtimeEntryInstalledOrigin["ctx.runtimeEntryInstalledOrigin<br/>Launcher-owned loaded source identity"]
+  pkg_dsh__CLI_["dsh (CLI)"]
   pkg_action_cards["action-cards"]
   svc_actionCards["ctx.actionCards<br/>Optional action cards"]
   pkg_creation_recommendations["creation-recommendations"]
@@ -102,7 +105,6 @@ flowchart LR
   pkg_experimental_api_speech_to_text["experimental-api-speech-to-text"]
   svc_speechController["ctx.speechController<br/>Experimental transcription Remote"]
   svc_collaborationTaskExecutions["ctx.collaborationTaskExecutions<br/>Original consuming-turn execution facts"]
-  pkg_web_app["web-app"]
   svc_collaborationTaskFloors["ctx.collaborationTaskFloors<br/>Original Root closed-floor lookup"]
   svc_runtimeEntryConsumerHost["ctx.runtimeEntryConsumerHost<br/>Private original-entry preparation reader"]
   svc_projectOperationMemoryAuthorizations["ctx.projectOperationMemoryAuthorizations<br/>Scoped operation-memory authorization reader"]
@@ -369,6 +371,7 @@ flowchart LR
   pkg_deepseek_account --> svc_deepseekAccount
   pkg_deepseek_account_platform --> svc_deepseekAccount
   pkg_deepseek_llm_api_extensions --> svc_deepseekLlmApiExtensions
+  pkg_dsh__CLI_ --> svc_runtimeEntryInstalledOrigin
   pkg_experimental_agent_team --> svc_agentTeams
   pkg_experimental_api_speech_to_text --> svc_speechController
   pkg_experimental_browser_use_chrome_devtools_mcp --> svc_browserUse
@@ -483,6 +486,7 @@ flowchart LR
   pkg_web_app --> svc_projectOperationMemoryAuthorizations
   pkg_web_app --> svc_projectOperationOrigins
   pkg_web_app --> svc_runtimeEntryConsumerHost
+  pkg_web_app --> svc_runtimeEntryInstalledOrigin
   pkg_web_app --> svc_webApp
   pkg_web_deepseek_api --> svc_web
   pkg_web_fetch_http --> svc_web
@@ -571,6 +575,7 @@ flowchart LR
   svc_remoteAccess --> pkg_api_session_controller
   svc_remoteAccess --> pkg_api_workspace_controller
   svc_runtimeEntryConsumerHost --> pkg_api_session_controller
+  svc_runtimeEntryInstalledOrigin --> pkg_web_app
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -668,6 +673,7 @@ flowchart LR
 
 | ctx key | Role | Owner | Implementations | Direct consumers | Companion plugins | Note |
 | --- | --- | --- | --- | --- | --- | --- |
+| `ctx.runtimeEntryInstalledOrigin` | `core` | [`web-app`](../packages/bundle/web-app) | `dsh (CLI)` | [`web-app`](../packages/bundle/web-app) | - | The original root Context owns the pre-import observer; Web reads the same first registration without execution or source-export permission. |
 | `ctx.actionCards` | `service` | [`action-cards`](../packages/experimental/action-cards) | - | [`creation-recommendations`](../packages/experimental/creation-recommendations), [`client-ui-action-cards`](../packages/experimental/client-ui-action-cards) | - | Owns the card tool, card state, user actions and status notices; card kinds register their actions and handlers. |
 | `ctx.pluginRecommendations` | `service` | [`plugin-recommendations`](../packages/experimental/plugin-recommendations) | - | [`client-ui-plugin-recommendations`](../packages/experimental/client-ui-plugin-recommendations) | - | Reads the current catalog text of an official plugin card and enables the plugin through the profile plugin manager after a click. |
 | `ctx.headlessStartup` | `core` | [`headless`](../packages/bundle/headless) | - | [`headless`](../packages/bundle/headless) | - | Supplies parsed task and run options to the headless runner and its sandbox-policy configuration. |

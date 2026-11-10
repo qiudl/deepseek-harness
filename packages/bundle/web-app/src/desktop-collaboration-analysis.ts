@@ -790,8 +790,8 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const nativePurpose = row.purpose === 'runtime_entry' && (row.action === 'root_feedback' || row.action === 'root_execution_journal')
       const keys = nativePurpose ? ['action', 'purpose', 'operation', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
         ...(Object.hasOwn(row, 'metadataAuthorization') ? ['metadataAuthorization'] : [])]
-        : row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish'
-          ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
+        : row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish' || row.action === 'runtime_entry_installed_origin'
+          ? ['action', ...(row.action === 'runtime_entry_installed_origin' ? [] : ['operation']), 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
             ...(row.action === 'runtime_entry_publish' ? ['actualPublication'] : [])]
           : row.action === 'task_coordination' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer']
             : row.action === 'task_coordination_commit_ack' ? ['action', 'request', 'fenceAck', 'binding_key', 'actualAccount', 'actualPeer']
@@ -830,7 +830,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
         return owner.rootPlanning
       }
       const nativePurpose = row.purpose === 'runtime_entry' && (row.action === 'root_feedback' || row.action === 'root_execution_journal')
-      if ((nativePurpose || row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish')
+      if ((nativePurpose || row.action === 'runtime_entry_installed_origin' || row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish')
         && row.actualWorkerId !== process.env.DSH_PROFILE_WORKER_ID) throw Error('runtime_entry_unavailable')
       if (!native && nativePurpose && row.action === 'root_execution_journal') {
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ supported: false, record: null })); return
@@ -838,6 +838,14 @@ export async function handleDesktopCollaborationAnalysisRequest(
       if ((nativePurpose || row.action === 'runtime_entry_publish') && !native) throw Error('runtime_entry_unavailable')
       const locate = native ? native.locate.bind(native) : coldLocator
       if (row.action === 'runtime_entry_locate' && !locate) throw Error('runtime_entry_unavailable')
+      if (row.action === 'runtime_entry_installed_origin') {
+        const actual = parseTaskCoordinationActualAccount(row.actualAccount)
+        parseTaskCoordinationActualPeer(row.actualPeer)
+        if (actual.hostProfileId !== process.env.DSH_PROFILE_ID) throw Error('runtime_entry_unavailable')
+        controller.signal.throwIfAborted()
+        send(200, { value: native?.installedOrigin() ?? null })
+        return
+      }
       const value = nativePurpose && native ? await native.analyze(row, controller.signal)
         : row.action === 'runtime_entry_locate' && locate ? await locate(row.operation, controller.signal)
           : row.action === 'runtime_entry_publish' && native ? { published: await native.publish(row.operation, row.actualPublication,

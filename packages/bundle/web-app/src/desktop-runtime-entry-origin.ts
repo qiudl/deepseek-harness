@@ -91,6 +91,7 @@ export class DesktopRuntimeEntryOrigin {
     try {
       const publication = await this.options.bindOriginalEntry({ originalCommandId: live.commandId,
         entryId: live.candidate.entryId, sourceEventId: reference.sourceEventId, sourceRevision: reference.sourceRevision }, live.signal)
+      this.options.factoryOptions.assertCurrentCode()
       if (this.live(token) !== live || publication === null) return null
       if (publication.entryId !== live.candidate.entryId || publication.projectId !== live.candidate.projectId ||
         publication.sourceEventId !== reference.sourceEventId || publication.sourceRevision !== reference.sourceRevision ||
@@ -133,6 +134,7 @@ export class DesktopRuntimeEntryOrigin {
           } finally { this.tokens.delete(token) }
         }
         active.throwIfAborted()
+        o.factoryOptions.assertCurrentCode()
         if (this.closed || !metadata.isCurrent() || !o.isCurrent(agent) || Date.now() >= metadata.binding.grantExpiresAt) throw Error('runtime_entry_origin_authority_lost')
         return materialize(materializeSignal)
       }) })
@@ -162,6 +164,7 @@ export class DesktopRuntimeEntryOrigin {
     if (!metadata || !current() || witness.inputs.originalAuthorityDigest !== metadata.originalAuthorityDigest
       || runtimeEntryBindingDigest(witness.receipt.binding) !== runtimeEntryBindingDigest(metadata.binding)) return false
     const candidate = this.candidate(witness, metadata)
+    o.factoryOptions.assertCurrentCode()
     const publication = await o.bindOriginalEntry({ originalCommandId: commandId, entryId,
       sourceEventId: 'dsh-runtime-entry:' + entryId, sourceRevision: '1' }, signal)
     if (!publication || !current() || publication.entryId !== candidate.entryId || publication.projectId !== candidate.projectId
@@ -171,7 +174,11 @@ export class DesktopRuntimeEntryOrigin {
     const token = Object.freeze({}) as ProjectOperationOriginToken
     const live: LiveEntry = { candidate, commandId, signal, current, binding: false, publication: Object.freeze({ ...publication }) }
     this.tokens.set(token, live)
-    try { return await this.ctx.serial('project-operation/runtime-entry', token, signal) === true && current() }
+    try {
+      const published = await this.ctx.serial('project-operation/runtime-entry', token, signal) === true
+      o.factoryOptions.assertCurrentCode()
+      return published && current()
+    }
     catch { signal.throwIfAborted(); return false }
     finally { this.tokens.delete(token) }
   }

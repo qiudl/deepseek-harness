@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from '../../../api/session-controller/tests/runtime-entry-test-code.ts'
 /** Actual driver/JSONL and two real allocators; controlled origin metadata tests ordering only, not export permission. */
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { Context } from '@deepseek-ai/cordis'
@@ -98,7 +99,9 @@ it.skipIf(!selectedSource || process.platform === 'win32')(
       grantExpiresAt: Date.now() + 60000,
     })
     const agent = await ctx.agentLoop.create(SessionId(original.sessionId), { provider: 'mock', model: 'mock' })
+    const code = runtimeEntryTestCode(root)
     const factory = new RuntimeEntryFactory({
+      assertCurrentCode: () => { code.assertCurrentCode() },
       journal: runtime,
       workerLifetimeId: randomUUID(),
       implementationDigest: '1'.repeat(64),

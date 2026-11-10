@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from '../../../api/session-controller/tests/runtime-entry-test-code.ts'
 /** Actual driver-entry publication ordering; controlled origin/Cloud callbacks are component fixtures only. */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,8 +10,8 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { parseRuntimeEntryBinding } from '@deepseek-ai/dsh-host-control-protocol'
-import { type RuntimeEntryFactoryOptions } from '@deepseek-ai/dsh-api-session-controller/src/runtime-entry.ts'
-import { RuntimeEntryJournal } from '@deepseek-ai/dsh-api-session-controller/src/runtime-entry-journal.ts'
+import { type RuntimeEntryFactoryOptions } from '../../../api/session-controller/src/runtime-entry.ts'
+import { RuntimeEntryJournal } from '../../../api/session-controller/src/runtime-entry-journal.ts'
 import type { ProjectOperationOriginToken, ProjectOperationOrigins, ProjectOperationRuntimeEntryCandidate, ProjectOperationRuntimeEntryPublication } from '@deepseek-ai/dsh-api-session-controller'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
@@ -35,8 +36,9 @@ async function harness() {
   const metadata = { binding, dispatchGranted: true, sourceKind: 'primary_human' as const, originalAuthorityDigest: digest,
     accountAuthorityDigest: digest, taskRef: brandString<NonNullable<ProjectOperationRuntimeEntryCandidate['taskRef']>>('original-task'),
     projectId: brandString<ProjectOperationRuntimeEntryCandidate['projectId']>('original-admission-project'), isCurrent: () => current }
+  const code = runtimeEntryTestCode(directory)
   const options: RuntimeEntryFactoryOptions = { journal, workerLifetimeId: '00000001-1111-4111-8111-000000000001',
-    implementationDigest: digest, compositionDigest: digest, compositionAuthorityDigest: digest, registryGeneration: '1',
+    assertCurrentCode: () => { code.assertCurrentCode() }, implementationDigest: digest, compositionDigest: digest, compositionAuthorityDigest: digest, registryGeneration: '1',
     readOriginalMetadata: async () => { metadataReads++; return metadata },
     readLoadedSession: async () => ({ session: agent.session, birthReceiptDigest: digest, instanceGeneration: '1',
       sessionAuthorityDigest: digest, logOffset: agent.session.seq, surfaceGeneration: agent.session.surface.contentGeneration,
@@ -65,7 +67,7 @@ async function harness() {
     expect(journal.count()).toBe(1)
     return createUserMessage({ content: [{ type: 'text', text: 'feedback body' }], source: { kind: 'user' } })
   }
-  return { ctx, agent, provider, reader, binding, journal, materialize, remember,
+  return { ctx, agent, provider, reader, binding, journal, materialize, remember, code,
     token: () => captured, revoke: () => { current = false }, counts: () => ({ bindCount, materializeCount }),
     metadataReads: () => metadataReads }
 }
@@ -151,5 +153,27 @@ describe('runtime entry publication provider', () => {
     await prepared.start(h.materialize)
     expect(h.journal.count()).toBe(1)
     expect(h.counts()).toEqual({ bindCount: 0, materializeCount: 0 })
+  })
+})
+
+describe('original code after awaited publication', () => {
+  it('keeps the durable entry but enters no body when code is changed and restored during the opaque event', async () => {
+    const h = await harness(), { writeFileSync, utimesSync } = await import('node:fs')
+    const bytes = readFileSync(h.code.path)
+    h.ctx.on('project-operation/runtime-entry', async () => {
+      expect(h.journal.count()).toBe(1)
+      await Promise.resolve()
+      writeFileSync(h.code.path, Buffer.alloc(bytes.length, 0x78))
+      utimesSync(h.code.path, 1700000000, 1700000000)
+      writeFileSync(h.code.path, bytes)
+      utimesSync(h.code.path, 1700000000, 1700000000)
+      return false
+    })
+    const prepared = await h.provider.prepare(h.agent, h.binding.consumerCommandId, new AbortController().signal)
+    expect(prepared.kind).toBe('prepared'); if (prepared.kind !== 'prepared') throw Error('controlled preparation missing')
+    const result = await prepared.start(h.materialize)
+    expect(result.kind).toBe('entered'); expect(h.journal.count()).toBe(1)
+    expect(h.counts().materializeCount).toBe(0); expect(() =>{  h.code.assertCurrentCode() }).toThrow()
+    expect(h.code.checks()).toBeGreaterThanOrEqual(3)
   })
 })
