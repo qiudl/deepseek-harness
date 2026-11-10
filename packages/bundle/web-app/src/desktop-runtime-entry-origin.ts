@@ -26,7 +26,7 @@ export interface DesktopRuntimeEntryOriginOptions {
   /** Read original retained signed metadata only in the authenticated historical bind context.
    * @param commandId - Original consumer command independently derived from the private receipt.
    * @param signal - Current Account/Profile/worker metadata request.
-   * @returns Historical provenance and a live local publication fence; never an execution grant. */
+   * @returns Original retained signed metadata and a live local publication fence; never an execution grant. */
   readHistoricalMetadata?(commandId: string, signal: AbortSignal): Promise<RuntimeEntryOriginalMetadata | undefined>
   /** @param request - Original coordinates only.
    * @param signal - Original cancellation.

@@ -176,7 +176,7 @@ export function readRuntimeEntryWitnessByAttempt(path: string, attemptId: string
   } finally { db.close() }
 }
 
-/** Exact immutable original signed pair; historical provenance does not renew an export or execution grant. */
+/** Exact immutable original signed pair; historical signatures do not renew an export or execution grant. */
 export interface RuntimeEntryPublicationPair {
   readonly observation: RuntimeEntryObservation
   readonly attribution: RuntimeEntryAttribution
