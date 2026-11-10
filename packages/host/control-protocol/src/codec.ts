@@ -1,6 +1,7 @@
 import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand, parseRuntimeEntryOriginResult } from './runtime-entry-carrier.ts'
 import { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'
 import { parseHostTaskCoordinationInput, parseHostTaskCoordinationReply } from './task-coordination.ts'
+import { captureHostTaskTargetCall } from './task-target-control.ts'
 import { parseHostProjectMemoryRequest } from './project-operation-memory-command.ts'
 import { parseHostProjectMemoryResponse } from './project-operation-read-result.ts'
 import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
@@ -1716,6 +1717,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
     exactKeys(row, ['action', 'request'])
     return { action: row.action, request: parseHostTaskCoordinationInput(row.request) }
   }
+  if (row.action === 'task_target') {
+    exactKeys(row, ['action', 'request'])
+    return { action: row.action, request: captureHostTaskTargetCall(row.request) }
+  }
   if (row.action === 'project_operation_memory') {
     exactKeys(row, ['action', 'request'])
     const request = parseHostProjectMemoryJson(row.request)
@@ -1778,6 +1783,13 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   if (row.kind === 'task_coordination') {
     exactKeys(row, ['kind', 'record'])
     return { kind: row.kind, record: parseHostTaskCoordinationReply(row.record) }
+  }
+  if (row.kind === 'task_target') {
+    exactKeys(row, ['kind', 'record'])
+    const record = parseHostRemoteSessionJson(row.record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 32768) reject()
+    // The Account owner and client decode associations against their original retained call.
+    return { kind: row.kind, record }
   }
   if (row.kind === 'root_capture_released') {
     exactKeys(row, ['kind', 'root'])

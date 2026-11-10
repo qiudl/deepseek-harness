@@ -64,6 +64,24 @@
     },
     {
       "path": "../../core/agent-loop"
+    },
+    {
+      "path": "../../fs/fs"
+    },
+    {
+      "path": "../../fs/fs-local"
+    },
+    {
+      "path": "../../fs/fs-sandbox"
+    },
+    {
+      "path": "../../sandbox/sandbox-policy"
+    },
+    {
+      "path": "../../session/working-directory"
+    },
+    {
+      "path": "../../core/agent"
     }
   ]
 }

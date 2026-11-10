@@ -64,6 +64,11 @@ export interface CollaborationTaskCoordinationJournal {
    * @returns Permanent closed floor, if any; no API opens one.
    */
   floor(floorDigest: string): CollaborationTaskClosedFloor | undefined
+  /** Read the greatest original durable or in-process accepted floor, without opening old epochs.
+   * @param floorDigest - Exact stable authority scope.
+   * @returns The greatest accepted epoch's original metadata, or undefined; unknown writer state throws.
+   */
+  latchedFloor(floorDigest: string): CollaborationTaskClosedFloor | undefined
   /** @param floorDigest - Stable original authority identity.
    * @returns Whether a durable floor or accepted in-process stop already forbids new dispatch.
    */
@@ -207,6 +212,13 @@ export async function openCollaborationTaskCoordinationJournal(facility: Pick<Do
     associations(floorDigest) { healthy(); return [...associations.entries()].map(([,
       value]) => value).filter(value => value.floorDigest === floorDigest) },
     floor(floorDigest) { healthy(); return floors.get(floorDigest) },
+    latchedFloor(floorDigest) {
+      healthy()
+      let greatest = floors.get(floorDigest)
+      for (const value of pendingFloors.values()) if (value.floorDigest === floorDigest
+        && (!greatest || BigInt(value.acceptedCoordinationEpoch) > BigInt(greatest.acceptedCoordinationEpoch))) greatest = value
+      return greatest
+    },
     blocked(floorDigest) { healthy(); return latches.has(floorDigest) },
     canonicalBlocked(canonicalDigest) { healthy(); return canonicalLatches.has(canonicalDigest) },
     canonicalCandidates(canonicalDigest, account) { healthy(); return [...new Map([...requests.entries(),

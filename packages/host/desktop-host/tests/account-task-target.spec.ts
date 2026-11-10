@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { expect, it, onTestFinished } from 'vitest'
 import {
   parseHostTaskTargetPrepareDirective, parseHostTaskTargetDescriptor, parseHostTaskReadyAdmissionDirective,
@@ -42,7 +43,9 @@ async function fixture() {
   const scope = parseHostTaskCoordinationScope({ ...base.scope, authorityEnvironmentId: account.authorityEnvironmentId,
     accountIssuer: account.issuer, accountSubject: account.subject, hostProfileId: profile.profileId })
   const peer = { ...base.peer, publicKey: installation.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url') }
-  const localPeer = { installationId: peer.installationId, publicKey: peer.publicKey, hostInstanceId: peer.hostInstanceId,
+  const localPeer: AccountTaskTargetOptions['peer'] = {
+    installationId: brandString<AccountTaskTargetOptions['peer']['installationId']>(peer.installationId), publicKey: peer.publicKey,
+    hostInstanceId: brandString<AccountTaskTargetOptions['peer']['hostInstanceId']>(peer.hostInstanceId),
     processNonce: peer.processNonce }
   const body = JSON.stringify({ schemaVersion: 1, text: '原计划下一步', permissions: { forceReadOnly: true,
     routeReadOnly: true, filesystem: 'read-only', networkAccess: false, skills: null, toolAllowlist: null } })
@@ -105,7 +108,7 @@ async function fixture() {
       async execute(raw, signal) {
         signal.throwIfAborted()
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('missing private command')
-        const command: Record<string, unknown> = raw
+        const command: Record<string, unknown> = Object.fromEntries(Object.entries(raw))
         if (typeof command.action !== 'string') throw Error('missing private action')
         actions.push(command.action)
         expect(command.actualWorkerId).toBe(workerId)
@@ -168,10 +171,10 @@ it('rejects wrong Source signatures, current Account, local peer, expiry and cal
   if (f.calls.prepare.operation !== 'prepare') throw Error('fixture operation')
   await expect(f.run({ ...f.calls.prepare, directive: { ...f.calls.prepare.directive, signature: unsigned } })).rejects.toThrow()
   await expect(f.run({ ...f.calls.prepare, verified: true })).rejects.toThrow()
+  const originalPeer = f.options.peer
   f.options.peer = { ...f.options.peer, processNonce: Buffer.alloc(32, 4).toString('base64url') }
   await expect(f.run(f.calls.prepare)).rejects.toThrow()
-  f.options.peer = { installationId: f.peer.installationId, publicKey: f.peer.publicKey,
-    hostInstanceId: f.peer.hostInstanceId, processNonce: f.peer.processNonce }
+  f.options.peer = originalPeer
   f.time.value = f.calls.prepare.directive.expiresAt
   await expect(f.run(f.calls.prepare)).rejects.toThrow()
   expect(f.actions).toEqual([])

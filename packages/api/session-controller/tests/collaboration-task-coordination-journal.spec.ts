@@ -54,6 +54,21 @@ it('keeps epoch floors monotone while original old-request replays are historica
   const other = { ...floor(), floorDigest: 'f'.repeat(64), acceptedCoordinationEpoch: '1' }
   expect(await f.journal.closeFloor(other, signal())).toEqual(other)
 })
+it('reads the greatest actual pending or durable floor without clearing the old closed floor', async () => {
+  const f = await fixture(), first = floor(), pending = { ...floor(), acceptedCoordinationEpoch: '4' }
+  expect(f.journal.latchedFloor(first.floorDigest)).toBeUndefined()
+  await f.journal.closeFloor(first, signal())
+  f.journal.latchFloor(pending)
+  f.journal.latchFloor({ ...floor(), acceptedCoordinationEpoch: '3' })
+  f.journal.latchFloor({ ...floor(), floorDigest: 'b'.repeat(64), acceptedCoordinationEpoch: '99' })
+  expect(f.journal.floor(first.floorDigest)).toEqual(first)
+  expect(f.journal.latchedFloor(first.floorDigest)).toEqual(pending)
+  expect(f.journal.blocked(first.floorDigest)).toBe(true)
+  await f.journal.closeFloor(pending, signal())
+  expect(f.journal.latchedFloor(first.floorDigest)).toEqual(pending)
+  expect(await f.journal.closeFloor(first, signal())).toEqual(first)
+  expect(f.journal.latchedFloor(first.floorDigest)).toEqual(pending)
+})
 it('recovered unfinished native work remains unknown without rewriting original IDs or replaying it', async () => {
   const f = await fixture(), command = association()
   await f.journal.associate(command, signal())
@@ -135,6 +150,7 @@ it('poisons the owner after an actual uncertain filesystem write instead of publ
     if (results[1]?.status !== 'rejected') throw Error('unexpected accepted queued write')
     expect(results[1].reason).toMatchObject({ message: 'task_coordination_recovery_required' })
     expect(() => f.journal.request(stopped.transferRequestId)).toThrow('recovery_required')
+    expect(() => f.journal.latchedFloor(stopped.floorDigest)).toThrow('recovery_required')
     await expect(f.journal.closeFloor(stopped, signal())).rejects.toThrow('recovery_required')
   } finally { await rm(f.root); await rename(saved, f.root) }
 })

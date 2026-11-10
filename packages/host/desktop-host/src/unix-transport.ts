@@ -2,6 +2,9 @@ import { join } from 'node:path'
 import type { ProjectOperationMemoryNativeSource } from './project-operation-memory-native-source.ts'
 import type { HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
 import { operateAccountTaskCoordination, type TaskCoordinationReceiver } from './account-task-coordination.ts'
+import { operateAccountTaskTarget } from './account-task-target.ts'
+import { captureHostTaskTargetCall, captureHostTaskTargetResult, hostTaskTargetCallHeader,
+  type HostTaskTargetCall, type HostTaskTargetResult } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostTaskCoordinationInput, parseHostTaskCoordinationReply, encodeHostTaskCoordinationFenceAck,
   encodeHostTaskCoordinationObservation, hostTaskCoordinationDirectiveDigest,
@@ -1142,6 +1145,17 @@ export class HostControlAuthority {
     this.taskCoordinationNonces.set(key, { referenceDigest: hostTaskCoordinationDirectiveDigest(d), expiresAt: d.expiresAt })
   }
 
+  private claimTaskTargetNonce(input: HostTaskTargetCall, now: number): void {
+    for (const [key, entry] of this.taskCoordinationNonces) if (entry.expiresAt <= now) this.taskCoordinationNonces.delete(key)
+    const d = input.operation === 'ready_start' ? input.receipt : input.directive
+    const nonce = input.operation === 'ready_start' ? input.receipt.receiptId : input.directive.nonce
+    const key = JSON.stringify(['task-target', input.operation, d.scope.authorityEnvironmentId, d.keyId, nonce])
+    if (this.taskCoordinationNonces.has(key)) throw new HostAuthorityError('replayed')
+    if (this.taskCoordinationNonces.size >= 4096) throw new HostAuthorityError('busy')
+    this.taskCoordinationNonces.set(key, { referenceDigest: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+      expiresAt: d.expiresAt })
+  }
+
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
     const selector = verifyProfileSelector(this.options.identity, profileSelector)
     const profileId = selector.profile_id, generation = String(selector.binding_generation)
@@ -2241,6 +2255,20 @@ export class HostControlAuthority {
             ? { host: this.options.host, configuration: this.options.runtimeEntryOrigins, keyrings: this.options.runtimeEntryKeyrings ?? [],
               receiver: this.options.runtimeEntryReceiver, profileRoot: this.options.runtimeEntryProfileRoot, peer: actualPeer,
               sign: (bytes: Uint8Array) => sign(null, bytes, privateKeyObject(identity.installationPrivateKey)).toString('base64url'), now: clock } : undefined
+          if (command.action === 'task_target') {
+            const receiver = this.options.taskCoordinationReceiver
+            if (!receiver || this.options.runtimeEntryOrigins?.schemaVersion !== 3) throw new HostAuthorityError('unavailable')
+            const record = await operateAccountTaskTarget({ host: this.options.host,
+              peer: actualPeer as Parameters<typeof operateAccountTaskTarget>[0]['peer'],
+              environments: this.options.taskCoordinationEnvironments ?? [], receiver,
+              claimNonce: (input) => { this.claimTaskTargetNonce(input, clock()) },
+              sign: bytes => sign(null, bytes, privateKeyObject(identity.installationPrivateKey)).toString('base64url'), now: clock,
+            }, account, command.request, binding, context.signal)
+            if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+            channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
+              result: parseHostCollaborationAnalysisResult({ kind: 'task_target', record }) })
+            return
+          }
           if (command.action === 'task_coordination') {
             const receiver = this.options.taskCoordinationReceiver
             if (!receiver) throw new HostAuthorityError('unavailable')
@@ -4654,7 +4682,7 @@ export class UnixHostClient {
             Buffer.from(receipt.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
       }
     }
-    const expected = command.action === 'task_coordination' ? 'task_coordination' : command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'project_operation_memory' ? 'project_operation_memory' : command.action === 'root_operation_origin' ? 'root_operation_origin' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
+    const expected = command.action === 'task_target' ? 'task_target' : command.action === 'task_coordination' ? 'task_coordination' : command.action === 'capture_root' ? 'root_captured' : command.action === 'release_captured_root' ? 'root_capture_released' : command.action === 'start_captured_root' ? 'root_prepared' : command.action === 'read_source_output' ? 'source_output' : command.action === 'project_operation_memory' ? 'project_operation_memory' : command.action === 'root_operation_origin' ? 'root_operation_origin' : command.action === 'root_feedback' ? 'root_feedback' : command.action === 'root_execution_journal' ? 'root_execution_journal' : command.action === 'read_root_attempt' ? 'root_attempt_evidence' : command.action === 'prepare_root_attempt' ? 'root_attempt_prepared' : command.action === 'read_root_diagnostic' ? 'root_diagnostic' : command.action === 'read_root_output' ? 'root_output' : (command.action === 'prepare_root' || command.action === 'recover_root' || command.action === 'reconcile_root' || command.action === 'resume_root') ? 'root_prepared' : command.action === 'capture_reply' ? 'reply_source' : (command.action === 'prepare' || command.action === 'resume_source' || command.action === 'prepare_clarification') ? 'prepared' : 'output'
     if (command.action === 'resume_source' && (result.kind !== 'prepared' || !result.preparation || typeof result.preparation !== 'object' ||
       Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
     if (command.action === 'resume_root' && (result.kind !== 'root_prepared' || !result.preparation || typeof result.preparation !== 'object' || Array.isArray(result.preparation) || !('kind' in result.preparation) || result.preparation.kind !== 'prepared')) throw new HostAuthorityError('unavailable')
@@ -5004,6 +5032,32 @@ export class UnixHostClient {
         Buffer.from(a.signature, 'base64url'))) throw new HostAuthorityError('unauthorized')
     }
     return result
+  }
+
+  /** Send one original paired-step request through the current authenticated Account and process.
+   * @param input - Actual Account binding and exact Source-signed call.
+   * @returns Original bounded metadata; Source/installation signatures remain verified by the receiving Account owner.
+   */
+  async operateTaskTarget(input: Omit<Parameters<UnixHostClient['resolveBotIdentity']>[0], 'botId'> & {
+    readonly request: HostTaskTargetCall
+  }): Promise<HostTaskTargetResult> {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.task_target_v1' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const request = captureHostTaskTargetCall(input.request), header = hostTaskTargetCallHeader(request)
+    const peer = this.currentPeerFingerprint()
+    if (header.scope.authorityEnvironmentId !== input.authorityEnvironmentId || header.scope.accountIssuer !== input.issuer
+      || header.scope.accountSubject !== input.subject
+      || header.accountBindingId !== null && header.accountBindingId !== input.accountBindingHandle
+      || header.accountBindingVersion !== null && header.accountBindingVersion !== input.authorityBindingVersion
+      || header.peer.installationId !== String(this.inspection.installation_id)
+      || header.peer.publicKey !== this.inspection.installation_public_key
+      || header.peer.hostInstanceId !== String(this.inspection.host_instance_id)
+      || header.peer.processNonce !== this.inspection.process_nonce) throw new HostAuthorityError('profile_mismatch')
+    const result = await this.collaborationAnalysis({ ...input, command: { action: 'task_target', request } })
+    input.signal?.throwIfAborted(); this.requireCurrentPeer(peer)
+    if (result.kind !== 'task_target') throw new HostAuthorityError('unavailable')
+    return captureHostTaskTargetResult(result.record, request)
   }
 
   /** Send a strict signed task-control request through the current authenticated Account/process.

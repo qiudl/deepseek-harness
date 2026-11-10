@@ -87,7 +87,7 @@ it.each(['normal', 'bad_prefix', 'prepare_failure', 'authority_lost', 'close_pre
           if (scenario !== 'close_prepare') return
           entered()
           if (!owned) throw Error('controlled_missing_owned_signal')
-          await new Promise<void>((resolve, reject) => {
+          await new Promise<void>((_resolve, reject) => {
             if (owned.aborted) { reject(owned.reason instanceof Error ? owned.reason : Error('controlled_abort')); return }
             owned.addEventListener('abort', () =>{  reject(owned.reason instanceof Error ? owned.reason : Error('controlled_abort')) }, { once: true })
           })

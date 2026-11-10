@@ -2162,6 +2162,19 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'pairedTaskTargetConsumerHost',
+    summary: 'Service implemented only by the original authenticated Profile bootstrap.',
+    description: 'Service implemented only by the original authenticated Profile bootstrap.',
+    methods: [
+      {
+        signature: 'take(capability: PairedTaskStepCapability, signal: AbortSignal): PairedTaskStepLease',
+        description: 'Consume only an exact private object retained by this factory, with no caller-provided validation callback.',
+        parameters: [{ name: 'capability', description: 'The original one-use object created after actual Source consumption and local persistence.' }, { name: 'signal', description: 'Original current admission request cancellation; retained execution uses the actual lease lifetime.' }],
+        returns: 'Its exact current Agent, Session and original signed-step data.',
+      },
+    ],
+  },
+  {
     key: 'permissionPresets',
     summary: 'Owns the deployment\'s configured permission presets, the fixed Auto integration hook, and their write path.',
     description: 'Owns the deployment\'s configured permission presets, the fixed Auto integration hook, and their write path. Requires a confining `ctx.shell` executor and `ctx.approval`; unmatched knob values are reported as CUSTOM_PRESET, not an error.',
@@ -2827,6 +2840,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read the independent coordination metadata writer; this does not authorize an association or execution.',
         parameters: [],
         returns: 'The Profile-owned journal, closed only after live original consumers drain.',
+      },
+      {
+        signature: 'async openPairedTaskTargetJournal(): Promise<PairedTaskTargetJournal>',
+        description: 'Open the Profile-owned paired-step metadata writer without granting execution or clearing permanent floors.',
+        parameters: [],
+        returns: 'The original journal, retained until the controller\'s lifecycle has drained.',
+      },
+      {
+        signature: 'async consumePairedTaskTarget(capability: PairedTaskStepCapability, signal: AbortSignal): Promise<PairedTaskTargetRun>',
+        description: 'Execute the original step only through the current worker\'s private one-use capability.',
+        parameters: [{ name: 'capability', description: 'Original object captured by the authenticated paired target factory.' }, { name: 'signal', description: 'Current authenticated request cancellation.' }],
+        returns: 'Actual input acceptance and interval completion; neither asserts descendant-process quiescence.',
       },
       {
         signature: 'stopCollaborationTaskExecution(commandId: string): void',
@@ -6322,7 +6347,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'CollaborationTaskCoordinationJournal',
-    declaration: 'export interface CollaborationTaskCoordinationJournal {\n    associate(value: CollaborationTaskAssociation, signal: AbortSignal): Promise<CollaborationTaskAssociation>;\n    association(commandId: string): CollaborationTaskAssociation | undefined;\n    associations(floorDigest: string): readonly CollaborationTaskAssociation[];\n    floor(floorDigest: string): CollaborationTaskClosedFloor | undefined;\n    blocked(floorDigest: string): boolean;\n    canonicalBlocked(canonicalDigest: string): boolean;\n    canonicalCandidates(canonicalDigest: string, account: CollaborationTaskCurrentAccount): readonly CollaborationTaskClosedFloor[];\n    latchFloor(value: CollaborationTaskClosedFloor): void;\n    request(requestId: string): CollaborationTaskClosedFloor | undefined;\n    pendingRequest(requestId: string): CollaborationTaskClosedFloor | undefined;\n    closeFloor(value: CollaborationTaskClosedFloor, signal: AbortSignal): Promise<CollaborationTaskClosedFloor>;\n    recordCall(value: CollaborationTaskNativeCall): Promise<void>;\n    calls(commandId: string | readonly string[]): readonly CollaborationTaskNativeCall[];\n    recordJob(value: CollaborationTaskControllerJob): Promise<void>;\n    jobs(commandId: string | readonly string[]): readonly CollaborationTaskControllerJob[];\n    artifact(key: string): CollaborationTaskArtifact | undefined;\n    retainArtifact(value: CollaborationTaskArtifact, now: number): Promise<CollaborationTaskArtifact>;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface CollaborationTaskCoordinationJournal {\n    associate(value: CollaborationTaskAssociation, signal: AbortSignal): Promise<CollaborationTaskAssociation>;\n    association(commandId: string): CollaborationTaskAssociation | undefined;\n    associations(floorDigest: string): readonly CollaborationTaskAssociation[];\n    floor(floorDigest: string): CollaborationTaskClosedFloor | undefined;\n    latchedFloor(floorDigest: string): CollaborationTaskClosedFloor | undefined;\n    blocked(floorDigest: string): boolean;\n    canonicalBlocked(canonicalDigest: string): boolean;\n    canonicalCandidates(canonicalDigest: string, account: CollaborationTaskCurrentAccount): readonly CollaborationTaskClosedFloor[];\n    latchFloor(value: CollaborationTaskClosedFloor): void;\n    request(requestId: string): CollaborationTaskClosedFloor | undefined;\n    pendingRequest(requestId: string): CollaborationTaskClosedFloor | undefined;\n    closeFloor(value: CollaborationTaskClosedFloor, signal: AbortSignal): Promise<CollaborationTaskClosedFloor>;\n    recordCall(value: CollaborationTaskNativeCall): Promise<void>;\n    calls(commandId: string | readonly string[]): readonly CollaborationTaskNativeCall[];\n    recordJob(value: CollaborationTaskControllerJob): Promise<void>;\n    jobs(commandId: string | readonly string[]): readonly CollaborationTaskControllerJob[];\n    artifact(key: string): CollaborationTaskArtifact | undefined;\n    retainArtifact(value: CollaborationTaskArtifact, now: number): Promise<C /* …truncated — full shape in source */',
   },
   {
     name: 'CollaborationTaskCurrentAccount',
@@ -7169,6 +7194,34 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface HostRuntimeEntryInstalledOrigin {\n    readonly schemaVersion: 1;\n    readonly profileId: HostProfileId;\n    readonly workerLifetimeId: Branded<\'RuntimeEntryWorkerLifetimeId\'>;\n    readonly entryId: Branded<\'CordisLoaderEntryId\'>;\n    readonly importSpecifier: \'ds-bot\';\n    readonly resolutionBase: string;\n    readonly packageManifestDigest: string;\n    readonly resolutionDigest: string;\n    readonly conditionsDigest: string;\n}',
   },
   {
+    name: 'HostTaskCoordinationScope',
+    declaration: 'export type HostTaskCoordinationScope = Parsed<typeof scopeSchema>;',
+  },
+  {
+    name: 'HostTaskReadyAdmissionDirective',
+    declaration: 'export type HostTaskReadyAdmissionDirective = Parsed<typeof readySchema>;',
+  },
+  {
+    name: 'HostTaskTargetConsumeChallenge',
+    declaration: 'export type HostTaskTargetConsumeChallenge = Parsed<typeof consumeChallengeSchema>;',
+  },
+  {
+    name: 'HostTaskTargetConsumeReceipt',
+    declaration: 'export type HostTaskTargetConsumeReceipt = Parsed<typeof consumeReceiptSchema>;',
+  },
+  {
+    name: 'HostTaskTargetDescriptor',
+    declaration: 'export type HostTaskTargetDescriptor = Parsed<typeof descriptorSchema>;',
+  },
+  {
+    name: 'HostTaskTargetPrepareDirective',
+    declaration: 'export type HostTaskTargetPrepareDirective = Parsed<typeof prepareSchema>;',
+  },
+  {
+    name: 'HostTaskTargetStepBody',
+    declaration: 'export type HostTaskTargetStepBody = Parsed<typeof stepBodySchema>;',
+  },
+  {
     name: 'ImageAttachmentLimits',
     declaration: 'export interface ImageAttachmentLimits {\n    maxImageBytes: number;\n    maxImagesPerMessage: number;\n    maxMessageImageBytes: number;\n    maxImagePixels: number;\n    maxImageDimension: number;\n    mediaTypes: readonly ImageMediaType[];\n}',
   },
@@ -7939,6 +7992,30 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'PaidTranslationSpec',
     declaration: 'export interface PaidTranslationSpec extends TranslationSpecFields {\n    readonly provider: PaidTranslationProvider;\n    readonly sessionId: SessionId;\n}',
+  },
+  {
+    name: 'PairedTaskStepCapability',
+    declaration: 'export interface PairedTaskStepCapability {\n    readonly kind: \'paired-task-step-capability\';\n}',
+  },
+  {
+    name: 'PairedTaskStepLease',
+    declaration: 'export interface PairedTaskStepLease {\n    readonly agent: Agent;\n    readonly session: Session;\n    readonly admission: PairedTaskTargetAdmission;\n    readonly proposal: HostTaskReadyAdmissionDirective;\n    readonly body: HostTaskTargetStepBody;\n    readonly signal: AbortSignal;\n    assertCurrent(): void;\n    prepare(signal: AbortSignal): Promise<void>;\n    starting(signal: AbortSignal): Promise<void>;\n    settling(signal: AbortSignal): Promise<void>;\n    finished(): Promise<void>;\n}',
+  },
+  {
+    name: 'PairedTaskTargetAdmission',
+    declaration: 'export type PairedTaskTargetAdmission = Readonly<z.infer<typeof admissionSchema>>;',
+  },
+  {
+    name: 'PairedTaskTargetJournal',
+    declaration: 'export interface PairedTaskTargetJournal {\n    readonly epoch: string;\n    prepare(descriptor: HostTaskTargetDescriptor, signal: AbortSignal): Promise<PairedTaskTargetProjection>;\n    projection(itemId: string): PairedTaskTargetProjection | undefined;\n    findProjection(prepare: HostTaskTargetPrepareDirective): PairedTaskTargetProjection | undefined;\n    commitProjection(itemId: string, signed: HostTaskTargetDescriptor, signal: AbortSignal): Promise<PairedTaskTargetProjection>;\n    consumeIntent(projectionId: string, proposal: HostTaskReadyAdmissionDirective, challenge: HostTaskTargetConsumeChallenge, signal: AbortSignal): Promise<PairedTaskTargetAdmission>;\n    recordSourceConsumption(itemId: string, receipt: HostTaskTargetConsumeReceipt, signal: AbortSignal): Promise<PairedTaskTargetAdmission>;\n    startIntent(itemId: string, signal: AbortSignal): Promise<Readonly<{\n        first: boolean;\n        record: PairedTaskTargetAdmission;\n    }>>;\n    recordClaim(itemId: string, claim: Readonly<{\n        messageId: string;\n        turn: number;\n        step: number;\n    }>, signal: AbortSignal): Promise<PairedTaskTargetAdmission>;\n    admission(itemId: string): PairedTaskTargetAdmission | undefined;\n    admissionByIntent(consumeIntentId: string): PairedTaskTargetAdmission | undefined;\n    commitChallenge(itemId: string, signed: HostTaskTargetConsumeChallenge, signal: AbortSignal): Promise<PairedTaskTargetAdmission>;\n    inventory(scope: HostTaskCoordinationScope): readonly (Readon /* …truncated — full shape in source */',
+  },
+  {
+    name: 'PairedTaskTargetProjection',
+    declaration: 'export type PairedTaskTargetProjection = Readonly<z.infer<typeof projectionSchema>>;',
+  },
+  {
+    name: 'PairedTaskTargetRun',
+    declaration: 'export interface PairedTaskTargetRun {\n    readonly accepted: Promise<PairedTaskTargetAdmission>;\n    readonly completion: Promise<PairedTaskTargetAdmission>;\n}',
   },
   {
     name: 'PaneOpenArgs',

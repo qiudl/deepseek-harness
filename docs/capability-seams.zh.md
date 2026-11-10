@@ -108,6 +108,7 @@ flowchart LR
   svc_speechController["ctx.speechController<br/>Experimental transcription Remote"]
   svc_collaborationTaskExecutions["ctx.collaborationTaskExecutions<br/>Original consuming-turn execution facts"]
   svc_collaborationTaskFloors["ctx.collaborationTaskFloors<br/>Original Root closed-floor lookup"]
+  svc_pairedTaskTargetConsumerHost["ctx.pairedTaskTargetConsumerHost<br/>Private paired-step capability reader"]
   svc_runtimeEntryConsumerHost["ctx.runtimeEntryConsumerHost<br/>Private original-entry preparation reader"]
   svc_projectOperationMemoryAuthorizations["ctx.projectOperationMemoryAuthorizations<br/>Scoped operation-memory authorization reader"]
   pkg_ds_bot__external_["ds-bot (external)"]
@@ -334,6 +335,7 @@ flowchart LR
   pkg_api_remote_access --> svc_remoteAccess
   pkg_api_session_controller --> svc_collaborationTaskExecutions
   pkg_api_session_controller --> svc_collaborationTaskFloors
+  pkg_api_session_controller --> svc_pairedTaskTargetConsumerHost
   pkg_api_session_controller --> svc_projectOperationMemoryAuthorizations
   pkg_api_session_controller --> svc_projectOperationOrigins
   pkg_api_session_controller --> svc_runtimeEntryConsumerHost
@@ -485,6 +487,7 @@ flowchart LR
   pkg_user_questions --> svc_userQuestions
   pkg_web --> svc_web
   pkg_web_app --> svc_collaborationTaskFloors
+  pkg_web_app --> svc_pairedTaskTargetConsumerHost
   pkg_web_app --> svc_projectOperationMemoryAuthorizations
   pkg_web_app --> svc_projectOperationOrigins
   pkg_web_app --> svc_runtimeEntryConsumerHost
@@ -562,6 +565,7 @@ flowchart LR
   svc_officeToPdf --> pkg_client_ui_sidebar_documentpreview
   svc_otel --> pkg_host_product_telemetry_otel
   svc_otel --> pkg_session_telemetry_otel
+  svc_pairedTaskTargetConsumerHost --> pkg_api_session_controller
   svc_pluginManager --> pkg_plugin_manager
   svc_pluginManager --> pkg_ui_settings_plugin_inventory
   svc_pluginMarket --> pkg_client_ui_plugin_market
@@ -707,6 +711,7 @@ flowchart LR
 | `ctx.speechController` | `core` | [`experimental-api-speech-to-text`](../packages/experimental/api-speech-to-text) | - | - | - | 在 Provider 调用前校验受限的浏览器音频。 |
 | `ctx.collaborationTaskExecutions` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | [`web-app`](../packages/bundle/web-app) | - | 仅在原消费 turn 存续期间读取真实消费命令；取消或 provider 替换会使保留的事实失效。 |
 | `ctx.collaborationTaskFloors` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | 按原本地 Root 坐标与当前 Parent Account 事实核对已保存的签名 floor；查不到 floor 不授予执行许可。 |
+| `ctx.pairedTaskTargetConsumerHost` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | 消费经过鉴权的 worker factory 保留的原一次性对象，提供当前 Agent、Session 和 Native 限制生命周期；调用者元数据不授予执行权限。 |
 | `ctx.runtimeEntryConsumerHost` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | 使用实际已加载 Session 前缀与 Main 已验证的原证明上下文准备一次私有 driver 入口；调用者不能提供证明上下文或 writer。 |
 | `ctx.projectOperationMemoryAuthorizations` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | 在等待中的私有源读取或原始确认 anchor 捕获期间解析不可变的单次请求授权；不提供公共铸造、保留正文或执行权限。 |
 | `ctx.projectOperationOrigins` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | 在等待中的认证来源发布期间读取不可变历史引用；外部 DSBot 观察器提交匹配的元数据修订，不授予执行、保留或导出权限。 |

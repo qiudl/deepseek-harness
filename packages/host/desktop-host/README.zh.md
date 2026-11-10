@@ -239,6 +239,8 @@ Host 仅在具备明确的 existing-only 持久化读取器时声明 `profile.re
 
 配对原步骤控制在安装密钥签名或执行准入前核对当前 Account、Source 签名及捕获的原 worker。输入持久 claim 由短请求返回，原 Account 登记一直保留到另一条原 worker 执行及清理真正完成。短响应之后撤销 Account 或替换 worker，仍会取消该受管执行。安装签名只提交原 descriptor 或 challenge 的精确内容。这些基础方法要求嵌入方提供实际私有 worker receiver 后才能挂载。
 
+已认证的 analysis carrier 通过 `operateTaskTarget` 承载四种配对目标操作。Main 使用原签名 receipt ID 防止 start 重放，并在签名持久化与执行清理期间保留同一捕获 receiver。只有私有长执行阶段跟随实际 Account/worker 生命周期，不使用普通元数据请求的 35 秒超时；独立 claim 请求仍有时限。配对能力在完整组合验收前保持不公告。
+
 协议权威测试在所有平台使用实例独立的 JSON 注册表钩子。POSIX 与 Windows 存储套件负责文件系统权限检查。内置归档存储测试依赖 POSIX UID 和权限位；Windows 私有文件、命名管道、ACL 与原生 PowerShell 套件仍为必需检查。
 
 <details>

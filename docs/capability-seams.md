@@ -106,6 +106,7 @@ flowchart LR
   svc_speechController["ctx.speechController<br/>Experimental transcription Remote"]
   svc_collaborationTaskExecutions["ctx.collaborationTaskExecutions<br/>Original consuming-turn execution facts"]
   svc_collaborationTaskFloors["ctx.collaborationTaskFloors<br/>Original Root closed-floor lookup"]
+  svc_pairedTaskTargetConsumerHost["ctx.pairedTaskTargetConsumerHost<br/>Private paired-step capability reader"]
   svc_runtimeEntryConsumerHost["ctx.runtimeEntryConsumerHost<br/>Private original-entry preparation reader"]
   svc_projectOperationMemoryAuthorizations["ctx.projectOperationMemoryAuthorizations<br/>Scoped operation-memory authorization reader"]
   pkg_ds_bot__external_["ds-bot (external)"]
@@ -332,6 +333,7 @@ flowchart LR
   pkg_api_remote_access --> svc_remoteAccess
   pkg_api_session_controller --> svc_collaborationTaskExecutions
   pkg_api_session_controller --> svc_collaborationTaskFloors
+  pkg_api_session_controller --> svc_pairedTaskTargetConsumerHost
   pkg_api_session_controller --> svc_projectOperationMemoryAuthorizations
   pkg_api_session_controller --> svc_projectOperationOrigins
   pkg_api_session_controller --> svc_runtimeEntryConsumerHost
@@ -483,6 +485,7 @@ flowchart LR
   pkg_user_questions --> svc_userQuestions
   pkg_web --> svc_web
   pkg_web_app --> svc_collaborationTaskFloors
+  pkg_web_app --> svc_pairedTaskTargetConsumerHost
   pkg_web_app --> svc_projectOperationMemoryAuthorizations
   pkg_web_app --> svc_projectOperationOrigins
   pkg_web_app --> svc_runtimeEntryConsumerHost
@@ -560,6 +563,7 @@ flowchart LR
   svc_officeToPdf --> pkg_client_ui_sidebar_documentpreview
   svc_otel --> pkg_host_product_telemetry_otel
   svc_otel --> pkg_session_telemetry_otel
+  svc_pairedTaskTargetConsumerHost --> pkg_api_session_controller
   svc_pluginManager --> pkg_plugin_manager
   svc_pluginManager --> pkg_ui_settings_plugin_inventory
   svc_pluginMarket --> pkg_client_ui_plugin_market
@@ -705,6 +709,7 @@ flowchart LR
 | `ctx.speechController` | `core` | [`experimental-api-speech-to-text`](../packages/experimental/api-speech-to-text) | - | - | - | Validates bounded browser audio before provider dispatch. |
 | `ctx.collaborationTaskExecutions` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | [`web-app`](../packages/bundle/web-app) | - | Reads the real consumer command only during its owned consuming turn; cancellation and provider replacement invalidate retained facts. |
 | `ctx.collaborationTaskFloors` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | Checks retained signed floors against original local Root coordinates and current parent Account facts; a missing floor grants no execution permission. |
+| `ctx.pairedTaskTargetConsumerHost` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | Consumes the original one-use object retained by the authenticated worker factory and supplies the current Agent, Session and Native restriction lifecycle; caller metadata grants no execution authority. |
 | `ctx.runtimeEntryConsumerHost` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | Uses the actual loaded Session prefix and Main-verified original proof context before preparing one private driver entry; callers cannot supply a proof context or writer. |
 | `ctx.projectOperationMemoryAuthorizations` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | Resolves one immutable request-local authorization during an awaited private source read or original confirmation-anchor capture; no public mint, retained body or execution authority. |
 | `ctx.projectOperationOrigins` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | Reads immutable historical references during an awaited authenticated origin publication; the external DSBot observer commits matching metadata revisions without execution, retention, or export authority. |

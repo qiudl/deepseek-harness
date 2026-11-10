@@ -152,6 +152,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 The paired-target codecs retain original logical-step, physical target, Source ready proposal and one-use challenge/receipt coordinates. Signing tuples remain fixed by the literal vectors; exact parsers reject mismatched associations and unknown fields. A step body is canonical UTF-8 JSON bounded to16KiB, including permission ceilings, inside a32KiB control envelope. Parsing and hashing do not verify signatures or current authority. Observation pages retain original projection/admission anchors; an unknown attempt cannot be read as completed work.
 
+The existing analysis command accepts the closed `task_target` call. Its metadata response is bounded JSON; both the Account owner and client decode its exact associations against their original retained call before returning a business result. No public command accepts private execution capabilities or caller validation flags.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 
