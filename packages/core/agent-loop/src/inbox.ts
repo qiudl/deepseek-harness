@@ -71,6 +71,9 @@ export const inboxProjectionDefinition = {
  * @param dispatch - agent-scoped notifications for Inbox lifecycle events.
  */
 export class ReactLoopInbox implements InboxContract {
+  private mutationSerial = 0n
+  private opaque: object | undefined
+
   constructor(
     private readonly readState: () => InboxState,
     private readonly session: Session,
@@ -90,11 +93,57 @@ export class ReactLoopInbox implements InboxContract {
   /** Whether either pending-message list contains work. */
   get hasPending(): boolean {
     const state = this.readState()
-    return state['next-turn'].length > 0 || state['next-step'].length > 0
+    return this.opaque !== undefined || state['next-turn'].length > 0 || state['next-step'].length > 0
+  }
+
+  /** Current private ordering generation, including edits that leave ordinary input unchanged. */
+  get mutationGeneration(): string { return this.mutationSerial.toString() }
+
+  /** Invalidate pending private preparations when maintenance or cancellation owns this same runtime. */
+  noteActivity(): void { this.mutationSerial++ }
+
+  /** Reserve the first next-turn position without materializing or publishing message content.
+   * @param occurrence - Factory-owned opaque identity; it never enters the Session log.
+   * @returns The exact ordering generation, or undefined when another input already owns the position.
+   */
+  reserveOpaque(occurrence: object): string | undefined {
+    if (this.hasPending) return undefined
+    this.opaque = occurrence
+    return (++this.mutationSerial).toString()
+  }
+
+  /** Check the original sole input without calling any open listener.
+   * @param occurrence - Original reserved identity.
+   * @param generation - Generation returned by reserveOpaque.
+   * @returns Whether the actual queues and mutation serial still match that reservation.
+   */
+  isOpaqueHead(occurrence: object, generation: string): boolean {
+    const state = this.readState()
+    return this.opaque === occurrence && this.mutationGeneration === generation
+      && state['next-turn'].length === 0 && state['next-step'].length === 0
+  }
+
+  /** Replace the private first position after the entry effect, keeping later input behind it.
+   * @param occurrence - Original driver-owned occurrence.
+   * @param message - Materialized original feedback, read only after the entry barrier.
+   */
+  materializeOpaque(occurrence: object, message: UserMessage): void {
+    if (this.opaque !== occurrence) throw new Error('runtime_entry_occurrence_cancelled')
+    this.opaque = undefined
+    this.mutate('next-turn', 0, 0, [message], true)
+  }
+
+  /** Remove only this private reservation; ordinary pending messages remain intact.
+   * @param occurrence - Original identity, never a public message ID.
+   */
+  discardOpaque(occurrence: object): void {
+    if (this.opaque === occurrence) { this.opaque = undefined; this.mutationSerial++ }
   }
 
   /** Durably cancel all pending input, clearing next-step before next-turn. */
   clear(): void {
+    this.opaque = undefined
+    this.mutationSerial++
     this.splice('next-step', 0, this.nextStep.length, [])
     this.splice('next-turn', 0, this.nextTurn.length, [])
   }
@@ -137,6 +186,7 @@ export class ReactLoopInbox implements InboxContract {
    * @returns whether the message was still pending.
    */
   replace(messageId: MessageId, newMessage: UserMessage): boolean {
+    this.mutationSerial++
     const location = this.locate(messageId)
     if (location === undefined) return false
     this.splice(location.target, location.index, 1, [newMessage])
@@ -149,6 +199,7 @@ export class ReactLoopInbox implements InboxContract {
    * @returns whether the message was still pending.
    */
   remove(messageId: MessageId): boolean {
+    this.mutationSerial++
     const location = this.locate(messageId)
     if (location === undefined) return false
     this.splice(location.target, location.index, 1, [])
@@ -190,6 +241,7 @@ export class ReactLoopInbox implements InboxContract {
     inserted: UserMessage[],
     discardRemoved: boolean,
   ): UserMessage[] {
+    this.mutationSerial++
     const state = this.readState()
     const inbox = state[target]
     const truncatedStart = Math.trunc(start)

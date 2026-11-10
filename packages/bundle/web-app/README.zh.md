@@ -223,6 +223,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 ## 已知限制与延期工作
 
+私有 task stop coordination 限制实际原 native consumer，不提供 open/ready 操作。消耗原 grant 前会检查实际选中的 Native executor，并在同一实例上安装所属生命周期的限制，保留其管线、接收者、描述与并发配置。不支持的 executor 保持 grant 为 prepared。销毁时先排空所属 Agent，再仅恢复自己的包装；选中实例变化后观察保持 unknown。工具 prepare 不代表效果已发生：最终工具体检查保留原 Account/请求取消，即使 awaited wrapper 替换执行 signal。已进入的工具体仍视为在途，直到返回且实际 Session flush 完成。device permit 库存尚不支持，空 native 页不能证明设备静止。缺少对应原本地 journal 时，`slark_run` 关联不可用。[Session Controller](../../api/session-controller/README.zh.md#collaboration-analysis-journal) 定义持久下限及重启后未知工作。
+
 <a id="known-limitations-and-deferred-work"></a>
 
 
@@ -307,6 +309,8 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。
 
 私有 `root_operation_origin` 处理器要求 Unix 提供当前 Account/Profile/peer 元数据，并读取实际 Bot 生产者描述。它保留有界的待绑定观察，验证原持久化事件、安装签名和固定 Cloud 签名，再通过等待中的归属事件发布不透明 token。公开读取器仅返回元数据，并在取消、claim 过期或事件结束时使 token 失效。消费者缺失或未就绪时返回 published=false，等待后续全新核对。
+
+私有操作记忆 reader 只有在原确认具有独立捕获的 activation cut 且实际 effect reader 可用时才接受 native entry 页面。来源权限保存在请求所有的对象 token 中，每次 await 前后复查 producer、worker 生命周期、签名绑定的 Account/peer/scope 与截止时间。effect reader 接收实际 token 所属的来源 view，通过持久元数据核对原 entry 的 owner、项目、Bot 与 Account，不返回消息正文。Main 在签署页面前独立核对完整 entry 及原始双签名记录。旧确认保留原 reference 路径。source provider 不提供 native 精确事件读取器；已激活 retained 事实的检索与证据需要 Cloud 投影集成。
 
 可选 `tests/collaboration-operation-origin.joined.spec.ts` 联合实际 Loader、AgentLoop、原生工具执行、JSONL 持久化、Host Account/Profile 授权器及安装签名器、Cloud 受限角色 PostgreSQL 服务，以及选定的 DSBot 生产 store/observer。它验证原始准入与消费、两个原子引用修订、重放拒绝及不增加执行的新证明幂等重试。已版本化的 `tests/fixtures/dsbot-operation-origin.test-support.mjs` 从明确选定的仓库导入生产 DSBot 模块，不复制观察器实现。请选择已评审 DSBot 合并提交 `f989287c1e806884647d64c826359b3dce3d9a3c`、包含 `project-operation-origin.joined-bridge.test-support.ts` 的 Slark 检出及专用回环测试数据库。跨仓库路径缺失时跳过此可选联调；普通 Loader 回归仍会执行。注册身份、模型响应和进程内分帧传输属于合成测试输入。物理 Unix socket、完整 Desktop Main 核对流程、双电脑及 staging 验收需要独立验证。
 

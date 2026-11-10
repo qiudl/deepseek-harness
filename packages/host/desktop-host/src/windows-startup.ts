@@ -1,3 +1,8 @@
+import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
+import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
+import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostTaskCoordinationEnvironments, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
@@ -142,6 +147,10 @@ export interface WindowsDesktopHostBaseConfig extends Omit<
   /** Explicit receipt capacity enables MCP extensions; omission retains the existing local-only composition. */
   readonly maximumExtensionReceiptBytes?: number
   /** Nonsecret signed-carrier JSON; mutually exclusive with the typed environment array. */
+  readonly taskCoordinationEnvironmentsJson?: string
+  readonly runtimeEntryOriginsJson?: string
+  readonly botGroupPublicKeyringsJson?: string
+  readonly taskCoordinationEnvironments?: readonly HostTaskCoordinationEnvironment[]
   readonly projectOperationMemoryEnvironmentsJson?: string
   readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
   readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
@@ -225,6 +234,7 @@ function validatePublicConfig(config: WindowsDesktopHostBaseConfig): void {
     || !positive(config.maximumRegistryBytes) || !positive(config.maximumManagedFileBytes)
     || !positive(config.maximumJournalBytes) || !positive(config.profileReadyTimeoutMs)
     || (config.maximumExtensionReceiptBytes !== undefined && !positive(config.maximumExtensionReceiptBytes))
+    || (config.taskCoordinationEnvironmentsJson !== undefined && config.taskCoordinationEnvironments !== undefined)
     || (config.projectOperationMemoryEnvironmentsJson !== undefined && config.projectOperationMemoryEnvironments !== undefined)
     || !positive(config.profileAbortTimeoutMs)) throw new HostAuthorityError('invalid_input')
 }
@@ -372,9 +382,24 @@ async function startWindowsDesktopHostApplicationWithTrust(
   const projectOperationMemoryEnvironments = config.projectOperationMemoryEnvironmentsJson === undefined
     ? parseHostProjectMemoryEnvironments(JSON.stringify(config.projectOperationMemoryEnvironments ?? []))
     : parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson)
+  const taskCoordinationEnvironments = parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson
+    ?? JSON.stringify(config.taskCoordinationEnvironments ?? []))
+  const runtimeEntryOrigins = parseHostRuntimeEntryOriginsJson(config.runtimeEntryOriginsJson)
+  if (runtimeEntryOrigins) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
+  if (config.botGroupPublicKeyringsJson !== undefined && config.operationOriginKeyrings !== undefined) throw new HostAuthorityError('invalid_input')
+  const operationOriginKeyrings = config.botGroupPublicKeyringsJson === undefined ? config.operationOriginKeyrings : (() => {
+    if (Buffer.byteLength(config.botGroupPublicKeyringsJson) > 32768) throw new HostAuthorityError('invalid_input')
+    const value: unknown = JSON.parse(config.botGroupPublicKeyringsJson)
+    if (!Array.isArray(value) || value.length > 4) throw new HostAuthorityError('invalid_input')
+    const keys = value.map(parseHostBotGroupPublicKeyring)
+    if (new Set(keys.map(key => key.environmentId)).size !== keys.length) throw new HostAuthorityError('invalid_input')
+    return keys
+  })()
   const profileWorkerOptions = {
+    ...(runtimeEntryOrigins ? { runtimeEntryOrigins } : {}),
+    taskCoordinationEnvironments,
     projectOperationMemoryEnvironments,
-    ...(config.operationOriginKeyrings === undefined ? {} : { operationOriginKeyrings: config.operationOriginKeyrings }),
+    ...(operationOriginKeyrings === undefined ? {} : { operationOriginKeyrings }),
     nodeExecutablePath: config.nodeExecutablePath,
     dshEntrypointPath: config.dshEntrypointPath,
     attestListener,
@@ -437,12 +462,14 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const accountAccessVerifier = new DshAccountAccessTokenVerifier(trust.accountAccessKeyring, {
         now: () => clock.now(),
       })
-      const memoryFiles = (profileId: string, role: 'source' | 'recipient') => {
+      const memoryFiles = (profileId: string, role: 'source' | 'recipient' | 'native') => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         const profileRoot = win32.join(config.root, 'profiles', profileId)
         return ProjectOperationMemoryDatabaseFiles.windows({
-          root: win32.join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : 'project-operation-memory-recipient-sqlite-v1'),
-          ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const } : {}),
+          root: win32.join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : role === 'recipient'
+            ? 'project-operation-memory-recipient-sqlite-v1' : 'project-operation-memory-native-source-sqlite-v1'),
+          ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const }
+            : role === 'native' ? { storePurpose: 'native_source_export' as const } : {}),
           legacyRoots: role === 'source' ? [win32.join(profileRoot, 'project-operation-memory'), win32.join(profileRoot, 'project-operation-memory-source-exports')] : [],
           profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
           userSid, pid: process.pid, processNonce: config.processNonce, bindings,
@@ -451,6 +478,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const databases = new ProjectOperationMemoryDatabases(
         async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
         async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
+        async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
       )
       memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
@@ -657,6 +685,18 @@ async function startWindowsDesktopHostApplicationWithTrust(
           schemaGeneration: config.schemaGeneration,
         },
         host,
+        taskCoordinationEnvironments,
+        taskCoordinationReceiver: profileId => workers.taskCoordinationReceiver(profileId),
+        ...(runtimeEntryOrigins ? { runtimeEntryOrigins, runtimeEntryKeyrings: operationOriginKeyrings ?? [],
+          runtimeEntryReceiver: (profileId: string) => workers.taskCoordinationReceiver(profileId),
+          runtimeEntryProfileRoot: (profileId: string) => {
+            if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+            const profileRoot = win32.join(config.root, 'profiles', profileId)
+            assertWindowsHostPrivatePathEvidence(bindings.ensurePrivateDirectory(
+              profileRoot, windowsHostPrivateSecurityDescriptor(userSid)), 'directory', userSid)
+            return profileRoot
+          },
+        } : {}),
         ...databases.services(
           { installationId: config.installationId, publicKey: config.installationPublicKey },
           projectOperationMemoryEnvironments,

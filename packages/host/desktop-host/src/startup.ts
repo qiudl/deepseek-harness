@@ -1,7 +1,11 @@
+import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
+import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
+import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
+import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { rootWorkerOperations } from './root-worker-operations.ts'
 import { TwinBindingReceipts } from './twin-binding-receipts.ts'
@@ -128,6 +132,8 @@ export interface Config {
   readonly botGroupPublicKeyringsJson?: string
   /** Explicit signed embedding memory audience/environment policies; omission disables memory authority. */
   readonly projectOperationMemoryEnvironmentsJson?: string
+  readonly taskCoordinationEnvironmentsJson?: string
+  readonly runtimeEntryOriginsJson?: string
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -170,6 +176,8 @@ export const Config: z<Config> = z.object({
   accountKeyringSha256: z.string().required(),
   botGroupPublicKeyringsJson: z.string(),
   projectOperationMemoryEnvironmentsJson: z.string(),
+  taskCoordinationEnvironmentsJson: z.string(),
+  runtimeEntryOriginsJson: z.string(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -302,6 +310,10 @@ export function windowsDesktopHostConfig(config: Config): WindowsDesktopHostPriv
     deviceIndexKeyPath: config.deviceIndexKeyPath,
     accountKeyringPath: config.accountKeyringPath,
     accountKeyringSha256: config.accountKeyringSha256,
+    ...(config.runtimeEntryOriginsJson === undefined ? {} : { runtimeEntryOriginsJson: config.runtimeEntryOriginsJson }),
+    ...(config.botGroupPublicKeyringsJson === undefined ? {} : { botGroupPublicKeyringsJson: config.botGroupPublicKeyringsJson }),
+    ...(config.taskCoordinationEnvironmentsJson === undefined ? {}
+      : { taskCoordinationEnvironmentsJson: config.taskCoordinationEnvironmentsJson }),
     ...(config.projectOperationMemoryEnvironmentsJson === undefined ? {}
       : { projectOperationMemoryEnvironmentsJson: config.projectOperationMemoryEnvironmentsJson }),
     installationPrivateKeyPath: config.installationPrivateKeyPath,
@@ -482,7 +494,11 @@ export async function startDesktopHostApplication(
   executableArtifact(config.nodeExecutablePath, uid)
   executableArtifact(config.dshEntrypointPath, uid)
   if (config.pnpmEntrypointPath !== undefined) executableArtifact(config.pnpmEntrypointPath, uid)
+  const runtimeEntryOrigins = parseHostRuntimeEntryOriginsJson(config.runtimeEntryOriginsJson)
+  if (runtimeEntryOrigins) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
   const workerFactory = new DshWebProfileWorkerFactory({
+    ...(runtimeEntryOrigins ? { runtimeEntryOrigins } : {}),
+    taskCoordinationEnvironments: parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson),
     operationOriginKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
     projectOperationMemoryEnvironments: parseHostProjectMemoryEnvironments(config.projectOperationMemoryEnvironmentsJson),
     nodeExecutablePath: config.nodeExecutablePath, dshEntrypointPath: config.dshEntrypointPath,
@@ -499,13 +515,15 @@ export async function startDesktopHostApplication(
       pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
-    const memoryFiles = (profileId: string, role: 'source' | 'recipient') => {
+    const memoryFiles = (profileId: string, role: 'source' | 'recipient' | 'native') => {
       requiredProfile(registry, profileId)
       const profileRoot = join(root, 'profiles', profileId)
       ownerDirectory(profileRoot, uid)
       return ProjectOperationMemoryDatabaseFiles.posix({
-        root: join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : 'project-operation-memory-recipient-sqlite-v1'),
-        ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const } : {}),
+        root: join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : role === 'recipient'
+          ? 'project-operation-memory-recipient-sqlite-v1' : 'project-operation-memory-native-source-sqlite-v1'),
+        ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const }
+          : role === 'native' ? { storePurpose: 'native_source_export' as const } : {}),
         legacyRoots: role === 'source' ? [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')] : [],
         profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
         uid, pid: process.pid, processNonce: config.processNonce,
@@ -514,6 +532,7 @@ export async function startDesktopHostApplication(
     const databases = new ProjectOperationMemoryDatabases(
       async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
       async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
+      async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
     )
     memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
@@ -869,6 +888,16 @@ export async function startDesktopHostApplication(
         ownerDirectory(packagesRoot, uid)
         return packagesRoot
       }),
+      taskCoordinationEnvironments: parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson),
+      taskCoordinationReceiver: profileId => workers.taskCoordinationReceiver(profileId),
+      ...(runtimeEntryOrigins ? { runtimeEntryOrigins,
+        runtimeEntryKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
+        runtimeEntryReceiver: (profileId: string) => workers.taskCoordinationReceiver(profileId),
+        runtimeEntryProfileRoot: (profileId: string) => {
+          if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
+          const profileRoot = join(root, 'profiles', profileId); ownerDirectory(profileRoot, uid); return profileRoot
+        },
+      } : {}),
       resolveBotIdentity: (profileId, botId, signal) => workers.resolveBotIdentity(profileId, botId, signal),
       ...databases.services(
         { installationId: config.installationId, publicKey: config.installationPublicKey },

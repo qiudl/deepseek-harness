@@ -150,6 +150,10 @@ Agent 拥有会话级选择，并通过 `Agent.model` 记录显式选择。`sele
 
 ## 协同 Source 与 journal
 
+独立的 `collaboration_task_coordination_v1` domain 保留原本地 command 关联、关闭的 epoch 下限、native 调用及 controller job 元数据，以及不可变的 stop cut 和安装密钥签名 Ack。它不重新开放 Root。已验证 stop 在异步持久化前锁定拒绝；写入失败后，此 owner 必须重新打开才能使用。原签名中的 owner、环境、Account、Profile 锚点还限制同一原 canonical Root 未关联的 command，不影响其他 Root。重启后未结束的调用或 job 变为 `unknown`，绝不重放。替换 worker 不能重采缺失的原 stop cut；下限继续关闭，receipt 恢复仍返回缺失。永久元数据有容量上限，仅过期分页快照可以清理；既有 Source、Root、Session 格式不变。库存关联原持久 consumer command：prepared command 保持排队，缺少已监控生命周期的既有 consumer 在关联后仍为 unknown。读取按已验证 Root command 集合对每张有界元数据表扫描一次。
+
+可选只读 execution 服务仅在原 consuming turn 存活期间暴露事实。native wrapper 的异步等待后及工具体调用前，会重新核对同一 provider、原请求 signal 和关闭下限。视图消失不能让该 consumer 回退到普通执行路径。私有 consumer 生命周期仅在实际 Agent 排空后释放限制；保留的事实不授予执行权限。
+
 发布新 Source 前，`captureCollaborationSource` 会在 Profile 的单文件 `collaboration_timeline_v2` 领域记录首次观察到的普通事件序号及独立展示顺序。记录只包含 Source 坐标和输入摘要，不包含消息正文、模型元数据或 Session 事件。即使 Source 发布失败，重试也保留首次位置；恢复的旧 Source 不会获得虚构的位置。位置本身不授予展示或执行权限。Profile 在关闭时排空已接受的写入；存储损坏或写入确认不确定时，需要关闭并重新打开才能复用。普通 Session 和现有 Source 格式保持不变。
 
 `openCollaborationAnalysisJournal(facility)` 拥有独立的单文件 `collaboration_analysis_v2` 领域。`createCollaborationAnalysisWriter(journal, claim)` 提供 Source 分析所需的 persist 回调：先提交完整、无信号 manifest 的规范 JSON，再向当前可信协调器申请派发资格，匹配的资格记录持久化后才返回。`CollaborationAnalysisJournalRecord` 保留原始请求 ID、完整 Source digest 与输入 manifest digest；`CollaborationAnalysisDispatchGrant` 绑定 plan/revision/attempt/fence 和租约。重复请求、取消、过期资格和写入确认丢失都会阻止派发。恢复只能枚举冻结的输入与资格记录，不恢复可执行调用。Profile 在已接受写入排空后关闭 `CollaborationAnalysisJournal`。回调中的协调器权限以及真实聊天/传输装配仍由调用方负责。
@@ -273,3 +277,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 私有操作来源捕获通过当前 Profile 成员关系检查和固定 JSONL 持久化屏障读取实际 Root 与已消费日志。仅原消费步骤中已完成的原生调用及结果符合条件；保留的 PTC `run_code` 程序保持为空缺；继承的消费、后续步骤、未完成调用和输入歧义保留为空缺。可选 `projectOperationOrigins.read(token)` 服务仅在等待中的 `project-operation/origin` 事件内返回不可变历史引用。取消、已验证的 Cloud 截止时间或事件结束均使 token 失效；消费者确认要求所有匹配修订已提交或已存在相同引用。这些引用不证明材料依赖，也不授予执行、保留或导出权限。
 
 可选只读 `projectOperationMemoryAuthorizations.read(token)` 契约仅在单次等待中的私有请求内解析不可伪造的对象。确认 anchor token 只捕获原始日志元数据；五种来源读取命令携带准确的已确认 scope、当前 Account/peer/worker、原确认、计划修订和截止时间。新计划从实际 producer 获取当前修订；原 activation 修订与水位保持不可变。只有匹配且已 finalize 的 delta 交付能提供已提交检查点，恢复计划保留原起点。交付 stage/finalize/receipt 不进入 DSP 来源 producer。取消、provider 替换、过期或请求结束永久撤销 token；保留对象不能续权。契约不提供 mint、verified 标志回调、Host wire DTO、来源正文或执行权限。
+
+来源读取 view 也可携带原生效确认时固定的 native activation cut。`readRuntimeEntryEffect(token, reference)` 只在同一活跃 token 下解析精确 entry ID 及 receipt/manifest 摘要；实际 worker 先核对原 owner、项目、Bot 与 Account，再返回私有 effect 坐标。anchor 和 retained-recipient token 不能使用此 reader。缺少 cut 时保持不支持；已具备 native 资格的来源序号不能因 reader 缺失而被跳过。私有 runtime effect head 判定原 entry 属于历史还是新增，混合来源 journal 序号只负责扫描。两者都不授予执行、导出或材料 Right。

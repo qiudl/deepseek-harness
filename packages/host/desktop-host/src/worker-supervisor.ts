@@ -21,6 +21,7 @@ import type { CollaborationDeliveryReceiver } from './collaboration-delivery-upl
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import type { TaskCoordinationReceiver } from './account-task-coordination.ts'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -34,6 +35,7 @@ export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
+  private readonly collaborationRequests = new Map<ProfileWorkerHandle, Set<AbortController>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
@@ -533,10 +535,34 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.collaborationAnalysis) throw new HostAuthorityError('unavailable')
     const current = () => !this.closed && this.workers.get(profileId) === worker
-    const result = await worker.collaborationAnalysis(command, signal)
-    signal.throwIfAborted()
-    if (!current()) throw new HostAuthorityError('stale')
-    return result
+    const controller = new AbortController(), requests = this.collaborationRequests.get(worker) ?? new Set<AbortController>()
+    requests.add(controller); this.collaborationRequests.set(worker, requests)
+    const owned = AbortSignal.any([signal, controller.signal])
+    try {
+      const result = await worker.collaborationAnalysis(command, owned)
+      owned.throwIfAborted()
+      if (!current()) throw new HostAuthorityError('stale')
+      return result
+    } finally {
+      requests.delete(controller)
+      if (!requests.size) this.collaborationRequests.delete(worker)
+    }
+  }
+
+  /** Capture one actual child through original cut read, installation signing and Ack persistence.
+   * @param profileId - Current Account Profile resolved by the parent.
+   * @returns Private receiver rejecting replacement or disposal of the original worker.
+   */
+  taskCoordinationReceiver(profileId: string): TaskCoordinationReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.collaborationAnalysis || !worker.workerId) throw new HostAuthorityError('unavailable')
+    const assertCurrent = () =>{  this.assertCurrentWorker(profileId, worker) }
+    return { workerId: worker.workerId, assertCurrent, execute: async (command, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = await this.collaborationAnalysis(profileId, command, signal)
+      signal.throwIfAborted(); assertCurrent()
+      return result
+    } }
   }
   /**
    * Capture a current worker for the complete original reply upload and durable commit.
@@ -645,6 +671,7 @@ export class ProfileWorkerSupervisor {
   private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
+    for (const controller of this.collaborationRequests.get(worker) ?? []) controller.abort(new HostAuthorityError('stale'))
     this.workers.delete(profileId)
     worker.closeNotifications()
     worker.abort()
@@ -665,6 +692,8 @@ export class ProfileWorkerSupervisor {
   /** Permanently refuse new starts and dispose all children, including pending starts, despite individual failures. */
   async disposeAll(): Promise<void> {
     this.closed = true
+    for (const requests of this.collaborationRequests.values()) for (const controller of requests)
+      controller.abort(new HostAuthorityError('stale'))
     const ids = new Set([...this.workers.keys(), ...this.pending.keys()])
     const results = await Promise.allSettled([...ids].map(profileId => this.dispose(profileId)))
     const failed = results.find(result => result.status === 'rejected')

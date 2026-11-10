@@ -230,6 +230,42 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('carries an explicit task policy from the raw Windows envelope into the actual worker factory and current Main authority', async () => {
+    const state = fixture(), keys = generateKeyPairSync('ed25519'), Original = hostControl.HostControlAuthority
+    let captured: ConstructorParameters<typeof Original>[0] | undefined
+    vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(class extends Original {
+      constructor(options: ConstructorParameters<typeof Original>[0]) { super(options); captured = options }
+    })
+    const policy = { audience: 'urn:slark:task-coordination:v1', environmentKey: 'staging', keyring: {
+      version: 1, environmentId: randomUUID(), issuer, keys: [{ kid: 'dsh-assertion-task-test',
+        publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }), validFrom: 1, validUntil: 2_000_000_000_000 }],
+    } }
+    const app = await startWindowsDesktopHostApplication({ ...state.options,
+      taskCoordinationEnvironmentsJson: JSON.stringify([policy]),
+    }, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    expect(state.dependencies.createProfileWorkerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      taskCoordinationEnvironments: [policy],
+    }))
+    expect(captured?.taskCoordinationEnvironments).toEqual([policy])
+    expect(typeof captured?.taskCoordinationReceiver).toBe('function')
+  })
+  it('rejects ambiguous, cross-purpose, unknown or private task policy before starting a Windows transport or worker', async () => {
+    for (const input of [
+      { taskCoordinationEnvironmentsJson: '[]', taskCoordinationEnvironments: [] },
+      { taskCoordinationEnvironmentsJson: '{}' },
+      { taskCoordinationEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:project-memory:v1',
+        environmentKey: 'staging', keyring: {} }]) },
+      { taskCoordinationEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:task-coordination:v1',
+        environmentKey: 'staging', keyring: {}, privateKeyPem: 'forbidden' }]) },
+    ]) {
+      const state = fixture()
+      await expect(startWindowsDesktopHostApplication({ ...state.options, ...input }, undefined, state.dependencies)).rejects.toThrow()
+      expect(state.startTransport).not.toHaveBeenCalled()
+      expect(state.dependencies.createProfileWorkerFactory).not.toHaveBeenCalled()
+    }
+  })
+
   it('projects only explicit public memory policy JSON into the actual worker factory', async () => {
     const state = fixture(), keys = generateKeyPairSync('ed25519')
     const policy = { audience: 'urn:slark:project-memory:v1', environmentKey: 'staging', keyring: {

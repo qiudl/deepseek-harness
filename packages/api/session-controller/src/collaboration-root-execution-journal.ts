@@ -126,6 +126,15 @@ export interface CollaborationRootExecutionJournal {
    * @returns Stored record or undefined; changed bindings reject.
    */
   read(root: CollaborationRootSubmission, selection: unknown): CollaborationExecutionRecord | undefined
+  /** Read an original concrete command without caller-supplied Root or task reconstruction.
+   * @param executionCommandId - Exact previously persisted local command identifier.
+   * @returns Original command and admitted receipt, or undefined; this grants no execution permission.
+   */
+  findByCommandId(executionCommandId: string): CollaborationExecutionRecord | undefined
+  /** @param rootCommandId - Original local Root admission command.
+   * @returns Previously persisted concrete execution commands for that Root, never new grants.
+   */
+  forRoot(rootCommandId: string): readonly CollaborationExecutionRecord[]
   /** Persist one authenticated cloud receipt after Main verifies current authority.
    * @param root - Original admitted root under current membership.
    * @param selection - Original frozen task binding.
@@ -186,6 +195,13 @@ export async function openCollaborationRootExecutionJournal(facility: Pick<Domai
       })
     },
     read(root, selection) { active(); return find(binding(root, selection)) },
+    findByCommandId(executionCommandId) {
+      active()
+      for (const [, record] of table.entries()) if (record.execution_command_id === executionCommandId) return record
+      return undefined
+    },
+    forRoot(rootCommandId) { active(); return [...table.entries()].map(([, record]) => record)
+      .filter(record => record.root.command_id === rootCommandId) },
     async accept(root, selection, value, signal) {
       const input = binding(root, selection), receipt = parseCollaborationExecutionReceipt(value)
       return queue(signal, async () => {

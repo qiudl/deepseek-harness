@@ -1,3 +1,5 @@
+import { parseHostRuntimeEntryOriginsConfiguration, type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostTaskCoordinationEnvironment, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostProjectMemoryJson, parseHostProjectMemoryEnvironment, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupPublicKeyring, type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { NativeRoomDrain } from './native-room-drain.ts'
@@ -28,7 +30,7 @@ import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceCo
   parseHostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
@@ -59,7 +61,10 @@ const REMOTE_UI_ASSET_CACHE_ENTRIES = 4
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
   'DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS',
+  'DSH_PROFILE_RUNTIME_ENTRY_ORIGINS',
   'DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS',
+  'DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS',
+  'DSH_PROFILE_WORKER_ID',
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -84,7 +89,9 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 
 /** Launch configuration for `dsh --profile web` Profile workers. */
 export interface DshWebProfileWorkerFactoryOptions {
+  readonly runtimeEntryOrigins?: HostRuntimeEntryOriginsConfiguration
   readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
+  readonly taskCoordinationEnvironments?: readonly HostTaskCoordinationEnvironment[]
   readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
@@ -169,11 +176,16 @@ async function exchangeBootstrap(
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
 export class DshWebProfileWorkerFactory {
   private readonly projectOperationMemoryEnvironments: readonly HostProjectMemoryEnvironment[]
+  private readonly taskCoordinationEnvironments: readonly HostTaskCoordinationEnvironment[]
+  private readonly runtimeEntryOrigins: HostRuntimeEntryOriginsConfiguration | undefined
   private readonly operationOriginKeyrings: readonly HostBotGroupPublicKeyring[]
   private generation = 0
   private readonly nativeDrain = new NativeRoomDrain()
   constructor(private readonly options: DshWebProfileWorkerFactoryOptions) {
+    this.taskCoordinationEnvironments = (options.taskCoordinationEnvironments ?? []).map(parseHostTaskCoordinationEnvironment)
     this.projectOperationMemoryEnvironments = (options.projectOperationMemoryEnvironments ?? []).map(parseHostProjectMemoryEnvironment)
+    this.runtimeEntryOrigins = options.runtimeEntryOrigins === undefined ? undefined
+      : parseHostRuntimeEntryOriginsConfiguration(options.runtimeEntryOrigins)
     this.operationOriginKeyrings = (options.operationOriginKeyrings ?? []).map(parseHostBotGroupPublicKeyring)
     if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)
       || options.pnpmEntrypointPath !== undefined && !isAbsolute(options.pnpmEntrypointPath)) throw new HostAuthorityError('invalid_input')
@@ -187,6 +199,7 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const workerId = randomUUID()
     const sourceToken = randomBytes(32).toString('base64url')
     const referenceToken = randomBytes(32).toString('base64url')
     const analysisToken = randomBytes(32).toString('base64url')
@@ -204,7 +217,10 @@ export class DshWebProfileWorkerFactory {
         ...spec.env,
         DSH_HOME: root,
         DSH_PROFILE_ID: spec.profileId,
+        DSH_PROFILE_WORKER_ID: workerId,
+        DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS: JSON.stringify(this.taskCoordinationEnvironments),
         DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS: JSON.stringify(this.projectOperationMemoryEnvironments),
+        DSH_PROFILE_RUNTIME_ENTRY_ORIGINS: this.runtimeEntryOrigins === undefined ? '' : JSON.stringify(this.runtimeEntryOrigins),
         DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: JSON.stringify(this.operationOriginKeyrings),
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
@@ -227,7 +243,7 @@ export class DshWebProfileWorkerFactory {
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
-      sourceToken, analysisToken, deliveryToken, referenceToken)
+      sourceToken, analysisToken, deliveryToken, referenceToken, workerId)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -295,6 +311,7 @@ export class DshWebProfileWorkerFactory {
     analysisToken: string,
     deliveryToken: string,
     referenceToken: string,
+    workerId: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -317,6 +334,7 @@ export class DshWebProfileWorkerFactory {
     })()
     return {
       viewOrigin,
+      workerId,
       generation,
       bootstrapCookie,
       resolveBotSessionIdentity: (botId, sessionId, signal) => this.resolveBotSessionIdentity(

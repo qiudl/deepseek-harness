@@ -137,6 +137,8 @@ export interface ProfileWorkerSpec {
 
 /** Child lifecycle whose disposal reaches process quiescence. */
 export interface ProfileWorkerHandle {
+  /** Nonsecret identity minted for this exact launched worker process. */
+  readonly workerId?: string
   /** Observe one exact Bot/Session association through the private Profile producer. */
   readonly resolveBotSessionIdentity?: (botId: string, sessionId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>

@@ -21,8 +21,8 @@
   en: 51d5be2a2cac246c
   zh: b4d03ac1261dd0d1
 /dsh-desktop-host/runtime-invariants:
-  en: 618fc1dda1500d52
-  zh: 4dd4ab18bd21abce
+  en: 996db0e759e79b43
+  zh: 2f10988b776725de
 /dsh-desktop-host/runtime-invariants/remote-workspace-directories:
   en: 6a7f3c24a3456956
   zh: 40172e97325bfeaf
@@ -36,5 +36,5 @@
   en: 79fc86c99c4aba67
   zh: 05bbe1fac8f7765e
 /dsh-desktop-host/known-limitations-and-deferred-work/dev-note:
-  en: a862ed8a00a72dca
-  zh: 91d0b6ce39b95722
+  en: 25627c6b8e1bbd44
+  zh: 96a1555f0020035c

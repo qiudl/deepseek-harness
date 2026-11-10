@@ -1,3 +1,5 @@
+import type { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
+import { ProjectOperationMemoryNativeSource } from './project-operation-memory-native-source.ts'
 import type { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryRecipientImports } from './project-operation-memory-recipient-imports.ts'
 import type { TwinBindingReceipts } from './twin-binding-receipts.ts'
@@ -56,11 +58,16 @@ class ProfileMemoryOwners<T extends { close(): Promise<void> }> {
 /** Independent source/recipient Profile caches share shutdown, never files, formats or records. */
 export class ProjectOperationMemoryDatabases extends ProfileMemoryOwners<ProjectOperationMemoryDatabase> {
   private readonly recipientOwners: ProfileMemoryOwners<ProjectOperationMemoryRecipientDatabase> | undefined
+  private readonly nativeOwners: ProfileMemoryOwners<ProjectOperationMemoryNativeDatabase> | undefined
   private allClosing: Promise<void> | undefined
-  constructor(create: (profileId: string) => Promise<ProjectOperationMemoryDatabase>,
-    createRecipient?: (profileId: string) => Promise<ProjectOperationMemoryRecipientDatabase>) {
+  constructor(
+    create: (profileId: string) => Promise<ProjectOperationMemoryDatabase>,
+    createRecipient?: (profileId: string) => Promise<ProjectOperationMemoryRecipientDatabase>,
+    createNative?: (profileId: string) => Promise<ProjectOperationMemoryNativeDatabase>,
+  ) {
     super(create)
     this.recipientOwners = createRecipient === undefined ? undefined : new ProfileMemoryOwners(createRecipient)
+    this.nativeOwners = createNative === undefined ? undefined : new ProfileMemoryOwners(createNative)
   }
   /** Project platform-independent metadata factories over this Host's actual Profile owners.
    * @param installation - Current installation identity used by both stores.
@@ -71,19 +78,43 @@ export class ProjectOperationMemoryDatabases extends ProfileMemoryOwners<Project
     installation: Readonly<{ installationId: string; publicKey: string }>,
     environments: readonly HostProjectMemoryEnvironment[],
   ) {
+    const nativeOwners = this.nativeOwners
     return {
       projectOperationMemoryEnvironments: environments,
+      ...(nativeOwners === undefined
+        ? {}
+        : {
+          createProjectOperationMemoryNativeSource: async (profileId: string) =>
+            new ProjectOperationMemoryNativeSource({
+              ...installation,
+              profileId,
+              environments,
+              database: await nativeOwners.get(profileId),
+            }),
+        }),
       createProjectOperationMemoryRecipientImports: async (profileId: string, confirmations: TwinBindingReceipts) => {
         if (!this.recipientOwners) throw new HostAuthorityError('unavailable')
-        return new ProjectOperationMemoryRecipientImports({ ...installation, profileId, environments,
-          confirmations, database: await this.recipientOwners.get(profileId) })
+        return new ProjectOperationMemoryRecipientImports({
+          ...installation,
+          profileId,
+          environments,
+          confirmations,
+          database: await this.recipientOwners.get(profileId),
+        })
       },
-      createProjectOperationMemorySourceExports: async (profileId: string) => new ProjectOperationMemorySourceExports({
-        ...installation, profileId, environments, database: await this.get(profileId),
-      }),
-      createProjectOperationMemoryMetadata: async (profileId: string) => new ProjectOperationMemoryMetadata({
-        ...installation, profileId, database: await this.get(profileId),
-      }),
+      createProjectOperationMemorySourceExports: async (profileId: string) =>
+        new ProjectOperationMemorySourceExports({
+          ...installation,
+          profileId,
+          environments,
+          database: await this.get(profileId),
+        }),
+      createProjectOperationMemoryMetadata: async (profileId: string) =>
+        new ProjectOperationMemoryMetadata({
+          ...installation,
+          profileId,
+          database: await this.get(profileId),
+        }),
     }
   }
   /** Stop both factory sets before awaiting all closes; any failure retains outer Host ownership.
@@ -93,8 +124,10 @@ export class ProjectOperationMemoryDatabases extends ProfileMemoryOwners<Project
     return (this.allClosing ??= this.closeBoth())
   }
   private async closeBoth(): Promise<void> {
-    const source = super.close(), recipient = this.recipientOwners === undefined ? Promise.resolve() : this.recipientOwners.close()
-    const closed = await Promise.allSettled([source, recipient])
+    const source = super.close(),
+      recipient = this.recipientOwners === undefined ? Promise.resolve() : this.recipientOwners.close()
+    const native = this.nativeOwners === undefined ? Promise.resolve() : this.nativeOwners.close()
+    const closed = await Promise.allSettled([source, recipient, native])
     for (const result of closed) if (result.status === 'rejected') throw result.reason
   }
 }

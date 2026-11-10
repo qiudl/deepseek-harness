@@ -9,8 +9,8 @@ import { isDeepStrictEqual } from 'node:util'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type { MessageId, UserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
-import { parseCollaborationExecutionRecord } from './collaboration-root-execution-journal.ts'
-import { parseCollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
+import { parseCollaborationExecutionRecord, type CollaborationExecutionRecord } from './collaboration-root-execution-journal.ts'
+import { parseCollaborationDeliveryRecord, type CollaborationDeliveryRecord } from './collaboration-delivery-journal.ts'
 import { collaborationJournalDigest, parseCollaborationSourceSnapshot, describeCollaborationSource } from './collaboration-source-journal.ts'
 
 declare module '@deepseek-ai/dsh-llm' {
@@ -33,6 +33,19 @@ export interface CollaborationFeedbackObservation {
   readonly assistant_event_seq?: number
   readonly continuation_observed: boolean
 }
+/** Derive the original relay identity from admitted execution and terminal metadata only.
+ * @param execution - Already validated original admitted execution record.
+ * @param delivery - Already validated original terminal identity; no reply content is inspected.
+ * @returns Existing deterministic feedback message identity, without materializing its body.
+ */
+export function collaborationFeedbackMessageId(execution: CollaborationExecutionRecord,
+  delivery: Pick<CollaborationDeliveryRecord, 'namespace_id' | 'invocation_id' | 'delivery_id' | 'result_digest'>): MessageId {
+  return brandString<MessageId>('collaboration-feedback-' + collaborationJournalDigest({
+    namespace_id: delivery.namespace_id, root_task_id: execution.root.root_task_id,
+    root_trace_id: execution.root.root_trace_id, execution_command_id: execution.execution_command_id,
+    invocation_id: delivery.invocation_id, delivery_id: delivery.delivery_id, result_digest: delivery.result_digest,
+  }))
+}
 /** Build one deterministic relay from the original admitted invocation and committed reply.
  * @param executionValue - Original durable concrete execution, including its historical admission receipt.
  * @param deliveryValue - Immutable Profile reply; the caller checks current Source and cloud authorization separately.
@@ -53,7 +66,7 @@ export function createCollaborationFeedbackMessage(executionValue: unknown, deli
   const identity = { namespace_id: delivery.namespace_id, root_task_id: execution.root.root_task_id,
     root_trace_id: execution.root.root_trace_id, execution_command_id: execution.execution_command_id,
     invocation_id: delivery.invocation_id, delivery_id: delivery.delivery_id, result_digest: delivery.result_digest }
-  return { id: brandString<MessageId>('collaboration-feedback-' + collaborationJournalDigest(identity)), role: 'user',
+  return { id: collaborationFeedbackMessageId(execution, delivery), role: 'user',
     source: { kind: 'collaboration-result', form: 'relay' },
     content: [{ type: 'text', text: JSON.stringify({ kind: 'collaboration_result', ...identity,
       plan_id: delivery.plan_id, task_id: delivery.task_id, task_revision: delivery.task_revision,

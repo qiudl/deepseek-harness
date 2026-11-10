@@ -1,4 +1,6 @@
+import type { RuntimeEntryAnalysisCommand } from './runtime-entry-carrier.ts'
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -1408,6 +1410,8 @@ export type HostSourceAnalysisOutput = Readonly<{ state: 'missing'; descriptor: 
   | Readonly<{ state: 'saved'; descriptor: Readonly<HostCollaborationSourceDescriptor> } & HostSavedAnalysisFields>
 /** Parent commands retain no caller-selected model or Account binding digest. */
 export type HostCollaborationAnalysisCommand =
+  | RuntimeEntryAnalysisCommand
+  | Readonly<{ action: 'task_coordination'; request: HostTaskCoordinationInput }>
   | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
   | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
   | Readonly<{ action: 'root_operation_origin'; operation: HostRemoteSessionJson }>
@@ -1432,6 +1436,7 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
 /** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
 export type HostCollaborationAnalysisResult =
+  | Readonly<{ kind: 'task_coordination'; record: HostTaskCoordinationReply }>
   | Readonly<{ kind: 'root_execution_journal' | 'root_feedback' | 'root_operation_origin' | 'project_operation_memory'; record: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>

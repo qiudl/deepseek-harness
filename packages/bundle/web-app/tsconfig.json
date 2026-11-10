@@ -8,7 +8,9 @@
     "src"
   ],
   "references": [
-    { "path": "../../api/session-controller/tsconfig.host.json" },
+    {
+      "path": "../../api/session-controller/tsconfig.host.json"
+    },
     {
       "path": "../../api/gateway/tsconfig.host.json"
     },
@@ -46,6 +48,9 @@
       "path": "../../core/system-prompt"
     },
     {
+      "path": "../../core/tool-executor-native"
+    },
+    {
       "path": "../../core/agent-default-model"
     },
     {
@@ -56,6 +61,9 @@
     },
     {
       "path": "../../subprocess/subprocess"
+    },
+    {
+      "path": "../../core/agent-loop"
     }
   ]
 }

@@ -1,5 +1,6 @@
 /** Profile-local committed collaboration replies, separate from ordinary model-visible Session events. */
 import { randomUUID } from 'node:crypto'
+import type { RuntimeEntryFeedbackCommit } from './runtime-entry-feedback-metadata.ts'
 import { z } from 'zod'
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
@@ -154,10 +155,12 @@ export interface CollaborationDeliveryJournal {
  * Caller authenticates the namespace and current Profile membership before persist. No Session events,
  * Agent activation, cloud acknowledgment, auto-deletion or retry execution occur here.
  * @param facility - Owning Profile's configured StorageDomain provider.
+ * @param firstDurableCommit - Profile-private metadata projection after a new successful put; its failures retain the original reply.
  * @returns Journal retaining first commits; uncertain writes require closing and reopening for read recovery.
  */
 export async function openCollaborationDeliveryJournal(
   facility: Pick<DomainFacility, 'open'>,
+  firstDurableCommit?: (commit: RuntimeEntryFeedbackCommit) => Promise<void>,
 ): Promise<CollaborationDeliveryJournal> {
   const domain = await facility.open(domainSpec),
     table = domain.table('replies')
@@ -245,6 +248,20 @@ export async function openCollaborationDeliveryJournal(
           throw error
         }
         bytes += addedBytes
+        if (firstDurableCommit) {
+          try {
+            await firstDurableCommit({
+              namespace_id: record.namespace_id, delivery_id: record.delivery_id, invocation_id: record.invocation_id,
+              plan_id: record.plan_id, task_id: record.task_id, task_revision: record.task_revision,
+              source_locator: record.source_locator, source_snapshot_digest: record.source_snapshot_digest,
+              result_digest: record.result_digest, execution_state: record.execution_state,
+              invocation_state_version: record.invocation_state_version, delivery_state_version: projection.delivery_state_version,
+              target: record.target, host_journal_commit: record.host_journal_commit,
+            })
+          } catch (_projectionError) {
+            // Metadata failure retains a Native gap or uncertainty; this original reply is already durable.
+          }
+        }
         return record
       })
       chain = operation.then(

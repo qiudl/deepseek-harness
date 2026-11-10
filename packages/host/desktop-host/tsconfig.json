@@ -1,12 +1,30 @@
 {
   "extends": "../../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "lib/types" },
-  "include": ["src"],
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types"
+  },
+  "include": [
+    "src"
+  ],
   "references": [
-    { "path": "../../boot/app-boot" },
-    { "path": "../../util/brand" },
-    { "path": "../control-protocol" },
-    { "path": "../../session/session-persistence-jsonl" },
-    { "path": "../../../vendor/cordis" }
+    {
+      "path": "../../boot/app-boot"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../control-protocol"
+    },
+    {
+      "path": "../../session/session-persistence-jsonl"
+    },
+    {
+      "path": "../../../vendor/cordis"
+    },
+    {
+      "path": "../../api/session-controller/tsconfig.host.json"
+    }
   ]
 }
