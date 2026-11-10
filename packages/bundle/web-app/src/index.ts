@@ -248,7 +248,7 @@ export function apply(ctx: Context, config: Config): void {
     ? runtimeEntryConfiguration(process.env.DSH_PROFILE_RUNTIME_ENTRY_ORIGINS) : undefined
   const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
   if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
-    ctx.inject(['sessionController', 'tools', ...(nativeConfiguration ? ['agentLoop', 'sessions', 'agents', 'sessionPersistence'] : [])], async (sessionCtx) => {
+    ctx.inject(['sessionController', 'tools', 'sessions', ...(nativeConfiguration ? ['agentLoop', 'agents', 'sessionPersistence'] : [])], async (sessionCtx) => {
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-root-journal',
         handler: (req, res) => handleDesktopRootJournalRequest(req, res, analysisToken, (command, signal) =>

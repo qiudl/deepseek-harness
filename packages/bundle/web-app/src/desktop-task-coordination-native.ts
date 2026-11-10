@@ -1,5 +1,5 @@
 /** Root-scoped restrictions on the existing native pipeline; these methods grant no execution permission. */
-import type { CollaborationTaskExecutions } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination'
+import type { CollaborationTaskDurableCut, CollaborationTaskExecutions } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
@@ -16,6 +16,12 @@ export class DesktopTaskCoordinationNative {
   private readonly closed = new Set<string>()
   private readonly active = new Map<string, Set<AbortController>>()
   private readonly live = new Map<string, CollaborationTaskNativeCall>()
+  private readonly durableCalls = new Map<string, { callSeq: number
+    callDigest: string
+    resultSeq: number
+    resultDigest: string
+    abortedBeforeDispatch: boolean }>()
+  private readonly terminals = new Map<string, CollaborationTaskDurableCut>()
   private readonly decorations = new WeakMap<object, { current(): boolean; execute(input: ToolBatchInput): Promise<ToolBatchResult> }>()
   private readonly prepared = new WeakMap<object, string | null>()
   private readonly observing = new Map<string, () => boolean>()
@@ -55,13 +61,21 @@ export class DesktopTaskCoordinationNative {
       this.observing.set(commandId, () => current() && ctx.get('collaborationTaskExecutions') === provider)
       return true
     })
-    ctx.on('task-coordination/consumer-settling', ({ commandId, agent, signal }) => {
+    ctx.on('task-coordination/consumer-settling', async ({ commandId, agent, signal }) => {
       const binding = this.bindings.get(agent)
       if (!binding || binding.association.commandId !== commandId) return
       if (binding.signal !== signal || !binding.current() || ctx.get('collaborationTaskExecutions') !== binding.provider) {
         this.observing.delete(commandId)
         throw Error('task_coordination_executor_changed')
       }
+      const durable = await binding.provider.captureDurable?.(commandId, agent)
+      if (!durable || !durable.isCurrent() || durable.state.end === null
+        || !['completed', 'aborted', 'blocked', 'error', 'max-tokens'].includes(durable.state.end.kind)
+        || !binding.current() || ctx.get('collaborationTaskExecutions') !== binding.provider)
+        throw Error('task_coordination_terminal_not_durable')
+      if (this.calls(commandId).some(call => call.state !== 'settled' || !this.durableCalls.has(call.itemId)))
+        throw Error('task_coordination_result_not_durable')
+      this.terminals.set(commandId, durable)
     })
     ctx.on('task-coordination/consumer-finished', ({ commandId, agent, signal }) => {
       const binding = this.bindings.get(agent)
@@ -120,6 +134,30 @@ export class DesktopTaskCoordinationNative {
    */
   observes(commandId: string): boolean {
     try { return this.observing.get(commandId)?.() ?? false } catch { return false }
+  }
+
+  /** Read exact persisted event references captured by the original execution-token owner.
+   * @param itemId - Actual invocation item allocated by this observer.
+   * @returns Original call/result references, or null when no durable pair was witnessed.
+   */
+  evidence(itemId: string): Readonly<{ callSeq: number
+    callDigest: string
+    resultSeq: number
+    resultDigest: string
+    abortedBeforeDispatch: boolean }> | null {
+    return this.durableCalls.get(itemId) ?? null
+  }
+
+  /** Read actual terminal ownership without treating an empty inventory as proof.
+   * @param commandIds - Full original local command set independently read from its journal.
+   * @returns True only for same-worker terminal prefixes whose actual calls were all cancelled before dispatch.
+   */
+  quiescent(commandIds: readonly string[]): boolean {
+    const calls = this.calls(commandIds)
+    return commandIds.length > 0 && calls.length > 0 && commandIds.every(commandId => this.observes(commandId)
+      && this.terminals.get(commandId)?.isCurrent() === true && calls.some(call => call.commandId === commandId))
+      && calls.every(call => !call.bodyEntered && call.state === 'settled'
+        && this.durableCalls.get(call.itemId)?.abortedBeforeDispatch === true)
   }
 
   /** Close the live latch before queueing durability; a failed write leaves this process denied.
@@ -215,7 +253,16 @@ export class DesktopTaskCoordinationNative {
       const result = await delegate(restricted)
       // Root result events are memory-visible before the public persistence barrier completes.
       if (!await this.ctx.sessions.flush(agent.session)) throw Error('task_coordination_result_not_durable')
-      for (const entry of records.values()) await update({ ...entry, state: 'settled' })
+      const durable = await binding.provider.captureDurable?.(view.commandId, agent)
+      if (!durable || !durable.isCurrent() || durable.turn !== log.turn || durable.state.step !== log.step
+        || !binding.current() || this.ctx.get('collaborationTaskExecutions') !== binding.provider) return result
+      for (const entry of records.values()) {
+        const pair = durable.state.pairs.find(pair => pair.callId === entry.callId)
+        if (!pair || pair.resultSeq === null || pair.resultDigest === null) return result
+        this.durableCalls.set(entry.itemId, { callSeq: pair.callSeq, callDigest: pair.callDigest,
+          resultSeq: pair.resultSeq, resultDigest: pair.resultDigest, abortedBeforeDispatch: pair.abortedBeforeDispatch })
+        await update({ ...entry, state: 'settled' })
+      }
       return result
     } finally {
       removeDispatchObserver()

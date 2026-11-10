@@ -697,6 +697,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'sessionId', description: 'Actual Agent Session.' }, { name: 'turn', description: 'Actual batch consuming turn.' }],
         returns: 'The original live request fact, or null outside that consuming turn.',
       },
+      {
+        signature: 'captureDurable?(commandId: CollaborationExecutionCommandId, agent: Agent): Promise<CollaborationTaskDurableCut | null>',
+        description: 'Capture metadata through the actual loaded Session writer, never a caller prefix or a cold restoration.',
+        parameters: [{ name: 'commandId', description: 'Original command currently owned by this consumer lifecycle.' }, { name: 'agent', description: 'Actual already-loaded Agent belonging to that lifecycle.' }],
+        returns: 'Exact durable prefix and folded event references, or null when unsupported/current ownership is lost.',
+      },
     ],
   },
   {
@@ -6308,6 +6314,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationTaskCurrentAccount',
     declaration: 'export interface CollaborationTaskCurrentAccount {\n    readonly authorityEnvironmentId: string;\n    readonly accountIssuer: string;\n    readonly accountSubject: string;\n    readonly hostProfileId: string;\n}',
+  },
+  {
+    name: 'CollaborationTaskDurabilityState',
+    declaration: 'export type CollaborationTaskDurabilityState = Readonly<z.infer<typeof stateSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskDurableCut',
+    declaration: 'export interface CollaborationTaskDurableCut {\n    readonly turn: number;\n    readonly eventCount: number;\n    readonly prefixDigest: string;\n    readonly state: CollaborationTaskDurabilityState;\n    isCurrent(): boolean;\n}',
   },
   {
     name: 'CollaborationTaskExecution',

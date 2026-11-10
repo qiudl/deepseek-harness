@@ -2,6 +2,7 @@
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { CollaborationExecutionCommandId } from './collaboration-root-execution-journal.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { CollaborationTaskDurabilityState } from './collaboration-task-durability.ts'
 
 /** Original consumer invocation, scoped to its actual persisted consuming turn and owned request cancellation. */
 export interface CollaborationTaskExecution {
@@ -9,6 +10,15 @@ export interface CollaborationTaskExecution {
   readonly sessionId: SessionId
   readonly turn: number
   readonly signal: AbortSignal
+}
+/** Fixed actual durable prefix, held only by the original live worker observer. */
+export interface CollaborationTaskDurableCut {
+  readonly turn: number
+  readonly eventCount: number
+  readonly prefixDigest: string
+  readonly state: CollaborationTaskDurabilityState
+  /** @returns Whether the same original backend, Agent and captured prefix remain current. */
+  isCurrent(): boolean
 }
 /** Optional observation service provided only by the actual SessionController consumer lifecycle. */
 export interface CollaborationTaskExecutions {
@@ -18,6 +28,12 @@ export interface CollaborationTaskExecutions {
    * @returns The original live request fact, or null outside that consuming turn.
    */
   read(sessionId: SessionId, turn: number): CollaborationTaskExecution | null
+  /** Capture metadata through the actual loaded Session writer, never a caller prefix or a cold restoration.
+   * @param commandId - Original command currently owned by this consumer lifecycle.
+   * @param agent - Actual already-loaded Agent belonging to that lifecycle.
+   * @returns Exact durable prefix and folded event references, or null when unsupported/current ownership is lost.
+   */
+  captureDurable?(commandId: CollaborationExecutionCommandId, agent: Agent): Promise<CollaborationTaskDurableCut | null>
 }
 /** Parent-authenticated current identity facts, separate from historical owner and route anchors. */
 export interface CollaborationTaskCurrentAccount {

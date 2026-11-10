@@ -45,6 +45,7 @@
     "src/collaboration-root-journal.ts",
     "src/collaboration-task-coordination-journal.ts",
     "src/collaboration-task-coordination.ts",
+    "src/collaboration-task-durability.ts",
     "src/collaboration-root-execution-journal.ts",
     "src/collaboration-root-planning-journal.ts",
     "src/collaboration-feedback.ts",
