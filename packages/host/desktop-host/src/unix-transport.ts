@@ -1,7 +1,5 @@
 import { join } from 'node:path'
-import { readRuntimeEntryFrontier } from '@deepseek-ai/dsh-api-session-controller/host/runtime-entry-journal'
 import type { ProjectOperationMemoryNativeSource } from './project-operation-memory-native-source.ts'
-import { operateAccountRuntimeEntryAnalysis, operateAccountRuntimeEntryOrigin, observeAccountRuntimeEntrySource } from './account-runtime-entry-host.ts'
 import type { HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
 import { operateAccountTaskCoordination, type TaskCoordinationReceiver } from './account-task-coordination.ts'
 import type { HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
@@ -2272,6 +2270,9 @@ export class HostControlAuthority {
                 observeRuntimeEntrySource: async (profile: string, directive: import('@deepseek-ai/dsh-host-control-protocol').HostProjectMemoryDirective,
                   entryId: string, signal: AbortSignal) => {
                   if (profile !== profileId) throw new HostAuthorityError('profile_mismatch')
+                  const { observeAccountRuntimeEntrySource } = await import('./account-runtime-entry-host.ts')
+                  signal.throwIfAborted()
+                  if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
                   return observeAccountRuntimeEntrySource(nativeOptions, account, this.options.projectOperationMemoryEnvironments ?? [],
                     directive, entryId, signal)
                 },
@@ -2294,12 +2295,17 @@ export class HostControlAuthority {
               actualAccount }) : parseHostProjectMemoryJson(payload), signal)
           const consumerStart = command.action === 'root_feedback' && command.operation !== null
             && typeof command.operation === 'object' && 'action' in command.operation && command.operation.action === 'consumer_start'
-          const value = nativeAnalysis && nativeOptions
-            ? await operateAccountRuntimeEntryAnalysis(nativeOptions, account, command, binding, context.signal)
-            : nativeOrigin && nativeOptions
-              ? await operateAccountRuntimeEntryOrigin(nativeOptions, account, command.operation, binding, context.signal)
-              : consumerStart ? await this.options.host.withCollaborationAccountRequest(account, context.signal, invoke)
-                : await invoke(profileId, context.signal)
+          let value: unknown
+          if (nativeAnalysis && nativeOptions) {
+            const { operateAccountRuntimeEntryAnalysis } = await import('./account-runtime-entry-host.ts')
+            if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+            value = await operateAccountRuntimeEntryAnalysis(nativeOptions, account, command, binding, context.signal)
+          } else if (nativeOrigin && nativeOptions) {
+            const { operateAccountRuntimeEntryOrigin } = await import('./account-runtime-entry-host.ts')
+            if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+            value = await operateAccountRuntimeEntryOrigin(nativeOptions, account, command.operation, binding, context.signal)
+          } else value = consumerStart ? await this.options.host.withCollaborationAccountRequest(account, context.signal, invoke)
+            : await invoke(profileId, context.signal)
           if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const signOutput = (dispatch: unknown, outputDigest: string) => {
             const unsigned = parseHostCollaborationAnalysisReceipt({ schema_version: 1,
@@ -2719,6 +2725,8 @@ export class HostControlAuthority {
                     if (!metadata) throw new HostAuthorityError('unavailable')
                     const anchor = metadata.capture(confirmation.anchorId, captured, guard)
                     const native = await this.options.createProjectOperationMemoryNativeSource(profile)
+                    guard()
+                    const { readRuntimeEntryFrontier } = await import('@deepseek-ai/dsh-api-session-controller/host/runtime-entry-journal')
                     guard()
                     const frontier = readRuntimeEntryFrontier(join(profileRoot, 'runtime-entry.sqlite'))
                     native.captureActivation(input, confirmation, anchor, frontier,

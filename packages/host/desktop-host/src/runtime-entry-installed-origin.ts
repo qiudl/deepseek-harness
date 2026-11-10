@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto'
 import { readFileSync, realpathSync } from 'node:fs'
 import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { createRuntimeResolution, createRuntimeResolutionLookup, loadProfileDirectory } from '@deepseek-ai/dsh-app-boot'
 import { parseHostRuntimeEntryInstalledOrigin, readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners,
   runtimeEntrySealedRuntimeRoot, runtimeEntryResolutionDigest, assertRuntimeEntryLoadedNativeBinding,
   type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
@@ -32,6 +31,7 @@ export async function readRuntimeEntryInstalledSource(configuration: HostRuntime
   if (cli.length !== 1 || !cli[0] || cli[0].selector.kind !== 'runtime') return unavailable()
   const anchor = join(runtimeRoot, cli[0].selector.relativeRoot, 'package.json'), profile = join(realpathSync(profileRoot), 'profiles/web')
   if (realpathSync(profile) !== profile) return unavailable()
+  const { createRuntimeResolution, createRuntimeResolutionLookup, loadProfileDirectory } = await import('@deepseek-ai/dsh-app-boot')
   const resolution = await createRuntimeResolution({ installAnchor: anchor, home: profileRoot,
     profile: loadProfileDirectory('dsh', profile, anchor) })
   if (!resolution.localPackageNames.includes('ds-bot') || resolution.linkedRoots.some(root => root.name === 'ds-bot')) return unavailable()
