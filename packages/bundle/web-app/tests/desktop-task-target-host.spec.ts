@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, symbols } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -40,7 +40,7 @@ const fixtureValue: unknown = JSON.parse(readFileSync(
   new URL('../../../host/control-protocol/tests/fixtures/task-target-v1.json', import.meta.url), 'utf8'))
 if (!fixtureValue || typeof fixtureValue !== 'object' || Array.isArray(fixtureValue)) throw Error('invalid fixture')
 const vector = fixtureValue as Record<string, unknown>
-async function fixture() {
+async function fixture(pendingBootstrap = false) {
   const root = await mkdtemp(join(tmpdir(), 'paired-host-')), ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root); ctx.storage.backend.register('json', backend)
@@ -77,11 +77,15 @@ async function fixture() {
   const controller: Partial<SessionController> = { async openPairedTaskTargetJournal() { opens++; return journal },
     async consumePairedTaskTarget(capability, short) { return consumer.begin(capability, short) } }
   ctx.provide('sessionController', controller as SessionController)
-  const provider: RuntimeEntryConsumerHost = { lifetime: lifetime.signal, supports: who => who === agent,
-    canPrepare: () => true, readLoadedSession: who => ctx.agentLoop.readOriginalInvocationEntrySession(who),
-    async readOriginal() { throw Error('not part of this controlled bootstrap') },
-    async prepareEntry() { throw Error('not part of this controlled bootstrap') } }
-  ctx.provide('runtimeEntryConsumerHost', provider)
+  const createProvider = (bootstrapCtx: Context): RuntimeEntryConsumerHost => {
+    const ownedAgent = bootstrapCtx.agents.get(agent.id)
+    return { lifetime: lifetime.signal, supports: who => who === ownedAgent,
+      canPrepare: () => true, readLoadedSession: who => bootstrapCtx.agentLoop.readOriginalInvocationEntrySession(who),
+      async readOriginal() { throw Error('not part of this controlled bootstrap') },
+      async prepareEntry() { throw Error('not part of this controlled bootstrap') } }
+  }
+  const provider = createProvider(ctx)
+  if (!pendingBootstrap) ctx.provide('runtimeEntryConsumerHost', provider)
   ctx.provide('dsBotSlarkExternalGroup', { async readLocalBotChat() { return { bot: { botId: directive.scope.botId, sessionId: agent.id } } },
     async describeLocalBotSession() { return { botId: directive.scope.botId, sessionId: agent.id } } })
   const configuration = parseHostRuntimeEntryOriginsConfiguration({ schemaVersion: 3, implementationDigest: 'a'.repeat(64),
@@ -91,8 +95,24 @@ async function fixture() {
       environmentId: directive.scope.authorityEnvironmentId, keys: [{ kid: directive.keyId,
         publicKeyPem: source.publicKey.export({ type: 'spki', format: 'pem' }).toString(), validFrom: 1, validUntil: directive.expiresAt + 1 }] } }]
   const native = new DesktopTaskCoordinationNative(ctx, controlJournal)
-  const host = new DesktopTaskTargetHost(ctx, environments, directive.scope.hostProfileId, 'actual-worker', lifetime.signal, configuration, native)
-  ctx.provide('pairedTaskTargetConsumerHost', host.service)
+  const createHost = (bootstrapCtx: Context, ownedProvider: RuntimeEntryConsumerHost) => new DesktopTaskTargetHost(
+    bootstrapCtx, environments, directive.scope.hostProfileId, 'actual-worker', lifetime.signal, configuration, native, ownedProvider)
+  let capturedHost: DesktopTaskTargetHost | undefined
+  if (pendingBootstrap) {
+    await ctx.inject(['agentLoop', 'agents', 'sessions', 'sessionPersistence', 'sessionController', 'tools'], async (bootstrapCtx) => {
+      const ownedProvider = createProvider(bootstrapCtx)
+      bootstrapCtx.provide('runtimeEntryConsumerHost', ownedProvider)
+      await Promise.resolve()
+      expect(bootstrapCtx.get('runtimeEntryConsumerHost')).toBeUndefined()
+      capturedHost = createHost(bootstrapCtx, ownedProvider)
+      bootstrapCtx.provide('pairedTaskTargetConsumerHost', capturedHost.service)
+    })
+  } else {
+    capturedHost = createHost(ctx, provider)
+    ctx.provide('pairedTaskTargetConsumerHost', capturedHost.service)
+  }
+  if (!capturedHost) throw Error('actual paired bootstrap did not activate')
+  const host = capturedHost
   const account = { authorityEnvironmentId: directive.scope.authorityEnvironmentId, accountIssuer: directive.scope.accountIssuer,
     accountSubject: directive.scope.accountSubject, accountBindingId: directive.accountBindingId,
     accountBindingVersion: directive.accountBindingVersion, hostProfileId: directive.scope.hostProfileId }
@@ -105,8 +125,35 @@ async function fixture() {
 }
 it('rejects absent original bootstrap facilities without providing a public capability factory', () => {
   const ctx = new Context()
-  expect(() => new DesktopTaskTargetHost(ctx, [], 'profile', 'worker', new AbortController().signal, undefined, undefined)).toThrow('unavailable')
+  expect(() => new DesktopTaskTargetHost(ctx, [], 'profile', 'worker', new AbortController().signal, undefined, undefined, undefined)).toThrow('unavailable')
   expect(ctx.get('pairedTaskTargetConsumerHost')).toBeUndefined()
+})
+it('retains the actual Native owner during its pending bootstrap and uses only the active published provider later', async () => {
+  const f = await fixture(true)
+  try {
+    expect(f.ctx.get('pairedTaskTargetConsumerHost')).toBe(f.host.service)
+    const value = await f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+    if (!value || typeof value !== 'object' || Array.isArray(value) || !('record' in value)) throw Error('missing projection')
+    const result = captureHostTaskTargetResult(value.record, f.request)
+    expect(result.ok && result.record.status).toBe('prepared')
+    expect(f.adapter.requests).toHaveLength(0)
+  } finally { await f.close() }
+})
+it.each([false, true])('permanently refuses a replacement provider, including original-symbol impersonation=%s', async (impersonate) => {
+  const f = await fixture()
+  try {
+    await f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+    const published = f.ctx.get('runtimeEntryConsumerHost')
+    if (!published) throw Error('missing active provider')
+    const replacement: RuntimeEntryConsumerHost = { ...published }
+    if (impersonate) Object.defineProperty(replacement, symbols.original, { value: published })
+    f.ctx.set('runtimeEntryConsumerHost', replacement)
+    expect(f.ctx.get('runtimeEntryConsumerHost')).toBe(replacement)
+    await expect(f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)).rejects.toThrow('unavailable')
+    f.ctx.set('runtimeEntryConsumerHost', published)
+    await expect(f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)).rejects.toThrow('unavailable')
+    expect(f.adapter.requests).toHaveLength(0)
+  } finally { await f.close() }
 })
 it.each(['signature', 'account', 'peer', 'binding'] as const)('refuses %s before opening its writer or waking a real Agent', async (mode) => {
   const f = await fixture()

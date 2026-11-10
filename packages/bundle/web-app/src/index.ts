@@ -280,7 +280,7 @@ export function apply(ctx: Context, config: Config): void {
         process.env.DSH_PROFILE_ID ?? '', process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal) : undefined
       const paired = native && nativeConfiguration?.schemaVersion === 3 && taskCoordination
         ? new DesktopTaskTargetHost(sessionCtx, taskCoordinationEnvironments, process.env.DSH_PROFILE_ID ?? '',
-          process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal, nativeConfiguration, taskCoordination.native) : undefined
+          process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal, nativeConfiguration, taskCoordination.native, native.service) : undefined
       if (paired) sessionCtx.provide('pairedTaskTargetConsumerHost', paired.service)
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),

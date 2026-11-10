@@ -82,11 +82,12 @@ export class DesktopTaskTargetHost {
    * @param lifetime - Actual worker lifetime; the parent separately owns every long Account request.
    * @param configuration - Exact installed-origin configuration also used by the actual Native bootstrap; absence refuses.
    * @param native - Same worker's actual native observer; absence refuses without opening a writer.
+   * @param provider - Actual Native owner retained by this bootstrap; consuming calls require its active published identity.
    */
   constructor(private readonly ctx: Context, private readonly environments: readonly HostTaskCoordinationEnvironment[],
     private readonly profileId: string, private readonly workerId: string, private readonly lifetime: AbortSignal,
-    configuration: HostRuntimeEntryOriginsConfiguration | undefined, native: DesktopTaskCoordinationNative | undefined) {
-    const provider = ctx.get('runtimeEntryConsumerHost')
+    configuration: HostRuntimeEntryOriginsConfiguration | undefined, native: DesktopTaskCoordinationNative | undefined,
+    provider: RuntimeEntryConsumerHost | undefined) {
     if (!provider || !environments.length || !profileId || !workerId || configuration?.schemaVersion !== 3 || !native
       || !ctx.get('agentLoop') || !ctx.get('sessionPersistence') || !ctx.get('sessionController')) unavailable()
     this.provider = provider; this.configuration = configuration; this.native = native
