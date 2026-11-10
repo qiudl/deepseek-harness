@@ -8,7 +8,7 @@ import { expect, it, onTestFinished } from 'vitest'
 import { createRuntimeResolutionLookup, type RuntimeResolution } from '@deepseek-ai/dsh-app-boot'
 import { readRuntimeOwnerTree } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRuntimeEntryOwnerManifest } from '@deepseek-ai/dsh-host-control-protocol'
-import { readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners } from '@deepseek-ai/dsh-host-control-protocol'
+import { readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners, captureHostRuntimeEntryOwners } from '@deepseek-ai/dsh-host-control-protocol'
 const hash = (value: Buffer | string) => createHash('sha256').update(value).digest('hex')
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-sealed-owners-')))
@@ -79,4 +79,24 @@ it('reads only the exact raw-hash resource and rejects bad encoding or unknown f
     expect(() => readHostRuntimeEntryOwnerManifest(bad.c)).toThrow()
     expect(readFileSync(path)).toEqual(bytes)
   }
+})
+
+it('retains an original complete owner selection across awaits and rejects restored lookup roots permanently', async () => {
+  const f = fixture(), check = captureHostRuntimeEntryOwners(f.manifest, f.runtime, f.profile, f.lookup)
+  expect(check.artifactPins).toEqual(f.verify())
+  check.assertCurrent(); check.verifyFullCurrent()
+  await Promise.resolve()
+  const path = join(f.nested, 'index.js'), original = readFileSync(path)
+  writeFileSync(path, original)
+  expect(() =>{  check.assertCurrent() }).toThrow()
+  expect(() =>{  check.verifyFullCurrent() }).toThrow()
+  expect(f.verify).not.toThrow()
+})
+it('detects new dependency selection and missing Profile selector files before code admission', async () => {
+  const f = fixture(), check = captureHostRuntimeEntryOwners(f.manifest, f.runtime, f.profile, f.lookup)
+  await Promise.resolve()
+  writeFileSync(join(f.profile, 'package.json'), '{}')
+  expect(() =>{  check.assertCurrent() }).toThrow()
+  rmSync(join(f.profile, 'package.json'))
+  expect(() =>{  check.assertCurrent() }).toThrow()
 })

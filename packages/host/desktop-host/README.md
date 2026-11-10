@@ -237,6 +237,8 @@ The startup compositions relay reference-grant reads to the original current Pro
 
 Main independently derives the Native runtime root from its trusted installation resource and resolves the current Account Profile's `profiles/web` package table without installing worker hooks. It compares the original worker's registered source, complete owner trees, importer-specific resolution and loaded resolver binary before publication. Current Account/worker checks surround these reads; a final private source read detects replacement during asynchronous work. Legacy pin configurations do not advertise `profile.runtime_entry`. Installation eligibility never substitutes for current Source, entry signatures or memory rights.
 
+An original Main request retains the complete owner verification and nanosecond OS identity snapshot selected by the trusted installation and Profile. Current checks compare that same snapshot across awaits; restored bytes cannot renew a failed request. Full content verification remains at fresh grant/start admission, publication and the actual installation-signature callback. Account, original worker and loaded-source checks are independent and unchanged; the 35-second request limit is not increased.
+
 ### Dev Note
 
 Protocol authority tests use instance-local JSON registry hooks on every platform. POSIX and Windows storage suites own filesystem permission checks. Bundled archive storage tests require POSIX UID and mode bits; Windows private-file, named-pipe, ACL, and native PowerShell suites remain required.

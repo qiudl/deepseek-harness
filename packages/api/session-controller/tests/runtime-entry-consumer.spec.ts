@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from './runtime-entry-test-code.ts'
 /** Actual original journals/Agent/Session/driver; Cloud metadata transport remains a controlled component. */
 import { Context } from '@deepseek-ai/cordis'
 import Storage from '@deepseek-ai/dsh-storage'
@@ -74,7 +75,8 @@ async function harness() {
   const consumer = new RuntimeEntryConsumer(consumers)
   const args = { agent, execution, header, signal, readSnapshot: () => ctx.agentLoop.readOriginalInvocationEntrySession(agent),
     isCurrent: () => current, isSupported: () => supported }
-  const factoryOptions = { journal, workerLifetimeId: randomUUID(), implementationDigest: '1'.repeat(64),
+  const code = runtimeEntryTestCode(directory)
+  const factoryOptions = { assertCurrentCode: () => { code.assertCurrentCode() }, journal, workerLifetimeId: randomUUID(), implementationDigest: '1'.repeat(64),
     compositionDigest: '2'.repeat(64), registryGeneration: '1', compositionAuthorityDigest: '3'.repeat(64),
     readLoadedSession: () => ctx.agentLoop.readOriginalInvocationEntrySession(agent), isCurrentComposition: () => current && supported }
   const fixture = JSON.parse(await readFile(new URL('../../../host/control-protocol/tests/fixtures/project-operation-runtime-entry-v1.json', import.meta.url), 'utf8')) as { values: { binding: RuntimeEntryBinding } }

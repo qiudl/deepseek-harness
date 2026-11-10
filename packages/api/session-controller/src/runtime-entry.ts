@@ -42,6 +42,9 @@ export interface RuntimeEntryFactoryOptions {
   readonly compositionDigest: string
   readonly registryGeneration: string
   readonly compositionAuthorityDigest: string
+  /** Full original installation verification supplied only by the actual worker bootstrap.
+   * @returns Nothing; missing or stale code never qualifies a Native entry. */
+  assertCurrentCode(): void
   /** Read current original metadata before any body materialization.
    * @param agent - Actual registered primary Bot runtime.
    * @param commandId - Original accepted consumer command.
@@ -88,7 +91,8 @@ export class RuntimeEntryFactory {
   constructor(private readonly options: RuntimeEntryFactoryOptions) {}
 
   private eligible(agent: Agent, signal: AbortSignal): boolean {
-    return !this.closed && !signal.aborted && this.options.isCurrentComposition(agent) && agent.status === 'idle'
+    return !this.closed && !signal.aborted && typeof this.options.assertCurrentCode === 'function'
+      && this.options.isCurrentComposition(agent) && agent.status === 'idle'
       && 'startOriginalInvocationEntry' in agent && typeof agent.startOriginalInvocationEntry === 'function'
       && agent.inbox.nextTurn.length === 0 && agent.inbox.nextStep.length === 0
       && agent.session.header.parentSession === undefined && !agent.session.header.isSeeded
@@ -147,6 +151,7 @@ export class RuntimeEntryFactory {
     const claim = this.claims.get(token), o = this.options
     if (claim === undefined || claim.agent !== agent || !claim.used || claim.selected) throw new Error('runtime_entry_claim_invalid')
     claim.selected = true
+    try { o.assertCurrentCode() } catch { return { kind: 'gap', reason: 'fence_lost' } }
     if (!this.current(claim, driver)) return { kind: 'gap', reason: 'fence_lost' }
     try {
       const witness = o.journal.commitOriginalInvocationEntry({ binding: claim.binding, implementationDigest: o.implementationDigest,
@@ -176,6 +181,7 @@ export class RuntimeEntryFactory {
       enter: (driver) => { result = this.commitOriginalInvocationEntry(claim.agent, token, driver) },
       materialize: async (signal) => {
         if (claim.signal.aborted || signal.aborted) throw new Error('runtime_entry_cancelled')
+        this.options.assertCurrentCode()
         if (!claim.original.isCurrent() || !claim.loaded.isCurrent() || !this.options.isCurrentComposition(claim.agent)
           || Date.now() >= claim.binding.grantExpiresAt) throw new Error('runtime_entry_origin_authority_lost')
         return materialize(signal)

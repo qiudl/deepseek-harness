@@ -87,7 +87,7 @@ function originalOrigin(options: AccountRuntimeEntryHostOptions, account: Accoun
         dispatchGranted: false, sourceKind: original.metadata.sourceKind,
         originalAuthorityDigest: original.metadata.originalAuthorityDigest,
         accountAuthorityDigest: original.metadata.accountAuthorityDigest, isCurrent: () => { current(); return true } }))
-    }, sign: options.sign, registerObservation: () => unavailable(),
+    }, sign: (bytes) => { source.verifyFullCurrent(); current(); return options.sign(bytes) }, registerObservation: () => unavailable(),
   })
 }
 
@@ -109,7 +109,7 @@ async function installedSource(options: AccountRuntimeEntryHostOptions, account:
   return Object.freeze({ ...source, async assertWorkerCurrent() {
     current()
     const next = await receiver.execute(request, signal)
-    current(); source.assertCurrent()
+    current(); source.verifyFullCurrent()
     if (JSON.stringify(next) !== JSON.stringify(response)) unavailable()
   } })
 }
@@ -149,6 +149,7 @@ export async function operateAccountRuntimeEntryAnalysis(options: AccountRuntime
       signature(proof, options, true); identity(proof, options, account, profileId, true); originalGrant(proof, command.operation.grant)
       if (!proof.metadata.dispatchGranted || options.now() >= proof.metadata.binding.grantExpiresAt) unavailable()
     }
+    source.verifyFullCurrent(); current()
     const result = await receiver.execute(parseHostRemoteSessionJson({ ...command, binding_key: bindingKey,
       actualAccount, actualPeer: options.peer, actualWorkerId: receiver.workerId }), active)
     await source.assertWorkerCurrent()

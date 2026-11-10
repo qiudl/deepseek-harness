@@ -6,7 +6,7 @@ import { dirname, join, relative, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseHostRuntimeEntryOwnerManifest, type HostRuntimeEntryOwnerManifest } from './runtime-entry-owner-seal.ts'
 import type { HostRuntimeEntrySealedOriginsConfiguration } from './runtime-entry-bootstrap.ts'
-import { readRuntimeOwnerTree } from './runtime-entry-owner-tree.ts'
+import { captureRuntimeOwnerTree, captureRuntimeOwnerPaths, type RuntimeOwnerIdentitySnapshot } from './runtime-entry-owner-tree.ts'
 
 /** Actual default Node lookup supplied by the installation/Profile resolver, without importing a target. */
 export interface RuntimeEntryOwnerLookup {
@@ -50,9 +50,30 @@ export function readHostRuntimeEntryOwnerManifest(
  * @param lookup - Actual fixed RuntimeResolution lookup, without global interception in Main.
  * @returns Selected immutable file hashes for existing historical artifact readers; not execution authority.
  */
-export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerManifest, runtimeRoot: string,
-  profileDir: string, lookup: RuntimeEntryOwnerLookup): readonly Readonly<{ path: string; sha256: string }>[] {
+function captureOwners(manifest: HostRuntimeEntryOwnerManifest, runtimeRoot: string,
+  profileDir: string, lookup: RuntimeEntryOwnerLookup) {
   if (realpathSync(runtimeRoot) !== runtimeRoot || realpathSync(profileDir) !== profileDir) return fail()
+  const checks: RuntimeOwnerIdentitySnapshot[] = [], selections = new Map<string, RuntimeOwnerIdentitySnapshot>()
+  const remember = (paths: readonly string[]): void => {
+    for (const path of paths) {
+      const previous = selections.get(path)
+      if (previous) { previous.assertCurrent(); continue }
+      if (selections.size >= 32768) fail()
+      selections.set(path, captureRuntimeOwnerPaths([path]))
+    }
+  }
+  const selection = (path: string, boundary: string) => {
+    const paths: string[] = []
+    let current = path
+    while (current === boundary || current.startsWith(boundary + sep)) {
+      paths.push(current)
+      if (current === boundary) break
+      current = dirname(current)
+    }
+    remember(paths)
+  }
+  selection(runtimeRoot, runtimeRoot); selection(profileDir, profileDir)
+  remember([join(profileDir, 'package.json'), join(profileDir, 'pnpm-lock.yaml'), join(profileDir, 'node_modules')])
   const roots = new Map<string, string>(), pending = [...manifest.owners], selected = new Set<string>()
   const budget = { entries: 0, files: 0, bytes: 0 }, pins: Readonly<{ path: string; sha256: string }>[] = []
   while (pending.length) {
@@ -62,14 +83,20 @@ export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerMani
       if (!o) return fail()
       const s = o.selector
       let root: string | undefined
-      if (s.kind === 'runtime') root = within(runtimeRoot, join(runtimeRoot, s.relativeRoot))
+      if (s.kind === 'runtime') {
+        const path = join(runtimeRoot, s.relativeRoot)
+        selection(path, runtimeRoot)
+        root = within(runtimeRoot, path)
+      }
       else if (s.kind === 'profile_plugin') {
+        selection(join(profileDir, 'node_modules', 'ds-bot'), profileDir)
         const actual = lookup.packageDir('ds-bot', pathToFileURL(profileDir + sep).href)
         if (!actual) return fail()
         root = within(join(profileDir, 'node_modules'), actual)
       } else {
         const from = roots.get(s.fromOwnerId)
         if (!from) continue
+        selection(join(from, s.fromPath), from)
         const parent = within(from, join(from, s.fromPath)), actual = lookup.packageDir(s.specifier, pathToFileURL(parent).href)
         if (!actual) return fail()
         root = within(join(profileDir, 'node_modules'), actual)
@@ -77,6 +104,7 @@ export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerMani
         if (!resolved.startsWith('file:')) return fail()
         within(root, fileURLToPath(resolved))
       }
+      selection(root, root.startsWith(runtimeRoot + sep) ? runtimeRoot : profileDir)
       if (selected.has(root)) return fail()
       selected.add(root); roots.set(o.ownerId, root); pending.splice(i, 1)
       const path = join(root, 'package.json'), stat = lstatSync(path)
@@ -84,7 +112,8 @@ export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerMani
       const bytes = readFileSync(path), packageValue: unknown = JSON.parse(bytes.toString('utf8'))
       if (!packageValue || typeof packageValue !== 'object' || Reflect.get(packageValue, 'name') !== o.packageName
         || Reflect.get(packageValue, 'version') !== o.packageVersion || hash(bytes) !== o.manifestSha256) return fail()
-      const tree = readRuntimeOwnerTree(root, budget)
+      const captured = captureRuntimeOwnerTree(root, budget), tree = captured.tree
+      checks.push(captured)
       if (tree.treeSha256 !== o.treeSha256 || tree.fileCount !== o.fileCount || tree.totalBytes !== o.totalBytes) return fail()
       // Existing readers require only these two original DS journal source files; complete owners were checked above.
       if (s.kind === 'profile_plugin') for (const file of ['project-operation-native-entry.js', 'project-operation-journal.js']) {
@@ -108,7 +137,49 @@ export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerMani
     const member = within(root, join(root, n.path))
     if (hash(readFileSync(member)) !== n.sha256) return fail()
   }
-  return Object.freeze(pins)
+  const originalChecks = [...selections.values(), ...checks]
+  for (const check of originalChecks) check.assertCurrent()
+  return { pins: Object.freeze(pins), checks: originalChecks }
+}
+
+/** A complete expected owner set, captured by one operation or actual worker. Drift never renews its baseline. */
+export interface HostRuntimeEntryOwnerVerification {
+  readonly artifactPins: readonly Readonly<{ path: string; sha256: string }>[]
+  /** @returns Nothing; compare original OS identities without reopening every file. */
+  assertCurrent(): void
+  /** @returns Nothing; hash the complete original expected content at an actual authority/effect/signing barrier. */
+  verifyFullCurrent(): void
+}
+/** Verify complete content once and retain the same bounded original OS identities.
+ * @param manifest - Trusted expected resource, not a worker or SDK inventory.
+ * @param runtimeRoot - Independently selected canonical installation.
+ * @param profileDir - Original selected profiles/web directory.
+ * @param lookup - Its actual fixed Node lookup.
+ * @returns One owner-bound check; no TTL, automatic recapture or business authorization.
+ */
+export function captureHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerManifest, runtimeRoot: string,
+  profileDir: string, lookup: RuntimeEntryOwnerLookup): HostRuntimeEntryOwnerVerification {
+  const original = captureOwners(manifest, runtimeRoot, profileDir, lookup)
+  let stale = false
+  const assertCurrent = (): void => {
+    if (stale) fail()
+    try { for (const check of original.checks) check.assertCurrent() } catch { stale = true; fail() }
+  }
+  return Object.freeze({ artifactPins: original.pins, assertCurrent, verifyFullCurrent() {
+    assertCurrent()
+    try { captureOwners(manifest, runtimeRoot, profileDir, lookup); assertCurrent() } catch { stale = true; fail() }
+  } })
+}
+/** Independently hash the complete selected owner set without retaining an authorization cache.
+ * @param manifest - Trusted expected resource.
+ * @param runtimeRoot - Canonical installation root.
+ * @param profileDir - Canonical current Profile directory.
+ * @param lookup - Actual importer/condition lookup.
+ * @returns The two existing DS journal source pins after complete verification.
+ */
+export function verifyHostRuntimeEntryOwners(manifest: HostRuntimeEntryOwnerManifest, runtimeRoot: string,
+  profileDir: string, lookup: RuntimeEntryOwnerLookup): readonly Readonly<{ path: string; sha256: string }>[] {
+  return captureOwners(manifest, runtimeRoot, profileDir, lookup).pins
 }
 /** Derive the runtime root from the one fixed copied installation resource location.
  * @param configuration - Parent-owned native-origins/owners-v3.json reference.

@@ -1,9 +1,9 @@
 /** Main independently resolves installed source metadata; worker responses never choose trusted roots or hashes. */
 import { createHash } from 'node:crypto'
 import { readFileSync, realpathSync } from 'node:fs'
-import { join, sep } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseHostRuntimeEntryInstalledOrigin, readHostRuntimeEntryOwnerManifest, verifyHostRuntimeEntryOwners,
+import { parseHostRuntimeEntryInstalledOrigin, readHostRuntimeEntryOwnerManifest, captureHostRuntimeEntryOwners, captureRuntimeOwnerPaths,
   runtimeEntrySealedRuntimeRoot, runtimeEntryResolutionDigest, assertRuntimeEntryLoadedNativeBinding,
   type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
 const unavailable = (): never => { throw Error('runtime_entry_unavailable') }
@@ -12,6 +12,8 @@ export interface RuntimeEntryInstalledSource {
   readonly artifactPins: readonly Readonly<{ path: string; sha256: string }>[]
   /** Recheck the fixed original selection and complete hashes; replacement cannot renew this request. */
   assertCurrent(): void
+  /** Rehash the same expected content at a real authority or signing barrier; never replace its original snapshot. */
+  verifyFullCurrent(): void
 }
 /** Verify the fixed original worker's registered source against Main-owned Profile and installation metadata.
  * @param configuration - Signed installation reference selected at bootstrap.
@@ -26,6 +28,7 @@ export async function readRuntimeEntryInstalledSource(configuration: HostRuntime
   if (configuration.schemaVersion !== 3) return unavailable()
   const actual = parseHostRuntimeEntryInstalledOrigin(response)
   if (!actual || actual.profileId !== profileId || actual.workerLifetimeId !== workerId) return unavailable()
+  const resource = captureRuntimeOwnerPaths([configuration.manifest.path, dirname(configuration.manifest.path)])
   const runtimeRoot = runtimeEntrySealedRuntimeRoot(configuration), manifest = readHostRuntimeEntryOwnerManifest(configuration)
   const cli = manifest.owners.filter(o => o.packageName === '@deepseek-ai/dsh' && o.selector.kind === 'runtime')
   if (cli.length !== 1 || !cli[0] || cli[0].selector.kind !== 'runtime') return unavailable()
@@ -39,17 +42,25 @@ export async function readRuntimeEntryInstalledSource(configuration: HostRuntime
   if (actual.resolutionBase !== base) return unavailable()
   const pkg = lookup.packageDir('ds-bot', base)
   if (!pkg) return unavailable()
+  const owners = captureHostRuntimeEntryOwners(manifest, runtimeRoot, profile, lookup)
   const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
+  let stale = false
   const assertCurrent = (): void => {
-    const current = readHostRuntimeEntryOwnerManifest(configuration)
-    if (current.implementationDigest !== manifest.implementationDigest || current.compositionDigest !== manifest.compositionDigest
+    if (stale) unavailable()
+    try {
+      resource.assertCurrent()
+      const current = readHostRuntimeEntryOwnerManifest(configuration)
+      if (current.implementationDigest !== manifest.implementationDigest || current.compositionDigest !== manifest.compositionDigest
       || runtimeEntryResolutionDigest(resolution) !== actual.resolutionDigest
       || hash(readFileSync(join(pkg, 'package.json'))) !== actual.packageManifestDigest
       || hash(JSON.stringify(lookup.resolve(base, 'ds-bot', 'import').conditions)) !== actual.conditionsDigest) unavailable()
-    assertRuntimeEntryLoadedNativeBinding(current)
-    verifyHostRuntimeEntryOwners(current, runtimeRoot, profile, lookup)
+      assertRuntimeEntryLoadedNativeBinding(current)
+      owners.assertCurrent()
+    } catch { stale = true; unavailable() }
   }
   assertCurrent()
-  const pins = verifyHostRuntimeEntryOwners(manifest, runtimeRoot, profile, lookup)
-  return Object.freeze({ artifactPins: pins, assertCurrent })
+  return Object.freeze({ artifactPins: owners.artifactPins, assertCurrent, verifyFullCurrent() {
+    assertCurrent()
+    try { owners.verifyFullCurrent(); assertCurrent() } catch { stale = true; unavailable() }
+  } })
 }

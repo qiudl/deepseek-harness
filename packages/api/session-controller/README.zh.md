@@ -281,3 +281,5 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 来源读取 view 也可携带原生效确认时固定的 native activation cut。`readRuntimeEntryEffect(token, reference)` 只在同一活跃 token 下解析精确 entry ID 及 receipt/manifest 摘要；实际 worker 先核对原 owner、项目、Bot 与 Account，再返回私有 effect 坐标。anchor 和 retained-recipient token 不能使用此 reader。缺少 cut 时保持不支持；已具备 native 资格的来源序号不能因 reader 缺失而被跳过。私有 runtime effect head 判定原 entry 属于历史还是新增，混合来源 journal 序号只负责扫描。两者都不授予执行、导出或材料 Right。
 
 Host 专用任务持久化 projection 仅保留有界的当前 step 调用、结果引用及原 turn 结束元数据，不保留消息正文。所属 Controller 在持久化屏障后重新核对实际已加载 Session、持久化 owner 及原存储事件。工具正文返回或持久终态前缀本身不能证明异步子进程或 provider 已结束；缺少相应结算能力时，只有同一 worker 完整监控且全部正文在 dispatch 前被阻止、原 ABORTED_BEFORE_DISPATCH 结果及终态事件均已持久化的生命周期可以报告 quiescent。重启、observer 替换、持久化所有权缺失和不受支持的 Slark 执行投影仍为 unknown 或 unavailable；原关闭下限和签名 Ack 不授予 ready 权限。
+
+Host-only entry factory 要求实际启动组合拥有的完整代码核验器。它在同步 entry 提交及正文物化前运行；worker 还会在 opaque publication event 等待结束后核验。核验缺失或失效会阻止 Native entry/正文，已持久的 entry 仍只是历史事实。该回调不来自调用方 JSON，不是公开 mint 或恢复的执行 grant；原 Session 与签名格式不变。

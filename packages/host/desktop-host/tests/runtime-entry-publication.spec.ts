@@ -1,3 +1,4 @@
+import { runtimeEntryTestCode } from '../../../api/session-controller/tests/runtime-entry-test-code.ts'
 /** Real SQLite writer and DSBot mixed allocator; the generated Cloud key is a component fixture, never a production claim. */
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync,
@@ -13,10 +14,10 @@ import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { RuntimeEntryFactory } from '@deepseek-ai/dsh-api-session-controller/src/runtime-entry.ts'
+import { RuntimeEntryFactory } from '../../../api/session-controller/src/runtime-entry.ts'
 import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { brandString } from '@deepseek-ai/dsh-brand'
-import { RuntimeEntryJournal } from '@deepseek-ai/dsh-api-session-controller/src/runtime-entry-journal.ts'
+import { RuntimeEntryJournal } from '../../../api/session-controller/src/runtime-entry-journal.ts'
 import { parseRuntimeEntryBinding, parseRuntimeEntryObservation, parseRuntimeEntryAttribution,
   encodeRuntimeEntryAttribution, runtimeEntryObservationDigest, runtimeEntryReceiptDigest,
   type RuntimeEntryObservation } from '@deepseek-ai/dsh-host-control-protocol'
@@ -58,7 +59,9 @@ async function harness(grantDuration = 60000, actualDriver = false) {
     await ctx.plugin(AgentLoop, { agents: [] })
     ctx.llm.registerAdapter(['mock'], new MockAdapter([textResponse('actual driver continued')]))
     const agent = await ctx.agentLoop.create(SessionId(binding.sessionId), { provider: 'mock', model: 'mock' })
-    const factory = new RuntimeEntryFactory({ journal, workerLifetimeId: write.workerLifetimeId, implementationDigest: digest,
+    const code = runtimeEntryTestCode(directory)
+    const factory = new RuntimeEntryFactory({ assertCurrentCode: () => { code.assertCurrentCode() }, journal,
+      workerLifetimeId: write.workerLifetimeId, implementationDigest: digest,
       compositionDigest: digest, compositionAuthorityDigest: digest, registryGeneration: '1',
       readOriginalMetadata: async () => ({ binding, dispatchGranted: true, sourceKind: 'primary_human',
         taskRef: brandString<NonNullable<ProjectOperationRuntimeEntryCandidate['taskRef']>>('actual-original-task'),
