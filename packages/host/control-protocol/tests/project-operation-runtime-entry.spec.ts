@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createHash, generateKeyPairSync, sign, verify } from 'node:crypto'
-import { test } from 'node:test'
+import { test } from 'vitest'
 import * as c from '../src/project-operation-runtime-entry.js'
 const fixture = JSON.parse(
   readFileSync(
@@ -34,7 +34,7 @@ const encoders = {
   attribution: c.encodeRuntimeEntryAttribution,
 }
 for (const key of Object.keys(parsers) as (keyof typeof parsers)[])
-  void test('fixed canonical tuple/domain ' + key, () => {
+  test('fixed canonical tuple/domain ' + key, () => {
     const value = fixture.values[key]
     assert.equal(encoders[key](value), fixture.expected[key])
     assert(Object.isFrozen(parsers[key](value)))
@@ -56,7 +56,7 @@ for (const key of Object.keys(parsers) as (keyof typeof parsers)[])
     assert.throws(() => parsers[key](getter))
     assert.equal(reads, 0)
   })
-void test('exact signature preimages bind purpose, original identities and receipt but exclude only their own signature', () => {
+test('exact signature preimages bind purpose, original identities and receipt but exclude only their own signature', () => {
   const { privateKey, publicKey } = generateKeyPairSync('ed25519')
   for (const [key, encoder] of [
     ['observation', c.encodeRuntimeEntryObservation],
@@ -93,7 +93,7 @@ void test('exact signature preimages bind purpose, original identities and recei
     }),
   )
 })
-void test('scope/time/version/key bounds cannot be widened or truncated', () => {
+test('scope/time/version/key bounds cannot be widened or truncated', () => {
   const b = fixture.values.binding,
     o = fixture.values.observation,
     r = fixture.values.receipt
@@ -119,7 +119,7 @@ void test('scope/time/version/key bounds cannot be widened or truncated', () => 
     c.parseRuntimeEntryAttribution({ ...fixture.values.attribution, sourceEventId: 'forged' }),
   )
 })
-void test('manifest has complete field grammar, unique sources/decisions and no dangling or accessor edges', () => {
+test('manifest has complete field grammar, unique sources/decisions and no dangling or accessor edges', () => {
   const m = fixture.values.manifest
   for (const value of [
     { ...m, sources: [...m.sources, ...m.sources] },
@@ -139,7 +139,7 @@ void test('manifest has complete field grammar, unique sources/decisions and no 
   Object.defineProperty(sources, 'hidden', { value: true })
   assert.throws(() => c.parseRuntimeEntryManifest({ ...m, sources }))
 })
-void test('effect and independent readback digests are noncircular and bind actual receipt/manifest coordinates', () => {
+test('effect and independent readback digests are noncircular and bind actual receipt/manifest coordinates', () => {
   const r = fixture.values.receipt,
     m = fixture.values.manifest
   assert.equal(c.runtimeEntryEffectDigest(r), r.entryEffectDigest)
@@ -158,7 +158,7 @@ void test('effect and independent readback digests are noncircular and bind actu
   )
 })
 
-void test('signed actual source mapping is distinct from private receipt sequence/epoch and cannot be transplanted', () => {
+test('signed actual source mapping is distinct from private receipt sequence/epoch and cannot be transplanted', () => {
   const o = fixture.values.observation,
     m = o.sourceEventMapping
   assert(m !== null)
@@ -208,7 +208,7 @@ void test('signed actual source mapping is distinct from private receipt sequenc
   )
 })
 
-void test('UTF8 validation rejects lone surrogates without depending on ESNext String APIs', () => {
+test('UTF8 validation rejects lone surrogates without depending on ESNext String APIs', () => {
   assert.throws(() =>
     c.parseRuntimeEntryObservation({ ...fixture.values.observation, issuer: 'bad\uD800' }),
   )

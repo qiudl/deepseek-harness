@@ -486,7 +486,23 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
   await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
     .resolves.toEqual(analysisCommand)
-  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, collaborationSignal)
+  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, expect.any(AbortSignal))
+  const cancelAnalysis = new AbortController(), analysisEntered = Promise.withResolvers<AbortSignal>()
+  const releaseAnalysis = Promise.withResolvers<undefined>()
+  collaborationAnalysis.mockImplementationOnce(async (command, owned) => {
+    analysisEntered.resolve(owned)
+    await releaseAnalysis.promise
+    return command
+  })
+  const pendingAnalysis = serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, cancelAnalysis.signal)
+  const cancellation = new Error('original connection cancelled'), rejectedAnalysis = expect(pendingAnalysis).rejects.toBe(cancellation)
+  const ownedAnalysisSignal = await analysisEntered.promise
+  expect(ownedAnalysisSignal).not.toBe(cancelAnalysis.signal)
+  expect(ownedAnalysisSignal.aborted).toBe(false)
+  cancelAnalysis.abort(cancellation)
+  expect(ownedAnalysisSignal.aborted).toBe(true)
+  releaseAnalysis.resolve(undefined)
+  await rejectedAnalysis
   const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
   if (!deliveryReceiver) throw new Error('missing original delivery receiver')
   expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()

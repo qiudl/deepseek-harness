@@ -3,7 +3,6 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
-import type { BrowserAuth } from '@deepseek-ai/dsh-client-connection/src/browser-auth.ts'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
 import { LlmAttemptId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
@@ -12,6 +11,7 @@ import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import SessionController from '../src/index.ts'
+import { SessionAssistantStreamAccumulator } from '../src/assistant-stream.ts'
 import type { ApiSessionAgentController } from '../src/agent.ts'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
 
@@ -65,6 +65,55 @@ describe('SessionController facade', () => {
     await frames.return?.(undefined)
   })
 
+  it.each(['dispose', 'registration-failure'] as const)(
+    'releases assistant listeners after controller %s', async (outcome) => {
+      const ctx = new Context()
+      onTestFinished(() => ctx.fiber.dispose())
+      await mountAgentLoopTestDependencies(ctx)
+      await mountAgentLoopTestHarness(ctx)
+      const gateway: Partial<TypertGatewayService> = { getPendingRemoteEvents: () => [] }
+      ctx.provide('typertGateway', gateway as TypertGatewayService)
+      const session = ctx.sessions.create(SessionId(`assistant-owner-${outcome}`), { meta: { cwd: '/workspace' } })
+      const partial: Partial<Agent> = { id: session.id, session, status: 'running', ctx }
+      const agent = partial as Agent
+      const accepted = vi.spyOn(SessionAssistantStreamAccumulator.prototype, 'accept')
+      onTestFinished(() => { accepted.mockRestore() })
+      const entered = Promise.withResolvers<undefined>()
+      const gate = Promise.withResolvers<undefined>()
+      const original = ctx.sessionProjections.register.bind(ctx.sessionProjections)
+      const registration = vi.spyOn(ctx.sessionProjections, 'register').mockImplementationOnce(async (...args) => {
+        entered.resolve(undefined)
+        await gate.promise
+        return original(...args)
+      })
+      onTestFinished(() => { registration.mockRestore() })
+      const owner = ctx.plugin(Object.assign(async (ownerCtx: Context) => {
+        await createSessionTestController(ownerCtx, defaults)
+      }, { inject: SessionController.inject.filter(name => ctx.get(name) !== undefined) }))
+      onTestFinished(() => owner.dispose())
+      const ready = owner.await()
+      await entered.promise
+      const emit = () => { ctx.emit('agent/assistant-stream', {
+        agent,
+        frame: { type: 'start', attemptId: LlmAttemptId('owned-boot-attempt'), revision: 1, turn: 1, step: 1 },
+      }) }
+      emit()
+      expect(accepted).toHaveBeenCalledOnce()
+      if (outcome === 'registration-failure') {
+        const rejected = expect(ready).rejects.toThrow('projection registration failed')
+        gate.reject(new Error('projection registration failed'))
+        await rejected
+      } else {
+        gate.resolve(undefined)
+        await ready
+        await owner.dispose()
+      }
+      accepted.mockClear()
+      emit()
+      expect(accepted).not.toHaveBeenCalled()
+    },
+  )
+
   it('serves passive reads, subscriptions and waits through its plain controllers', async () => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())
@@ -99,7 +148,7 @@ describe('SessionController facade', () => {
     onTestFinished(() => ctx.fiber.dispose())
     await mountAgentLoopTestDependencies(ctx)
     await mountAgentLoopTestHarness(ctx)
-    new HostConnectionService(ctx, [], {} as BrowserAuth)
+    new HostConnectionService(ctx, [], {} as ConstructorParameters<typeof HostConnectionService>[2])
     const sessionId = SessionId('controller-session')
     const header: SessionHeader = {
       version: SESSION_FORMAT_VERSION,

@@ -445,7 +445,6 @@ export class SessionController extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
-    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     ctx.typert.resources.register('session', { resolve: resolveSessionResource })
     this.agents = new ApiSessionAgentController(ctx)
     this.agents.initialize()
@@ -492,6 +491,7 @@ export class SessionController extends TypertRemoteService {
     this.historyController = new HistoryController(ctx)
     this.stateController = new StateController(ctx, this.historyController)
     this.webController = new WebController(ctx, this.historyController, (observation) => { this.promote(observation) })
+    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     this.listState = new ApiSessionList(ctx, this.listWorkSliceMs)
     await this.listState.initialize()
     ctx.plugin(SessionFileReferences)
