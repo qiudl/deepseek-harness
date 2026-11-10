@@ -1,5 +1,6 @@
 /** Existing Bot identity and its current own-chat Session, without initialization. */
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
 /** Bot identity scoped to the lease-selected Profile. */
 export type HostBotChatId = Branded<'HostBotChatId'>
@@ -20,10 +21,6 @@ export interface HostBotChat {
 }
 const botIdValid = (value: unknown): value is string => typeof value === 'string'
   && value.length > 0 && value.length <= 200 && !/[^A-Za-z0-9_-]/u.test(value)
-const record = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-const exact = (value: Record<string, unknown>, keys: string[]) =>
-  Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 
 /**
  * Refuse caller-selected Sessions, authority and extra arguments.

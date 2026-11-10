@@ -1,5 +1,6 @@
 /** Bounded owner room summaries supplied by the installed Bot plugin. */
 import type { Branded } from '@deepseek-ai/dsh-brand'
+import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
 /** Existing group Session identity in the lease-selected Profile. */
 export type HostBotRoomId = Branded<'HostBotRoomId'>
@@ -17,10 +18,6 @@ export interface HostBotRoomList {
   }[]
   readonly nextCursor: HostBotRoomId | null
 }
-const record = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value)
-const exact = (value: Record<string, unknown>, keys: string[]) =>
-  Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 const roomIdValid = (value: unknown): value is string => typeof value === 'string' &&
   value.length >= 1 && value.length <= 256 && value !== '.' && value !== '..' &&
   !/[^!-~]|[/\\]/u.test(value)
