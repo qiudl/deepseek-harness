@@ -1,4 +1,6 @@
+import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand, parseRuntimeEntryOriginResult } from './runtime-entry-carrier.ts'
 import { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'
+import { parseHostTaskCoordinationInput, parseHostTaskCoordinationReply } from './task-coordination.ts'
 import { parseHostProjectMemoryRequest } from './project-operation-memory-command.ts'
 import { parseHostProjectMemoryResponse } from './project-operation-read-result.ts'
 import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
@@ -1705,6 +1707,15 @@ export function matchHostSourceAnalysisOutput(value: unknown, target: HostCollab
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
+  if (Object.hasOwn(row, 'purpose')) {
+    const parsed = parseRuntimeEntryAnalysisCommand(row)
+    if (Buffer.byteLength(JSON.stringify(parsed), 'utf8') > 48 * 1024) reject()
+    return parsed
+  }
+  if (row.action === 'task_coordination') {
+    exactKeys(row, ['action', 'request'])
+    return { action: row.action, request: parseHostTaskCoordinationInput(row.request) }
+  }
   if (row.action === 'project_operation_memory') {
     exactKeys(row, ['action', 'request'])
     const request = parseHostProjectMemoryJson(row.request)
@@ -1715,8 +1726,13 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
   if ((row.action === 'root_execution_journal' || row.action === 'root_feedback' || row.action === 'root_operation_origin')) {
     exactKeys(row, ['action', 'operation'])
     const operation = remoteSessionJson(row.operation)
-    if (row.action === 'root_operation_origin') parseHostOperationOriginCommand(operation)
+    if (row.action === 'root_operation_origin') {
+      if (operation && typeof operation === 'object' && Object.hasOwn(operation, 'purpose')) parseRuntimeEntryOriginCommand(operation)
+      else parseHostOperationOriginCommand(operation)
+    }
     if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > (row.action === 'root_operation_origin' ? 48 * 1024 : 8192)) reject()
+    if (row.action === 'root_execution_journal') return { action: row.action, operation }
+    if (row.action === 'root_feedback') return { action: row.action, operation }
     return { action: row.action, operation }
   }
   if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
@@ -1759,6 +1775,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
  */
 export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
   const row = registrationRecord(value)
+  if (row.kind === 'task_coordination') {
+    exactKeys(row, ['kind', 'record'])
+    return { kind: row.kind, record: parseHostTaskCoordinationReply(row.record) }
+  }
   if (row.kind === 'root_capture_released') {
     exactKeys(row, ['kind', 'root'])
     return { kind: row.kind, root: parseHostRootSubmissionDescriptor(row.root) }
@@ -1797,7 +1817,10 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback' || row.kind === 'root_operation_origin')) {
     exactKeys(row, ['kind', 'record'])
     const record = remoteSessionJson(row.record)
-    if (row.kind === 'root_operation_origin') parseHostOperationOriginResult(record)
+    if (row.kind === 'root_operation_origin') {
+      if (record && typeof record === 'object' && Object.hasOwn(record, 'purpose')) parseRuntimeEntryOriginResult(record)
+      else parseHostOperationOriginResult(record)
+    }
     if (Buffer.byteLength(JSON.stringify(record), 'utf8') > (row.kind === 'root_operation_origin' ? 40 * 1024 : 8192)) reject()
     return { kind: row.kind, record }
   }

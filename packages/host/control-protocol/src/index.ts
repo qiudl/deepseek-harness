@@ -360,3 +360,24 @@ export { HOST_PROJECT_MEMORY_AUDIENCE, parseHostProjectMemoryEnvironment, parseH
 export type { HostProjectMemoryEnvironment } from './project-operation-memory-environment.ts'
 
 export { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'
+
+// REQ-20261031-0006 / Task26690: independent task-control wire contracts.
+export { HOST_TASK_COORDINATION_AUDIENCE, parseHostTaskCoordinationScope, hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest, hostTaskCoordinationCommandDigest, parseHostTaskCoordinationDirective, encodeHostTaskCoordinationDirective, hostTaskCoordinationDirectiveDigest, parseHostTaskCoordinationInput, parseHostTaskCoordinationFenceAck, encodeHostTaskCoordinationFenceAck, parseHostTaskCoordinationObservation, encodeHostTaskCoordinationObservation, parseHostTaskCoordinationReply, hostTaskCoordinationInventoryDigest } from './task-coordination.ts'
+export type { HostTaskCoordinationId, HostTaskCoordinationVersion, HostTaskCoordinationPeer, HostTaskCoordinationScope, HostTaskCoordinationCommands, HostTaskCoordinationDirective, HostTaskCoordinationInput, HostTaskCoordinationFenceAck, HostTaskCoordinationInventoryItem, HostTaskCoordinationObservation, HostTaskCoordinationReply } from './task-coordination.ts'
+export { parseHostTaskCoordinationEnvironment, parseHostTaskCoordinationEnvironments } from './task-coordination-environment.ts'
+export type { HostTaskCoordinationEnvironment } from './task-coordination-environment.ts'
+
+// REQ-20261031-0006 / Task26692: private original runtime-entry byte contracts.
+export { RUNTIME_ENTRY_CONTRACT, RUNTIME_ENTRY_SOURCE_KINDS, RUNTIME_ENTRY_DECISIONS, RUNTIME_ENTRY_FIELDS, parseRuntimeEntryBinding, parseRuntimeEntryReceipt, parseRuntimeEntryManifest, parseRuntimeEntrySourceEventMapping, parseRuntimeEntryObservation, parseRuntimeEntryAttribution, encodeRuntimeEntryBinding, encodeRuntimeEntryReceipt, encodeRuntimeEntryManifest, encodeRuntimeEntrySourceEventMapping, encodeRuntimeEntryObservation, encodeRuntimeEntryAttribution, runtimeEntryBindingDigest, runtimeEntryReceiptDigest, runtimeEntryManifestDigest, runtimeEntrySourceEventMappingDigest, runtimeEntryObservationDigest, runtimeEntryAttributionDigest, runtimeEntryEffectDigest, runtimeEntryReadbackDigest } from './project-operation-runtime-entry.ts'
+export type { RuntimeEntryWireId, RuntimeEntryWireSequence, RuntimeEntryBinding, RuntimeEntryReceipt, RuntimeEntryManifest, RuntimeEntrySourceEventMapping, RuntimeEntryObservation, RuntimeEntryAttribution } from './project-operation-runtime-entry.ts'
+
+export { RUNTIME_ENTRY_METADATA_AUTHORIZATION_PURPOSE, parseRuntimeEntryConsumerGrantMetadata,
+  parseRuntimeEntryMetadataAuthorization, encodeRuntimeEntryMetadataAuthorization, parseRuntimeEntryConsumerGrant,
+} from './runtime-entry-metadata-authorization.ts'
+export type { RuntimeEntryConsumerGrantMetadata, RuntimeEntryMetadataAuthorization, RuntimeEntryConsumerGrant,
+} from './runtime-entry-metadata-authorization.ts'
+export { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand, parseRuntimeEntryOriginResult } from './runtime-entry-carrier.ts'
+export type { RuntimeEntryAnalysisCommand, RuntimeEntryOriginCommand, RuntimeEntryOriginResult } from './runtime-entry-carrier.ts'
+
+export { parseHostRuntimeEntryOriginsConfiguration, parseHostRuntimeEntryOriginsJson } from './runtime-entry-bootstrap.ts'
+export type { HostRuntimeEntryOriginsConfiguration } from './runtime-entry-bootstrap.ts'

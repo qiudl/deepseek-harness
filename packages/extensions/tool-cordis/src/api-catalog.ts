@@ -143,6 +143,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'async readOriginalInvocationEntrySession(agent: Agent): Promise<OriginalInvocationEntrySessionWitness | undefined>',
+        description: 'Read only the actual startup handle after its own durability barrier; resume and unknown backends are unsupported.',
+        parameters: [{ name: 'agent', description: 'Exact actual Agent published by this factory, not a reconstructed ID or caller object.' }],
+        returns: 'Header-only original birth/ownership metadata with a current synchronous lease fence.',
+      },
+      {
         signature: 'async create(id: SessionId, options: AgentOptions = {}, meta: Pick<SessionHeader, \'cwd\'> = {}): Promise<Agent>',
         description: 'Create an agent and session under one caller-supplied identity, owned by the accessing fiber. Constructor-driven config calls mint a fresh combined id before entering this boundary. When a persistence backend is mounted, the session\'s durable identity and any seed are stored before publication.',
         parameters: [{ name: 'id', description: 'shared agent/session identity.' }, { name: 'options', description: 'concrete loop options.' }, { name: 'meta', description: 'optional fresh-session workspace metadata.' }],
@@ -677,6 +683,32 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Fires after any flush that recomposed the graph (row added/removed, or a rebuilt rev change). Pull model: listeners re-read graph.',
         parameters: [{ name: 'listener', description: 'notified with no payload.' }],
         returns: 'the unsubscriber.',
+      },
+    ],
+  },
+  {
+    key: 'collaborationTaskExecutions',
+    summary: 'Optional observation service provided only by the actual SessionController consumer lifecycle.',
+    description: 'Optional observation service provided only by the actual SessionController consumer lifecycle.',
+    methods: [
+      {
+        signature: 'read(sessionId: SessionId, turn: number): CollaborationTaskExecution | null',
+        description: 'Read original execution facts; a retained object grants no right after its signal is cancelled or its provider changes.',
+        parameters: [{ name: 'sessionId', description: 'Actual Agent Session.' }, { name: 'turn', description: 'Actual batch consuming turn.' }],
+        returns: 'The original live request fact, or null outside that consuming turn.',
+      },
+    ],
+  },
+  {
+    key: 'collaborationTaskFloors',
+    summary: 'Readonly denial lookup; null never supplies execution permission.',
+    description: 'Readonly denial lookup; null never supplies execution permission.',
+    methods: [
+      {
+        signature: 'read(canonicalDigest: string, account: CollaborationTaskCurrentAccount): \'closed\' | \'unknown\' | null',
+        description: 'Verify original signed-floor candidates selected from an actual original local Root.',
+        parameters: [{ name: 'canonicalDigest', description: 'Independently recomputed exact local Root coordinates.' }, { name: 'account', description: 'Actual current parent identity; no owner or original epoch is guessed from it.' }],
+        returns: 'Closed/unknown denial, or null when this original Root has no matching floor.',
       },
     ],
   },
@@ -2426,6 +2458,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'token', description: 'Opaque object supplied by the private authenticated Host call.' }],
         returns: 'Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.',
       },
+      {
+        signature: 'readRuntimeEntryEffect?( token: ProjectOperationMemoryAuthorizationToken, reference: Readonly<{ entryId: ProjectOperationMemoryId entryReceiptDigest: ProjectOperationMemoryDigest manifestDigest: ProjectOperationMemoryDigest }>, ): Promise<ProjectOperationMemoryRuntimeEntryEffect | null>',
+        description: 'Resolve only original effect metadata while this source-read token and its fixed facility remain current.',
+        parameters: [{ name: 'token', description: 'Current source-read token, never an anchor or retained-recipient token.' }, { name: 'reference', description: 'Original entry identity and digest pins; no caller sequence or path is accepted.' }],
+        returns: 'Exact original effect coordinates, or null without the actual facility/entry.',
+      },
     ],
   },
   {
@@ -2438,6 +2476,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Read original references during publication.',
         parameters: [{ name: 'token', description: 'Token supplied by the current origin event.' }],
         returns: 'Immutable references, or null after publication or for another provider\'s token.',
+      },
+      {
+        signature: 'readRuntimeEntry?(token: ProjectOperationOriginToken): ProjectOperationRuntimeEntryCandidate | null',
+        description: 'Read one actual durable entry before feedback body materialization; absence means this provider cannot publish native entries.',
+        parameters: [{ name: 'token', description: 'Original process-local token from the awaited runtime-entry event.' }],
+        returns: 'The same deeply immutable original candidate while its provider and request remain current, otherwise null.',
+      },
+      {
+        signature: 'bindRuntimeEntry?(token: ProjectOperationOriginToken, reference: Readonly<{ sourceEventId: Branded<\'ProjectOperationSourceEventId\'> sourceRevision: string }>): Promise<ProjectOperationRuntimeEntryPublication | null>',
+        description: 'Verify the actual consumer-allocated mapping independently and publish through the original Cloud attribution chain.',
+        parameters: [{ name: 'token', description: 'The same live runtime-entry token; retained or queued tokens supply no authority.' }, { name: 'reference', description: 'Only the original allocated event identity and revision; no body, sequence, owner or caller path is accepted.' }],
+        returns: 'Verified historical metadata after current-authority checks, or null without a publication grant.',
       },
     ],
   },
@@ -2518,6 +2568,43 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Stream the calling Peer\'s access snapshot: one baseline, then `upsert` and `remove` frames after each `invalidate()` and each policy registration or removal that changes a grant. The owner receives only `{ owner: true }`. The generation ends when `signal` aborts or this service unloads, so a reloaded service starts every reader from a fresh baseline.',
         parameters: [{ name: 'signal', description: 'generation cancellation.' }],
         returns: 'the access frames of one generation.',
+      },
+    ],
+  },
+  {
+    key: 'runtimeEntryConsumerHost',
+    summary: 'Implemented only by the actual authenticated worker bootstrap and retained across each original consumer request.',
+    description: 'Implemented only by the actual authenticated worker bootstrap and retained across each original consumer request.',
+    methods: [
+      {
+        signature: 'supports(agent: Agent): boolean',
+        description: 'Check the original loaded Agent against this boot\'s actual pinned providers.',
+        parameters: [{ name: 'agent', description: 'Actual registered loaded Agent.' }],
+        returns: 'Whether the bootstrap\'s pinned implementation and selected tools remain installed.',
+      },
+      {
+        signature: 'canPrepare(commandId?: string): boolean',
+        description: 'Check the original command\'s bounded metadata and pair admission before Source dispatch.',
+        parameters: [{ name: 'commandId', description: 'Existing prepared local command, if any.' }],
+        returns: 'Whether bounded proof/pair admission is available before the first Source grant.',
+      },
+      {
+        signature: 'readLoadedSession(agent: Agent): Promise<RuntimeEntryLoadedSession | undefined>',
+        description: 'Read only the actual loaded Session\'s durable exclusive prefix.',
+        parameters: [{ name: 'agent', description: 'Same already-loaded runtime.' }],
+        returns: 'Actual exclusive writer cut, or unsupported without restoring history.',
+      },
+      {
+        signature: 'readOriginal(commandId: string, signal: AbortSignal): Promise<RuntimeEntryConsumerOriginal>',
+        description: 'Read only the original signed-proof context already verified by Main for this private request.',
+        parameters: [{ name: 'commandId', description: 'Existing durable consumer command.' }, { name: 'signal', description: 'The original owned request cancellation.' }],
+        returns: 'Original metadata and raw grant from that same response, without a new Source request.',
+      },
+      {
+        signature: 'prepareEntry(agent: Agent, commandId: string, signal: AbortSignal): Promise<RuntimeEntryPreparation>',
+        description: 'Prepare the original invocation through the private captured proof and driver.',
+        parameters: [{ name: 'agent', description: 'Actual retained Agent.' }, { name: 'commandId', description: 'Existing original consumer command.' }, { name: 'signal', description: 'Current owned lifecycle; no caller metadata enters the factory.' }],
+        returns: 'Actual opaque driver preparation using only its private captured original-proof context.',
       },
     ],
   },
@@ -2643,14 +2730,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         throws: ['when the workspace is absent, ownership changes, or the caller cancels.'],
       },
       {
-        signature: 'async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>',
+        signature: 'async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId sessionId: SessionId prepared: PreparedLlmSnapshotCall }>>',
         description: 'Prepare the source Session\'s next model under this Profile\'s registry. Recheck workspace/session ownership and selection after credential preparation. The returned call is process-local and one-shot; this does not issue Source authority, resume an Agent, append events, or send a model request. No Remote method is exposed.',
         parameters: [{ name: 'sessionId', description: 'ordinary Session registered under this workspace.' }, { name: 'workspaceId', description: 'WorkspaceRegistry UUID.' }, { name: 'signal', description: 'owning Host operation\'s cancellation, retained through dispatch.' }],
         returns: 'workspace/session identities and the captured executable model call with an 8192-token output cap.',
         throws: ['on ownership/selection change, unsupported capture, preparation failure or cancellation.'],
       },
       {
-        signature: 'async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: \'captured\' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: \'recovered\'; snapshot: CollaborationSourceSnapshot }> >',
+        signature: 'async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: \'captured\' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: \'recovered\' snapshot: CollaborationSourceSnapshot }> >',
         description: 'Capture user content under this Profile\'s registry and actual prepared model. Persist before returning the process-local call. Duplicate/restarted input returns only its original snapshot, never a new executable handle or a model request. First capture exposes Host-only analyze and analyzeClarification sharing one one-shot call. The caller durably commits the full manifest before dispatch; clarification rereads all original/reply Sources. The Profile bounds calls and rechecks original membership before and after that commit. This Host-only queued operation has no Remote endpoint and grants no cloud authority.',
         parameters: [{ name: 'input', description: 'exact Source coordinates, raw text and trusted classified mentions; no model or commit fields.' }, { name: 'signal', description: 'caller cancellation, combined with the owning Profile lifetime through dispatch.' }],
         returns: 'first durable capture with its one-shot call, or original non-executable recovery.',
@@ -2705,9 +2792,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'Persisted enqueue/consumption evidence. Removed or claimed messages are never automatically reinserted.',
       },
       {
-        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >',
+        signature: 'async collaborationRootConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >',
         description: 'Execute a private durable consumer command under authenticated Main\'s current authority.',
-        parameters: [{ name: 'value', description: 'Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }],
+        parameters: [{ name: 'value', description: 'Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.' }, { name: 'signal', description: 'Current parent and Profile lifetime; recovery never restores live wake permission.' }, { name: 'account', description: 'Current parent-owned Account identity used only by denial floors.' }],
         returns: 'Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.',
       },
       {
@@ -2715,6 +2802,52 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Capture the exact original consumed-step prefix through the Profile\'s real persistence barrier.',
         parameters: [{ name: 'value', description: 'Original root, frozen execution and delivery; no caller event metadata.' }, { name: 'signal', description: 'Authenticated parent request lifetime.' }],
         returns: 'Original durable Root/consumption and raw prefix for the private observer only.',
+      },
+      {
+        signature: 'async openCollaborationTaskCoordinationJournal(): Promise<CollaborationTaskCoordinationJournal>',
+        description: 'Read the independent coordination metadata writer; this does not authorize an association or execution.',
+        parameters: [],
+        returns: 'The Profile-owned journal, closed only after live original consumers drain.',
+      },
+      {
+        signature: 'stopCollaborationTaskExecution(commandId: string): void',
+        description: 'Cancel only the live original consumer of an already-associated local command.',
+        parameters: [{ name: 'commandId', description: 'Original command selected by the authenticated stop control.' }],
+      },
+      {
+        signature: 'stopCollaborationTaskRoot(canonicalDigest: string, account: CollaborationTaskCurrentAccount): void',
+        description: 'Stop actual legacy consumers of the exact persisted Root under the same current parent identity.',
+        parameters: [{ name: 'canonicalDigest', description: 'Recomputed original local Root coordinates, never a new Root.' }, { name: 'account', description: 'Original Account/environment/Profile facts verified by the authenticated stop handler.' }],
+      },
+      {
+        signature: 'async inspectCollaborationTaskExecution(commandId: string, signal: AbortSignal): Promise<{ execution: Extract<CollaborationExecutionRecord, { state: \'admitted\' }> root: Extract<CollaborationRootSubmission, { state: \'admitted\' }> }>',
+        description: 'Inspect actual original command, Root and source membership for private task coordination.',
+        parameters: [{ name: 'commandId', description: 'Existing concrete local execution command, never a new Root selector.' }, { name: 'signal', description: 'Current authenticated parent request cancellation.' }],
+        returns: 'Original admitted command and Root; no Cloud birth snapshot is inferred from them.',
+      },
+      {
+        signature: 'async inspectCollaborationTaskRoot(canonical: Pick<CollaborationRootSubmission, \'namespace_id\' | \'root_task_id\' | \'root_trace_id\'>, signal: AbortSignal): Promise<{ root: Extract<CollaborationRootSubmission, { state: \'admitted\' }> executions: readonly CollaborationExecutionRecord[] consumers: readonly CollaborationConsumptionRecord[] }>',
+        description: 'Read only the real local Root and its original concrete commands for a signed stop control.',
+        parameters: [{ name: 'canonical', description: 'Exact original Root coordinates verified by the private worker handler.' }, { name: 'signal', description: 'Original current Account control request cancellation.' }],
+        returns: 'Real admitted Root, original execution commands and exact durable consumer records; unknown roots reject.',
+      },
+      {
+        signature: 'async collaborationRuntimeEntryExecution(value: unknown, signal: AbortSignal): Promise<{ supported: boolean record: CollaborationExecutionRecord | null }>',
+        description: 'Read an actual execution and its first-durable terminal header without opening Root, Source, reply or Session history.',
+        parameters: [{ name: 'value', description: 'Exact native-purpose read with the original delivery selector.' }, { name: 'signal', description: 'Current authenticated Account request.' }],
+        returns: 'Original body-free metadata, or explicit local unsupported before any Source grant.',
+      },
+      {
+        signature: 'async inspectRuntimeEntryConsumer(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionRecord | null>',
+        description: 'Read the original native candidate\'s consumer identity without restoring an Agent or reading feedback bodies.',
+        parameters: [{ name: 'value', description: 'Exact original Root, task selection and terminal delivery.' }, { name: 'signal', description: 'Current authenticated Account/Profile request.' }],
+        returns: 'Existing original consumer record; absence supplies no execution or publication authority.',
+      },
+      {
+        signature: 'async collaborationRuntimeEntryConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise< CollaborationConsumptionResult >',
+        description: 'Consume through the actual original-entry driver, with no body/history reads before its durable entry.',
+        parameters: [{ name: 'value', description: 'Closed native read/prepare/start operation under authenticated Main.' }, { name: 'signal', description: 'Original current Account and worker request cancellation.' }, { name: 'account', description: 'Actual Parent identity for denial-only canonical floors.' }],
+        returns: 'Existing consumption vocabulary; loss after Source dispatch never falls back or wakes again.',
       },
       {
         signature: 'async inspectCollaborationSource(target: CollaborationSourceCoordinates, signal: AbortSignal): Promise< CollaborationSourceCoordinates & { readonly snapshot_digest: string } >',
@@ -2813,7 +2946,7 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'true when the matching open operation is available.',
       },
       {
-        signature: 'workspaceDesktop(): { name: string; available: boolean; fileManager: \'finder\' | \'explorer\' | \'directory\' | null }',
+        signature: 'workspaceDesktop(): { name: string available: boolean fileManager: \'finder\' | \'explorer\' | \'directory\' | null }',
         description: 'Describe the serving desktop for authenticated file-action routes.',
         parameters: [],
         returns: 'Host name, configured availability, and platform-specific file-manager behavior.',
@@ -4212,6 +4345,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the effect disposer. Unloading leaves the selection unavailable until it is replaced.',
       },
       {
+        signature: 'inspectExecutor(scope?: ScopeKey): Readonly<ToolExecutor>',
+        description: 'Read the actual current provider identity without registering or invoking it.',
+        parameters: [{ name: 'scope', description: 'Agent or preset scope; omission reads the deployment selection.' }],
+        returns: 'The selected instance as a readonly interface; missing or unloaded selections throw without fallback.',
+      },
+      {
         signature: 'async execute(input: ToolBatchInput): Promise<ToolBatchResult>',
         description: 'Delegate a raw call batch to its Agent\'s provider or the deployment default. Select at dispatch; accepted batches settle through that provider even if it unloads.',
         parameters: [{ name: 'input', description: 'original calls, optional owning Agent, and optional logging step.' }],
@@ -5323,6 +5462,14 @@ export const EVENT_API: readonly EventApiEntry[] = [
     parameters: [{ name: 'token', description: 'Opaque token readable only from this publication\'s provider.' }, { name: 'signal', description: 'Original authenticated request and Profile lifetime.' }],
   },
   {
+    name: 'project-operation/runtime-entry',
+    mode: 'serial',
+    signature: '\'project-operation/runtime-entry\'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>',
+    summary: 'Append an original durable entry candidate and verify its independently read mapping before feedback body materialization.',
+    description: 'Append an original durable entry candidate and verify its independently read mapping before feedback body materialization.',
+    parameters: [{ name: 'token', description: 'Opaque token whose lifetime ends when this awaited event finishes; no public factory exists.' }, { name: 'signal', description: 'Original execution and Profile lifetime; publication must remain current across every await.' }],
+  },
+  {
     name: 'schedule/changed',
     mode: 'emit',
     signature: '\'schedule/changed\'(): void',
@@ -5441,6 +5588,38 @@ export const EVENT_API: readonly EventApiEntry[] = [
     summary: 'Emitted when any prompt provider changes.',
     description: 'Emitted when any prompt provider changes. This registry notification is unfiltered because a global change affects every scope.',
     parameters: [],
+  },
+  {
+    name: 'task-coordination/consumer-finished',
+    mode: 'serial',
+    signature: '\'task-coordination/consumer-finished\'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): void | Promise<void>',
+    summary: 'Release denial-only bindings after the original Agent and cancellation drain have completed.',
+    description: 'Release denial-only bindings after the original Agent and cancellation drain have completed.',
+    parameters: [{ name: 'payload', description: 'The same original execution identity and owned signal; creates no permission.' }],
+  },
+  {
+    name: 'task-coordination/consumer-prepare',
+    mode: 'serial',
+    signature: '\'task-coordination/consumer-prepare\'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): true | undefined | Promise<true | undefined>',
+    summary: 'Check the actual executor before consuming the original durable grant.',
+    description: 'Check the actual executor before consuming the original durable grant.',
+    parameters: [{ name: 'payload', description: 'Original local command, actual idle Agent and request cancellation.' }],
+  },
+  {
+    name: 'task-coordination/consumer-settling',
+    mode: 'serial',
+    signature: '\'task-coordination/consumer-settling\'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): void | Promise<void>',
+    summary: 'Verify the original observer after the actual persistence barrier and before marking settlement.',
+    description: 'Verify the original observer after the actual persistence barrier and before marking settlement.',
+    parameters: [{ name: 'payload', description: 'Original execution identity and captured request cancellation.' }],
+  },
+  {
+    name: 'task-coordination/consumer-start',
+    mode: 'serial',
+    signature: '\'task-coordination/consumer-start\'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): true | undefined | Promise<true | undefined>',
+    summary: 'Prepare restrictions for the original admitted consumer before it is sent to its actual idle Agent.',
+    description: 'Prepare restrictions for the original admitted consumer before it is sent to its actual idle Agent.',
+    parameters: [{ name: 'payload', description: 'Existing local command, actual Agent and original request cancellation; emits no new grant.' }],
   },
   {
     name: 'tools/change',
@@ -6039,6 +6218,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type CollaborationDeliveryRecord = DeepReadonly<z.infer<typeof rawRecordSchema>>;',
   },
   {
+    name: 'CollaborationExecutionCommandId',
+    declaration: 'export type CollaborationExecutionCommandId = Branded<\'CollaborationExecutionCommandId\'>;',
+  },
+  {
     name: 'CollaborationExecutionRecord',
     declaration: 'export type CollaborationExecutionRecord = Readonly<z.infer<typeof recordSchema>>;',
   },
@@ -6101,6 +6284,38 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'CollaborationSourceSnapshot',
     declaration: 'export type CollaborationSourceSnapshot = DeepReadonly<z.infer<typeof rawSnapshotSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskArtifact',
+    declaration: 'export type CollaborationTaskArtifact = Readonly<z.infer<typeof artifactSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskAssociation',
+    declaration: 'export type CollaborationTaskAssociation = Readonly<z.infer<typeof associationSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskClosedFloor',
+    declaration: 'export type CollaborationTaskClosedFloor = Readonly<z.infer<typeof floorSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskControllerJob',
+    declaration: 'export type CollaborationTaskControllerJob = Readonly<z.infer<typeof jobSchema>>;',
+  },
+  {
+    name: 'CollaborationTaskCoordinationJournal',
+    declaration: 'export interface CollaborationTaskCoordinationJournal {\n    associate(value: CollaborationTaskAssociation, signal: AbortSignal): Promise<CollaborationTaskAssociation>;\n    association(commandId: string): CollaborationTaskAssociation | undefined;\n    associations(floorDigest: string): readonly CollaborationTaskAssociation[];\n    floor(floorDigest: string): CollaborationTaskClosedFloor | undefined;\n    blocked(floorDigest: string): boolean;\n    canonicalBlocked(canonicalDigest: string): boolean;\n    canonicalCandidates(canonicalDigest: string, account: CollaborationTaskCurrentAccount): readonly CollaborationTaskClosedFloor[];\n    latchFloor(value: CollaborationTaskClosedFloor): void;\n    request(requestId: string): CollaborationTaskClosedFloor | undefined;\n    pendingRequest(requestId: string): CollaborationTaskClosedFloor | undefined;\n    closeFloor(value: CollaborationTaskClosedFloor, signal: AbortSignal): Promise<CollaborationTaskClosedFloor>;\n    recordCall(value: CollaborationTaskNativeCall): Promise<void>;\n    calls(commandId: string | readonly string[]): readonly CollaborationTaskNativeCall[];\n    recordJob(value: CollaborationTaskControllerJob): Promise<void>;\n    jobs(commandId: string | readonly string[]): readonly CollaborationTaskControllerJob[];\n    artifact(key: string): CollaborationTaskArtifact | undefined;\n    retainArtifact(value: CollaborationTaskArtifact, now: number): Promise<CollaborationTaskArtifact>;\n    close(): Promise<void>;\n}',
+  },
+  {
+    name: 'CollaborationTaskCurrentAccount',
+    declaration: 'export interface CollaborationTaskCurrentAccount {\n    readonly authorityEnvironmentId: string;\n    readonly accountIssuer: string;\n    readonly accountSubject: string;\n    readonly hostProfileId: string;\n}',
+  },
+  {
+    name: 'CollaborationTaskExecution',
+    declaration: 'export interface CollaborationTaskExecution {\n    readonly commandId: CollaborationExecutionCommandId;\n    readonly sessionId: SessionId;\n    readonly turn: number;\n    readonly signal: AbortSignal;\n}',
+  },
+  {
+    name: 'CollaborationTaskNativeCall',
+    declaration: 'export type CollaborationTaskNativeCall = Readonly<z.infer<typeof callSchema>>;',
   },
   {
     name: 'CollectedOutput',
@@ -7647,6 +7862,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface OriginalCollaborationOperationPair {\n    readonly callId: string;\n    readonly toolName: string;\n    readonly callSeq: number;\n    readonly callTime: number;\n    readonly callEventDigest: string;\n    readonly resultSeq: number;\n    readonly resultTime: number;\n    readonly resultEventDigest: string;\n}',
   },
   {
+    name: 'OriginalInvocationEntrySessionWitness',
+    declaration: 'export interface OriginalInvocationEntrySessionWitness {\n    readonly session: Session;\n    readonly birthReceiptDigest: string;\n    readonly instanceGeneration: string;\n    readonly sessionAuthorityDigest: string;\n    readonly logOffset: number;\n    readonly prefixLogDigest?: string | undefined;\n    readonly surfaceGeneration: number;\n    isCurrent(): boolean;\n}',
+  },
+  {
     name: 'OTelEventRecord',
     declaration: 'export interface OTelEventRecord {\n    eventName: string;\n    body: string;\n    timestamp: number;\n    severityNumber?: SeverityNumber;\n    attributes?: Record<string, OTelEventScalar | Record<string, OTelEventScalar>>;\n}',
   },
@@ -7987,6 +8206,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ProjectOperationMemoryLocalIdentity = Readonly<{\n    authorityEnvironmentId: ProjectOperationMemoryId;\n    accountIssuer: string;\n    accountSubject: ProjectOperationMemoryId;\n    accountBindingId: ProjectOperationMemoryId;\n    accountBindingVersion: number;\n    hostProfileId: ProjectOperationMemoryId;\n    botId: ProjectOperationMemoryId;\n    workerId: ProjectOperationMemoryId;\n    peer: ProjectOperationMemoryPeer;\n}>;',
   },
   {
+    name: 'ProjectOperationMemoryNativeActivationCut',
+    declaration: 'export type ProjectOperationMemoryNativeActivationCut = Readonly<{\n    journalId: ProjectOperationMemoryId;\n    journalEpoch: ProjectOperationMemoryVersion;\n    effectHead: ProjectOperationMemorySequence;\n    anchorId: ProjectOperationMemoryId;\n    confirmationDigest: ProjectOperationMemoryDigest;\n    sourceJournalEpoch: ProjectOperationMemoryId;\n    activationSequence: ProjectOperationMemorySequence;\n    scopeDigest: ProjectOperationMemoryDigest;\n    recipientDigest: ProjectOperationMemoryDigest;\n}>;',
+  },
+  {
     name: 'ProjectOperationMemoryOwnership',
     declaration: 'export type ProjectOperationMemoryOwnership = Readonly<{\n    hostProfileId: ProjectOperationMemoryId;\n    botId: ProjectOperationMemoryId;\n    actorRef: ProjectOperationMemoryId;\n    sessionIds: readonly SessionId[];\n}>;',
   },
@@ -8007,12 +8230,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type ProjectOperationMemoryRetainedAuthorization = Common & Readonly<{\n    purpose: \'retained_read\';\n    mode: \'retained_recipient\';\n    operation: \'search\' | \'evidence\';\n    command: ProjectOperationMemoryReadCommands[\'search\'] | ProjectOperationMemoryReadCommands[\'evidence\'];\n    readDirectiveDigest: ProjectOperationMemoryDigest;\n    authorityDigest: ProjectOperationMemoryDigest;\n    consentVersions: readonly Readonly<{\n        id: ProjectOperationMemoryId;\n        generation: ProjectOperationMemoryVersion;\n    }>[];\n    materialVersions: readonly Readonly<{\n        rightId: ProjectOperationMemoryId;\n        generation: ProjectOperationMemoryVersion;\n        sourceRevision: ProjectOperationMemoryVersion;\n    }>[];\n    originProofDigests: readonly ProjectOperationMemoryDigest[];\n}>;',
   },
   {
+    name: 'ProjectOperationMemoryRuntimeEntryEffect',
+    declaration: 'export type ProjectOperationMemoryRuntimeEntryEffect = Readonly<{\n    entryId: ProjectOperationMemoryId;\n    entryReceiptDigest: ProjectOperationMemoryDigest;\n    manifestDigest: ProjectOperationMemoryDigest;\n    journalId: ProjectOperationMemoryId;\n    journalEpoch: ProjectOperationMemoryVersion;\n    entryEffectSeq: ProjectOperationMemoryVersion;\n}>;',
+  },
+  {
     name: 'ProjectOperationMemorySequence',
     declaration: 'export type ProjectOperationMemorySequence = Branded<\'ProjectOperationMemorySequence\'>;',
   },
   {
     name: 'ProjectOperationMemorySourceAuthorization',
-    declaration: 'export type ProjectOperationMemorySourceAuthorization = Common & Readonly<{\n    purpose: \'source_read\';\n    mode: \'source_export\';\n    readDirectiveDigest: ProjectOperationMemoryDigest;\n    authorityDigest: ProjectOperationMemoryDigest;\n    local: ProjectOperationMemoryLocalIdentity & Readonly<{\n        peer: ProjectOperationMemoryPeer & Readonly<{\n            hostRegistryId: ProjectOperationMemoryId;\n            hostEpoch: ProjectOperationMemoryVersion;\n        }>;\n    }>;\n    confirmation: ProjectOperationMemoryConfirmation & Readonly<{\n        ackDigest: ProjectOperationMemoryDigest;\n    }>;\n    anchor: ProjectOperationMemoryActivationAnchor;\n    expectedSourceAuthorityVersion: ProjectOperationMemoryVersion | null;\n    expectedJournalEpoch: ProjectOperationMemoryId | null;\n    currentCommittedCheckpoint?: ProjectOperationMemoryCheckpoint;\n}> & {\n    [O in ProjectOperationMemoryReadOperation]: Readonly<{\n        operation: O;\n        command: ProjectOperationMemoryReadCommands[O];\n    }>;\n}[ProjectOperationMemoryReadOperation];',
+    declaration: 'export type ProjectOperationMemorySourceAuthorization = Common & Readonly<{\n    purpose: \'source_read\';\n    mode: \'source_export\';\n    readDirectiveDigest: ProjectOperationMemoryDigest;\n    authorityDigest: ProjectOperationMemoryDigest;\n    local: ProjectOperationMemoryLocalIdentity & Readonly<{\n        peer: ProjectOperationMemoryPeer & Readonly<{\n            hostRegistryId: ProjectOperationMemoryId;\n            hostEpoch: ProjectOperationMemoryVersion;\n        }>;\n    }>;\n    confirmation: ProjectOperationMemoryConfirmation & Readonly<{\n        ackDigest: ProjectOperationMemoryDigest;\n    }>;\n    anchor: ProjectOperationMemoryActivationAnchor;\n    expectedSourceAuthorityVersion: ProjectOperationMemoryVersion | null;\n    expectedJournalEpoch: ProjectOperationMemoryId | null;\n    currentCommittedCheckpoint?: ProjectOperationMemoryCheckpoint;\n    nativeActivationCut?: ProjectOperationMemoryNativeActivationCut;\n}> & {\n    [O in ProjectOperationMemoryReadOperation]: Readonly<{\n        operation: O;\n        command: ProjectOperationMemoryReadCommands[O];\n    }>;\n}[ProjectOperationMemoryReadOperation];',
   },
   {
     name: 'ProjectOperationMemoryVersion',
@@ -8025,6 +8252,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'ProjectOperationOriginToken',
     declaration: 'export interface ProjectOperationOriginToken {\n    readonly [tokenBrand]: true;\n}',
+  },
+  {
+    name: 'ProjectOperationRuntimeEntryCandidate',
+    declaration: 'export interface ProjectOperationRuntimeEntryCandidate {\n    readonly profileId: Branded<\'HostProfileId\'>;\n    readonly botRootId: Branded<\'ProjectOperationBotId\'>;\n    readonly sessionId: SessionId;\n    readonly ownerUserId: Branded<\'ProjectOperationOwnerUserId\'>;\n    readonly projectId: Branded<\'ProjectOperationProjectId\'>;\n    readonly taskRef: Branded<\'ProjectOperationTaskRef\'> | null;\n    readonly invocationRef: Branded<\'ProjectOperationInvocationId\'>;\n    readonly entryId: Branded<\'ProjectOperationRuntimeEntryId\'>;\n    readonly entryEffectAt: number;\n    readonly entryReceiptDigest: string;\n    readonly manifestDigest: string;\n}',
+  },
+  {
+    name: 'ProjectOperationRuntimeEntryPublication',
+    declaration: 'export interface ProjectOperationRuntimeEntryPublication {\n    readonly attributionDigest: string;\n    readonly observationDigest: string;\n    readonly mappingDigest: string;\n    readonly entryId: Branded<\'ProjectOperationRuntimeEntryId\'>;\n    readonly entryReceiptDigest: string;\n    readonly manifestDigest: string;\n    readonly projectId: Branded<\'ProjectOperationProjectId\'>;\n    readonly sourceEventId: Branded<\'ProjectOperationSourceEventId\'>;\n    readonly sourceRevision: string;\n    readonly payloadDigest: string;\n}',
   },
   {
     name: 'PromptAssembly',
@@ -8373,6 +8608,46 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'RunnerFailureRule',
     declaration: 'export interface RunnerFailureRule {\n    allowedExitCodes?: readonly number[];\n    fatalSignatures: readonly string[];\n    informationalLines?: readonly string[];\n}',
+  },
+  {
+    name: 'RuntimeEntryBinding',
+    declaration: 'export type RuntimeEntryBinding = Value<typeof binding>;',
+  },
+  {
+    name: 'RuntimeEntryConsumerOriginal',
+    declaration: 'export interface RuntimeEntryConsumerOriginal {\n    readonly metadata: RuntimeEntryOriginalMetadata;\n    readonly consumerGrant: unknown;\n    readonly consumerGrantMetadata: unknown;\n}',
+  },
+  {
+    name: 'RuntimeEntryLoadedSession',
+    declaration: 'export interface RuntimeEntryLoadedSession {\n    readonly session: Session;\n    readonly birthReceiptDigest: string;\n    readonly instanceGeneration: string;\n    readonly sessionAuthorityDigest: string;\n    readonly logOffset: number;\n    readonly prefixLogDigest?: string | undefined;\n    readonly surfaceGeneration: number;\n    isCurrent(): boolean;\n}',
+  },
+  {
+    name: 'RuntimeEntryManifest',
+    declaration: 'export type RuntimeEntryManifest = Value<typeof manifest>;',
+  },
+  {
+    name: 'RuntimeEntryManifestInputs',
+    declaration: 'export interface RuntimeEntryManifestInputs {\n    readonly originalAuthorityDigest: string;\n    readonly accountAuthorityDigest: string;\n    readonly sessionAuthorityDigest: string;\n    readonly compositionAuthorityDigest: string;\n    readonly registryGeneration: string;\n}',
+  },
+  {
+    name: 'RuntimeEntryOriginalMetadata',
+    declaration: 'export interface RuntimeEntryOriginalMetadata {\n    readonly binding: RuntimeEntryBinding;\n    readonly taskRef: Branded<\'ProjectOperationTaskRef\'> | null;\n    readonly projectId: Branded<\'ProjectOperationProjectId\'>;\n    readonly dispatchGranted: boolean;\n    readonly sourceKind: \'primary_human\' | \'live_reference\' | \'restricted\' | \'unknown\';\n    readonly originalAuthorityDigest: string;\n    readonly accountAuthorityDigest: string;\n    isCurrent(): boolean;\n}',
+  },
+  {
+    name: 'RuntimeEntryPreparation',
+    declaration: 'export type RuntimeEntryPreparation = Readonly<{\n    kind: \'unsupported\';\n}> | Readonly<{\n    kind: \'historical\';\n    witness: RuntimeEntryWitness;\n}> | Readonly<{\n    kind: \'prepared\';\n    start(materialize: (signal: AbortSignal) => Promise<UserMessage>): Promise<RuntimeEntryResult>;\n}>;',
+  },
+  {
+    name: 'RuntimeEntryReceipt',
+    declaration: 'export type RuntimeEntryReceipt = Value<typeof receipt>;',
+  },
+  {
+    name: 'RuntimeEntryResult',
+    declaration: 'export type RuntimeEntryResult = Readonly<{\n    kind: \'entered\';\n    witness: RuntimeEntryWitness;\n}> | Readonly<{\n    kind: \'gap\';\n    reason: \'fence_lost\' | \'journal_failed\' | \'cancelled\';\n}>;',
+  },
+  {
+    name: 'RuntimeEntryWitness',
+    declaration: 'export interface RuntimeEntryWitness {\n    readonly receipt: RuntimeEntryReceipt;\n    readonly manifest: RuntimeEntryManifest;\n    readonly inputs: RuntimeEntryManifestInputs;\n    readonly readbackDigest: string;\n}',
   },
   {
     name: 'SandboxEnforcement',
@@ -8780,7 +9055,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionHandle',
-    declaration: 'export interface SessionHandle extends AsyncDisposable {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly access: SessionAccess;\n    read(offset?: number, length?: number, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult>;\n    append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>;\n    flush(options?: SessionHandleFlushOptions): Promise<void>;\n    close(): Promise<void>;\n}',
+    declaration: 'export interface SessionHandle extends AsyncDisposable {\n    readonly id: SessionId;\n    readonly header: SessionHeader;\n    readonly inheritedEventCount: SessionLogOffset;\n    readonly access: SessionAccess;\n    runtimeEntrySnapshot?(options?: SessionHandleFlushOptions): Promise<Readonly<{\n        header: SessionHeader;\n        eventCount: number;\n        prefixLogDigest?: string | undefined;\n        isCurrent(): boolean;\n    }>>;\n    read(offset?: number, length?: number, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult>;\n    append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void>;\n    flush(options?: SessionHandleFlushOptions): Promise<void>;\n    close(): Promise<void>;\n}',
   },
   {
     name: 'SessionHandleAppendOptions',
@@ -10048,7 +10323,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ToolsService',
-    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
+    declaration: 'export class ToolsService extends Service {\n    static inject;\n    static Config;\n    constructor(ctx: Context);\n    register(definition: ToolDefinition, options: ToolRegistrationOptions = {}): () => void;\n    restrict(filter: ToolRestriction): () => void;\n    get(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    executable(name: string, scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolDefinition | undefined;\n    async resolve(context: ToolActivationContext): Promise<ResolvedToolSet>;\n    definitions(scope?: ScopeKey, toolSet?: ResolvedToolSet): readonly ToolDefinition[];\n    schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[];\n    setExecutor(executor: ToolExecutor): () => void;\n    inspectExecutor(scope?: ScopeKey): Readonly<ToolExecutor>;\n    async execute(input: ToolBatchInput): Promise<ToolBatchResult>;\n    guard(guard: ToolGuard): () => void;\n    checkGuards(exec: ToolExecution): string | undefined;\n}',
   },
   {
     name: 'ToolUpdate',

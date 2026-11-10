@@ -1,3 +1,4 @@
+import { inspectNativeSourceFormat } from './project-operation-memory-native-format.ts'
 import { ProjectMemoryOwnershipRetainedError } from './project-operation-memory-ownership-error.ts'
 /** Private files and bootstrap publication owned by the same Host as the memory database. */
 import { createHash, randomUUID } from 'node:crypto'
@@ -24,7 +25,7 @@ type Marker = Readonly<{
   databaseId: string
   state: 'pending' | 'published'
   mainFileIdentity: string | null
-  storePurpose?: 'recipient_import'
+  storePurpose?: 'recipient_import' | 'native_source_export'
 }>
 type Guard = { state: 'created' | 'existing'; inspect(): { byteLength: bigint; fileIdentity: string }; release(): void }
 type PlatformFiles = {
@@ -50,7 +51,7 @@ const exists = (path: string): boolean => {
     throw error
   }
 }
-function marker(value: unknown, identity: Identity, purpose: 'recipient_import' | undefined): Marker {
+function marker(value: unknown, identity: Identity, purpose: 'recipient_import' | 'native_source_export' | undefined): Marker {
   if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return invalid()
   const r = value as { [key: string]: unknown }
   if (
@@ -74,7 +75,7 @@ function marker(value: unknown, identity: Identity, purpose: 'recipient_import' 
 }
 
 /** Inspect only the fixed header under the held private main identity, before creating SQLite sidecars. */
-function recipientHeader(path: string, main: Guard, allowUncheckpointed: boolean): void {
+function recipientHeader(path: string, main: Guard, allowUncheckpointed: boolean, expectedAppId = 0x44534d32): void {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
     main.inspect()
@@ -84,7 +85,7 @@ function recipientHeader(path: string, main: Guard, allowUncheckpointed: boolean
     main.inspect()
     if (size !== bytes.length || !bytes.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) return invalid()
     const appId = bytes.readUInt32BE(68), version = bytes.readUInt32BE(60)
-    if (appId !== 0x44534d32 || version !== 1) {
+    if (appId !== expectedAppId || version !== 1) {
       // A fresh bootstrap or already-held WAL may own the initial schema before main checkpoint.
       if (!allowUncheckpointed || appId !== 0 || version !== 0) return invalid()
     }
@@ -111,7 +112,7 @@ export class ProjectOperationMemoryDatabaseFiles {
     return this.snapshot.databaseId
   }
   /** Known source-v1 absence or exact recipient-only purpose, validated before acquiring any SQLite sidecar. */
-  get storePurpose(): 'source_export' | 'recipient_import' {
+  get storePurpose(): 'source_export' | 'recipient_import' | 'native_source_export' {
     return this.snapshot.storePurpose === undefined ? 'source_export' : this.snapshot.storePurpose
   }
   get published(): boolean {
@@ -171,7 +172,7 @@ export class ProjectOperationMemoryDatabaseFiles {
   private static async prepare(
     platform: PlatformFiles,
     identity: Identity,
-    purpose: 'recipient_import' | undefined,
+    purpose: 'recipient_import' | 'native_source_export' | undefined,
   ): Promise<ProjectOperationMemoryDatabaseFiles> {
     const opened: Guard[] = []
     try {
@@ -200,6 +201,7 @@ export class ProjectOperationMemoryDatabaseFiles {
       } else {
         if (bytes.length > 16384) return invalid()
         current = marker(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)), identity, purpose)
+        if (purpose === 'native_source_export') await inspectNativeSourceFormat(platform.path, current)
         platform.marker.ensureDurable(bytes)
       }
       const main = platform.acquire(current.state === 'published' ? 'existing' : 'create_or_open', '')
@@ -216,7 +218,7 @@ export class ProjectOperationMemoryDatabaseFiles {
         platform.marker.write(Buffer.from(JSON.stringify(current)), platform.assertOwner)
       }
       const existingSidecars = new Map<string, Guard>()
-      if (purpose === 'recipient_import') {
+      if (purpose === 'recipient_import' || purpose === 'native_source_export') {
         for (const suffix of ['-wal', '-shm'] as const) {
           try {
             const file = platform.acquire('existing', suffix)
@@ -228,7 +230,7 @@ export class ProjectOperationMemoryDatabaseFiles {
           }
         }
         if (initial.byteLength !== 0n)
-          recipientHeader(platform.path, main, current.state === 'pending' || existingSidecars.size === 2)
+          recipientHeader(platform.path, main, current.state === 'pending' || existingSidecars.size === 2, purpose === 'native_source_export' ? 0x44534d33 : 0x44534d32)
       }
       if (current.state === 'published' && platform.journalExists()) return invalid()
       if (current.state === 'pending') {
@@ -271,7 +273,7 @@ export class ProjectOperationMemoryDatabaseFiles {
     options: Identity & {
       root: string
       legacyRoots: readonly string[]
-      storePurpose?: 'recipient_import'
+      storePurpose?: 'recipient_import' | 'native_source_export'
       uid: number
       pid: number
       processNonce: string
@@ -405,7 +407,7 @@ export class ProjectOperationMemoryDatabaseFiles {
     options: Identity & {
       root: string
       legacyRoots: readonly string[]
-      storePurpose?: 'recipient_import'
+      storePurpose?: 'recipient_import' | 'native_source_export'
       userSid: string
       pid: number
       processNonce: string

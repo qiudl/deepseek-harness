@@ -7,7 +7,8 @@
 import type { Volatile } from '@deepseek-ai/cosmokit'
 
 import { Context, FiberState, Service } from '@deepseek-ai/cordis'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type {
@@ -22,6 +23,7 @@ import type {
   ModelSelection,
   ModelSelectionProjectionState,
   InboxState,
+  OriginalInvocationEntrySessionWitness,
 } from '@deepseek-ai/dsh-agent'
 import { modelSelectionProjectionDefinition } from '@deepseek-ai/dsh-agent'
 import { errorChain, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -161,6 +163,7 @@ function assertAgentOptions(options: AgentOptions): void {
 interface StoredSession {
   readonly handle: SessionHandle
   storedCount: number
+  readonly startupPersistence?: SessionPersistence
 }
 
 /** Acquired Session resources and composition inputs for one Agent initialization. */
@@ -314,6 +317,44 @@ export class AgentLoop extends Service implements AgentFactory {
   private readonly runtime: { ctx: Context }
   private modelProjectionHandle!: ProjectionHandle<ModelSelectionProjectionState>
   private inboxProjectionHandle!: ProjectionHandle<InboxState>
+  private runtimeEntryGeneration = 0n
+  private readonly runtimeEntrySessions = new WeakMap<Agent, {
+    readonly stored: StoredSession
+    readonly persistence: SessionPersistence
+    readonly generation: string
+    isLive(): boolean
+  }>()
+
+  /** Read only the actual startup handle after its own durability barrier; resume and unknown backends are unsupported.
+   * @param agent - Exact actual Agent published by this factory, not a reconstructed ID or caller object.
+   * @returns Header-only original birth/ownership metadata with a current synchronous lease fence.
+   */
+  async readOriginalInvocationEntrySession(agent: Agent): Promise<OriginalInvocationEntrySessionWitness | undefined> {
+    const owned = this.runtimeEntrySessions.get(agent)
+    const isOwner = () => owned !== undefined && owned.isLive() && this.ownership.isActive()
+      && this.runtime.ctx.get('sessionPersistence')?.identity === owned.persistence.identity
+      && this.runtime.ctx.agents.get(agent.id) === agent
+    if (owned === undefined || !isOwner() || owned.stored.handle.runtimeEntrySnapshot === undefined) return undefined
+    const durable = await owned.stored.handle.runtimeEntrySnapshot()
+    const metadata = await owned.persistence.stat(agent.id)
+    // Current header decoding materializes the released default delegationDepth=0.
+    const createdHeader = { ...owned.stored.handle.header, delegationDepth: owned.stored.handle.header.delegationDepth ?? 0 }
+    const durableHeader = { ...durable.header, delegationDepth: durable.header.delegationDepth ?? 0 }
+    if (!isOwner() || !durable.isCurrent() || durable.eventCount !== agent.session.seq || metadata === undefined
+      || metadata.formatStatus !== 'current' || metadata.location === undefined
+      || !isDeepStrictEqual(metadata.header, createdHeader) || !isDeepStrictEqual(durableHeader, createdHeader)) return undefined
+    const logOffset = durable.eventCount, surfaceGeneration = agent.session.surface.contentGeneration
+    const hash = (purpose: string, fields: readonly unknown[]) => createHash('sha256')
+      .update('dsh.runtime-entry.session/' + purpose + '/v1\0' + JSON.stringify(fields)).digest('hex')
+    // The header comes from the original create() handle, now independently materialized via flush()+stat().
+    const birthReceiptDigest = hash('birth', ['startup', createdHeader])
+    return Object.freeze({ session: agent.session, birthReceiptDigest, instanceGeneration: owned.generation,
+      sessionAuthorityDigest: hash('ownership', [birthReceiptDigest, owned.generation, metadata.revision, logOffset, surfaceGeneration]),
+      logOffset, surfaceGeneration, prefixLogDigest: durable.prefixLogDigest,
+      isCurrent: () => isOwner() && durable.isCurrent() && agent.session.seq === logOffset
+        && agent.session.surface.contentGeneration === surfaceGeneration,
+    })
+  }
 
   constructor(ctx: Context, config: Config) {
     super(ctx, 'agentLoop')
@@ -637,6 +678,14 @@ export class AgentLoop extends Service implements AgentFactory {
           detachAgent = loopCtx.agents.enter(agent, parentAgent)
           await loopCtx.agents.announce(agent, source, abort.signal)
           assertLive()
+          if (source === 'startup' && stored?.startupPersistence !== undefined && parentAgent === undefined
+            && session.header.parentSession === undefined && !session.header.isSeeded && session.header.origin === undefined
+            && session.inheritedEventCount === 0 && stored.handle.inheritedEventCount === 0) {
+            this.runtimeEntrySessions.set(agent, { stored, persistence: stored.startupPersistence,
+              generation: (++this.runtimeEntryGeneration).toString(),
+              isLive: () => ready && disposing === undefined && !abort.signal.aborted,
+            })
+          }
           ready = true
           return { agent, dispose }
         } catch (error: unknown) {
@@ -693,7 +742,7 @@ export class AgentLoop extends Service implements AgentFactory {
       inheritedEventCount: session.inheritedEventCount,
       ...signal === undefined ? {} : { signal },
     })
-    return { handle, storedCount: 0 }
+    return { handle, storedCount: 0, startupPersistence: persistence }
   }
 
   /**

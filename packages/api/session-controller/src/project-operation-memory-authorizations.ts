@@ -125,6 +125,27 @@ export type ProjectOperationMemoryActivationAnchor = Readonly<{
   sourceAuthorityVersion: ProjectOperationMemoryVersion
   ownership: ProjectOperationMemoryOwnership
 }>
+/** Original private runtime frontier, captured after the mixed source anchor and before its first binding Ack. */
+export type ProjectOperationMemoryNativeActivationCut = Readonly<{
+  journalId: ProjectOperationMemoryId
+  journalEpoch: ProjectOperationMemoryVersion
+  effectHead: ProjectOperationMemorySequence
+  anchorId: ProjectOperationMemoryId
+  confirmationDigest: ProjectOperationMemoryDigest
+  sourceJournalEpoch: ProjectOperationMemoryId
+  activationSequence: ProjectOperationMemorySequence
+  scopeDigest: ProjectOperationMemoryDigest
+  recipientDigest: ProjectOperationMemoryDigest
+}>
+/** Independently read original effect coordinates; these do not authorize a source export. */
+export type ProjectOperationMemoryRuntimeEntryEffect = Readonly<{
+  entryId: ProjectOperationMemoryId
+  entryReceiptDigest: ProjectOperationMemoryDigest
+  manifestDigest: ProjectOperationMemoryDigest
+  journalId: ProjectOperationMemoryId
+  journalEpoch: ProjectOperationMemoryVersion
+  entryEffectSeq: ProjectOperationMemoryVersion
+}>
 type Prepare = Readonly<{
   requestId: ProjectOperationMemoryId
   expectedScopeVersion: ProjectOperationMemoryVersion
@@ -213,6 +234,8 @@ export type ProjectOperationMemorySourceAuthorization = Common &
     expectedJournalEpoch: ProjectOperationMemoryId | null
     /** Only a matching Cloud receipt finalized in the Host source delta ledger can supply this; history never advances it. */
     currentCommittedCheckpoint?: ProjectOperationMemoryCheckpoint
+    /** Missing on original released confirmations; absence never means an empty runtime journal. */
+    nativeActivationCut?: ProjectOperationMemoryNativeActivationCut
   }> &
   {
     [O in ProjectOperationMemoryReadOperation]: Readonly<{
@@ -250,6 +273,19 @@ export interface ProjectOperationMemoryAuthorizations {
    * @returns Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.
    */
   read(token: ProjectOperationMemoryAuthorizationToken): ProjectOperationMemoryAuthorization | null
+  /** Resolve only original effect metadata while this source-read token and its fixed facility remain current.
+   * @param token - Current source-read token, never an anchor or retained-recipient token.
+   * @param reference - Original entry identity and digest pins; no caller sequence or path is accepted.
+   * @returns Exact original effect coordinates, or null without the actual facility/entry.
+   */
+  readRuntimeEntryEffect?(
+    token: ProjectOperationMemoryAuthorizationToken,
+    reference: Readonly<{
+      entryId: ProjectOperationMemoryId
+      entryReceiptDigest: ProjectOperationMemoryDigest
+      manifestDigest: ProjectOperationMemoryDigest
+    }>,
+  ): Promise<ProjectOperationMemoryRuntimeEntryEffect | null>
 }
 /** Metadata-only source reference; it asserts no retained Right, fact content or complete dependency set. */
 export type ProjectOperationMemoryReferenceEvent = Readonly<{
@@ -276,6 +312,25 @@ export type ProjectOperationMemoryReferenceEvent = Readonly<{
   materialDependencies: readonly []
   content: null
 }>
+/** Fixed reviewed original-feedback entry only; qualification is independently verified by Main for every SourceProof. */
+export type ProjectOperationMemoryNativeEntryEvent = Omit<
+  ProjectOperationMemoryReferenceEvent,
+  'sourcePolicy' | 'sourceLocator' | 'content' | 'kind'
+> &
+  Readonly<{
+    kind: 'operation'
+    sourcePolicy: 'owner_native_operation_fact_v1'
+    sourceLocator: null
+    content: Readonly<{
+      goalSummary: 'Handle original invocation feedback.'
+      operationSummary: 'Start handling feedback in the DSH Bot runtime.'
+      outcome: 'succeeded'
+      resultSummary: 'Runtime entry for the original invocation feedback was durably recorded.'
+      failureCode: null
+      unfinishedRefs: readonly []
+      verification: 'observed_receipt'
+    }>
+  }>
 /** Explicit scan gaps; a filtered empty page may advance without asserting every operation is classified. */
 export type ProjectOperationMemoryCoverage = Readonly<{
   state: 'complete' | 'partial' | 'unsupported'
@@ -300,7 +355,7 @@ type Prepared = Readonly<{
   resumeCursor: ProjectOperationMemoryId | null
 }>
 type Paged = Readonly<{
-  events: readonly ProjectOperationMemoryReferenceEvent[]
+  events: readonly (ProjectOperationMemoryReferenceEvent | ProjectOperationMemoryNativeEntryEvent)[]
   scannedThroughSequence: ProjectOperationMemorySequence
   throughSequence: ProjectOperationMemorySequence
   checkpoint: ProjectOperationMemoryCheckpoint

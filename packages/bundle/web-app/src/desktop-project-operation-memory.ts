@@ -32,6 +32,10 @@ import type {
   ProjectOperationMemoryConfirmation as Confirmation,
   ProjectOperationMemoryLocalIdentity as Local,
 } from '@deepseek-ai/dsh-api-session-controller'
+import type {
+  ProjectOperationMemoryNativeActivationCut as NativeCut,
+  ProjectOperationMemoryRuntimeEntryEffect as NativeEffect,
+} from '@deepseek-ai/dsh-api-session-controller'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
 const unavailable = (): never => {
@@ -86,6 +90,47 @@ function ownership(value: unknown): Anchor['ownership'] {
     actorRef: id(ascii(x.actorRef)),
     sessionIds: sessions,
   }
+}
+function nativeCut(
+  value: unknown,
+  a: Anchor,
+  c: Confirmation,
+  scopeDigest: string,
+  recipientDigest: string,
+): NativeCut {
+  const r = row(value, [
+    'journalId',
+    'journalEpoch',
+    'effectHead',
+    'anchorId',
+    'confirmationDigest',
+    'sourceJournalEpoch',
+    'activationSequence',
+    'scopeDigest',
+    'recipientDigest',
+  ])
+  const result = {
+    journalId: id(uuid(r.journalId)),
+    journalEpoch: version(decimal(r.journalEpoch, true)),
+    effectHead: sequence(decimal(r.effectHead, false)),
+    anchorId: id(uuid(r.anchorId)),
+    confirmationDigest: digest(sha(r.confirmationDigest)),
+    sourceJournalEpoch: id(uuid(r.sourceJournalEpoch)),
+    activationSequence: sequence(decimal(r.activationSequence, false)),
+    scopeDigest: digest(sha(r.scopeDigest)),
+    recipientDigest: digest(sha(r.recipientDigest)),
+  }
+  if (
+    result.anchorId !== a.anchorId ||
+    result.anchorId !== c.anchorId ||
+    result.confirmationDigest !== c.confirmationDigest ||
+    result.sourceJournalEpoch !== a.journalEpoch ||
+    result.activationSequence !== a.activationSequence ||
+    result.scopeDigest !== scopeDigest ||
+    result.recipientDigest !== recipientDigest
+  )
+    return unavailable()
+  return Object.freeze(result)
 }
 function anchor(value: unknown): Anchor {
   const x = row(value, [
@@ -264,14 +309,70 @@ export class DesktopProjectOperationMemory {
   private readonly workerId = id(randomUUID())
   private readonly tokens = new WeakMap<Token, { view: View; owner: Producer }>()
   /** Synchronous stable-view reader; no caller can mint, queue, extend or transfer a token. */
-  readonly reader: Reader = Object.freeze({ read: (token: Token) => this.read(token) })
+  readonly reader: Reader = Object.freeze({
+    read: (token: Token) => this.read(token),
+    readRuntimeEntryEffect: (
+      token: Token,
+      reference: Readonly<{ entryId: Id; entryReceiptDigest: Digest; manifestDigest: Digest }>,
+    ) => this.readNativeEffect(token, reference),
+  })
   constructor(
     private readonly ctx: Context,
     private readonly environments: readonly HostProjectMemoryEnvironment[],
     private readonly profileId: string,
     private readonly lifetime: AbortSignal,
     private readonly now: () => number = Date.now,
+    private readonly nativeEffectReader?: (
+      reference: Readonly<{ entryId: string; entryReceiptDigest: string; manifestDigest: string }>,
+      authorization: Extract<View, { purpose: 'source_read' }>,
+      signal: AbortSignal,
+    ) => unknown,
   ) {}
+  private async readNativeEffect(
+    token: Token,
+    reference: Readonly<{ entryId: Id; entryReceiptDigest: Digest; manifestDigest: Digest }>,
+  ): Promise<NativeEffect | null> {
+    const view = this.read(token),
+      reader = this.nativeEffectReader
+    if (
+      !view ||
+      view.purpose !== 'source_read' ||
+      !view.nativeActivationCut ||
+      !reader
+    )
+      return null
+    const raw = row(reference, ['entryId', 'entryReceiptDigest', 'manifestDigest']),
+      ref = {
+        entryId: uuid(raw.entryId),
+        entryReceiptDigest: sha(raw.entryReceiptDigest),
+        manifestDigest: sha(raw.manifestDigest),
+      }
+    const returned = await reader(ref, view, view.signal)
+    if (this.read(token) !== view) return null
+    if (returned === undefined || returned === null) return null
+    const e = row(returned, [
+      'entryId',
+      'entryReceiptDigest',
+      'manifestDigest',
+      'journalId',
+      'journalEpoch',
+      'entryEffectSeq',
+    ])
+    if (
+      e.entryId !== ref.entryId ||
+      e.entryReceiptDigest !== ref.entryReceiptDigest ||
+      e.manifestDigest !== ref.manifestDigest
+    )
+      return unavailable()
+    return Object.freeze({
+      entryId: id(uuid(e.entryId)),
+      entryReceiptDigest: digest(sha(e.entryReceiptDigest)),
+      manifestDigest: digest(sha(e.manifestDigest)),
+      journalId: id(uuid(e.journalId)),
+      journalEpoch: version(decimal(e.journalEpoch, true)),
+      entryEffectSeq: version(decimal(e.entryEffectSeq, true)),
+    })
+  }
   private localAccount(
     d: Readonly<{
       authorityEnvironmentId: string
@@ -493,7 +594,9 @@ export class DesktopProjectOperationMemory {
    * @returns Actual bounded result metadata for the Host signer, or a closed read error.
    */
   async execute(value: unknown, signal: AbortSignal): Promise<unknown> {
+    const hasNativeCut = value !== null && typeof value === 'object' && Object.hasOwn(value, 'nativeActivationCut')
     const raw = row(value, [
+      ...(hasNativeCut ? ['nativeActivationCut'] : []),
       'action',
       'request',
       'binding_key',
@@ -582,9 +685,11 @@ export class DesktopProjectOperationMemory {
           BigInt(committed.sequence) < BigInt(a.syncStartSequence))
       )
         return unavailable()
+      const cut = hasNativeCut ? nativeCut(raw.nativeActivationCut, a, c, d.scope.scopeDigest, recipientDigest) : null
       const view = freeze(
         {
           ...common,
+          ...(cut === null ? {} : { nativeActivationCut: cut }),
           purpose: 'source_read' as const,
           mode: 'source_export' as const,
           operation: d.operation,
@@ -625,7 +730,11 @@ export class DesktopProjectOperationMemory {
         const result = parseHostProjectMemoryReadResult(d.operation, out.result)
         if (
           ('events' in result &&
-            result.events.some(e => e.sourcePolicy !== 'live_reference_v1' || e.materialDependencies.length !== 0)) ||
+            result.events.some(
+              e =>
+                e.materialDependencies.length !== 0 ||
+                (e.sourcePolicy === 'owner_native_operation_fact_v1' && (cut === null || !this.nativeEffectReader)),
+            )) ||
           ('items' in result &&
             result.items.some(i => i.snippet !== '' || i.rightId !== null || i.rightGeneration !== null)) ||
           (d.operation === 'evidence' && (!('status' in result) || result.status !== 'missing'))

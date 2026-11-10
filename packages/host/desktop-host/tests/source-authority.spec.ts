@@ -1585,7 +1585,9 @@ it.each(['root_execution_journal', 'root_feedback'] as const)('gates %s on capab
       expect(command.binding_key).toMatch(/^[a-f0-9]{64}$/u)
       return null
     })
-    const input = { ...f.account, command: { action, operation: { action: 'read' } } }
+    const input: Parameters<typeof f.client.collaborationAnalysis>[0] = { ...f.account, command: action === 'root_feedback'
+      ? { action: 'root_feedback', operation: { action: 'read' } }
+      : { action: 'root_execution_journal', operation: { action: 'read' } } }
     await expect(f.client.collaborationAnalysis(input)).rejects.toThrow()
     expect(calls).toBe(0)
     await f.grant()

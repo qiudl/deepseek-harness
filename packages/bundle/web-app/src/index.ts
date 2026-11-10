@@ -1,3 +1,6 @@
+import { DesktopRuntimeEntryHost, runtimeEntryConfiguration, createDesktopRuntimeEntryLocator } from './desktop-runtime-entry-host.ts'
+import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
+import { DesktopTaskCoordination } from './desktop-task-coordination.ts'
 import { DesktopProjectOperationMemory } from './desktop-project-operation-memory.ts'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopOperationOrigin, parseOperationOriginKeyrings } from './desktop-operation-origin.ts'
@@ -238,11 +241,14 @@ export function apply(ctx: Context, config: Config): void {
       }))
     })
   }
+  const taskCoordinationEnvironments = parseHostTaskCoordinationEnvironments(process.env.DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS)
   const operationMemoryEnvironments = parseHostProjectMemoryEnvironments(process.env.DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS)
   const operationOriginKeyrings = parseOperationOriginKeyrings(process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
+  const nativeConfiguration = operationOriginKeyrings.length && process.env.DSH_PROFILE_RUNTIME_ENTRY_ORIGINS
+    ? runtimeEntryConfiguration(process.env.DSH_PROFILE_RUNTIME_ENTRY_ORIGINS) : undefined
   const analysisToken = process.env.DSH_PROFILE_ANALYSIS_TOKEN
   if (analysisToken && /^[A-Za-z0-9_-]{43}$/u.test(analysisToken)) {
-    ctx.inject(['sessionController'], (sessionCtx) => {
+    ctx.inject(['sessionController', 'tools', ...(nativeConfiguration ? ['agentLoop', 'sessions', 'agents', 'sessionPersistence'] : [])], async (sessionCtx) => {
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-root-journal',
         handler: (req, res) => handleDesktopRootJournalRequest(req, res, analysisToken, (command, signal) =>
@@ -250,11 +256,26 @@ export function apply(ctx: Context, config: Config): void {
             : sessionCtx.sessionController.acceptCollaborationRoot(command.target, command.receipt, signal)),
       }))
       const lifetime = new AbortController()
+      let native: DesktopRuntimeEntryHost | undefined
+      let coldLocator: ReturnType<typeof createDesktopRuntimeEntryLocator> | undefined
+      if (nativeConfiguration) {
+        try { coldLocator = createDesktopRuntimeEntryLocator(sessionCtx, nativeConfiguration,
+          process.env.DSH_PROFILE_ID ?? '', lifetime.signal) }
+        catch { /* A cold reader never repairs or claims an unsupported private source. */ }
+        try { native = new DesktopRuntimeEntryHost(sessionCtx, nativeConfiguration, operationOriginKeyrings,
+          process.env.DSH_PROFILE_ID ?? '', process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal) }
+        catch { /* Preserve an unavailable private format and keep the original business owner available. */ }
+      }
+      if (native) sessionCtx.provide('runtimeEntryConsumerHost', native.service)
       const origins = new DesktopOperationOrigin(sessionCtx, sessionCtx.sessionController, operationOriginKeyrings,
-        process.env.DSH_PROFILE_ID ?? '', lifetime.signal)
+        process.env.DSH_PROFILE_ID ?? '', lifetime.signal, native ? reader => native.readerWith(reader) : undefined)
       sessionCtx.provide('projectOperationOrigins', origins.reader)
-      const operationMemory = new DesktopProjectOperationMemory(sessionCtx, operationMemoryEnvironments, process.env.DSH_PROFILE_ID ?? '', lifetime.signal)
+      const operationMemory = new DesktopProjectOperationMemory(sessionCtx, operationMemoryEnvironments, process.env.DSH_PROFILE_ID ?? '', lifetime.signal,
+        Date.now, native ? (reference, view, signal) => native.readEffect(reference, view, signal) : undefined)
       sessionCtx.provide('projectOperationMemoryAuthorizations', operationMemory.reader)
+      const taskCoordination = taskCoordinationEnvironments.length ? new DesktopTaskCoordination(sessionCtx, sessionCtx.sessionController,
+        await sessionCtx.sessionController.openCollaborationTaskCoordinationJournal(), taskCoordinationEnvironments,
+        process.env.DSH_PROFILE_ID ?? '', process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal) : undefined
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
         async () => {
@@ -273,16 +294,17 @@ export function apply(ctx: Context, config: Config): void {
         } },
         (input, signal) => sessionCtx.sessionController.collaborationRootExecution(input, signal),
         (input, signal) => sessionCtx.sessionController.collaborationRootFeedback(input, signal),
-        (input, signal) => sessionCtx.sessionController.collaborationRootConsumption(input, signal),
+        (input, signal, account) => sessionCtx.sessionController.collaborationRootConsumption(input, signal, account),
         (target, signal) => sessionCtx.sessionController.readCollaborationSourceSnapshot(target, signal),
         (input, signal) => sessionCtx.sessionController.captureCollaborationGroupRoot(input, signal),
         (input, signal) => origins.execute(input, signal),
         operationMemory,
+        taskCoordination,
       )
       sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-analysis',
-        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner),
+        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner, native, coldLocator),
       }))
     })
   }

@@ -132,6 +132,11 @@ export interface CollaborationRootJournal {
    * @returns Stored aggregate, or undefined when absent.
    */
   read(command: CollaborationRootCommandId): CollaborationRootSubmission | undefined
+  /** Find only a previously persisted canonical Root, without creating or reconstructing one.
+   * @param canonical - Exact original namespace, Root id and trace.
+   * @returns Original local aggregate, or undefined.
+   */
+  findCanonical(canonical: Pick<CollaborationRootSubmission, 'namespace_id' | 'root_task_id' | 'root_trace_id'>): CollaborationRootSubmission | undefined
   /**
    * Find an existing root by namespace and original Source coordinates without capturing anything.
    * @param target - Current caller-authorized namespace and Source lookup.
@@ -214,6 +219,12 @@ export async function openCollaborationRootJournal(facility: Pick<DomainFacility
     hasSession(sessionId) { readable(); return [...table.entries()].some(([, entry]) => entry.source.session_id === sessionId) },
     pending() { readable(); return [...table.entries()].map(([, entry]) => entry).filter(entry => entry.state === 'pending').values() },
     read(command) { readable(); const key = commands.get(command); return key === undefined ? undefined : table.get(key) },
+    findCanonical(canonical) {
+      readable()
+      for (const [, record] of table.entries()) if (record.namespace_id === canonical.namespace_id
+        && record.root_task_id === canonical.root_task_id && record.root_trace_id === canonical.root_trace_id) return record
+      return undefined
+    },
     find(target) {
       readable()
       return table.get(collaborationJournalDigest([target.namespace_id,target.workspace_id,target.session_id,

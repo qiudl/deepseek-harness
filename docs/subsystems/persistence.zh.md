@@ -52,6 +52,22 @@ interface SessionHandle extends AsyncDisposable {
   /** Whether this handle may mutate the log. */
   readonly access: SessionAccess
 
+  /** Optional private metadata capability for an already-owned runtime entry. Absence means unsupported.
+   * Drains and flushes only this handle; it must not read event bodies or scan other Sessions.
+   * @param options - Cancellation before the actual per-Session durability barrier.
+   * @returns Original durable header/count and a synchronous exact handle/lease fence; never an execution grant.
+   */
+  runtimeEntrySnapshot?(options?: SessionHandleFlushOptions): Promise<Readonly<{
+    header: SessionHeader
+    eventCount: number
+    /** SHA-256 of the RFC 8785 canonical original event array at eventCount, maintained during normal load/append.
+     * Absent when this backend cannot attest the complete durable, non-inherited prefix; absence never grants runtime entry.
+     */
+    prefixLogDigest?: string | undefined
+    /** @returns Whether this same durable handle/cursor/kernel lease is still current, with no pending writes. */
+    isCurrent(): boolean
+  }>>
+
   /**
    * Read a slice of the valid contiguous logical log. The slice is a legal log
    * prefix segment: a torn physical tail is never returned, and repeated reads

@@ -44,10 +44,13 @@ export class DesktopOperationOrigin {
     expiresAt: number
   }>()
   /** Read-only service; tokens never survive the associated request or Cloud deadline. */
-  readonly reader: ProjectOperationOrigins = Object.freeze({ read: (token: ProjectOperationOriginToken) => this.readToken(token) })
+  readonly reader: ProjectOperationOrigins
   constructor(private readonly ctx: Context, private readonly controller: SessionController,
     private readonly keyrings: readonly HostBotGroupPublicKeyring[], private readonly profileId: string,
-    private readonly lifetime: AbortSignal) {}
+    private readonly lifetime: AbortSignal, extend?: (reader: ProjectOperationOrigins) => ProjectOperationOrigins) {
+    const reader = Object.freeze({ read: (token: ProjectOperationOriginToken) => this.readToken(token) })
+    this.reader = extend ? extend(reader) : reader
+  }
 
   private readToken(token: ProjectOperationOriginToken): readonly ProjectOperationOriginReference[] | null {
     const entry = this.tokens.get(token)

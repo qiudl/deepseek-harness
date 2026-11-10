@@ -141,6 +141,18 @@ function unlockMaterial(value: string): Buffer {
 
 /** Durable registry that stores only HMAC account indexes and Keychain handles. */
 export class ProfileRegistry {
+  private readonly changeControllers = new Map<PersonProfileId, AbortController>()
+
+  /** Observe replacement of an existing Profile row without granting access to it.
+   * @param profileId - Exact currently resolved Profile.
+   * @returns Cancellation when registry persistence replaces or removes that row.
+   */
+  profileChangeSignal(profileId: PersonProfileId): AbortSignal {
+    if (!this.resolveProfile(profileId)) throw new HostAuthorityError('profile_mismatch')
+    let controller = this.changeControllers.get(profileId)
+    if (!controller) { controller = new AbortController(); this.changeControllers.set(profileId, controller) }
+    return controller.signal
+  }
   private readonly path: string
   private profiles: PersonProfileRecord[]
   private snapshot?: { readonly value: unknown; readonly contents: string }
@@ -204,8 +216,7 @@ export class ProfileRegistry {
       if (previous !== profile) {
         if (beforeSnapshot && this.snapshot === preparedSnapshot) {
           this.persist(beforeSnapshot.value, beforeSnapshot.contents)
-          this.snapshot = beforeSnapshot
-          this.profiles = before
+          this.publishProfiles(before, beforeSnapshot)
         } else if (previous) this.rollbackUpdate(profile, previous)
         else this.rollbackRegistration(profile.profileId)
       }
@@ -299,7 +310,6 @@ export class ProfileRegistry {
       }
       const next = this.profiles.map(profile => profile.profileId === bindingOwner.profileId ? migrated : profile)
       this.save(next)
-      this.profiles = next
       return migrated
     }
     if (existing) {
@@ -317,7 +327,7 @@ export class ProfileRegistry {
       if (binding === undefined) {
         if (currentProfile === existing) return existing
         const next = this.profiles.map(profile => profile.profileId === existing.profileId ? currentProfile : profile)
-        this.save(next); this.profiles = next
+        this.save(next)
         return currentProfile
       }
       const environmentBindings = currentProfile.accountBindings?.filter(candidate =>
@@ -340,7 +350,7 @@ export class ProfileRegistry {
           if (binding.handle !== current.handle) throw new HostAuthorityError('conflict')
           if (currentProfile === existing) return existing
           const next = this.profiles.map(profile => profile.profileId === existing.profileId ? currentProfile : profile)
-          this.save(next); this.profiles = next
+          this.save(next)
           return currentProfile
         }
       }
@@ -359,7 +369,6 @@ export class ProfileRegistry {
       }
       const next = this.profiles.map(profile => profile.profileId === existing.profileId ? updated : profile)
       this.save(next)
-      this.profiles = next
       return updated
     }
     if (options.requireScopedBinding !== undefined && this.profiles.some(profile =>
@@ -378,7 +387,6 @@ export class ProfileRegistry {
     }
     const next = [...this.profiles, profile]
     this.save(next)
-    this.profiles = next
     return profile
   }
 
@@ -417,7 +425,6 @@ export class ProfileRegistry {
     }
     const next = [...this.profiles, profile]
     this.save(next)
-    this.profiles = next
     return profile
   }
 
@@ -553,7 +560,6 @@ export class ProfileRegistry {
     const next = this.profiles.filter(profile => profile.profileId !== profileId)
     if (next.length === this.profiles.length) throw new HostAuthorityError('stale')
     this.save(next)
-    this.profiles = next
   }
 
   /**
@@ -567,7 +573,6 @@ export class ProfileRegistry {
       || previous.profileId !== current.profileId) throw new HostAuthorityError('stale')
     const next = this.profiles.map(profile => profile.profileId === current.profileId ? previous : profile)
     this.save(next)
-    this.profiles = next
   }
 
   private load(): PersonProfileRecord[] {
@@ -637,7 +642,19 @@ export class ProfileRegistry {
     const snapshot = { version, profiles }
     const contents = `${JSON.stringify(snapshot satisfies RegistryFile)}\n`
     this.persist(snapshot, contents)
-    this.snapshot = { value: snapshot, contents }
+    this.publishProfiles(profiles, { value: snapshot, contents })
+  }
+
+  private publishProfiles(profiles: readonly PersonProfileRecord[], snapshot: NonNullable<ProfileRegistry['snapshot']>): void {
+    const previous = this.profiles
+    this.profiles = [...profiles]
+    this.snapshot = snapshot
+    for (const entry of previous) {
+      if (profiles.find(profile => profile.profileId === entry.profileId) === entry) continue
+      const controller = this.changeControllers.get(entry.profileId)
+      this.changeControllers.delete(entry.profileId)
+      controller?.abort(new HostAuthorityError('stale'))
+    }
   }
 
   private persist(snapshot: unknown, contents: string): void {

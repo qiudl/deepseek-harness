@@ -50,6 +50,9 @@ export { REGION_BEGIN, REGION_END }
  * errors, so the partition can never silently drift from the service API.
  */
 export const SERVICE_PAGE: Record<string, string> = {
+  collaborationTaskExecutions: 'session.md',
+  collaborationTaskFloors: 'session.md',
+  runtimeEntryConsumerHost: 'session.md',
   headlessStartup: 'boot.md',
   translator: 'translation.md',
   cotTranslation: 'translation.md',
@@ -231,6 +234,7 @@ export const SERVICE_WALK_EXEMPTIONS: Record<string, string> = {
  * {@link EVENT_WALK_EXEMPTIONS} names each one with its documentation owner.
  */
 export const EVENT_SCOPE_PAGE: Record<string, string> = {
+  'task-coordination': 'session.md',
   'project-operation': 'session.md',
   'app-boot': 'boot.md',
   hmr: 'boot.md',
@@ -299,6 +303,21 @@ export const EVENT_WALK_EXEMPTIONS: Record<string, string> = {
  * appear on more than one page.
  */
 export const LINK_MAP: Readonly<Record<string, string>> = {
+  Branded: 'core.md',
+  CollaborationTaskCoordinationJournal: 'session.md',
+  CollaborationTaskCurrentAccount: 'session.md',
+  CollaborationTaskExecution: 'session.md',
+  OriginalInvocationEntrySessionWitness: 'core.md',
+  ProjectOperationMemoryDigest: 'session.md',
+  ProjectOperationMemoryId: 'session.md',
+  ProjectOperationMemoryRuntimeEntryEffect: 'session.md',
+  ProjectOperationRuntimeEntryCandidate: 'session.md',
+  ProjectOperationRuntimeEntryPublication: 'session.md',
+  RuntimeEntryConsumerOriginal: 'session.md',
+  RuntimeEntryLoadedSession: 'session.md',
+  RuntimeEntryPreparation: 'session.md',
+
+  CollaborationExecutionCommandId: 'session.md',
   Principal: 'typert.md',
   PrincipalMap: 'typert.md',
   RemoteAccessResource: 'typert.md',

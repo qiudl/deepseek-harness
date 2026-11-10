@@ -111,6 +111,7 @@ export class DesktopHost {
   private readonly leases = new Map<ProfileViewLeaseId, ViewLease>()
   private readonly generations = new Map<PersonProfileId, number>()
   private readonly ownerGrants = new Map<string, Map<PersonProfileId, ProfileAccessGrant>>()
+  private readonly collaborationRequests = new Map<string, Map<PersonProfileId, Set<AbortController>>>()
   private readonly recoveryCandidates = new Map<OfflineProfileRecoveryCandidateId, RecoveryCandidateState>()
   private readonly recoveryOperations = new Map<OfflineProfileRecoveryOperationId, StoredRecoveryOperationState>()
   private readonly profileRecoveries = new Map<PersonProfileId, OfflineProfileRecoveryOperationId>()
@@ -746,6 +747,37 @@ export class DesktopHost {
     }
   }
 
+  /** Own a current Account fence throughout one awaited original collaboration request.
+   * @param account - Actual authenticated connection Account, never supplied worker authority.
+   * @param signal - Original parent-owned request cancellation.
+   * @param execute - Existing worker request; its signal remains live through actual consumer settlement.
+   * @returns The original result only while Account/Profile identity and request ownership remain current.
+   */
+  async withCollaborationAccountRequest<T>(
+    account: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0], signal: AbortSignal,
+    execute: (profileId: PersonProfileId, signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    signal.throwIfAborted()
+    this.authorizeCollaborationRegistration(account)
+    const profileId = this.authorizeAccountModelText(account), controller = new AbortController()
+    const profiles = this.collaborationRequests.get(account.ownerId) ?? new Map<PersonProfileId, Set<AbortController>>()
+    const requests = profiles.get(profileId) ?? new Set<AbortController>()
+    requests.add(controller); profiles.set(profileId, requests); this.collaborationRequests.set(account.ownerId, profiles)
+    const owned = AbortSignal.any([signal, controller.signal, this.options.registry.profileChangeSignal(profileId)])
+    try {
+      owned.throwIfAborted()
+      const result = await execute(profileId, owned)
+      owned.throwIfAborted()
+      this.authorizeCollaborationRegistration(account)
+      if (this.authorizeAccountModelText(account) !== profileId) throw new HostAuthorityError('profile_mismatch')
+      return result
+    } finally {
+      requests.delete(controller)
+      if (!requests.size) profiles.delete(profileId)
+      if (!profiles.size) this.collaborationRequests.delete(account.ownerId)
+    }
+  }
+
   /**
    * Recheck a token, current binding and Main-vault proof when a pending claim prevents worker startup.
    * This grants no view lease and must only be used with a durable same-Profile claim receipt.
@@ -808,6 +840,8 @@ export class DesktopHost {
    * @param ownerId - authenticated connection owner to revoke.
    */
   revokeOwner(ownerId: string): void {
+    for (const requests of this.collaborationRequests.get(ownerId)?.values() ?? [])
+      for (const controller of requests) controller.abort(new HostAuthorityError('unauthorized'))
     for (const [leaseId, lease] of this.leases) if (lease.ownerId === ownerId) this.leases.delete(leaseId)
     this.ownerGrants.delete(ownerId)
     for (const [candidateId, candidate] of this.recoveryCandidates) {
@@ -825,6 +859,8 @@ export class DesktopHost {
    * @param profileId - Profile whose leases must be revoked.
    */
   revokeProfile(profileId: PersonProfileId): void {
+    for (const profiles of this.collaborationRequests.values()) for (const controller of profiles.get(profileId) ?? [])
+      controller.abort(new HostAuthorityError('stale'))
     for (const [leaseId, lease] of this.leases) if (lease.profileId === profileId) this.leases.delete(leaseId)
   }
 
@@ -836,6 +872,11 @@ export class DesktopHost {
     accountVerified = false,
   ): void {
     const profiles = this.ownerGrants.get(ownerId) ?? new Map<PersonProfileId, ProfileAccessGrant>()
+    const previous = profiles.get(profileId)
+    if (previous && (previous.scope !== scope || previous.accountVerified !== accountVerified || previous.operationId !== operationId)) {
+      for (const controller of this.collaborationRequests.get(ownerId)?.get(profileId) ?? [])
+        controller.abort(new HostAuthorityError('unauthorized'))
+    }
     profiles.set(profileId, {
       scope, ...(operationId === undefined ? {} : { operationId }), accountVerified, grantedAt: this.options.clock.now(),
     })

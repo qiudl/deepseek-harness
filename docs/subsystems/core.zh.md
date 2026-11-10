@@ -561,6 +561,12 @@ Source: [`packages/core/agent-default-model/src/index.ts`](../../packages/core/a
 Concrete agent factory and driver service.
 
 ```ts cordis-catalog
+/** Read only the actual startup handle after its own durability barrier; resume and unknown backends are unsupported.
+ * @param agent - Exact actual Agent published by this factory, not a reconstructed ID or caller object.
+ * @returns Header-only original birth/ownership metadata with a current synchronous lease fence.
+ */
+async readOriginalInvocationEntrySession(agent: Agent): Promise<OriginalInvocationEntrySessionWitness | undefined>
+
 /**
  * Create an agent and session under one caller-supplied identity, owned by
  * the accessing fiber. Constructor-driven config calls mint a fresh combined

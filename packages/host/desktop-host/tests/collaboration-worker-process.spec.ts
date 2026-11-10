@@ -1,4 +1,4 @@
-import { parseHostNativeRoomRetirementCommand } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostTaskCoordinationEnvironment, type HostTaskCoordinationEnvironment, parseHostNativeRoomRetirementCommand } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: original Profile worker communication through public handles. */
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
@@ -65,7 +65,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
   botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 },
   botSessionIdentity: { bot_id: string; session_id: string } | null = null,
-  operationOriginKeyrings: readonly HostBotGroupPublicKeyring[] = []) {
+  operationOriginKeyrings: readonly HostBotGroupPublicKeyring[] = [],
+  taskCoordinationEnvironments: readonly HostTaskCoordinationEnvironment[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -79,6 +80,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     import { createServer } from 'node:http'
     import { writeFileSync } from 'node:fs'
     writeFileSync(${JSON.stringify(join(root, 'origin-keyrings.json'))}, process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
+    writeFileSync(${JSON.stringify(join(root, 'task-policy.json'))}, JSON.stringify({
+      policies: JSON.parse(process.env.DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS), workerId: process.env.DSH_PROFILE_WORKER_ID }))
     const descriptor = ${JSON.stringify(descriptor)}
     const snapshot = ${JSON.stringify(snapshot)}
     const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
@@ -171,7 +174,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)) })
   `, { mode: 0o600 })
   const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
-    dshEntrypointPath: executable, operationOriginKeyrings,
+    dshEntrypointPath: executable, operationOriginKeyrings, taskCoordinationEnvironments,
     attestListener: async (pid, origin) => {
       expect(pid).toBeGreaterThan(0)
       expect((await fetch(origin)).status).toBe(401)
@@ -695,4 +698,31 @@ it.each([null, { bot_id: 'bot_1', session_id: 'session_1' }])('retains the Bot/S
     expect(owner.aborted).toBe(false)
     expect(timer).toHaveBeenCalledWith(10_000)
   } finally { response.mockRestore(); timer.mockRestore() }
+})
+
+it('passes only the validated explicit task policy and newly owned worker identity through the actual child reserved environment', async () => {
+  vi.stubEnv('DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS', 'untrusted ambient environment')
+  vi.stubEnv('DSH_PROFILE_WORKER_ID', 'untrusted-worker')
+  onTestFinished(() => { vi.unstubAllEnvs() })
+  const keys = generateKeyPairSync('ed25519'), policy = parseHostTaskCoordinationEnvironment({
+    audience: 'urn:slark:task-coordination:v1', environmentKey: 'staging', keyring: { version: 1,
+      environmentId: '20000000-0000-4000-8000-000000000002', issuer: 'https://cloud.example.test', keys: [{
+        kid: 'dsh-assertion-task-worker-test', publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }),
+        validFrom: 1, validUntil: 2_000_000_000_000,
+      }] },
+  })
+  const h = await harness(undefined, undefined, undefined, null, undefined, undefined, undefined, null, [], [policy])
+  const value = JSON.parse(readFileSync(join(h.root, 'task-policy.json'), 'utf8')) as { policies: unknown; workerId: string }
+  expect(value.policies).toEqual([policy])
+  expect(value.workerId).toBe(h.worker.workerId)
+  expect(value.workerId).toMatch(/^[0-9a-f-]{36}$/u)
+  expect(value.workerId).not.toBe('untrusted-worker')
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    taskCoordinationEnvironments: [policy] })
+  for (const key of ['DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS', 'DSH_PROFILE_WORKER_ID'])
+    await expect(factory.create({ profileId: 'profile', profileRoot: h.root, credentialHandle: 'fixture', pluginRoots: [],
+      env: { [key]: 'untrusted caller field' } })).rejects.toMatchObject({ code: 'invalid_input' })
+  const bad = { ...policy, privateKeyPem: 'forbidden' }
+  expect(() => new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+    dshEntrypointPath: process.execPath, taskCoordinationEnvironments: [bad] })).toThrow()
 })

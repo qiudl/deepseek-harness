@@ -8,7 +8,7 @@ type Group = 'permanent' | 'transient'
 const fail = (): never => { throw new HostAuthorityError('unavailable') }
 /** Only module-owned literal schemas reach this private engine; callers and wire requests never select a format. */
 export interface ProjectMemorySqliteFormat {
-  readonly purpose: 'source_export' | 'recipient_import'
+  readonly purpose: 'source_export' | 'recipient_import' | 'native_source_export'
   readonly appId: number
   readonly schemas: readonly (readonly [string, string, string])[]
   readonly transientKinds: readonly string[]

@@ -1,0 +1,590 @@
+{
+  "description": "Codec grammar and golden bytes only; not a trusted writer/manifest/source/Right positive.",
+  "values": {
+    "binding": {
+      "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+      "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ownerUserId": "human:codec-only",
+      "hostProfileId": "10000000-0000-4000-8000-000000000002",
+      "botId": "codec_bot",
+      "sessionId": "codec-session",
+      "sourceCoordinates": {
+        "workspaceId": "10000000-0000-4000-8000-000000000003",
+        "sessionId": "codec-session",
+        "sourceMessageId": "source-message",
+        "sourceRevision": "1"
+      },
+      "sourceSnapshotDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "admissionId": "10000000-0000-4000-8000-000000000004",
+      "bindingId": "10000000-0000-4000-8000-000000000005",
+      "bindingGeneration": "1",
+      "confirmationCommandId": "10000000-0000-4000-8000-000000000006",
+      "rootTaskId": "10000000-0000-4000-8000-000000000007",
+      "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "rootCommandId": "10000000-0000-4000-8000-000000000008",
+      "rootPayloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "executionCommandId": "10000000-0000-4000-8000-000000000009",
+      "invocationId": "invocation-1",
+      "originalExecutorRef": {
+        "kind": "slark_group_text_invocation",
+        "projectId": "actual-executor-project",
+        "agentId": "executor-agent",
+        "computerId": "executor-computer",
+        "workspace": "agent",
+        "invocationId": "invocation-1",
+        "attemptFence": "1",
+        "capabilitySnapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "turnId": "original-turn",
+        "inputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "terminalKind": "journal",
+        "journalResultDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "terminalDeliveryId": "delivery-1",
+      "terminalDeliveryVersion": "1",
+      "terminalResultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "consumerCommandId": "10000000-0000-4000-8000-000000000010",
+      "consumerAttemptId": "10000000-0000-4000-8000-000000000011",
+      "consumerStepGrantId": "10000000-0000-4000-8000-000000000012",
+      "consumerGrantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "grantIssuedAt": 1720000000000,
+      "grantExpiresAt": 1720000120000
+    },
+    "receipt": {
+      "schemaVersion": 1,
+      "contractId": "dsh.feedback-runtime-entry/v1",
+      "implementationDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "compositionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "binding": {
+        "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+        "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ownerUserId": "human:codec-only",
+        "hostProfileId": "10000000-0000-4000-8000-000000000002",
+        "botId": "codec_bot",
+        "sessionId": "codec-session",
+        "sourceCoordinates": {
+          "workspaceId": "10000000-0000-4000-8000-000000000003",
+          "sessionId": "codec-session",
+          "sourceMessageId": "source-message",
+          "sourceRevision": "1"
+        },
+        "sourceSnapshotDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admissionId": "10000000-0000-4000-8000-000000000004",
+        "bindingId": "10000000-0000-4000-8000-000000000005",
+        "bindingGeneration": "1",
+        "confirmationCommandId": "10000000-0000-4000-8000-000000000006",
+        "rootTaskId": "10000000-0000-4000-8000-000000000007",
+        "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "rootCommandId": "10000000-0000-4000-8000-000000000008",
+        "rootPayloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "executionCommandId": "10000000-0000-4000-8000-000000000009",
+        "invocationId": "invocation-1",
+        "originalExecutorRef": {
+          "kind": "slark_group_text_invocation",
+          "projectId": "actual-executor-project",
+          "agentId": "executor-agent",
+          "computerId": "executor-computer",
+          "workspace": "agent",
+          "invocationId": "invocation-1",
+          "attemptFence": "1",
+          "capabilitySnapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "turnId": "original-turn",
+          "inputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "terminalKind": "journal",
+          "journalResultDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "terminalDeliveryId": "delivery-1",
+        "terminalDeliveryVersion": "1",
+        "terminalResultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "consumerCommandId": "10000000-0000-4000-8000-000000000010",
+        "consumerAttemptId": "10000000-0000-4000-8000-000000000011",
+        "consumerStepGrantId": "10000000-0000-4000-8000-000000000012",
+        "consumerGrantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "grantIssuedAt": 1720000000000,
+        "grantExpiresAt": 1720000120000
+      },
+      "entryId": "10000000-0000-4000-8000-000000000013",
+      "queueOccurrenceId": "10000000-0000-4000-8000-000000000014",
+      "queueGeneration": "1",
+      "driverReservationId": "10000000-0000-4000-8000-000000000015",
+      "workerLifetimeId": "10000000-0000-4000-8000-000000000016",
+      "sessionInstanceGeneration": "1",
+      "sessionBirthReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entryEffectSeq": "1",
+      "entryEffectAt": 1720000000100,
+      "entryEffectDigest": "8a2c37bfa33ebced3a02dd3230919523dbfa35c0231087b64e859f0f042f0c9c",
+      "journalId": "10000000-0000-4000-8000-000000000017",
+      "journalEpoch": "1",
+      "journalCommitSequence": "1",
+      "manifestDigest": "c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102"
+    },
+    "manifest": {
+      "schemaVersion": 1,
+      "contractId": "dsh.feedback-runtime-entry/v1",
+      "implementationDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "compositionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bindingDigest": "a562d1bcdbeddde8ef3ecf380716a5f21f814b5b8c57453dd7d6bd619ba02be4",
+      "receiptCoordinates": {
+        "entryId": "10000000-0000-4000-8000-000000000013",
+        "entryEffectSeq": "1",
+        "entryEffectAt": 1720000000100,
+        "journalId": "10000000-0000-4000-8000-000000000017",
+        "journalEpoch": "1",
+        "journalCommitSequence": "1"
+      },
+      "sources": [
+        {
+          "id": "implementation-vector",
+          "version": "1",
+          "kind": "implementation",
+          "purpose": "field_derivation",
+          "authorityDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contribution": "field"
+        }
+      ],
+      "decisions": [
+        {
+          "kind": "actual_primary_session",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "exclusive_writer",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "first_dispatch",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "single_occurrence",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "driver_reserved",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "queue_current",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "grant_current",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "deadline_current",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "owner_current",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "composition_current",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "no_preentry_body_read",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        },
+        {
+          "kind": "no_open_callback",
+          "sourceIds": [
+            "implementation-vector"
+          ],
+          "value": true,
+          "version": "1"
+        }
+      ],
+      "fieldDerivations": [
+        {
+          "field": "originSide",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "originActorRef",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "sourceEventId",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "sourceRevision",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "sourceSequence",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "projectId",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "occurredAt",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "kind",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "taskRef",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "stepRef",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "invocationRef",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "evidenceRef",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "sourcePolicy",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "sourceLocator",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "materialDependencies",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.goalSummary",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.operationSummary",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.outcome",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.resultSummary",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.failureCode",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.unfinishedRefs",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "content.verification",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        },
+        {
+          "field": "payloadDigest",
+          "sourceIds": [
+            "implementation-vector"
+          ]
+        }
+      ],
+      "registryGeneration": "1"
+    },
+    "observation": {
+      "schemaVersion": 1,
+      "purpose": "project_operation_runtime_entry_observation",
+      "issuer": "dsh-host",
+      "keyId": "host-key",
+      "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+      "accountIssuer": "https://accounts.dsh.colorbuyai.com",
+      "accountSubject": "10000000-0000-4000-8000-000000000018",
+      "accountBindingId": "account-binding",
+      "accountBindingVersion": 1,
+      "hostProfileId": "10000000-0000-4000-8000-000000000002",
+      "botId": "codec_bot",
+      "peer": {
+        "computerId": "host-computer",
+        "installationId": "host-installation",
+        "hostRegistryId": "h2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "hostEpoch": "1",
+        "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "hostInstanceId": "host-instance",
+        "processNonce": "host-process"
+      },
+      "requestId": "10000000-0000-4000-8000-000000000019",
+      "nonce": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+      "issuedAt": 1720000000200,
+      "expiresAt": 1720000015200,
+      "receipt": {
+        "schemaVersion": 1,
+        "contractId": "dsh.feedback-runtime-entry/v1",
+        "implementationDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "compositionDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "binding": {
+          "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+          "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ownerUserId": "human:codec-only",
+          "hostProfileId": "10000000-0000-4000-8000-000000000002",
+          "botId": "codec_bot",
+          "sessionId": "codec-session",
+          "sourceCoordinates": {
+            "workspaceId": "10000000-0000-4000-8000-000000000003",
+            "sessionId": "codec-session",
+            "sourceMessageId": "source-message",
+            "sourceRevision": "1"
+          },
+          "sourceSnapshotDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "admissionId": "10000000-0000-4000-8000-000000000004",
+          "bindingId": "10000000-0000-4000-8000-000000000005",
+          "bindingGeneration": "1",
+          "confirmationCommandId": "10000000-0000-4000-8000-000000000006",
+          "rootTaskId": "10000000-0000-4000-8000-000000000007",
+          "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "rootCommandId": "10000000-0000-4000-8000-000000000008",
+          "rootPayloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "executionCommandId": "10000000-0000-4000-8000-000000000009",
+          "invocationId": "invocation-1",
+          "originalExecutorRef": {
+            "kind": "slark_group_text_invocation",
+            "projectId": "actual-executor-project",
+            "agentId": "executor-agent",
+            "computerId": "executor-computer",
+            "workspace": "agent",
+            "invocationId": "invocation-1",
+            "attemptFence": "1",
+            "capabilitySnapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "turnId": "original-turn",
+            "inputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "terminalKind": "journal",
+            "journalResultDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "terminalDeliveryId": "delivery-1",
+          "terminalDeliveryVersion": "1",
+          "terminalResultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "consumerCommandId": "10000000-0000-4000-8000-000000000010",
+          "consumerAttemptId": "10000000-0000-4000-8000-000000000011",
+          "consumerStepGrantId": "10000000-0000-4000-8000-000000000012",
+          "consumerGrantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "grantIssuedAt": 1720000000000,
+          "grantExpiresAt": 1720000120000
+        },
+        "entryId": "10000000-0000-4000-8000-000000000013",
+        "queueOccurrenceId": "10000000-0000-4000-8000-000000000014",
+        "queueGeneration": "1",
+        "driverReservationId": "10000000-0000-4000-8000-000000000015",
+        "workerLifetimeId": "10000000-0000-4000-8000-000000000016",
+        "sessionInstanceGeneration": "1",
+        "sessionBirthReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "entryEffectSeq": "1",
+        "entryEffectAt": 1720000000100,
+        "entryEffectDigest": "8a2c37bfa33ebced3a02dd3230919523dbfa35c0231087b64e859f0f042f0c9c",
+        "journalId": "10000000-0000-4000-8000-000000000017",
+        "journalEpoch": "1",
+        "journalCommitSequence": "1",
+        "manifestDigest": "c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102"
+      },
+      "readbackDigest": "d770f898374be609881f3adce817fe892ca311b3adce5d6eca548e7d404c616c",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "sourceEventMapping": {
+        "journalId": "actual-dsbot-journal-codec-vector",
+        "journalEpoch": "10000000-0000-4000-8000-000000000020",
+        "providerId": "dsbot-project-operations",
+        "providerVersion": "1",
+        "sourceEventId": "dsh-runtime-entry:10000000-0000-4000-8000-000000000013",
+        "sourceRevision": "1",
+        "sourceSequence": "341",
+        "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "entryId": "10000000-0000-4000-8000-000000000013",
+        "entryReceiptDigest": "112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195",
+        "manifestDigest": "c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102"
+      }
+    },
+    "attribution": {
+      "schemaVersion": 1,
+      "purpose": "project_operation_runtime_entry_attribution",
+      "issuer": "https://cloud.example.test",
+      "keyId": "environment-key",
+      "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+      "accountIssuer": "https://accounts.dsh.colorbuyai.com",
+      "accountSubject": "10000000-0000-4000-8000-000000000018",
+      "accountBindingId": "account-binding",
+      "accountBindingVersion": 1,
+      "hostProfileId": "10000000-0000-4000-8000-000000000002",
+      "botId": "codec_bot",
+      "installationId": "host-installation",
+      "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "requestId": "10000000-0000-4000-8000-000000000019",
+      "issuedAt": 1720000000300,
+      "expiresAt": 1720000120300,
+      "observationDigest": "b29e17866452a0edabdb0e8240af91e2e220e43e2b9cb2d52cfea3f26ee2222d",
+      "entryReceiptDigest": "112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195",
+      "manifestDigest": "c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102",
+      "binding": {
+        "authorityEnvironmentId": "10000000-0000-4000-8000-000000000001",
+        "namespaceId": "n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ownerUserId": "human:codec-only",
+        "hostProfileId": "10000000-0000-4000-8000-000000000002",
+        "botId": "codec_bot",
+        "sessionId": "codec-session",
+        "sourceCoordinates": {
+          "workspaceId": "10000000-0000-4000-8000-000000000003",
+          "sessionId": "codec-session",
+          "sourceMessageId": "source-message",
+          "sourceRevision": "1"
+        },
+        "sourceSnapshotDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "admissionId": "10000000-0000-4000-8000-000000000004",
+        "bindingId": "10000000-0000-4000-8000-000000000005",
+        "bindingGeneration": "1",
+        "confirmationCommandId": "10000000-0000-4000-8000-000000000006",
+        "rootTaskId": "10000000-0000-4000-8000-000000000007",
+        "rootTraceId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "rootCommandId": "10000000-0000-4000-8000-000000000008",
+        "rootPayloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "executionCommandId": "10000000-0000-4000-8000-000000000009",
+        "invocationId": "invocation-1",
+        "originalExecutorRef": {
+          "kind": "slark_group_text_invocation",
+          "projectId": "actual-executor-project",
+          "agentId": "executor-agent",
+          "computerId": "executor-computer",
+          "workspace": "agent",
+          "invocationId": "invocation-1",
+          "attemptFence": "1",
+          "capabilitySnapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "turnId": "original-turn",
+          "inputDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "terminalKind": "journal",
+          "journalResultDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "terminalDeliveryId": "delivery-1",
+        "terminalDeliveryVersion": "1",
+        "terminalResultDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "consumerCommandId": "10000000-0000-4000-8000-000000000010",
+        "consumerAttemptId": "10000000-0000-4000-8000-000000000011",
+        "consumerStepGrantId": "10000000-0000-4000-8000-000000000012",
+        "consumerGrantDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "grantIssuedAt": 1720000000000,
+        "grantExpiresAt": 1720000120000
+      },
+      "entryId": "10000000-0000-4000-8000-000000000013",
+      "projectId": "original-admission-project",
+      "sourceEventId": "dsh-runtime-entry:10000000-0000-4000-8000-000000000013",
+      "sourceRevision": "1",
+      "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    "sourceEventMapping": {
+      "journalId": "actual-dsbot-journal-codec-vector",
+      "journalEpoch": "10000000-0000-4000-8000-000000000020",
+      "providerId": "dsbot-project-operations",
+      "providerVersion": "1",
+      "sourceEventId": "dsh-runtime-entry:10000000-0000-4000-8000-000000000013",
+      "sourceRevision": "1",
+      "sourceSequence": "341",
+      "payloadDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "entryId": "10000000-0000-4000-8000-000000000013",
+      "entryReceiptDigest": "112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195",
+      "manifestDigest": "c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102"
+    }
+  },
+  "expected": {
+    "binding": "dsh.project-operation-runtime-entry-binding/v1\u0000[\"10000000-0000-4000-8000-000000000001\",\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"human:codec-only\",\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",\"codec-session\",[\"10000000-0000-4000-8000-000000000003\",\"codec-session\",\"source-message\",\"1\"],\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000004\",\"10000000-0000-4000-8000-000000000005\",\"1\",\"10000000-0000-4000-8000-000000000006\",\"10000000-0000-4000-8000-000000000007\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"10000000-0000-4000-8000-000000000008\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000009\",\"invocation-1\",[\"slark_group_text_invocation\",\"actual-executor-project\",\"executor-agent\",\"executor-computer\",\"agent\",\"invocation-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"original-turn\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"journal\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"delivery-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000010\",\"10000000-0000-4000-8000-000000000011\",\"10000000-0000-4000-8000-000000000012\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1720000000000,1720000120000]",
+    "receipt": "dsh.project-operation-runtime-entry-receipt/v1\u0000[1,\"dsh.feedback-runtime-entry/v1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",[\"10000000-0000-4000-8000-000000000001\",\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"human:codec-only\",\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",\"codec-session\",[\"10000000-0000-4000-8000-000000000003\",\"codec-session\",\"source-message\",\"1\"],\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000004\",\"10000000-0000-4000-8000-000000000005\",\"1\",\"10000000-0000-4000-8000-000000000006\",\"10000000-0000-4000-8000-000000000007\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"10000000-0000-4000-8000-000000000008\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000009\",\"invocation-1\",[\"slark_group_text_invocation\",\"actual-executor-project\",\"executor-agent\",\"executor-computer\",\"agent\",\"invocation-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"original-turn\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"journal\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"delivery-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000010\",\"10000000-0000-4000-8000-000000000011\",\"10000000-0000-4000-8000-000000000012\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1720000000000,1720000120000],\"10000000-0000-4000-8000-000000000013\",\"10000000-0000-4000-8000-000000000014\",\"1\",\"10000000-0000-4000-8000-000000000015\",\"10000000-0000-4000-8000-000000000016\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"1\",1720000000100,\"8a2c37bfa33ebced3a02dd3230919523dbfa35c0231087b64e859f0f042f0c9c\",\"10000000-0000-4000-8000-000000000017\",\"1\",\"1\",\"c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102\"]",
+    "manifest": "dsh.project-operation-runtime-entry-manifest/v1\u0000[1,\"dsh.feedback-runtime-entry/v1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"a562d1bcdbeddde8ef3ecf380716a5f21f814b5b8c57453dd7d6bd619ba02be4\",[\"10000000-0000-4000-8000-000000000013\",\"1\",1720000000100,\"10000000-0000-4000-8000-000000000017\",\"1\",\"1\"],[[\"implementation-vector\",\"1\",\"implementation\",\"field_derivation\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"field\"]],[[\"actual_primary_session\",[\"implementation-vector\"],true,\"1\"],[\"exclusive_writer\",[\"implementation-vector\"],true,\"1\"],[\"first_dispatch\",[\"implementation-vector\"],true,\"1\"],[\"single_occurrence\",[\"implementation-vector\"],true,\"1\"],[\"driver_reserved\",[\"implementation-vector\"],true,\"1\"],[\"queue_current\",[\"implementation-vector\"],true,\"1\"],[\"grant_current\",[\"implementation-vector\"],true,\"1\"],[\"deadline_current\",[\"implementation-vector\"],true,\"1\"],[\"owner_current\",[\"implementation-vector\"],true,\"1\"],[\"composition_current\",[\"implementation-vector\"],true,\"1\"],[\"no_preentry_body_read\",[\"implementation-vector\"],true,\"1\"],[\"no_open_callback\",[\"implementation-vector\"],true,\"1\"]],[[\"originSide\",[\"implementation-vector\"]],[\"originActorRef\",[\"implementation-vector\"]],[\"sourceEventId\",[\"implementation-vector\"]],[\"sourceRevision\",[\"implementation-vector\"]],[\"sourceSequence\",[\"implementation-vector\"]],[\"projectId\",[\"implementation-vector\"]],[\"occurredAt\",[\"implementation-vector\"]],[\"kind\",[\"implementation-vector\"]],[\"taskRef\",[\"implementation-vector\"]],[\"stepRef\",[\"implementation-vector\"]],[\"invocationRef\",[\"implementation-vector\"]],[\"evidenceRef\",[\"implementation-vector\"]],[\"sourcePolicy\",[\"implementation-vector\"]],[\"sourceLocator\",[\"implementation-vector\"]],[\"materialDependencies\",[\"implementation-vector\"]],[\"content.goalSummary\",[\"implementation-vector\"]],[\"content.operationSummary\",[\"implementation-vector\"]],[\"content.outcome\",[\"implementation-vector\"]],[\"content.resultSummary\",[\"implementation-vector\"]],[\"content.failureCode\",[\"implementation-vector\"]],[\"content.unfinishedRefs\",[\"implementation-vector\"]],[\"content.verification\",[\"implementation-vector\"]],[\"payloadDigest\",[\"implementation-vector\"]]],\"1\"]",
+    "observation": "dsh.project-operation-runtime-entry-observation/v1\u0000[1,\"project_operation_runtime_entry_observation\",\"dsh-host\",\"host-key\",\"10000000-0000-4000-8000-000000000001\",\"https://accounts.dsh.colorbuyai.com\",\"10000000-0000-4000-8000-000000000018\",\"account-binding\",1,\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",[\"host-computer\",\"host-installation\",\"h2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"1\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"host-instance\",\"host-process\"],\"10000000-0000-4000-8000-000000000019\",\"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE\",1720000000200,1720000015200,[1,\"dsh.feedback-runtime-entry/v1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",[\"10000000-0000-4000-8000-000000000001\",\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"human:codec-only\",\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",\"codec-session\",[\"10000000-0000-4000-8000-000000000003\",\"codec-session\",\"source-message\",\"1\"],\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000004\",\"10000000-0000-4000-8000-000000000005\",\"1\",\"10000000-0000-4000-8000-000000000006\",\"10000000-0000-4000-8000-000000000007\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"10000000-0000-4000-8000-000000000008\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000009\",\"invocation-1\",[\"slark_group_text_invocation\",\"actual-executor-project\",\"executor-agent\",\"executor-computer\",\"agent\",\"invocation-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"original-turn\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"journal\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"delivery-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000010\",\"10000000-0000-4000-8000-000000000011\",\"10000000-0000-4000-8000-000000000012\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1720000000000,1720000120000],\"10000000-0000-4000-8000-000000000013\",\"10000000-0000-4000-8000-000000000014\",\"1\",\"10000000-0000-4000-8000-000000000015\",\"10000000-0000-4000-8000-000000000016\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"1\",1720000000100,\"8a2c37bfa33ebced3a02dd3230919523dbfa35c0231087b64e859f0f042f0c9c\",\"10000000-0000-4000-8000-000000000017\",\"1\",\"1\",\"c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102\"],[\"actual-dsbot-journal-codec-vector\",\"10000000-0000-4000-8000-000000000020\",\"dsbot-project-operations\",\"1\",\"dsh-runtime-entry:10000000-0000-4000-8000-000000000013\",\"1\",\"341\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000013\",\"112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195\",\"c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102\"],\"d770f898374be609881f3adce817fe892ca311b3adce5d6eca548e7d404c616c\"]",
+    "attribution": "slark.project-operation-runtime-entry-attribution/v1\u0000[1,\"project_operation_runtime_entry_attribution\",\"https://cloud.example.test\",\"environment-key\",\"10000000-0000-4000-8000-000000000001\",\"https://accounts.dsh.colorbuyai.com\",\"10000000-0000-4000-8000-000000000018\",\"account-binding\",1,\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",\"host-installation\",\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\",\"10000000-0000-4000-8000-000000000019\",1720000000300,1720000120300,\"b29e17866452a0edabdb0e8240af91e2e220e43e2b9cb2d52cfea3f26ee2222d\",\"112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195\",\"c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102\",[\"10000000-0000-4000-8000-000000000001\",\"n2_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"human:codec-only\",\"10000000-0000-4000-8000-000000000002\",\"codec_bot\",\"codec-session\",[\"10000000-0000-4000-8000-000000000003\",\"codec-session\",\"source-message\",\"1\"],\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000004\",\"10000000-0000-4000-8000-000000000005\",\"1\",\"10000000-0000-4000-8000-000000000006\",\"10000000-0000-4000-8000-000000000007\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"10000000-0000-4000-8000-000000000008\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000009\",\"invocation-1\",[\"slark_group_text_invocation\",\"actual-executor-project\",\"executor-agent\",\"executor-computer\",\"agent\",\"invocation-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"original-turn\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"journal\",\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\"],\"delivery-1\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000010\",\"10000000-0000-4000-8000-000000000011\",\"10000000-0000-4000-8000-000000000012\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",1720000000000,1720000120000],\"10000000-0000-4000-8000-000000000013\",\"original-admission-project\",\"dsh-runtime-entry:10000000-0000-4000-8000-000000000013\",\"1\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]",
+    "sourceEventMapping": "dsh.project-operation-runtime-entry-source-mapping/v1\u0000[\"actual-dsbot-journal-codec-vector\",\"10000000-0000-4000-8000-000000000020\",\"dsbot-project-operations\",\"1\",\"dsh-runtime-entry:10000000-0000-4000-8000-000000000013\",\"1\",\"341\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"10000000-0000-4000-8000-000000000013\",\"112fdf6c9f08ed32a64d98083b93be82839d88724840c534ff12d4e8fa8c4195\",\"c5b4aaa2374f8f907cca35e8f3409be9ff33f02fb49f8a657fad117c34e14102\"]"
+  }
+}

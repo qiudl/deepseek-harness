@@ -3,6 +3,8 @@ import { memoryDatabaseFixture } from './project-operation-memory.test-support.t
 import { createHash, generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { Context } from '@deepseek-ai/cordis'
+import { createServer } from 'node:http'
+import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from '../../../bundle/web-app/src/desktop-collaboration-analysis.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   parseHostProjectMemoryEnvironment,
@@ -61,7 +63,7 @@ function file() {
     },
   }
 }
-async function fixture(confirm = true) {
+async function fixture(confirm = true, journalEpoch = 'journal_1') {
   const ctx = new Context()
   lives.push(ctx)
   const cloud = generateKeyPairSync('ed25519'),
@@ -102,7 +104,7 @@ async function fixture(confirm = true) {
     clockRead: undefined as (() => number) | undefined,
     current: true,
     version: '12',
-    prepareResult: structuredClone(data.readResults[0]!.value),
+    prepareResult: replaceFixtureValue(replaceFixtureValue(structuredClone(data.readResults[0]!.value), ['journalEpoch'], journalEpoch), ['checkpoint', 'journalEpoch'], journalEpoch),
     deadline: false,
     block: undefined as (() => Promise<void>) | undefined,
     mutation: undefined as ((view: ProjectOperationMemoryAuthorization) => void) | undefined,
@@ -133,7 +135,7 @@ async function fixture(confirm = true) {
       return {
         anchorId: view.confirmation.anchorId,
         confirmationDigest: view.confirmation.confirmationDigest,
-        journalEpoch: 'journal_1',
+        journalEpoch,
         activationSequence: '0',
         syncStartSequence: '0',
         sourceAuthorityVersion: '11',
@@ -158,7 +160,7 @@ async function fixture(confirm = true) {
       const output = {
         operation: view.operation,
         sourceAuthorityVersion: state.version,
-        journalEpoch: 'journal_1',
+        journalEpoch,
         snapshotId:
           view.operation === 'prepare_snapshot' && result && typeof result === 'object' && 'snapshotId' in result
             ? result.snapshotId
@@ -168,7 +170,7 @@ async function fixture(confirm = true) {
         previousCheckpoint:
           view.operation === 'history_page' || view.operation === 'delta_page'
             ? {
-              journalEpoch: 'journal_1',
+              journalEpoch,
               sequence: '0',
               scopeDigest: view.scopeDigest,
               recipientDigest: view.recipientDigest,
@@ -1290,4 +1292,54 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
     cancelled.abort('private cancellation reason')
     expect(await f.owner.execute(body, cancelled.signal)).toMatchObject({ status: 'error', code: 'timeout' })
   })
+})
+
+/** The source producer is controlled here; HTTP grammar and the opaque worker reader are real. */
+it('passes the original optional native cut through HTTP and rejects malformed or mismatched cut metadata before the producer', async () => {
+  const f = await fixture(true, randomUUID())
+  await f.call()
+  const body = f.commands.at(-1)
+  if (!body || typeof body !== 'object' || !('anchor' in body) || !('confirmation' in body) || !('request' in body))
+    throw Error('actual Main request missing')
+  const a = body.anchor as { anchorId: string; journalEpoch: string; activationSequence: string }
+  const c = body.confirmation as { confirmationDigest: string }
+  const d = parseHostProjectMemoryRequest(body.request).directive
+  const cut = { journalId: randomUUID(), journalEpoch: '1', effectHead: '0', anchorId: a.anchorId,
+    confirmationDigest: c.confirmationDigest, sourceJournalEpoch: a.journalEpoch,
+    activationSequence: a.activationSequence, scopeDigest: d.scope.scopeDigest,
+    recipientDigest: d.scope.recipientRef.audienceDigest }
+  const oldView = f.views.at(-1)
+  if (!oldView) throw Error('actual worker authorization missing')
+  cut.recipientDigest = oldView.recipientDigest
+  const noCapture = async () => { throw Error('unexpected capture') }
+  const owner = new DesktopCollaborationAnalysis(noCapture, noCapture, f.life.signal,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, f.owner)
+  const token = 'A'.repeat(43)
+  const server = createServer((req, res) => { void handleDesktopCollaborationAnalysisRequest(req, res, token, owner) })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const address = server.address()
+    if (!address || typeof address === 'string') throw Error('actual listener missing')
+    const post = async (payload: object) => {
+      const response = await fetch('http://127.0.0.1:' + String(address.port), { method: 'POST',
+        headers: { authorization: 'Bearer ' + token }, body: JSON.stringify(payload) })
+      const value: unknown = await response.json()
+      return { status: response.status, value }
+    }
+    const prior = f.counts().reads
+    expect((await post(body)).status).toBe(200)
+    expect((await post({ ...body, nativeActivationCut: cut })).status).toBe(200)
+    expect(f.counts().reads).toBe(prior + 2)
+    const view = f.views.at(-1)
+    expect(view && view.purpose === 'source_read' ? view.nativeActivationCut : null).toEqual(cut)
+    for (const invalid of [null, {}, { ...cut, extra: true }, { ...cut, anchorId: randomUUID() },
+      { ...cut, scopeDigest: 'f'.repeat(64) }, { ...cut, effectHead: '-1' }]) {
+      const result = await post({ ...body, nativeActivationCut: invalid })
+      expect(result.status).toBe(200)
+      expect(result.value).toMatchObject({ value: { status: 'error', code: 'capability_unavailable' } })
+    }
+    expect(f.counts().reads).toBe(prior + 2)
+    expect((await post({ ...body, nativeActivationCut: cut, unknown: true })).status).toBe(400)
+    expect((await post({ ...body, action: 'project_operation_memory_anchor', nativeActivationCut: cut })).status).toBe(400)
+  } finally { await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve() })) }
 })

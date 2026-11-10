@@ -1,3 +1,7 @@
+import type { DesktopRuntimeEntryHost } from './desktop-runtime-entry-host.ts'
+import { parseTaskCoordinationActualAccount, parseTaskCoordinationActualPeer, type TaskCoordinationActualAccount,
+  type DesktopTaskCoordination } from './desktop-task-coordination.ts'
+import { parseHostTaskCoordinationInput } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootAnalysisDiagnostic, type HostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRootPlanning } from './desktop-root-planning.ts'
 import type { CollaborationRootPlanningJournal, CollaborationRootPlanningGrant } from '@deepseek-ai/dsh-api-session-controller'
@@ -101,12 +105,44 @@ export class DesktopCollaborationAnalysis {
       execute(value: unknown, signal: AbortSignal): Promise<unknown>
       captureAnchor(value: unknown, signal: AbortSignal): Promise<unknown>
     },
+    private readonly taskCoordination?: DesktopTaskCoordination,
   ) {
     if (planning && readRoot) this.rootPlanning = new DesktopRootPlanning(readRoot, planning.prepare, planning.open,
       () => this.journal ??= this.open(), (root) => {
         // An immutable root always retains the same Source digest, including after admission.
         if ([...this.pending].some(p => !p.controller.signal.aborted && p.sourceDigest === root.source_digest)) throw Error('collaboration_root_planning_original_alive')
       }, lifetime)
+  }
+
+  /** Process only parent-authenticated task metadata and original-cut signature persistence.
+   * @param row - Exact private HTTP request, never the public task payload alone.
+   * @param signal - Original parent request lifetime.
+   * @returns Worker metadata; Main supplies installation signatures before any public reply.
+   */
+  async coordinateTask(row: Record<string, unknown>, signal: AbortSignal): Promise<
+    { kind: string
+      record: Awaited<ReturnType<DesktopTaskCoordination['operate']>>
+      originalCut?: ReturnType<DesktopTaskCoordination['inspectOriginalCut']> }
+    | { kind: string; record: { ok: boolean; errorCode: string } }
+  > {
+    if (this.closing || !this.taskCoordination) throw Error('task_coordination_unavailable')
+    const account = parseTaskCoordinationActualAccount(row.actualAccount), peer = parseTaskCoordinationActualPeer(row.actualPeer)
+    const active = AbortSignal.any([signal, this.lifetime])
+    try {
+      if (row.action === 'task_coordination_commit_ack') {
+        const ack = await this.taskCoordination.commitAck(row.request, row.fenceAck, account, peer, active)
+        return { kind: 'task_coordination', record: { ok: true, peer: parseHostTaskCoordinationInput(row.request).directive.peer,
+          record: { status: 'closed', fenceAck: ack } } }
+      }
+      const record = await this.taskCoordination.operate(row.request, account, peer, active)
+      return { kind: 'task_coordination', record,
+        ...(record.ok && record.record.status === 'closed' ? { originalCut: this.taskCoordination.inspectOriginalCut(row.request) } : {}) }
+    } catch (error) {
+      const code: unknown = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+      return { kind: 'task_coordination', record: { ok: false,
+        errorCode: typeof code === 'string' && ['unauthorized', 'profile_mismatch', 'replayed', 'stale', 'conflict', 'busy'].includes(code)
+          ? code : 'unavailable' } }
+    }
   }
   /** Execute private original-event observation under the current authenticated parent request.
    * @param value - Unix-authenticated Account, peer and distinct origin operation.
@@ -131,9 +167,10 @@ export class DesktopCollaborationAnalysis {
   /** Read or enqueue original Session feedback under the private parent lifetime.
    * @param operation - Exact root, execution, delivery and observed Session prefix.
    * @param signal - Parent cancellation; current cloud permission remains the parent's responsibility.
+   * @param account - Current parent-owned Account for denial-only Root floors.
    * @returns Persisted consumption evidence; enqueue does not wake a model.
    */
-  async rootFeedback(operation: unknown, signal: AbortSignal): Promise<
+  async rootFeedback(operation: unknown, signal: AbortSignal, account?: TaskCoordinationActualAccount): Promise<
     Awaited<ReturnType<SessionController['collaborationRootFeedback']>> | Awaited<ReturnType<SessionController['collaborationRootConsumption']>>
   > {
     if (this.closing || !this.feedback) throw Error('collaboration_feedback_unavailable')
@@ -143,7 +180,7 @@ export class DesktopCollaborationAnalysis {
     const consumer = action === 'continuation_read' || action === 'consumer_read' || action === 'consumer_prepare' || action === 'consumer_start'
     const consume = this.consumption
     if (consumer && !consume) throw Error('collaboration_consumption_unavailable')
-    const result = consumer && consume ? await consume(operation, active) : await this.feedback(operation, active)
+    const result = consumer && consume ? await consume(operation, active, account) : await this.feedback(operation, active)
     active.throwIfAborted()
     return result
   }
@@ -694,12 +731,16 @@ export class DesktopCollaborationAnalysis {
  * @param res - Noncacheable JSON; refusals exclude Source content, keys and exception details.
  * @param token - Profile-worker analysis capability owned only by its Parent Host.
  * @param owner - Profile-local two-stage coordinator.
+ * @param native - Actual optional metadata entry owner from the same worker boot.
+ * @param coldLocator - Fixed-bootstrap read-only original-attempt locator; never a request field.
  */
 export async function handleDesktopCollaborationAnalysisRequest(
   req: IncomingMessage,
   res: ServerResponse,
   token: string,
   owner: DesktopCollaborationAnalysis,
+  native?: DesktopRuntimeEntryHost,
+  coldLocator?: (operation: unknown, signal: AbortSignal) => Promise<{ entryId: string | null }>,
 ): Promise<void> {
   const actual = Buffer.from(
       req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '',
@@ -746,19 +787,28 @@ export async function handleDesktopCollaborationAnalysisRequest(
       const parsed: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)))
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw Error('invalid')
       row = parsed as Record<string, unknown>
-      const keys = row.action === 'project_operation_memory' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation', 'anchor', 'plan', 'currentCommittedCheckpoint']
-        : row.action === 'project_operation_memory_anchor' ? ['action', 'input', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation']
-          : row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key'] :
-            (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
-              : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
-                : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
-                  : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
-                    ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
+      const nativePurpose = row.purpose === 'runtime_entry' && (row.action === 'root_feedback' || row.action === 'root_execution_journal')
+      const keys = nativePurpose ? ['action', 'purpose', 'operation', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
+        ...(Object.hasOwn(row, 'metadataAuthorization') ? ['metadataAuthorization'] : [])]
+        : row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish'
+          ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
+            ...(row.action === 'runtime_entry_publish' ? ['actualPublication'] : [])]
+          : row.action === 'task_coordination' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer']
+            : row.action === 'task_coordination_commit_ack' ? ['action', 'request', 'fenceAck', 'binding_key', 'actualAccount', 'actualPeer']
+              : row.action === 'project_operation_memory' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation', 'anchor', 'plan', 'currentCommittedCheckpoint',
+                ...(Object.hasOwn(row, 'nativeActivationCut') ? ['nativeActivationCut'] : [])]
+                : row.action === 'project_operation_memory_anchor' ? ['action', 'input', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation']
+                  : row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key', ...(Object.hasOwn(row, 'actualAccount') ? ['actualAccount'] : [])] :
+                    (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
+                      : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
+                        : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
+                          : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
+                            ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
                   ((row.action === 'prepare' || row.action === 'prepare_root') && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
-                    : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
-                      : row.action === 'dispatch'
-                        ? ['action', 'attempt_request_id', 'binding_key', 'grant']
-                        : []
+                            : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
+                              : row.action === 'dispatch'
+                                ? ['action', 'attempt_request_id', 'binding_key', 'grant']
+                                : []
       if (
         !keys.length ||
         Object.keys(row).length !== keys.length ||
@@ -779,42 +829,57 @@ export async function handleDesktopCollaborationAnalysisRequest(
         if (!owner.rootPlanning) throw Error('collaboration_root_planning_unavailable')
         return owner.rootPlanning
       }
-      const value = row.action === 'capture_root' || row.action === 'capture_group_root'
-        ? await owner.captureRootOnly(row.input, row.binding_key, controller.signal,
-          row.action === 'capture_group_root' ? 'group' : 'legacy')
-        : row.action === 'start_captured_root' ? await owner.startCapturedRootAnalysis(row.input, row.binding_key, controller.signal)
-          : row.action === 'release_captured_root' ? await owner.releaseCapturedRoot(row.input, row.binding_key, controller.signal)
-            : row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
-              : row.action === 'prepare_clarification' ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
-                : row.action === 'project_operation_memory' || row.action === 'project_operation_memory_anchor'
-                  ? await owner.projectOperationMemory(row, controller.signal, row.action === 'project_operation_memory_anchor')
-                  : row.action === 'root_operation_origin' ? await owner.rootOperationOrigin(row, controller.signal)
-                    : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
-                      row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
-                        : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
-                          : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
-                            row.binding_key, controller.signal)
-                            : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
-                              row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
-                              : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
-                                : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
-                                  : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
-                                    : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
-                                      : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
-                                        : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
-                                          : row.action === 'prepare_root'
-                                            ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
-                                              row.resume_binding_key as string | undefined)
-                                            : row.action === 'prepare'
-                                              ? await owner.prepare(row.input as CollaborationSourceInput,
-                                                row.binding_key, controller.signal,
-                                                row.resume_binding_key as string | undefined)
-                                              : await owner.dispatch(
-                                                row.attempt_request_id as string,
-                                                row.binding_key,
-                                                row.grant as CollaborationAnalysisDispatchGrant,
-                                                controller.signal,
-                                              )
+      const nativePurpose = row.purpose === 'runtime_entry' && (row.action === 'root_feedback' || row.action === 'root_execution_journal')
+      if ((nativePurpose || row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish')
+        && row.actualWorkerId !== process.env.DSH_PROFILE_WORKER_ID) throw Error('runtime_entry_unavailable')
+      if (!native && nativePurpose && row.action === 'root_execution_journal') {
+        res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ supported: false, record: null })); return
+      }
+      if ((nativePurpose || row.action === 'runtime_entry_publish') && !native) throw Error('runtime_entry_unavailable')
+      const locate = native ? native.locate.bind(native) : coldLocator
+      if (row.action === 'runtime_entry_locate' && !locate) throw Error('runtime_entry_unavailable')
+      const value = nativePurpose && native ? await native.analyze(row, controller.signal)
+        : row.action === 'runtime_entry_locate' && locate ? await locate(row.operation, controller.signal)
+          : row.action === 'runtime_entry_publish' && native ? { published: await native.publish(row.operation, row.actualPublication,
+            parseTaskCoordinationActualAccount(row.actualAccount), parseTaskCoordinationActualPeer(row.actualPeer), controller.signal) }
+            : row.action === 'task_coordination' || row.action === 'task_coordination_commit_ack'
+              ? await owner.coordinateTask(row, controller.signal)
+              : row.action === 'capture_root' || row.action === 'capture_group_root'
+                ? await owner.captureRootOnly(row.input, row.binding_key, controller.signal,
+                  row.action === 'capture_group_root' ? 'group' : 'legacy')
+                : row.action === 'start_captured_root' ? await owner.startCapturedRootAnalysis(row.input, row.binding_key, controller.signal)
+                  : row.action === 'release_captured_root' ? await owner.releaseCapturedRoot(row.input, row.binding_key, controller.signal)
+                    : row.action === 'capture_reply' ? await owner.captureReply(row.input as CollaborationSourceInput, row.binding_key, controller.signal)
+                      : row.action === 'prepare_clarification' ? await owner.prepareClarification(row.input, row.binding_key, controller.signal)
+                        : row.action === 'project_operation_memory' || row.action === 'project_operation_memory_anchor'
+                          ? await owner.projectOperationMemory(row, controller.signal, row.action === 'project_operation_memory_anchor')
+                          : row.action === 'root_operation_origin' ? await owner.rootOperationOrigin(row, controller.signal)
+                            : row.action === 'root_feedback' ? await owner.rootFeedback(row.operation, controller.signal, Object.hasOwn(row, 'actualAccount') ? parseTaskCoordinationActualAccount(row.actualAccount) : undefined) : row.action === 'root_execution_journal' ? await owner.executionJournal(row.operation, controller.signal) :
+                              row.action === 'read_root_attempt' ? await planning().readEvidence(row.target, controller.signal)
+                                : row.action === 'prepare_root_attempt' ? await planning().prepare(row.target, row.binding_key, controller.signal)
+                                  : row.action === 'inspect_root_attempt' ? await planning().inspect(row.target, row.attempt_request_id as string,
+                                    row.binding_key, controller.signal)
+                                    : row.action === 'dispatch_root_attempt' ? await planning().dispatch(row.attempt_request_id as string,
+                                      row.binding_key, row.grant as CollaborationRootPlanningGrant, controller.signal)
+                                      : row.action === 'resume_root' ? await owner.resumeRoot(row.input,row.binding_key,controller.signal,row.resume_binding_key as string)
+                                        : row.action === 'resume_source' ? await owner.resumeSource(row.input, row.binding_key, controller.signal, row.resume_binding_key as string)
+                                          : row.action === 'read_source_output' ? await owner.readSourceOutput(row.target, controller.signal)
+                                            : row.action === 'read_root_diagnostic' ? await owner.readRootDiagnostic(row.target, controller.signal)
+                                              : row.action === 'read_root_output' ? await owner.readRootOutput(row.target, controller.signal)
+                                                : (row.action === 'recover_root' || row.action === 'reconcile_root') ? await owner.recoverRoot(row.input,controller.signal,row.action === 'reconcile_root')
+                                                  : row.action === 'prepare_root'
+                                                    ? await owner.prepareRoot(row.input, row.binding_key, controller.signal,
+                                                      row.resume_binding_key as string | undefined)
+                                                    : row.action === 'prepare'
+                                                      ? await owner.prepare(row.input as CollaborationSourceInput,
+                                                        row.binding_key, controller.signal,
+                                                        row.resume_binding_key as string | undefined)
+                                                      : await owner.dispatch(
+                                                        row.attempt_request_id as string,
+                                                        row.binding_key,
+                                                        row.grant as CollaborationAnalysisDispatchGrant,
+                                                        controller.signal,
+                                                      )
       controller.signal.throwIfAborted()
       send(200, { value })
     } catch {

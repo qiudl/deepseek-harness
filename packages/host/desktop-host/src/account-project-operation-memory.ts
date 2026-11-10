@@ -1,3 +1,8 @@
+import type { ProjectOperationMemoryNativeSource } from './project-operation-memory-native-source.ts'
+import type {
+  NativeRuntimeEntrySourceWitness,
+  NativePolicyPin,
+} from './project-operation-memory-native-qualification.ts'
 import { operateAccountProjectOperationMemoryRecipient } from './account-project-operation-memory-recipient.ts'
 import type { ProjectOperationMemoryRecipientImports } from './project-operation-memory-recipient-imports.ts'
 import type { HostBotIdentity } from '@deepseek-ai/dsh-host-control-protocol'
@@ -72,12 +77,26 @@ export interface AccountProjectOperationMemoryOptions {
   readonly peer: Pick<HostProjectMemoryPeer, 'installationId' | 'publicKey' | 'hostInstanceId' | 'processNonce'>
   readonly environments: readonly HostProjectMemoryEnvironment[]
   /** Independent recipient owner; omission keeps reverse metadata unavailable. */
-  readonly recipientImports?: (profileId: string) =>
-    ProjectOperationMemoryRecipientImports | Promise<ProjectOperationMemoryRecipientImports>
-  readonly resolveRecipientBot?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
+  readonly recipientImports?: (
+    profileId: string,
+  ) => ProjectOperationMemoryRecipientImports | Promise<ProjectOperationMemoryRecipientImports>
+  readonly resolveRecipientBot?: (
+    profileId: string,
+    botId: string,
+    signal: AbortSignal,
+  ) => Promise<HostBotIdentity | null>
   readonly sourceExports?: (
     profileId: string,
   ) => ProjectOperationMemorySourceExports | Promise<ProjectOperationMemorySourceExports>
+  readonly nativeSource?: (
+    profileId: string,
+  ) => ProjectOperationMemoryNativeSource | Promise<ProjectOperationMemoryNativeSource>
+  readonly observeRuntimeEntrySource?: (
+    profileId: string,
+    directive: HostProjectMemoryDirective,
+    entryId: string,
+    signal: AbortSignal,
+  ) => Promise<NativeRuntimeEntrySourceWitness>
   readonly metadata: (profileId: string) => ProjectOperationMemoryMetadata | Promise<ProjectOperationMemoryMetadata>
   readonly execute: (
     profileId: string,
@@ -111,6 +130,7 @@ export async function operateAccountProjectOperationMemory(
     options.host.authorizeCollaborationRegistration(account)
     return options.host.authorizeAccountModelText(account)
   }
+  const nativeWitnesses: NativeRuntimeEntrySourceWitness[] = []
   const profileId = authorize()
   const guard = () => {
     if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
@@ -127,6 +147,7 @@ export async function operateAccountProjectOperationMemory(
     )
       throw new HostAuthorityError('unauthorized')
     verifyProjectOperationMemoryDirective(options.environments, d, options.now())
+    for (const witness of nativeWitnesses) witness.assertCurrent()
   }
   try {
     guard()
@@ -146,6 +167,11 @@ export async function operateAccountProjectOperationMemory(
     const store = await options.metadata(profileId)
     guard()
     store.reserveNonce([d.authorityEnvironmentId, d.issuer, d.keyId, d.nonce], options.now(), d.expiresAt, guard)
+    const original = store.find(d.scope, d.ownerUserId, d.authorityEnvironmentId)
+    const nativeSource = options.nativeSource ? await options.nativeSource(profileId) : undefined
+    guard()
+    const nativeCut = original ? (nativeSource?.cutFor(d, original) ?? null) : null
+    if (nativeCut && (!nativeSource || !original)) throw new HostAuthorityError('unavailable')
     if (d.operation === 'apply' || d.operation === 'receipt') {
       const exports = await options.sourceExports?.(profileId)
       guard()
@@ -153,22 +179,23 @@ export async function operateAccountProjectOperationMemory(
       guard()
       const result =
         d.operation === 'receipt'
-          ? exports.read(d, request.commandBody as HostProjectMemoryCommands['receipt'])
+          ? (nativeCut && nativeSource ? nativeSource : exports).read(d, request.commandBody as HostProjectMemoryCommands['receipt'])
           : (() => {
             const command = request.commandBody as HostProjectMemoryCommands['apply']
             return command.phase === 'stage'
-              ? exports.stage(d, command, store, options.now(), options.sign, guard)
-              : exports.finalize(d, command, options.now(), guard, options.sign)
+              ? nativeCut && nativeSource && original
+                ? nativeSource.stage(d, command, original, options.now(), options.sign, guard)
+                : exports.stage(d, command, store, options.now(), options.sign, guard)
+              : (nativeCut && nativeSource ? nativeSource : exports).finalize(d, command, options.now(), guard, options.sign)
           })()
       guard()
       return parseHostProjectMemoryJson(parseHostProjectMemoryResponse(result))
     }
-    const original = store.find(d.scope, d.ownerUserId, d.authorityEnvironmentId)
     if (!original) throw new HostAuthorityError('unavailable')
     const sourceExports = await options.sourceExports?.(profileId)
     guard()
     const currentCommittedCheckpoint =
-      sourceExports?.committedCheckpoint(
+      (nativeCut ? nativeSource : sourceExports)?.committedCheckpoint(
         d,
         parseHostProjectMemoryCheckpoint({
           journalEpoch: original.anchor.journalEpoch,
@@ -215,6 +242,7 @@ export async function operateAccountProjectOperationMemory(
         anchor: original.anchor,
         plan,
         currentCommittedCheckpoint,
+        ...(nativeCut === null ? {} : { nativeActivationCut: nativeCut }),
       }),
       signal,
     )
@@ -253,13 +281,13 @@ export async function operateAccountProjectOperationMemory(
       ('events' in result &&
         result.events.some(
           e =>
-            e.sourcePolicy !== 'live_reference_v1' ||
             e.materialDependencies.length !== 0 ||
             e.originSide !== 'dsh' ||
             e.originActorRef !== d.scope.sourceRef.actorRef ||
             e.projectId !== d.scope.projectId ||
             !d.scope.materialKinds.includes(e.kind) ||
-            e.sourceLocator.providerId !== d.scope.sourceRef.providerId ||
+            (e.sourcePolicy === 'live_reference_v1' &&
+              (e.sourceLocator.providerId !== d.scope.sourceRef.providerId)) ||
             (d.operation === 'history_page' &&
               (e.occurredAt < d.scope.historyFrom || e.occurredAt > d.scope.historyTo)),
         )) ||
@@ -268,6 +296,7 @@ export async function operateAccountProjectOperationMemory(
           result.items.some(
             i =>
               i.snippet !== '' ||
+              i.sourceEventId.startsWith('dsh-runtime-entry:') ||
               i.rightId !== null ||
               i.rightGeneration !== null ||
               i.originSide !== 'dsh' ||
@@ -277,6 +306,27 @@ export async function operateAccountProjectOperationMemory(
       (d.operation === 'evidence' && (!('status' in result) || result.status !== 'missing'))
     )
       throw new HostAuthorityError('unavailable')
+    const nativeFacts: NativePolicyPin[] = []
+    if ('events' in result)
+      for (const event of result.events) {
+        if (event.sourcePolicy !== 'owner_native_operation_fact_v1') continue
+        if (
+          !nativeCut ||
+          !nativeSource ||
+          !options.observeRuntimeEntrySource ||
+          !event.sourceEventId.startsWith('dsh-runtime-entry:')
+        )
+          throw new HostAuthorityError('unavailable')
+        const witness = await options.observeRuntimeEntrySource(profileId, d, event.sourceEventId.slice(18), signal)
+        guard()
+        if (witness.observation.sourceEventMapping?.journalEpoch !== out.journalEpoch)
+          throw new HostAuthorityError('unavailable')
+        nativeFacts.push(
+          nativeSource.qualifyRuntimeEntry(witness, event, d, nativeCut, options.environments, options.now()),
+        )
+        nativeWitnesses.push(witness)
+        guard()
+      }
     if (
       'activationSequence' in result &&
       (result.activationSequence !== original.anchor.activationSequence ||
@@ -362,19 +412,18 @@ export async function operateAccountProjectOperationMemory(
     guard()
     const signature = options.sign(Buffer.from(encodeHostProjectMemorySourceProof(proof)))
     guard()
-    if ('events' in result && previousCheckpoint !== null)
-      store.publishRead(
-        {
-          proof: { ...proof, signature: signature as typeof proof.signature },
-          requestId: d.requestId,
-          previousCheckpoint,
-          checkpoint: result.checkpoint,
-          eventsDigest: projectOperationMemoryEventsDigest(result.events),
-          eof: result.eof,
-        },
-        options.now(),
-        guard,
-      )
+    if ('events' in result && previousCheckpoint !== null) {
+      const published = {
+        proof: { ...proof, signature: signature as typeof proof.signature },
+        requestId: d.requestId,
+        previousCheckpoint,
+        checkpoint: result.checkpoint,
+        eventsDigest: projectOperationMemoryEventsDigest(result.events),
+        eof: result.eof,
+      }
+      if (nativeCut && nativeSource) nativeSource.publishRead(published, result, nativeFacts, options.now(), options.sign, guard)
+      else store.publishRead(published, options.now(), guard)
+    }
     guard()
     return parseHostProjectMemoryJson(
       parseHostProjectMemoryResponse({

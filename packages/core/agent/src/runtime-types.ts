@@ -13,7 +13,58 @@ import type {
 import type { AgentCancelCause, Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 export type { AgentCancelCause } from '@deepseek-ai/dsh-session'
 import type { Agent, InboxTarget, ModelSelection } from './types.ts'
+import type { Branded } from '@deepseek-ai/dsh-brand'
 export type { Agent } from './types.ts'
+
+/** Process-local opaque driver identity; it is never a durable message or an authorization proof. */
+export type OriginalInvocationOccurrenceId = Branded<'OriginalInvocationOccurrenceId'>
+/** Actual driver cut supplied synchronously before any open listener or message materialization. */
+export interface OriginalInvocationEntryDriver {
+  readonly agent: Agent
+  readonly session: Session
+  readonly queueGeneration: string
+  readonly driverReservationId: Branded<'OriginalInvocationDriverReservationId'>
+  readonly signal: AbortSignal
+  /** @returns Whether this exact driver, queue and Session cut still own the operation. */
+  isCurrent(): boolean
+}
+/** Private factory-issued input; callers cannot supply a fact, manifest or completion flag. */
+export interface OriginalInvocationEntryOccurrence {
+  readonly occurrenceId: OriginalInvocationOccurrenceId
+  /** Persist/readback the actual entry or retain an explicit gap before returning.
+   * @param driver - Actual sole driver; no asynchronous or open callback may run inside its commit.
+   */
+  enter(driver: OriginalInvocationEntryDriver): void
+  /** Read original feedback only after enter has returned.
+   * @param signal - The same actual driver cancellation.
+   * @returns Original UserMessage for the unchanged ordinary turn pipeline.
+   */
+  materialize(signal: AbortSignal): Promise<UserMessage>
+}
+/** Private concrete runtime capability, absent on alternate/custom Agent implementations. */
+export interface OriginalInvocationEntryRuntime extends Agent {
+  /** Actual queue/activity serial; empty edits and maintenance also invalidate a pending preparation. */
+  readonly originalInvocationEntryGeneration: string
+  /** Select a sole opaque input and synchronously reserve the actual driver.
+   * @param occurrence - Factory-owned, one-use occurrence.
+   * @returns False without a wake when this Agent or its ordinary queues are busy.
+   */
+  startOriginalInvocationEntry(occurrence: OriginalInvocationEntryOccurrence): boolean
+}
+
+/** Private factory-owned startup witness, never minted from a current header or a caller flag. */
+export interface OriginalInvocationEntrySessionWitness {
+  readonly session: Session
+  readonly birthReceiptDigest: string
+  readonly instanceGeneration: string
+  readonly sessionAuthorityDigest: string
+  readonly logOffset: number
+  /** Original durable logical prefix digest, absent when this backend cannot attest it without a body read. */
+  readonly prefixLogDigest?: string | undefined
+  readonly surfaceGeneration: number
+  /** @returns Whether the original startup handle, backend, Session and exclusive writer remain current. */
+  isCurrent(): boolean
+}
 import type {} from '@deepseek-ai/dsh-system-prompt'
 declare module '@deepseek-ai/dsh-system-prompt' {
   interface AssembleContext {

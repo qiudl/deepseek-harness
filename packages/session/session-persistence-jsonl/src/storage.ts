@@ -21,6 +21,7 @@ import {
   SessionPersistenceNotFoundError,
   SessionPersistenceRevision,
   SessionReadOnlyError,
+  SessionOwnershipLostError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type {
   SessionAccess,
@@ -31,6 +32,7 @@ import type {
   SessionHandleReadResult,
 } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionWriteLease } from './lease.ts'
+import { RuntimeEntryPrefix } from './runtime-entry-prefix.ts'
 
 /** Maximum intentional wait before a routed live session batch starts writing. */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200
@@ -92,6 +94,8 @@ export class JsonlSessionHandle implements SessionHandle {
   /** Set when a drain failed; the automatic timer stays quiet until the next drain. */
   private drainPaused = false
   private draining: Promise<void> | undefined
+  private runtimeEntrySerial = 0n
+  private runtimeEntryPrefix: RuntimeEntryPrefix | undefined
 
   constructor(
     private readonly storage: JsonlHandleStorage,
@@ -101,7 +105,18 @@ export class JsonlSessionHandle implements SessionHandle {
     private readonly state: StorageHandleState,
     /** The cross-process write lock; a create handle acquires it lazily at first materialization. */
     private lease?: SessionWriteLease,
-  ) {}
+  ) {
+    // Only ordinary write construction may seed this metadata. Unknown or
+    // inherited prefixes stay unsupported rather than triggering a later scan.
+    if (access === 'write' && !header.isSeeded && state.inheritedEventCount === 0) {
+      const events = state.primed?.events
+      if (events !== undefined && events.length === state.cursor) {
+        this.runtimeEntryPrefix = RuntimeEntryPrefix.from(events)
+      } else if (state.cursor === 0 && !state.materialized) {
+        this.runtimeEntryPrefix = RuntimeEntryPrefix.from([])
+      }
+    }
+  }
 
   /** Exact fork-inherited prefix length stored with this session's log. */
   get inheritedEventCount(): SessionLogOffset {
@@ -186,6 +201,7 @@ export class JsonlSessionHandle implements SessionHandle {
    */
   async append(events: readonly SessionEvent[], options?: SessionHandleAppendOptions): Promise<void> {
     this.assertOpen('append')
+    this.runtimeEntrySerial++
     // Validate and deep-snapshot the batch HERE, before queueing behind the
     // chain, so the checked value is exactly the value persisted.
     const batch = materializeAppendBatch(events)
@@ -209,6 +225,26 @@ export class JsonlSessionHandle implements SessionHandle {
       await this.storage.persistHeader(this.header, this.state.inheritedEventCount)
       this.state.materialized = true
     })
+  }
+
+  /** Flush only this actual handle and capture metadata without opening or scanning its event log.
+   * @param options - Original operation cancellation before the durability barrier.
+   * @returns Durable original header/count, an optional canonical prefix digest and an exact synchronous lease/cursor fence.
+   */
+  async runtimeEntrySnapshot(options?: SessionHandleFlushOptions) {
+    this.assertOpen('runtime_entry_snapshot')
+    options?.signal?.throwIfAborted()
+    if (this.access !== 'write') throw new SessionReadOnlyError(this.id, 'runtime_entry_snapshot')
+    const serial = this.runtimeEntrySerial
+    await this.drainLive()
+    await this.flush(options)
+    const lease = this.lease, eventCount = this.state.cursor
+    const isCurrent = () => this.closing === undefined && this.state.materialized && this.state.cursor === eventCount
+      && this.runtimeEntrySerial === serial && this.buffered.length === 0 && this.lease === lease && lease?.isCurrent() === true
+    if (!isCurrent()) throw new SessionOwnershipLostError(this.id)
+    const prefixLogDigest = this.state.tornTruncateTo === undefined && (this.state.recoveredTail?.length ?? 0) === 0
+      ? this.runtimeEntryPrefix?.digest() : undefined
+    return Object.freeze({ header: this.header, eventCount, prefixLogDigest, isCurrent })
   }
 
   /**
@@ -272,6 +308,7 @@ export class JsonlSessionHandle implements SessionHandle {
    *   (the events stay buffered; the next {@link drainLive} retries loudly).
    */
   enqueueLive(event: SessionEvent, reportBackgroundFailure: (error: unknown) => void): void {
+    this.runtimeEntrySerial++
     this.buffered.push(structuredClone(event))
     if (this.batchTimer !== undefined || this.drainPaused) return
     this.batchTimer = setTimeout(() => {
@@ -321,6 +358,7 @@ export class JsonlSessionHandle implements SessionHandle {
     if (batch.length === 0) return
     await this.ensureLease()
     assertContiguous(this.id, batch, this.state.cursor)
+    const nextRuntimeEntryPrefix = this.runtimeEntryPrefix?.appended(batch)
     // Commit any pending torn-tail repair first, clearing each step's state
     // only once it lands so a failed step retries on the next mutation:
     // truncate the torn bytes, then durably rewrite the complete events
@@ -336,6 +374,7 @@ export class JsonlSessionHandle implements SessionHandle {
       this.state.recoveredTail = undefined
     }
     await this.storage.persistBatch(this.header, batch, this.state.materialized, this.state.inheritedEventCount)
+    this.runtimeEntryPrefix = nextRuntimeEntryPrefix
     this.state.materialized = true
     this.state.cursor += batch.length
     this.state.primed = undefined
