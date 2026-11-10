@@ -1,3 +1,5 @@
+import { parseHostBotSessionTarget } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomPreparationTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import * as appBoot from '@deepseek-ai/dsh-app-boot'
 import * as pluginExecutors from '../src/profile-plugin-executor.ts'
 import * as pluginCommands from '../src/plugin-command.ts'
@@ -25,6 +27,20 @@ import { acquireWindowsSingleHostLock } from '../src/windows-single-instance.ts'
 import { UnixHostClient } from '../src/unix-transport.ts'
 import * as hostControl from '../src/unix-transport.ts'
 import { expectSlarkStartupAdmission } from './slark-startup-admission.ts'
+
+// The Windows paths in this fixture are virtual on every platform; diagnostics use the same mapped boundary.
+vi.mock('../src/host-diagnostics.ts', async (load) => {
+  const actual = await load<typeof import('../src/host-diagnostics.ts')>()
+  return { ...actual, createHostDiagnostics(options: Parameters<typeof actual.createHostDiagnostics>[0]) {
+    const logs = new Map<string, Buffer>()
+    return actual.createHostDiagnostics({ ...options, fileOperations: {
+      ensureDirectory() {},
+      append(path, bytes) { logs.set(path, Buffer.concat([logs.get(path) ?? Buffer.alloc(0), bytes])) },
+      length(path) { return logs.get(path)?.length },
+      replace(source, target) { const bytes = logs.get(source); if (bytes) logs.set(target, bytes); logs.delete(source) },
+    } })
+  } }
+})
 
 vi.mock('node:fs', async (load) => {
   const actual = await load<typeof import('node:fs')>()
@@ -214,6 +230,72 @@ function fixture() {
 }
 
 describe('Windows Desktop Host startup', () => {
+  it('carries an explicit task policy from the raw Windows envelope into the actual worker factory and current Main authority', async () => {
+    const state = fixture(), keys = generateKeyPairSync('ed25519'), Original = hostControl.HostControlAuthority
+    let captured: ConstructorParameters<typeof Original>[0] | undefined
+    vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(class extends Original {
+      constructor(options: ConstructorParameters<typeof Original>[0]) { super(options); captured = options }
+    })
+    const policy = { audience: 'urn:slark:task-coordination:v1', environmentKey: 'staging', keyring: {
+      version: 1, environmentId: randomUUID(), issuer, keys: [{ kid: 'dsh-assertion-task-test',
+        publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }), validFrom: 1, validUntil: 2_000_000_000_000 }],
+    } }
+    const app = await startWindowsDesktopHostApplication({ ...state.options,
+      taskCoordinationEnvironmentsJson: JSON.stringify([policy]),
+    }, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    expect(state.dependencies.createProfileWorkerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      taskCoordinationEnvironments: [policy],
+    }))
+    expect(captured?.taskCoordinationEnvironments).toEqual([policy])
+    expect(typeof captured?.taskCoordinationReceiver).toBe('function')
+  })
+  it('rejects ambiguous, cross-purpose, unknown or private task policy before starting a Windows transport or worker', async () => {
+    for (const input of [
+      { taskCoordinationEnvironmentsJson: '[]', taskCoordinationEnvironments: [] },
+      { taskCoordinationEnvironmentsJson: '{}' },
+      { taskCoordinationEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:project-memory:v1',
+        environmentKey: 'staging', keyring: {} }]) },
+      { taskCoordinationEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:task-coordination:v1',
+        environmentKey: 'staging', keyring: {}, privateKeyPem: 'forbidden' }]) },
+    ]) {
+      const state = fixture()
+      await expect(startWindowsDesktopHostApplication({ ...state.options, ...input }, undefined, state.dependencies)).rejects.toThrow()
+      expect(state.startTransport).not.toHaveBeenCalled()
+      expect(state.dependencies.createProfileWorkerFactory).not.toHaveBeenCalled()
+    }
+  })
+
+  it('projects only explicit public memory policy JSON into the actual worker factory', async () => {
+    const state = fixture(), keys = generateKeyPairSync('ed25519')
+    const policy = { audience: 'urn:slark:project-memory:v1', environmentKey: 'staging', keyring: {
+      version: 1, environmentId: randomUUID(), issuer, keys: [{ kid: 'dsh-assertion-memory-test',
+        publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }), validFrom: 1, validUntil: 2_000_000_000_000 }],
+    } }
+    const app = await startWindowsDesktopHostApplication({ ...state.options,
+      projectOperationMemoryEnvironmentsJson: JSON.stringify([policy]),
+    }, undefined, state.dependencies)
+    onTestFinished(async () => { await app.close() })
+    expect(state.dependencies.createProfileWorkerFactory).toHaveBeenCalledWith(expect.objectContaining({
+      projectOperationMemoryEnvironments: [policy],
+    }))
+  })
+
+  it('rejects ambiguous, unknown or private memory policy carrier inputs before starting transport', async () => {
+    for (const input of [
+      { projectOperationMemoryEnvironmentsJson: '[]', projectOperationMemoryEnvironments: [] },
+      { projectOperationMemoryEnvironmentsJson: '{}' },
+      { projectOperationMemoryEnvironmentsJson: JSON.stringify([{ audience: 'urn:slark:project-memory:v1',
+        environmentKey: 'staging', keyring: {}, privateKeyPem: 'forbidden' }]) },
+    ]) {
+      const state = fixture()
+      await expect(startWindowsDesktopHostApplication({ ...state.options, ...input }, undefined, state.dependencies))
+        .rejects.toThrow()
+      expect(state.startTransport).not.toHaveBeenCalled()
+      expect(state.dependencies.createProfileWorkerFactory).not.toHaveBeenCalled()
+    }
+  })
+
   it('composes twin receipt storage only for a registry-resolved Profile and a fixed native private path', async () => {
     const Original = hostControl.HostControlAuthority
     let captured: ConstructorParameters<typeof Original>[0] | undefined
@@ -252,13 +334,16 @@ describe('Windows Desktop Host startup', () => {
     }) }
     const inspect = vi.fn(async () => descriptor), read = vi.fn(async () => snapshot)
     const receive = vi.fn(async () => null), analysis = vi.fn(async () => null)
+    const nativePhase = vi.fn(async () => ({ state: 'bot_unavailable' as const }))
+    const sessionRead = vi.fn(async (botId: string, sessionId: string) =>
+      parseHostBotSessionTarget({ bot_id: botId, session_id: sessionId }))
     state.createProfileWorker.mockImplementation(async () => ({
       closeNotifications: vi.fn(), abort: vi.fn(), done: Promise.resolve(),
       viewOrigin: 'http://127.0.0.1:49152', generation: 1,
       bootstrapCookie: { name: 'dsh-auth-test', value: 'v1.test.test' },
       inspectWorkspaceModelSelection: async value => ({ ...value, provider: 'deepseek', model: 'chat' }),
       inspectCollaborationSource: inspect, readCollaborationSourceSnapshot: read, receiveCollaborationDelivery: receive,
-      collaborationAnalysis: analysis,
+      collaborationAnalysis: analysis, prepareNativeRoomPhase: nativePhase, resolveBotSessionIdentity: sessionRead,
     }))
     const application = await startWindowsDesktopHostApplication(state.options, { now: () => now }, state.dependencies)
     onTestFinished(async () => { await application.close() })
@@ -275,9 +360,19 @@ describe('Windows Desktop Host startup', () => {
       authorityBindingVersion: 1, issuer, subject: accountId }
     const selection = { ...account, workspace_id: target.workspace_id, session_id: target.session_id }
     await expect(client.inspectWorkspaceModelSelection(selection)).rejects.toMatchObject({ code: 'unauthorized' })
-    await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
+    const ensured = await client.ensureAccountProfile({ ...account, accountAccessToken: accountToken(state.accountPrivateKey, now),
       keyHandle: 'windows-credential:account', unlockMaterial })
     expect(client.inspection.capabilities).toContain('profile.collaboration_registration')
+    expect(client.inspection.capabilities).toContain('profile.native_room_preparation')
+    const nativeTarget = parseHostNativeRoomPreparationTarget({ operation: 'prepare_source',
+      challenge_nonce: 'A'.repeat(43), expires_at: now + 1000, binding_id: randomUUID(), binding_generation: '1',
+      computer_id: 'fixture-computer', slark_audience: 'https://slark.example.test', expected_profile_id: ensured.profileId,
+      bot_id: 'operator', room_id: 'room-1', workspace_id: target.workspace_id, member_set_digest: 'a'.repeat(64), expected_source: null })
+    expect(await client.prepareNativeRoomPhase({ ...account, target: nativeTarget })).toEqual({ state: 'bot_unavailable' })
+    expect(nativePhase).toHaveBeenCalledWith(nativeTarget, expect.any(AbortSignal))
+    expect(await client.resolveBotSessionIdentity({ ...account, botId: 'bot_1', sessionId: 'session_1' }))
+      .toEqual({ bot_id: 'bot_1', session_id: 'session_1', host_profile_id: ensured.profileId })
+    expect(sessionRead).toHaveBeenCalledWith('bot_1', 'session_1', expect.any(AbortSignal))
     const registrationChallenge = parseHostCollaborationRegistrationChallenge({
       registration_request_id: randomUUID(), challenge_id: randomUUID(), challenge_nonce: 'A'.repeat(43),
       expires_at: now + 1_000, audience: 'https://slark.example.test', environment_id: account.authorityEnvironmentId,

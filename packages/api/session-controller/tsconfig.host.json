@@ -7,6 +7,9 @@
   },
   "files": [
     "src/index.ts",
+    "src/project-operation-origins.ts",
+    "src/project-operation-memory-authorizations.ts",
+    "src/collaboration-operation-origin.ts",
     "src/types.ts",
     "src/remote-events.ts",
     "src/agent.ts",
@@ -40,13 +43,25 @@
     "src/collaboration-delivery-journal.ts",
     "src/collaboration-discussion.ts",
     "src/collaboration-root-journal.ts",
+    "src/collaboration-task-coordination-journal.ts",
+    "src/collaboration-task-coordination.ts",
+    "src/collaboration-task-durability.ts",
     "src/collaboration-root-execution-journal.ts",
     "src/collaboration-root-planning-journal.ts",
     "src/collaboration-feedback.ts",
     "src/collaboration-consumption-journal.ts",
-    "src/collaboration-continuation-journal.ts"
+    "src/collaboration-continuation-journal.ts",
+    "src/runtime-entry.ts",
+    "src/runtime-entry-feedback-metadata.ts",
+    "src/runtime-entry-consumer.ts",
+    "src/runtime-entry-consumer-host.ts",
+    "src/runtime-entry-journal.ts",
+    "src/runtime-entry-manifest.ts"
   ],
   "references": [
+    {
+      "path": "../../core/tools"
+    },
     {
       "path": "../gateway/tsconfig.host.json"
     },
@@ -151,6 +166,9 @@
     },
     {
       "path": "../../storage/storage-domain"
+    },
+    {
+      "path": "../../host/control-protocol"
     }
   ]
 }

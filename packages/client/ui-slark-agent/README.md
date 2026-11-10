@@ -38,6 +38,8 @@ The Slark account launcher shows only the authenticated Slark name and avatar, w
 
 <a id="understand-the-implementation"></a>
 
+Group messages display binding clarification and ended-binding notices beneath the original line. A notice does not retry a request or certify whether earlier operations ran.
+
 ## Understand the implementation
 
 <details>

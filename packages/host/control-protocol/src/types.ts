@@ -1,4 +1,6 @@
+import type { RuntimeEntryAnalysisCommand } from './runtime-entry-carrier.ts'
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
+import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -917,6 +919,18 @@ export interface ProfileBotIdentityV2Result extends Omit<ProfileBotIdentityResul
   readonly result: { readonly identity: import('./bot-identity.ts').HostBotIdentityV2 | null }
 }
 
+/** Account-scoped observation of an exact original Bot/Session association. */
+export interface ProfileBotSessionIdentityRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & import('./bot-session-identity.ts').HostBotSessionCoordinates
+}
+
+/** The Parent-selected local Profile and private producer coordinates, or absence. */
+export interface ProfileBotSessionIdentityResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.bot_session_identity'
+  readonly result: { readonly identity: import('./bot-session-identity.ts').HostAccountBotSessionIdentity | null }
+}
+
 /** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
 export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
   readonly method: 'profile.twin_binding'
@@ -980,6 +994,82 @@ export interface ProfileNativeRoomResult {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.native_room'
   readonly result: { readonly binding: import('./native-room.ts').HostNativeRoomAssertion | null }
+}
+
+/** Current Account Profile reads a nonce-bound native participation page. */
+export interface ProfileBoundBotRoomsRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostBoundBotRoomsTarget
+  }
+}
+/** Independently signed current page, or an explicit incomplete read. */
+export interface ProfileBoundBotRoomsResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.bound_bot_rooms'
+  readonly result: import('./bound-bot-rooms.ts').HostBoundBotRoomsResult
+}
+/** Current Account Profile projects an original Cloud member command. */
+export interface ProfileNativeRoomProjectionRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomProjectionTarget
+  }
+}
+/** Signature acknowledges the original native join/leave and exact member cycle only. */
+export interface ProfileNativeRoomProjectionResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_projection'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomProjectionProof }
+}
+
+/** Current Account Profile retires one exact original native member cycle. */
+export interface ProfileNativeRoomRetirementRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./bound-bot-rooms.ts').HostNativeRoomRetirementTarget
+  }
+}
+/** Signature guarantees durable retirement of the original paired commands. */
+export interface ProfileNativeRoomRetirementResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_retirement'
+  readonly result: { readonly proof: import('./bound-bot-rooms.ts').HostNativeRoomRetirementProof }
+}
+
+/** Current Account Profile prepares or attests one original bound-Bot room Source. */
+export interface ProfileNativeRoomPreparationRequest {
+  readonly version: 1
+  readonly type: 'request'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly params: Omit<ProfileNativeRoomRequest['params'], 'room_id'> & {
+    readonly target: import('./native-room-preparation.ts').HostNativeRoomPreparationTarget
+  }
+}
+
+/** Independent stage outcome; unavailable facts never become a signed success. */
+export interface ProfileNativeRoomPreparationResult {
+  readonly version: 1
+  readonly type: 'result'
+  readonly request_id: HostControlRequestId
+  readonly method: 'profile.native_room_preparation'
+  readonly result: { readonly outcome: import('./native-room-preparation.ts').HostNativeRoomPreparationOutcome }
 }
 
 /** Account-bound member and message operation for an existing native room. */
@@ -1320,8 +1410,12 @@ export type HostSourceAnalysisOutput = Readonly<{ state: 'missing'; descriptor: 
   | Readonly<{ state: 'saved'; descriptor: Readonly<HostCollaborationSourceDescriptor> } & HostSavedAnalysisFields>
 /** Parent commands retain no caller-selected model or Account binding digest. */
 export type HostCollaborationAnalysisCommand =
+  | RuntimeEntryAnalysisCommand
+  | Readonly<{ action: 'task_coordination'; request: HostTaskCoordinationInput }>
   | Readonly<{ action: 'root_execution_journal'; operation: HostRemoteSessionJson }>
   | Readonly<{ action: 'root_feedback'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'root_operation_origin'; operation: HostRemoteSessionJson }>
+  | Readonly<{ action: 'project_operation_memory'; request: HostRemoteSessionJson }>
   | Readonly<{ action: 'read_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'prepare_root_attempt'; target: HostRootSubmissionTarget }>
   | Readonly<{ action: 'dispatch_root_attempt'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
@@ -1342,7 +1436,8 @@ export type HostCollaborationAnalysisCommand =
   | Readonly<{ action: 'dispatch'; attempt_request_id: HostControlRequestId; grant: HostRemoteSessionJson }>
 /** Original analysis JSON uses base64url to stay within the existing frame limit after escaping. */
 export type HostCollaborationAnalysisResult =
-  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback'; record: HostRemoteSessionJson }>
+  | Readonly<{ kind: 'task_coordination'; record: HostTaskCoordinationReply }>
+  | Readonly<{ kind: 'root_execution_journal' | 'root_feedback' | 'root_operation_origin' | 'project_operation_memory'; record: HostRemoteSessionJson }>
   | Readonly<{ kind: 'root_attempt_evidence'; evidence: HostRootPlanningEvidence }>
   | Readonly<{ kind: 'root_attempt_prepared'; preparation: HostRootPlanningAttemptDescriptor }>
   | Readonly<{ kind: 'source_output'; evidence: HostSourceAnalysisOutput }>
@@ -2430,10 +2525,20 @@ export type HostControlFrame =
   | ProfileBotIdentityResult
   | ProfileBotIdentityV2Request
   | ProfileBotIdentityV2Result
+  | ProfileBotSessionIdentityRequest
+  | ProfileBotSessionIdentityResult
   | ProfileTwinBindingRequest
   | ProfileTwinBindingResult
   | ProfileBotRosterRequest
   | ProfileBotRosterResult
+  | ProfileBoundBotRoomsRequest
+  | ProfileBoundBotRoomsResult
+  | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomRetirementRequest
+  | ProfileNativeRoomProjectionResult
+  | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationRequest
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomRequest
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationRequest

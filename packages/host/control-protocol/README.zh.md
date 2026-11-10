@@ -92,9 +92,17 @@ kind: "package-reference"
 
 `profile.bot_identity` 从当前 Account Profile 的私有插件服务读取一个准确的 Bot ID。响应仅包含缺失状态，或 Bot ID、派生的发言者引用和有界显示名。调用方不能选择 Profile 路径、私聊或插件房间。此读取不授予群成员资格、投递或分身代理权限。
 
+Bot/Session 坐标解析器只接受有界的精确 `bot_id`、`session_id`；响应可显式表示缺失。Profile 本地 producer 必须核实存活 Session 属于该 Bot。坐标不包含账号、项目、来源正文或执行权限。
+
 `profile.bot_identity_v2` 单独返回该公开身份及当前认证 Host 的本地 `host_profile_id`，调用方不能提供此字段。原方法保持三字段响应；两种方法均不授予配对、记忆或设备权限。
 
+`profile.bot_session_identity` 使用原认证 Account 范围及精确 `bot_id`/`session_id` 选择值。独立响应仅添加父进程选定的 `host_profile_id`，或返回 null。未知字段和调用方指定的 Profile 均被拒绝；私有 producer 仍保持两字段协议。该观察不授予来源正文、项目归属、记忆或执行权限。
+
 `profile.twin_binding` 接受完整、固定方向顺序的双向留存 offer，以及独立的 Cloud 目的限定许可，其有效期最多 30 秒。两方向必须对应同一本人、项目、分身与实际 DSH Bot；Host 重算 consent、scope 和父摘要，再核验当前 Account 与本地 Bot。结果仅为原始持久 `acknowledged` 事实，或回执查询的 `missing`，不返回 active 绑定，也不授予记忆、群或设备执行权。Directive 与 Ack 使用独立的规范数组签名域；持久 Ack 摘要还覆盖其原始签名。
+
+`profile.native_room_retirement` 独立绑定完整原 join/leave 命令及各自不同的请求 ID，要求同一 room/member/cycle。其 `native_room_retirement` proof 只在独立签名域内签署 durable left，序号0也合法。不可用或受理结果未知都不能证明已关闭。绑定选择值只是回显上下文，调用方仍须核验 Cloud 清理授权。
+
+`profile.native_room_preparation` 是独立能力，每次请求只执行 `prepare_source`、`attest_source` 或 `attest_activation` 中的一个阶段。完整 JSON 帧最多为 49,152 个 UTF-8 字节。target 将原 Computer、绑定代次、Profile、Bot、房间、工作区和成员摘要绑定到最多有效 60 秒的 nonce。成功 proof 在 `dsh-native-room-preparation/v1` 域内签署实际参与和原 Source，同时包含原 native-room、Source-authority 或 input-fence 的独立签名凭据。客户端用当前安装公钥验证两层签名。嵌套 challenge 保留原 Account、audience 和到期检查。明确未就绪状态不含 proof，不证明缺失或就绪。[字段解析器和固定元组](src/native-room-preparation.ts) 定义准确编码。Cloud 调用方提交前仍须重新核验当前绑定和群授权。
 
 `profile.native_room` 在当前 Account Profile 下只接收一个已有 DS Bot 房间 ID。Host 用安装密钥签署插件核实的房间 ID、独立桥接 Source、Account 绑定、安装与进程身份及签发时间；客户端验证签名，拒绝过期或错配响应。多余字段或与房间 Session 相同的 Source Session 均被拒绝。桥接 Source 用于 Slark 注册，不会把房间 Session 变成 Slark 协作 Session。
 
@@ -135,6 +143,8 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 `parseHostCollaborationReferenceTarget` 校验私有 worker 查询，其中只有原始 Source 坐标及完整引用请求摘要，不能提供所选字节、快照摘要或授权。`parseHostCollaborationReferenceGrant` 独立校验返回的已提交描述符及请求摘要。
 
 ## API
+
+`createHostProjectOperationEvent` 校验 v3 精确源字段并计算事件摘要；`parseHostProjectOperationEvent` 验证完整事件，`encodeHostProjectOperationEventPayload` 返回带独立用途域的规范摘要原像。完整事件不超过 8192 UTF-8 字节，三项摘要分别最多 2000 字节，材料依赖最多 20 条。修订和序号完整保留 int64 十进制字符串；依赖先按 Right ID、再按数值 generation/revision 升序。实时引用只包含定位、版本及原来源摘要，暂存阶段也不携带正文。解析不证明来源归属，也不授予材料导出或留存权。
 
 `profile.collaboration_delivery` 通过顺序上传的规范 base64url 分块传输完整终态答复，每块解码后最多 16 KiB，完整封装最多 1 MiB，答复最多 128 KiB UTF-8。普通 JSON 与 64 KiB 单帧上限保持不变。最终回执不包含答复，使用规范键排序 JSON 签名域 `dsh-collaboration-delivery-receipt-v1`，绑定已验证的 Account、当前安装/进程和原 Profile 提交记录。解析或签名本身均不授予云端确认或执行权威。
 
@@ -264,3 +274,7 @@ MCP 清单可声明 `mcp_remove: true` 和 `mcp_update: true`；缺失表示对�
 个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
 
 受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。
+
+内部操作来源编解码器分别使用安装观察和云端归属签名域。它们绑定实际Account/Profile/Bot、原Root/消费记录和精确的原生事件摘要；观察JSON上限32KiB，包含在原64KiB帧内。稳定的原始来源引用不包含新nonce、签名、时间或增长的历史。解析只验证语法；原记录关联、固定密钥验证和认证请求范围内的provider仍由调用者负责。独立 `profile.project_operation_origin` 能力控制私有分析传输中的闭合 `root_operation_origin` read/bind 操作。Unix 提供实际 Account/Profile/peer 字段，调用者不能覆盖。读取页在32KiB内包含至多50对完整事件，并返回最后一对的结果序号。空页使用 null 观察和游标及 eof=true。绑定仅在消费者确认后返回 published=true。来源范围版本允许规范的零，绑定代次仍须为正数；不暴露记忆能力。
+
+项目操作记忆编解码器实现冻结 v3 的 owner-private 受限子集：`prepare_snapshot`（含 resume）、`history_page`、`delta_page`、`search`、`evidence`、`apply`（stage/finalize）和 `receipt`。精确解析器拒绝未知字段、非规范坐标、不一致的请求/结果/证明摘要、无效页面进度及超限的完整结果。签名字节使用声明顺序的嵌套数组；`tests/fixtures/project-operation-memory-v3-owner-private.json` 独立于编码器锁定字面 UTF-8 字节和摘要。finalize 与 receipt 结果保留 Doc21558 的准确字段。已认证的私有服务使用这些编解码器；记忆 capability 广告保持禁用。[Desktop Host](../desktop-host/README.zh.md) 负责当前授权、安装签名及持久 source-export 元数据。支持范围仍限于 `owner_private`、`audienceVersion: '1'`、`presentationVersion: 'v1'` 和非 null 的历史边界；群/版本化受众及更广的冻结 v3 scope 尚不支持。解析和摘要只校验语法与一致性；固定密钥签名验证、当前接收者/来源/导出权限、持久进度和激活仍由 provider 负责。这些编解码器不改变 `private_history` 或模型上下文。

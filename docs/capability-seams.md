@@ -101,6 +101,13 @@ flowchart LR
   pkg_message_feedback["message-feedback"]
   pkg_experimental_api_speech_to_text["experimental-api-speech-to-text"]
   svc_speechController["ctx.speechController<br/>Experimental transcription Remote"]
+  svc_collaborationTaskExecutions["ctx.collaborationTaskExecutions<br/>Original consuming-turn execution facts"]
+  pkg_web_app["web-app"]
+  svc_collaborationTaskFloors["ctx.collaborationTaskFloors<br/>Original Root closed-floor lookup"]
+  svc_runtimeEntryConsumerHost["ctx.runtimeEntryConsumerHost<br/>Private original-entry preparation reader"]
+  svc_projectOperationMemoryAuthorizations["ctx.projectOperationMemoryAuthorizations<br/>Scoped operation-memory authorization reader"]
+  pkg_ds_bot__external_["ds-bot (external)"]
+  svc_projectOperationOrigins["ctx.projectOperationOrigins<br/>Scoped original operation attribution reader"]
   svc_sessionController["ctx.sessionController<br/>Host Session Remote controller"]
   svc_sessionFileReferences["ctx.sessionFileReferences<br/>Session-addressed file-reference Remote adapter"]
   svc_sessionSkillCatalog["ctx.sessionSkillCatalog<br/>Session-addressed skill Remote adapter"]
@@ -296,7 +303,6 @@ flowchart LR
   svc_webServer["ctx.webServer<br/>HTTP route registration"]
   pkg_client_modules["client-modules"]
   pkg_client_hmr["client-hmr"]
-  pkg_web_app["web-app"]
   svc_webApp["ctx.webApp<br/>Served Web GUI"]
   pkg_harness_dev_context["harness-dev-context"]
   svc_clientModules["ctx.clientModules<br/>Client plugin graph host"]
@@ -322,6 +328,11 @@ flowchart LR
   pkg_api_gateway --> svc_typertGateway
   pkg_api_job_controller --> svc_jobController
   pkg_api_remote_access --> svc_remoteAccess
+  pkg_api_session_controller --> svc_collaborationTaskExecutions
+  pkg_api_session_controller --> svc_collaborationTaskFloors
+  pkg_api_session_controller --> svc_projectOperationMemoryAuthorizations
+  pkg_api_session_controller --> svc_projectOperationOrigins
+  pkg_api_session_controller --> svc_runtimeEntryConsumerHost
   pkg_api_session_controller --> svc_sessionController
   pkg_api_session_controller --> svc_sessionFileReferences
   pkg_api_session_controller --> svc_sessionSkillCatalog
@@ -468,6 +479,10 @@ flowchart LR
   pkg_user_approval --> svc_approval
   pkg_user_questions --> svc_userQuestions
   pkg_web --> svc_web
+  pkg_web_app --> svc_collaborationTaskFloors
+  pkg_web_app --> svc_projectOperationMemoryAuthorizations
+  pkg_web_app --> svc_projectOperationOrigins
+  pkg_web_app --> svc_runtimeEntryConsumerHost
   pkg_web_app --> svc_webApp
   pkg_web_deepseek_api --> svc_web
   pkg_web_fetch_http --> svc_web
@@ -502,6 +517,8 @@ flowchart LR
   svc_browserUse --> pkg_experimental_browser_use_playwright_mcp
   svc_browserUse --> pkg_experimental_browser_use_stagehand_native
   svc_clientModules --> pkg_client_hmr
+  svc_collaborationTaskExecutions --> pkg_web_app
+  svc_collaborationTaskFloors --> pkg_api_session_controller
   svc_compaction --> pkg_compaction_basic
   svc_computerUse --> pkg_experimental_computer_use_cua_driver_mcp
   svc_computerUse --> pkg_experimental_computer_use_cua_driver_native
@@ -546,11 +563,14 @@ flowchart LR
   svc_pluginRecommendations --> pkg_client_ui_plugin_recommendations
   svc_pluginRegistryProbe --> pkg_client_ui_plugin_manager
   svc_profileContext --> pkg_plugin_manager
+  svc_projectOperationMemoryAuthorizations --> pkg_ds_bot__external_
+  svc_projectOperationOrigins --> pkg_ds_bot__external_
   svc_ptcRuntime --> pkg_tool_executor_ptc
   svc_ptcRuntime --> pkg_workflow_ptc
   svc_remoteAccess --> pkg_api_gateway
   svc_remoteAccess --> pkg_api_session_controller
   svc_remoteAccess --> pkg_api_workspace_controller
+  svc_runtimeEntryConsumerHost --> pkg_api_session_controller
   svc_sandbox --> pkg_bash_sandbox
   svc_sandbox --> pkg_terminal_bash
   svc_sandboxPolicy --> pkg_bash_sandbox
@@ -677,6 +697,11 @@ flowchart LR
 | `ctx.toolResultPruner` | `core` | [`compaction-tool-result-pruner`](../packages/compaction/compaction-tool-result-pruner) | - | [`compaction-basic`](../packages/compaction/compaction-basic) | - | Rewrites oversized current tool results through replayable single-node surface replacements before summary compaction. |
 | `ctx.sessions` | `core` | [`session`](../packages/core/session) | - | [`agent-loop`](../packages/core/agent-loop), [`agent`](../packages/core/agent), [`session-persistence`](../packages/session/session-persistence), [`session-query`](../packages/session-query/session-query), [`session-query-sqlite`](../packages/session-query/session-query-sqlite), [`subagent`](../packages/subagent/subagent), [`message-feedback`](../packages/feedback/message-feedback) | - | Owns append-only Session instances and emits the durable session event feed. |
 | `ctx.speechController` | `core` | [`experimental-api-speech-to-text`](../packages/experimental/api-speech-to-text) | - | - | - | Validates bounded browser audio before provider dispatch. |
+| `ctx.collaborationTaskExecutions` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | [`web-app`](../packages/bundle/web-app) | - | Reads the real consumer command only during its owned consuming turn; cancellation and provider replacement invalidate retained facts. |
+| `ctx.collaborationTaskFloors` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | Checks retained signed floors against original local Root coordinates and current parent Account facts; a missing floor grants no execution permission. |
+| `ctx.runtimeEntryConsumerHost` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | [`api-session-controller`](../packages/api/session-controller) | - | Uses the actual loaded Session prefix and Main-verified original proof context before preparing one private driver entry; callers cannot supply a proof context or writer. |
+| `ctx.projectOperationMemoryAuthorizations` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | Resolves one immutable request-local authorization during an awaited private source read or original confirmation-anchor capture; no public mint, retained body or execution authority. |
+| `ctx.projectOperationOrigins` | `seam` | [`api-session-controller`](../packages/api/session-controller) | [`web-app`](../packages/bundle/web-app) | `ds-bot (external)` | - | Reads immutable historical references during an awaited authenticated origin publication; the external DSBot observer commits matching metadata revisions without execution, retention, or export authority. |
 | `ctx.sessionController` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | - | - | Owns Session commands, cold reads, durable-event following, live control state, model catalogs, workspace opening, and Agent activation policy. |
 | `ctx.sessionFileReferences` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | - | - | Delegates file-reference discovery through the Session Controller's established Agent lookup policy. |
 | `ctx.sessionSkillCatalog` | `core` | [`api-session-controller`](../packages/api/session-controller) | - | - | - | Lists the Session composition's user-invocable skills without activating a cold Agent. |

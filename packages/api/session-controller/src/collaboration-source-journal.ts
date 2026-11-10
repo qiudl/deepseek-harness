@@ -36,7 +36,7 @@ const rawSnapshotSchema = z.strictObject({ ...fields,
   host_journal_commit: z.strictObject({ journal_id: id, commit_version: version(), content_digest: digest }),
 })
 const snapshotSchema = rawSnapshotSchema.refine(value => validBody(value)
-  && value.host_journal_commit.content_digest === hash(canonicalJson(bodyOf(value))))
+  && value.host_journal_commit.content_digest === hash(encodeCollaborationJournalJson(bodyOf(value))))
 
 /** Frozen Host input; the coordinator supplies actual prepared metadata and classified mentions. */
 export type CollaborationSourceBody = DeepReadonly<z.infer<typeof rawBodySchema>>
@@ -100,14 +100,18 @@ function hash(value: string): string { return createHash('sha256').update(value,
  * @param value - Validated JSON containing only well-formed strings, finite numbers, arrays and records.
  * @returns RFC 8785 SHA-256; no Unicode normalization or authority grant.
  */
-export function collaborationJournalDigest(value: unknown): string { return hash(canonicalJson(value)) }
+export function collaborationJournalDigest(value: unknown): string { return hash(encodeCollaborationJournalJson(value)) }
 // The schema admits only strings, safe integers, arrays and plain JSON objects.
 // Sorted UTF-16 keys and JSON number/string serialization implement RFC 8785 for this vocabulary.
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+/** Encode validated collaboration or original Session JSON with sorted keys.
+ * @param value - Already validated finite, well-formed JSON; this encoder provides no validation or authority.
+ * @returns Canonical bytes shared by journal hashes and purpose-specific event digests.
+ */
+export function encodeCollaborationJournalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(encodeCollaborationJournalJson).join(',')}]`
   if (value !== null && typeof value === 'object') {
     const row = value as Record<string, unknown>
-    return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(row[key])}`).join(',')}}`
+    return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${encodeCollaborationJournalJson(row[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
 }
@@ -143,7 +147,7 @@ export function describeCollaborationSource(snapshot: CollaborationSourceSnapsho
 CollaborationSourceCoordinates & { readonly snapshot_digest: string } {
   return Object.freeze({ workspace_id: snapshot.workspace_id, session_id: snapshot.session_id,
     source_message_id: snapshot.source_message_id, source_revision: snapshot.source_revision,
-    snapshot_digest: hash(canonicalJson(snapshot)) })
+    snapshot_digest: hash(encodeCollaborationJournalJson(snapshot)) })
 }
 // Authoritative data uses single layout: the JSON per-record backend intentionally
 // treats malformed or foreign-version files as disposable cache misses.
@@ -219,14 +223,14 @@ export async function openCollaborationSourceJournal(facility: Pick<DomainFacili
         const key = keyOf(captured)
         const existing = table.get(key)
         if (existing !== undefined) {
-          if (canonicalJson(bodyOf(existing)) !== canonicalJson(captured)) throw new Error('collaboration_source_payload_conflict')
+          if (encodeCollaborationJournalJson(bodyOf(existing)) !== encodeCollaborationJournalJson(captured)) throw new Error('collaboration_source_payload_conflict')
           return existing
         }
         // These entries are all un-routed Sources. The planner's approved pending
         // budget applies until the route/outbox owner supplies a durable retirement.
         if (table.size >= 128) throw new Error('collaboration_source_journal_capacity_reached')
         const snapshot = freeze(snapshotSchema.parse({ ...captured, host_journal_commit: {
-          journal_id: randomUUID(), commit_version: '1', content_digest: hash(canonicalJson(captured)),
+          journal_id: randomUUID(), commit_version: '1', content_digest: hash(encodeCollaborationJournalJson(captured)),
         } }))
         try {
           await table.put(key, snapshot)

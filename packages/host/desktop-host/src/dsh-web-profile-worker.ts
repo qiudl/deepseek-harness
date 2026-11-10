@@ -1,7 +1,18 @@
+import { parseHostRuntimeEntryOriginsConfiguration, type HostRuntimeEntryOriginsConfiguration } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostTaskCoordinationEnvironment, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostProjectMemoryJson, parseHostProjectMemoryEnvironment, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGroupPublicKeyring, type HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
+import { NativeRoomDrain } from './native-room-drain.ts'
+import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationWorkerRead,
+  matchHostNativeRoomPreparationWorkerRead, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES,
+  type HostNativeRoomPreparationTarget, type HostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomRetirementCommand, parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBoundBotRoomsQuery, parseHostBoundBotRoomsRead, type HostBoundBotRoomsQuery, type HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostSourceAnalysisOutput, matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSessionTarget, parseHostBotSessionIdentity, type HostBotSessionCoordinates } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotIdentity, HostBotRosterPage } from '@deepseek-ai/dsh-host-control-protocol'
@@ -19,7 +30,7 @@ import { parseHostCollaborationReferenceGrant, parseHostCollaborationReferenceCo
   parseHostCollaborationReferenceContentTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostCollaborationReferenceTarget, HostControlSha256 } from '@deepseek-ai/dsh-host-control-protocol'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { promisify } from 'node:util'
@@ -49,6 +60,11 @@ type RemoteUiAssetCache = { entries?: Map<string, Promise<RemoteUiAssetEntry>> }
 const REMOTE_UI_ASSET_CACHE_ENTRIES = 4
 const READY_LINE = /^dsh web: (http:\/\/127\.0\.0\.1:(?:[1-9]\d{0,4})(?:\/[^\s?]*)?(?:\?[^\s]*)?)(?: \(LAN: .+\))?$/u
 const RESERVED_ENV = new Set([
+  'DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS',
+  'DSH_PROFILE_RUNTIME_ENTRY_ORIGINS',
+  'DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS',
+  'DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS',
+  'DSH_PROFILE_WORKER_ID',
   'DSH_HOME', 'DSH_PROFILE_ID', 'DSH_PROFILE_CREDENTIAL_HANDLE', 'DSH_PROFILE_PLUGIN_ROOTS',
   'DSH_PROFILE_MODEL_TOKEN', 'DSH_PROFILE_WORKSPACE_MODEL_TOKEN', 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN', 'DSH_PROFILE_SOURCE_TOKEN',
   'DSH_PROFILE_ANALYSIS_TOKEN', 'DSH_PROFILE_REFERENCE_TOKEN',
@@ -73,6 +89,10 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 
 /** Launch configuration for `dsh --profile web` Profile workers. */
 export interface DshWebProfileWorkerFactoryOptions {
+  readonly runtimeEntryOrigins?: HostRuntimeEntryOriginsConfiguration
+  readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
+  readonly taskCoordinationEnvironments?: readonly HostTaskCoordinationEnvironment[]
+  readonly operationOriginKeyrings?: readonly HostBotGroupPublicKeyring[]
   readonly nodeExecutablePath: string
   readonly dshEntrypointPath: string
   readonly pnpmEntrypointPath?: string
@@ -155,8 +175,18 @@ async function exchangeBootstrap(
 
 /** Real child-process factory for one existing `dsh web` composition per Person Profile. */
 export class DshWebProfileWorkerFactory {
+  private readonly projectOperationMemoryEnvironments: readonly HostProjectMemoryEnvironment[]
+  private readonly taskCoordinationEnvironments: readonly HostTaskCoordinationEnvironment[]
+  private readonly runtimeEntryOrigins: HostRuntimeEntryOriginsConfiguration | undefined
+  private readonly operationOriginKeyrings: readonly HostBotGroupPublicKeyring[]
   private generation = 0
+  private readonly nativeDrain = new NativeRoomDrain()
   constructor(private readonly options: DshWebProfileWorkerFactoryOptions) {
+    this.taskCoordinationEnvironments = (options.taskCoordinationEnvironments ?? []).map(parseHostTaskCoordinationEnvironment)
+    this.projectOperationMemoryEnvironments = (options.projectOperationMemoryEnvironments ?? []).map(parseHostProjectMemoryEnvironment)
+    this.runtimeEntryOrigins = options.runtimeEntryOrigins === undefined ? undefined
+      : parseHostRuntimeEntryOriginsConfiguration(options.runtimeEntryOrigins)
+    this.operationOriginKeyrings = (options.operationOriginKeyrings ?? []).map(parseHostBotGroupPublicKeyring)
     if (!isAbsolute(options.nodeExecutablePath) || !isAbsolute(options.dshEntrypointPath)
       || options.pnpmEntrypointPath !== undefined && !isAbsolute(options.pnpmEntrypointPath)) throw new HostAuthorityError('invalid_input')
   }
@@ -169,6 +199,7 @@ export class DshWebProfileWorkerFactory {
   async create(spec: ProfileWorkerSpec): Promise<ProfileWorkerHandle> {
     if (Object.keys(spec.env).some(key => RESERVED_ENV.has(key))) throw new HostAuthorityError('invalid_input')
     const root = realpathSync(spec.profileRoot)
+    const workerId = randomUUID()
     const sourceToken = randomBytes(32).toString('base64url')
     const referenceToken = randomBytes(32).toString('base64url')
     const analysisToken = randomBytes(32).toString('base64url')
@@ -186,6 +217,11 @@ export class DshWebProfileWorkerFactory {
         ...spec.env,
         DSH_HOME: root,
         DSH_PROFILE_ID: spec.profileId,
+        DSH_PROFILE_WORKER_ID: workerId,
+        DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS: JSON.stringify(this.taskCoordinationEnvironments),
+        DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS: JSON.stringify(this.projectOperationMemoryEnvironments),
+        DSH_PROFILE_RUNTIME_ENTRY_ORIGINS: this.runtimeEntryOrigins === undefined ? '' : JSON.stringify(this.runtimeEntryOrigins),
+        DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: JSON.stringify(this.operationOriginKeyrings),
         DSH_PROFILE_CREDENTIAL_HANDLE: spec.credentialHandle,
         DSH_PROFILE_PLUGIN_ROOTS: JSON.stringify(spec.pluginRoots),
         DSH_PROFILE_MODEL_TOKEN: modelToken,
@@ -207,7 +243,7 @@ export class DshWebProfileWorkerFactory {
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
-      sourceToken, analysisToken, deliveryToken, referenceToken)
+      sourceToken, analysisToken, deliveryToken, referenceToken, workerId)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -275,9 +311,13 @@ export class DshWebProfileWorkerFactory {
     analysisToken: string,
     deliveryToken: string,
     referenceToken: string,
+    workerId: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
+    const actualExit = new AbortController()
+    const exited = Promise.withResolvers<void>()
+    child.once('exit', () => { actualExit.abort(); exited.resolve() })
     const assetCache: RemoteUiAssetCache = {}
     let resolveDone!: () => void
     let rejectDone!: (error: Error) => void
@@ -289,18 +329,30 @@ export class DshWebProfileWorkerFactory {
       if (requestedStop || code === 0) resolveDone()
       else rejectDone(new Error(`Profile Web worker exited unexpectedly with code ${String(code)} and signal ${String(signal)}`))
     })
+    const completion = (async () => {
+      try { await done } finally { await exited.promise }
+    })()
     return {
       viewOrigin,
+      workerId,
       generation,
       bootstrapCookie,
+      resolveBotSessionIdentity: (botId, sessionId, signal) => this.resolveBotSessionIdentity(
+        viewOrigin, sourceToken, botId, sessionId, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
         viewOrigin, sourceToken, botId, signal, () => requestedStop || settled),
       listBotRoster: (afterBotId, limit, signal) => this.listBotRoster(
         viewOrigin, sourceToken, afterBotId, limit, signal, () => requestedStop || settled),
+      listBoundBotRooms: (query, signal) => this.listBoundBotRooms(
+        viewOrigin, sourceToken, query, signal, () => requestedStop || settled, actualExit.signal),
+      retireNativeRoom: (command, signal) => this.retireNativeRoom(
+        viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       prepareNativeRoom: (roomId, signal) => this.prepareNativeRoom(
-        viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled),
+        viewOrigin, sourceToken, roomId, signal, () => requestedStop || settled, actualExit.signal),
+      prepareNativeRoomPhase: (target, signal) => this.prepareNativeRoomPhase(
+        viewOrigin, sourceToken, target, signal, () => requestedStop || settled, actualExit.signal),
       operateNativeRoom: (command, signal) => this.operateNativeRoom(
-        viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
+        viewOrigin, sourceToken, command, signal, () => requestedStop || settled, actualExit.signal),
       operateBotGroup: (command, signal) => this.operateBotGroup(
         viewOrigin, sourceToken, command, signal, () => requestedStop || settled),
       generateText: async (text, signal) => {
@@ -393,13 +445,13 @@ export class DshWebProfileWorkerFactory {
         viewOrigin, remoteUiToken, endpoint, payload, signal, () => requestedStop || settled, itemChunks),
       closeNotifications() { child.stdout?.removeAllListeners(); child.stderr?.removeAllListeners() },
       abort: () => {
-        if (requestedStop || settled) return
+        if (requestedStop || actualExit.signal.aborted) return
         requestedStop = true
         child.kill('SIGTERM')
-        const timer = setTimeout(() => { if (!settled) child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
-        void done.finally(() => { clearTimeout(timer) })
+        const timer = setTimeout(() => { if (!actualExit.signal.aborted) child.kill('SIGKILL') }, this.options.abortTimeoutMs ?? 5_000)
+        void exited.promise.then(() => { clearTimeout(timer) })
       },
-      done,
+      done: completion,
     }
   }
 
@@ -502,7 +554,44 @@ export class DshWebProfileWorkerFactory {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(target), signal: active,
     })
-    return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    const result = await this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+    signal.throwIfAborted()
+    if (active.aborted || stopped()) throw new HostAuthorityError('unavailable')
+    return result
+  }
+
+  private async postNativeProfileResource<T>(
+    viewOrigin: string, token: string, route: string, target: unknown,
+    timeoutMs: number, maxBytes: number, signal: AbortSignal, stopped: () => boolean, exited: AbortSignal,
+    parse: (bytes: Buffer) => T,
+  ): Promise<T> {
+    const active = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+    try {
+      return await this.nativeDrain.run({ origin: viewOrigin, token, signal: active, stopped, exited }, async (post) => {
+        const response = await post(route, target)
+        return this.readPrivateResponse(response, active, signal, stopped, maxBytes, parse, 'await')
+      })
+    } catch (error) {
+      if (error instanceof HostAuthorityError || signal.aborted) throw error
+      throw new HostAuthorityError('unavailable')
+    }
+  }
+
+  private async resolveBotSessionIdentity(
+    viewOrigin: string, token: string, botId: string, sessionId: string,
+    signal: AbortSignal, stopped: () => boolean,
+  ): Promise<HostBotSessionCoordinates | null> {
+    const target = parseHostBotSessionTarget({ bot_id: botId, session_id: sessionId })
+    const result = await this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-bot-session-identity',
+      target, 10_000, 2048, signal, stopped, (bytes) => {
+        const identity = parseHostBotSessionIdentity(JSON.parse(bytes.toString('utf8')))
+        if (identity !== null && (identity.bot_id !== target.bot_id || identity.session_id !== target.session_id))
+          throw new HostAuthorityError('profile_mismatch')
+        return identity
+      })
+    signal.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('unavailable')
+    return result
   }
 
   private async resolveBotIdentity(
@@ -538,18 +627,46 @@ export class DshWebProfileWorkerFactory {
     }, 'await')
   }
 
+  private async listBoundBotRooms(viewOrigin: string, token: string, query: HostBoundBotRoomsQuery,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal): Promise<HostBoundBotRoomsRead> {
+    const target = parseHostBoundBotRoomsQuery(query)
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-bound-bot-rooms',
+      target, 10_000, 16 * 1024, signal, stopped, exited, (bytes) => {
+        const result = parseHostBoundBotRoomsRead(JSON.parse(bytes.toString('utf8')))
+        if (result.state === 'page' && (result.bot_id !== target.bot_id || result.items.length > target.limit ||
+          result.next_cursor !== null && result.next_cursor === target.cursor)) throw new HostAuthorityError('profile_mismatch')
+        return result
+      })
+  }
+
+  private async retireNativeRoom(viewOrigin: string, token: string, command: HostNativeRoomRetirementCommand,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal): Promise<HostNativeRoomRetirementReply> {
+    const target = parseHostNativeRoomRetirementCommand(command)
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room-retirement',
+      target, 35_000, 2048, signal, stopped, exited, bytes =>
+        parseHostNativeRoomRetirementReply(JSON.parse(bytes.toString('utf8'))))
+  }
+
   private async prepareNativeRoom(
     viewOrigin: string, token: string, roomId: string,
-    signal: AbortSignal, stopped: () => boolean,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal,
   ): Promise<HostNativeRoomSource | null> {
     const target = parseHostNativeRoomTarget({ room_id: roomId })
-    return this.postPrivateProfileResource(viewOrigin, token, '/internal/desktop-native-room',
-      target, 30_000, 2048, signal, stopped, (bytes) => {
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room',
+      target, 30_000, 2048, signal, stopped, exited, (bytes) => {
         const value: unknown = JSON.parse(bytes.toString('utf8'))
         const binding = value === null ? null : parseHostNativeRoomSource(value)
         if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
         return binding
       })
+  }
+
+  private async prepareNativeRoomPhase(viewOrigin: string, token: string, input: HostNativeRoomPreparationTarget,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal): Promise<HostNativeRoomPreparationWorkerRead> {
+    const target = parseHostNativeRoomPreparationTarget(input)
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room-preparation',
+      target, 60_000, HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, signal, stopped, exited, bytes =>
+        matchHostNativeRoomPreparationWorkerRead(parseHostNativeRoomPreparationWorkerRead(JSON.parse(bytes.toString('utf8'))), target))
   }
 
   private async operateBotGroup(
@@ -575,23 +692,15 @@ export class DshWebProfileWorkerFactory {
 
   private async operateNativeRoom(
     viewOrigin: string, token: string, command: HostNativeRoomCommand,
-    signal: AbortSignal, stopped: () => boolean,
+    signal: AbortSignal, stopped: () => boolean, exited: AbortSignal,
   ): Promise<HostNativeRoomReply> {
-    signal.throwIfAborted()
-    if (stopped()) throw new HostAuthorityError('unavailable')
-    const active = AbortSignal.any([signal, AbortSignal.timeout(35_000)])
     const target = parseHostNativeRoomCommand(command)
-    const response = await fetch(`${viewOrigin}/internal/desktop-native-room-operations`, {
-      method: 'POST', redirect: 'error',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(target), signal: active,
-    })
-    return this.readPrivateResponse(response, active, signal, stopped,
-      target.operation === 'messages' ? 1024 * 1024 : 2048, (bytes) => {
+    return this.postNativeProfileResource(viewOrigin, token, '/internal/desktop-native-room-operations',
+      target, 35_000, target.operation === 'messages' ? 1024 * 1024 : 2048, signal, stopped, exited, (bytes) => {
         const reply = parseHostNativeRoomReply(JSON.parse(bytes.toString('utf8')))
         if (!matchesHostNativeRoomReply(reply, target)) throw new HostAuthorityError('profile_mismatch')
         return reply
-      }, 'await')
+      })
   }
 
   private async inspectCollaborationArchiveIntent(
@@ -620,7 +729,9 @@ export class DshWebProfileWorkerFactory {
     const active = AbortSignal.any([signal, AbortSignal.timeout(35000)])
     active.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
-    const body = JSON.stringify(parseHostRemoteSessionJson(command))
+    const memory = command && typeof command === 'object' && !Array.isArray(command) && 'action' in command &&
+      (command.action === 'project_operation_memory' || command.action === 'project_operation_memory_anchor')
+    const body = JSON.stringify(memory ? parseHostProjectMemoryJson(command) : parseHostRemoteSessionJson(command))
     if (Buffer.byteLength(body, 'utf8') > 1024 * 1024) throw new HostAuthorityError('invalid_input')
     const response = await fetch(`${origin}/internal/desktop-collaboration-analysis`, {
       method: 'POST',
@@ -644,7 +755,7 @@ export class DshWebProfileWorkerFactory {
         const evidence = parseHostSourceAnalysisOutput(value)
         return { ...evidence, descriptor: { ...evidence.descriptor } }
       }
-      return parseHostRemoteSessionJson(value)
+      return memory ? parseHostProjectMemoryJson(value) : parseHostRemoteSessionJson(value)
     }, 'detach')
   }
 

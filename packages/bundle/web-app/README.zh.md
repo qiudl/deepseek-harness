@@ -98,11 +98,19 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 ## 理解实现
 
+五个私有原生群目录、准备、退役和操作路由可在 worker token 下接收可选的 `x-dsh-native-drain`，其值为 32 字节规范 base64url nonce。只有实际 service Promise 结束（含失败），或输入在接收执行前被拒绝，才用 `x-dsh-native-settled` 返回相同 nonce。这类请求到期时取消操作 signal，不销毁已接收执行的请求。调用方断链仍取消 signal，handler 仍等待 service。收据缺失不证明实际结束；旧 worker 可能执行后不返回收据。未带该 header 的请求保留原截止时间行为。
+
 `DSH_PROFILE_WORKSPACE_MODEL_TOKEN` 仅在隔离 Profile worker 中启用 `/internal/desktop-workspace-model-selection`。入口接受最多 2 KiB 的注册表工作区/Session 目标，交给仅供 Host 使用的 Session Controller 读取，不激活 Agent 或调用模型。浏览器 Cookie 不能授权此入口。失败不含异常详情；响应禁止缓存，仅包含已校验的选择字段。该读取不提供 Source 凭据或已准备的配置快照。
 
 `DSH_PROFILE_SOURCE_TOKEN` 也保护 `/internal/desktop-bot-identity`。入口在每次请求时通过 Profile 本地可选的 `dsBotSlarkExternalGroup` 服务解析准确 Bot ID。服务或 Bot 缺失时返回缺失；只有 Bot ID、派生的发言者引用和有界显示名可以离开 worker。浏览器 Cookie 不能调用此入口。
 
+`/internal/desktop-bot-session-identity` 使用同一 worker token，通过当前插件 producer 核实精确 Bot/Session 关联。缺少支持时返回缺失；读取期间 producer 被替换或返回坐标不符时拒绝。只有两个坐标离开 worker；该读取不初始化 Session，也不提供来源、发起人、项目或记忆授权。
+
+`/internal/desktop-native-room-preparation` 使用同一 worker token 执行一个有界、未签名的阶段。它捕获保留调用追踪的 native-room、Session Controller 和 Workspace Registry provider，并拒绝 provider 替换；阶段前后均读取 Bot 的实际参与。只有预期 Source 为 null 且房间尚未准备时，才允许调用 `prepareBinding`，由插件内部用四个选择字段约束创建；不会回落到旧 `prepare` 方法。已有 Source 和两个证明阶段只读原严格 journal，要求固定控制文本、修订一和空 mentions。激活在安装原持久输入围栏前再次核验参与。child 不返回签名、Account 字段或凭据，也不启动模型回合。父进程负责证明签名和完整响应上限。
+
 `/internal/desktop-native-room` 使用同一 worker token 接收单个房间 ID，并调用 Profile 本地可选的 `dsBotSlarkNativeRoom` 服务准备 Slark 桥接 Source。响应只包含房间 ID 和 Source 坐标；房间 Session 自身的 Source 或附带额外字段的响应会被拒绝。浏览器 Cookie 不能调用此入口。
+
+`/internal/desktop-native-room-retirement` 在私有 worker token 下只接收完整原 join 身份，调用当前插件 service 的 `retireAgent`，不向插件传入 Cloud binding 或 challenge。严格结果在方法缺失时保留 upgrade_required；只有 left 才证明持久关闭。本路由不创建 bridge Source 或 Session，也不调用模型。
 
 `/internal/desktop-native-room-operations` 使用同一私有 worker token 调用该服务有界的加入、消息分页、确认与离开操作。入口校验命令及响应的准确字段，每页最多返回三条消息。浏览器 Cookie 不能授权此入口。
 
@@ -217,6 +225,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 ## 已知限制与延期工作
 
+私有 task stop coordination 限制实际原 native consumer，不提供 open/ready 操作。消耗原 grant 前会检查实际选中的 Native executor，并在同一实例上安装所属生命周期的限制，保留其管线、接收者、描述与并发配置。不支持的 executor 保持 grant 为 prepared。销毁时先排空所属 Agent，再仅恢复自己的包装；选中实例变化后观察保持 unknown。工具 prepare 不代表效果已发生：最终工具体检查保留原 Account/请求取消，即使 awaited wrapper 替换执行 signal。已进入的工具体仍视为在途，直到返回且实际 Session flush 完成。device permit 库存尚不支持，空 native 页不能证明设备静止。缺少对应原本地 journal 时，`slark_run` 关联不可用。[Session Controller](../../api/session-controller/README.zh.md#collaboration-analysis-journal) 定义持久下限及重启后未知工作。
+
 <a id="known-limitations-and-deferred-work"></a>
 
 
@@ -299,3 +309,24 @@ analysis-token 的 `root_execution_journal` 操作将精确的 read/prepare/acce
 个人 `credentials.apply` 命令只允许精确的 set/unset。引用名沿用原语法且最多 128 字符，只写值最多 16 KiB。存储由原凭据 provider 负责。成功不返回值，已知拒绝的详情只包含引用名，不回显 provider 值或私有诊断。
 
 受控终端操作保留原Gateway参数并拒绝跨会话输入；shell输入与生命周期变更必须使用当前Host签发的会话控制权证明。
+
+私有 `root_operation_origin` 处理器要求 Unix 提供当前 Account/Profile/peer 元数据，并读取实际 Bot 生产者描述。它保留有界的待绑定观察，验证原持久化事件、安装签名和固定 Cloud 签名，再通过等待中的归属事件发布不透明 token。公开读取器仅返回元数据，并在取消、claim 过期或事件结束时使 token 失效。消费者缺失或未就绪时返回 published=false，等待后续全新核对。
+
+私有操作记忆 reader 只有在原确认具有独立捕获的 activation cut 且实际 effect reader 可用时才接受 native entry 页面。来源权限保存在请求所有的对象 token 中，每次 await 前后复查 producer、worker 生命周期、签名绑定的 Account/peer/scope 与截止时间。effect reader 接收实际 token 所属的来源 view，通过持久元数据核对原 entry 的 owner、项目、Bot 与 Account，不返回消息正文。Main 在签署页面前独立核对完整 entry 及原始双签名记录。旧确认保留原 reference 路径。source provider 不提供 native 精确事件读取器；已激活 retained 事实的检索与证据需要 Cloud 投影集成。
+
+可选 `tests/collaboration-operation-origin.joined.spec.ts` 联合实际 Loader、AgentLoop、原生工具执行、JSONL 持久化、Host Account/Profile 授权器及安装签名器、Cloud 受限角色 PostgreSQL 服务，以及选定的 DSBot 生产 store/observer。它验证原始准入与消费、两个原子引用修订、重放拒绝及不增加执行的新证明幂等重试。已版本化的 `tests/fixtures/dsbot-operation-origin.test-support.mjs` 从明确选定的仓库导入生产 DSBot 模块，不复制观察器实现。请选择已评审 DSBot 合并提交 `f989287c1e806884647d64c826359b3dce3d9a3c`、包含 `project-operation-origin.joined-bridge.test-support.ts` 的 Slark 检出及专用回环测试数据库。跨仓库路径缺失时跳过此可选联调；普通 Loader 回归仍会执行。注册身份、模型响应和进程内分帧传输属于合成测试输入。物理 Unix socket、完整 Desktop Main 核对流程、双电脑及 staging 验收需要独立验证。
+
+```sh
+DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT=/path/to/dsbot \
+DSH_TEST_OPERATION_ORIGIN_DSBOT_COMMIT=f989287c1e806884647d64c826359b3dce3d9a3c \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT=/path/to/slark \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_BRIDGE=/absolute/path/to/project-operation-origin.joined-bridge.test-support.ts \
+DSH_TEST_OPERATION_ORIGIN_CLOUD_NODE=/path/to/node22/bin/node \
+PROJECT_OPERATION_ORIGIN_OWNER_URL=postgresql://postgres@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+PROJECT_OPERATION_ORIGIN_APP_URL=postgresql://slark_app@127.0.0.1:52044/slark_req0006_operation_origin_test_r2 \
+/path/to/node26/bin/node node_modules/vitest/vitest.mjs run packages/bundle/web-app/tests/collaboration-operation-origin.joined.spec.ts
+```
+
+私有记忆请求 owner 在使用请求内对象 token 调用实际来源 producer 前，校验固定 Cloud purpose、环境、准确 Account 和本地 peer。公开 reader 仅在捕获的 producer 和生命周期仍有效时返回同一不可变授权，不公开 token 工厂。原确认 anchor 捕获与来源读取分离；每次等待中的来源调用均受取消和签名截止时间约束。来源回复只含引用元数据、明确空缺或缺失证据。负责签名的 Host 在发布前独立复查 Account；worker 生命周期本身不等同于 Account 撤销订阅。独立的 64 KiB memory JSON 封套接纳嵌套确认 offer 和有界页面，不改变其他 Session JSON 限制。此路径不导入模型上下文、不保留正文，也不授予原生执行权限。
+
+任务 drain 观察通过实际 Controller 和 Session 持久化读取器取得原调用、结果摘要及终态证据。Native 执行在等待 wrapper 期间保留原取消信号，即使 wrapper 替换执行信号也不改变屏障。只有同一受监控 worker 的原取消结果与 turn 结束均持久化后，未进入正文的取消才可报告 quiescent。已进入正文的调用保留终态回执元数据，但缺少真实子进程或 provider 结算能力时，整体 quiescence 仍为 unknown。不受支持的 Slark 投影仍为 unavailable；空库存、租约过期及 Promise 返回均不能开放关闭下限。

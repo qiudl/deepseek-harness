@@ -715,6 +715,12 @@ schemas(scope?: ScopeKey, toolSet?: ResolvedToolSet): ToolSchema[]
  */
 setExecutor(executor: ToolExecutor): () => void
 
+/** Read the actual current provider identity without registering or invoking it.
+ * @param scope - Agent or preset scope; omission reads the deployment selection.
+ * @returns The selected instance as a readonly interface; missing or unloaded selections throw without fallback.
+ */
+inspectExecutor(scope?: ScopeKey): Readonly<ToolExecutor>
+
 /**
  * Delegate a raw call batch to its Agent's provider or the deployment default.
  * Select at dispatch; accepted batches settle through that provider even if it unloads.

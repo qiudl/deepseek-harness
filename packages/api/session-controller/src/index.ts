@@ -1,20 +1,37 @@
+import { collaborationTaskDurabilityProjection, collaborationTaskEventDigest } from './collaboration-task-durability.ts'
+import type { CollaborationTaskDurabilityState } from './collaboration-task-durability.ts'
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
+import { collaborationFeedbackMessageId } from './collaboration-feedback.ts'
+import type {} from './runtime-entry-consumer-host.ts'
+import { RuntimeEntryConsumer } from './runtime-entry-consumer.ts'
+import { openRuntimeEntryFeedbackMetadata, type RuntimeEntryFeedbackMetadataJournal } from './runtime-entry-feedback-metadata.ts'
+import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand } from '@deepseek-ai/dsh-host-control-protocol'
+export type * from './project-operation-memory-authorizations.ts'
+export { observeOriginalCollaborationOperations } from './collaboration-operation-origin.ts'
+export type { ProjectOperationOrigins, ProjectOperationOriginToken, ProjectOperationOriginReference,
+  ProjectOperationRuntimeEntryCandidate, ProjectOperationRuntimeEntryPublication } from './project-operation-origins.ts'
 export type { CollaborationAnalysisFailure } from './collaboration-analysis-failure-journal.ts'
 import { openCollaborationContinuationJournal, collaborationContinuationCommit, type CollaborationContinuationResult } from './collaboration-continuation-journal.ts'
-import type { CollaborationConsumptionResult } from './collaboration-consumption-journal.ts'
+import type { CollaborationConsumptionResult, CollaborationConsumptionRecord } from './collaboration-consumption-journal.ts'
 import { openCollaborationConsumptionJournal, collaborationConsumptionCommit } from './collaboration-consumption-journal.ts'
 import { createCollaborationFeedbackMessage, observeCollaborationFeedback, installCollaborationFeedbackCheckpoint, parseCollaborationFeedbackOperation } from './collaboration-feedback.ts'
 import type { CollaborationFeedbackObservation } from './collaboration-feedback.ts'
 import { openCollaborationRootExecutionJournal, parseCollaborationExecutionOperation } from './collaboration-root-execution-journal.ts'
 import type { CollaborationRootExecutionJournal, CollaborationExecutionRecord } from './collaboration-root-execution-journal.ts'
+import { openCollaborationTaskCoordinationJournal } from './collaboration-task-coordination-journal.ts'
+import type { CollaborationTaskCoordinationJournal, CollaborationTaskControllerJob } from './collaboration-task-coordination-journal.ts'
+import type { CollaborationTaskExecution, CollaborationTaskCurrentAccount } from './collaboration-task-coordination.ts'
 /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
 
 import { isDeepStrictEqual } from 'node:util'
 import type { CollaborationPlanningPredecessor, CollaborationRootPlanningManifest } from './collaboration-root-planning-journal.ts'
 import { hostname } from 'node:os'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import type { CollaborationRootCommandId } from './collaboration-root-journal.ts'
 import { resolve } from 'node:path'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { inboxProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
-import { Context, Service } from '@deepseek-ai/cordis'
+import { Context, Service, FiberState, symbols } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { errorChain, ReasoningEffortId, type MessageSource } from '@deepseek-ai/dsh-llm'
 import type { PreparedLlmSnapshotCall } from '@deepseek-ai/dsh-llm'
@@ -187,7 +204,8 @@ function resolveSessionResource({ args, parameters }: TypertResourceResolveInput
   for (const parameter of parameters) {
     const value = args[parameter.wire]
     if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
-    const request = value as { readonly sessionId?: SessionId; readonly address?: SessionAddress }
+    const request = value as { readonly sessionId?: SessionId
+      readonly address?: SessionAddress }
     const address = request.address
     if (request.sessionId !== undefined && address !== undefined) {
       throw new Error('Session resource request must not contain both sessionId and address')
@@ -235,6 +253,11 @@ async function waitForCollaborationSourceRead<T>(read: Promise<T>, signal: Abort
 
 /** Host service backing the generated `ctx.remote.session` namespace. */
 export class SessionController extends TypertRemoteService {
+  /** Whether `create({ sessionId, exactAdopt: true })` keeps that identity or fails without minting another. */
+  get supportsExactAdopt(): true {
+    return true
+  }
+
   static inject = [
     'agentDefaultModel',
     'agents',
@@ -285,8 +308,18 @@ export class SessionController extends TypertRemoteService {
   private readonly collaborationRootTransportTraces = new WeakMap<CollaborationSourceSnapshot, string>()
   private collaborationContinuationJournal?: Promise<Awaited<ReturnType<typeof openCollaborationContinuationJournal>>>
   private collaborationConsumptionJournal?: Promise<Awaited<ReturnType<typeof openCollaborationConsumptionJournal>>>
-  private readonly collaborationConsumerLive = new Map<string, { sessionId: SessionId; expiresAt: number; signal: AbortSignal }>()
+  private readonly collaborationConsumerLive = new Map<string, { sessionId: SessionId
+    expiresAt: number
+    signal: AbortSignal
+    commandId: CollaborationExecutionRecord['execution_command_id']
+    controller: AbortController
+    canonicalDigest: string
+    account?: CollaborationTaskCurrentAccount
+    execution?: CollaborationTaskExecution }>()
+  private collaborationTaskDurability!: ProjectionHandle<CollaborationTaskDurabilityState>
+  private collaborationTaskJournal?: Promise<CollaborationTaskCoordinationJournal>
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
+  private runtimeEntryFeedbackMetadata?: Promise<RuntimeEntryFeedbackMetadataJournal>
 
   /**
    * @param ctx - Host context containing the Session capability assembly.
@@ -295,6 +328,56 @@ export class SessionController extends TypertRemoteService {
    */
   constructor(ctx: Context, config: Config, internals: SessionControllerInternals = {}) {
     super(ctx, 'sessionController', { namespace: 'session' })
+    ctx.provide('collaborationTaskExecutions', Object.freeze({ read: (sessionId: SessionId, turn: number) => {
+      for (const live of this.collaborationConsumerLive.values()) {
+        if (live.sessionId === sessionId && live.execution?.turn === turn && !live.signal.aborted && Date.now() < live.expiresAt)
+          return live.execution
+      }
+      return null
+    }, captureDurable: async (commandId: CollaborationTaskExecution['commandId'], agent: Agent) => {
+      const selected = [...this.collaborationConsumerLive.entries()].find(([, value]) => value.commandId === commandId
+        && value.sessionId === agent.id), live = selected?.[1]
+      const loop = ctx.get('agentLoop'), persistence = ctx.get('sessionPersistence'), session = agent.session
+      const sameService = (left: object | undefined, right: object | undefined) => left !== undefined && right !== undefined
+        && (Reflect.get(left, symbols.original) ?? left) === (Reflect.get(right, symbols.original) ?? right)
+      const current = () => ctx.fiber.state === FiberState.ACTIVE && ctx.agents.get(agent.id) === agent
+        && ctx.sessions.get(agent.id) === session && sameService(ctx.get('agentLoop'), loop)
+        && sameService(ctx.get('sessionPersistence'), persistence)
+      const retained = () => selected !== undefined && this.collaborationConsumerLive.get(selected[0]) === live
+      if (!live?.execution || !loop || !persistence || !current() || !retained()) return null
+      const durable = await loop.readOriginalInvocationEntrySession(agent)
+      if (!durable || !durable.isCurrent() || !durable.prefixLogDigest || !current() || !retained()) return null
+      const state = this.collaborationTaskDurability.stateOf(session)
+      if (!state.complete || state.turn !== live.execution.turn || state.end && state.end.seq >= durable.logOffset
+        || state.pairs.some(pair => pair.callSeq >= durable.logOffset
+          || pair.resultSeq !== null && pair.resultSeq >= durable.logOffset)) return null
+      // Projection selects bounded coordinates; the original reader independently verifies the stored bytes.
+      const handle = await persistence.open(agent.id, 'read', { signal: this.collaborationLifetime.signal })
+      try {
+        for (const pair of state.pairs) {
+          if (pair.callSeq < handle.inheritedEventCount) return null
+          const call = (await handle.read(pair.callSeq, 1)).events[0]
+          if (call?.type !== 'tool/call' || call.data.turn !== state.turn || call.data.step !== state.step
+            || call.data.callId !== pair.callId || call.data.name !== pair.toolName
+            || collaborationTaskEventDigest(call) !== pair.callDigest) return null
+          if (pair.resultSeq !== null) {
+            const result = (await handle.read(pair.resultSeq, 1)).events[0]
+            if (result?.type !== 'tool/result' || result.data.turn !== state.turn || result.data.step !== state.step
+              || result.data.message.toolCallId !== pair.callId || result.data.message.source.callId !== pair.callId
+              || collaborationTaskEventDigest(result) !== pair.resultDigest
+              || pair.abortedBeforeDispatch !== (result.data.message.isError === true && result.data.error?.code === 'ABORTED_BEFORE_DISPATCH')) return null
+          }
+        }
+        if (state.end) {
+          const end = (await handle.read(state.end.seq, 1)).events[0]
+          if (end?.type !== 'turn/end' || end.data.turn !== state.turn || end.data.reason.kind !== state.end.kind
+            || collaborationTaskEventDigest(end) !== state.end.digest) return null
+        }
+      } finally { await handle.close() }
+      if (!current() || !retained() || !durable.isCurrent()) return null
+      return Object.freeze({ turn: live.execution.turn, eventCount: durable.logOffset,
+        prefixDigest: durable.prefixLogDigest, state, isCurrent: () => current() && durable.isCurrent() })
+    } }))
     // Host identity reads use the owning Profile's registry, never a caller's Cordis scope.
     this.inspectWorkspaceModelSelection = this.inspectWorkspaceModelSelection.bind(this)
     this.prepareCollaborationRootPlanning = this.prepareCollaborationRootPlanning.bind(this)
@@ -324,10 +407,14 @@ export class SessionController extends TypertRemoteService {
       await timeline?.close()
       const executions = await this.collaborationRootExecutionJournal?.catch(() => undefined)
       await executions?.close()
+      const coordination = await this.collaborationTaskJournal?.catch(() => undefined)
+      await coordination?.close()
       const roots = await this.collaborationRootJournal?.catch(() => undefined)
       await roots?.close()
       const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
       await replies?.close()
+      const entryHeaders = await this.runtimeEntryFeedbackMetadata?.catch(() => undefined)
+      await entryHeaders?.close()
       const references = await this.collaborationReferenceJournal?.catch(() => undefined)
       await references?.close()
       const consumptions = await this.collaborationConsumptionJournal?.catch(() => undefined)
@@ -358,6 +445,7 @@ export class SessionController extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
+    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     ctx.typert.resources.register('session', { resolve: resolveSessionResource })
     this.agents = new ApiSessionAgentController(ctx)
     this.agents.initialize()
@@ -565,7 +653,9 @@ export class SessionController extends TypertRemoteService {
    */
   async prepareWorkspaceModelSnapshot(
     sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal,
-  ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>> {
+  ): Promise<Readonly<{ workspaceId: WorkspaceId
+    sessionId: SessionId
+    prepared: PreparedLlmSnapshotCall }>> {
     signal.throwIfAborted()
     const workspace = this.ctx.workspaceRegistry.get(workspaceId)
     const session = this.ctx.sessions.get(sessionId)
@@ -622,7 +712,8 @@ export class SessionController extends TypertRemoteService {
       analyzeClarification: (input: CollaborationClarificationInput,
         persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>,
         cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }>
-    | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }>
+    | Readonly<{ kind: 'recovered'
+      snapshot: CollaborationSourceSnapshot }>
   > {
     return this.captureCollaborationSourceMode(input, signal, 'legacy')
   }
@@ -955,19 +1046,375 @@ export class SessionController extends TypertRemoteService {
   /** Execute a private durable consumer command under authenticated Main's current authority.
    * @param value - Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.
    * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+   * @param account - Current parent-owned Account identity used only by denial floors.
    * @returns Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.
    */
-  async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise<
+  async collaborationRootConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise<
     CollaborationConsumptionResult | CollaborationContinuationResult
   > {
     const parsed = parseCollaborationFeedbackOperation(value)
     if (parsed.action === 'read' || parsed.action === 'enqueue') throw Error('collaboration_consumption_operation_invalid')
-    const result = await this.accessCollaborationFeedback(parsed, signal)
+    const result = await this.accessCollaborationFeedback(parsed, signal, account)
     /* v8 ignore next -- Consumer actions are excluded from the observation-only return paths above. */
     if ('status' in result) throw Error('collaboration_consumption_operation_invalid')
     if (result.kind === 'continuation') return result
     const commit = result.record ? collaborationConsumptionCommit(result.record) : undefined
     return { ...result, ...(commit ? { commit } : {}) }
+  }
+
+  /** Capture the exact original consumed-step prefix through the Profile's real persistence barrier.
+   * @param value - Original root, frozen execution and delivery; no caller event metadata.
+   * @param signal - Authenticated parent request lifetime.
+   * @returns Original durable Root/consumption and raw prefix for the private observer only.
+   */
+  async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{
+    root: CollaborationRootSubmission
+    record: Extract<CollaborationConsumptionRecord, { state: 'consumed' }>
+    events: readonly import('@deepseek-ai/dsh-session').SessionEvent[]
+    inheritedEventCount: number
+    consumptionCommitDigest: string
+  }> {
+    const command = parseCollaborationFeedbackOperation(value)
+    if (command.action !== 'consumer_read') throw Error('collaboration_operation_origin_command')
+    const result = await this.collaborationRootConsumption(command, signal)
+    if (result.kind !== 'consumer' || result.record?.state !== 'consumed') throw Error('collaboration_operation_origin_not_consumed')
+    const root = await this.readCollaborationRoot(command.target, signal)
+    const persistence = this.ctx.get('sessionPersistence')
+    if (!persistence) throw Error('collaboration_operation_origin_persistence')
+    const sessionId = SessionId(command.target.session_id), session = this.ctx.sessions.get(sessionId), count = session?.seq
+    if (count !== undefined) { await persistence.flush(); signal.throwIfAborted() }
+    const handle = await persistence.open(sessionId, 'read', { signal })
+    try {
+      const { events } = await handle.read(0, count, { signal })
+      if (count === undefined) await persistence.flush()
+      else if (events.length !== count) throw Error('collaboration_operation_origin_prefix')
+      await this.inspectCollaborationMembership(sessionId, WorkspaceId(command.target.workspace_id), signal)
+      if (this.ctx.sessions.get(sessionId) !== session) throw Error('collaboration_operation_origin_session')
+      signal.throwIfAborted()
+      return { root, record: result.record, events, inheritedEventCount: handle.inheritedEventCount,
+        consumptionCommitDigest: (collaborationConsumptionCommit(result.record) as
+          NonNullable<ReturnType<typeof collaborationConsumptionCommit>>).host_journal_commit.content_digest }
+    } finally { await handle.close() }
+  }
+
+  /** Read the independent coordination metadata writer; this does not authorize an association or execution.
+   * @returns The Profile-owned journal, closed only after live original consumers drain.
+   */
+  async openCollaborationTaskCoordinationJournal(): Promise<CollaborationTaskCoordinationJournal> {
+    if (!this.collaborationTaskJournal) {
+      const facility = this.ctx.get('storageDomain')
+      if (!facility) throw Error('task_coordination_storage_unavailable')
+      this.collaborationTaskJournal = openCollaborationTaskCoordinationJournal(facility)
+    }
+    return this.collaborationTaskJournal
+  }
+
+  /** Cancel only the live original consumer of an already-associated local command.
+   * @param commandId - Original command selected by the authenticated stop control.
+   */
+  stopCollaborationTaskExecution(commandId: string): void {
+    for (const live of this.collaborationConsumerLive.values()) if (live.commandId === commandId)
+      live.controller.abort(Error('task_coordination_closed'))
+  }
+
+  /** Stop actual legacy consumers of the exact persisted Root under the same current parent identity.
+   * @param canonicalDigest - Recomputed original local Root coordinates, never a new Root.
+   * @param account - Original Account/environment/Profile facts verified by the authenticated stop handler.
+   */
+  stopCollaborationTaskRoot(canonicalDigest: string, account: CollaborationTaskCurrentAccount): void {
+    for (const live of this.collaborationConsumerLive.values()) if (live.canonicalDigest === canonicalDigest
+      && live.account?.authorityEnvironmentId === account.authorityEnvironmentId && live.account.accountIssuer === account.accountIssuer
+      && live.account.accountSubject === account.accountSubject && live.account.hostProfileId === account.hostProfileId)
+      live.controller.abort(Error('task_coordination_closed'))
+  }
+
+  /** Inspect actual original command, Root and source membership for private task coordination.
+   * @param commandId - Existing concrete local execution command, never a new Root selector.
+   * @param signal - Current authenticated parent request cancellation.
+   * @returns Original admitted command and Root; no Cloud birth snapshot is inferred from them.
+   */
+  async inspectCollaborationTaskExecution(commandId: string, signal: AbortSignal): Promise<{
+    execution: Extract<CollaborationExecutionRecord, { state: 'admitted' }>
+    root: Extract<CollaborationRootSubmission, { state: 'admitted' }>
+  }> {
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal]), facility = this.ctx.get('storageDomain')
+    if (!facility) throw Error('task_coordination_storage_unavailable')
+    this.collaborationRootExecutionJournal ??= openCollaborationRootExecutionJournal(facility)
+    this.collaborationRootJournal ??= openCollaborationRootJournal(facility)
+    const executions = await this.collaborationRootExecutionJournal, roots = await this.collaborationRootJournal
+    owned.throwIfAborted()
+    const execution = executions.findByCommandId(commandId)
+    if (!execution || execution.state !== 'admitted') throw Error('task_coordination_execution_missing')
+    const root = roots.read(brandString<CollaborationRootCommandId>(execution.root.command_id))
+    if (!root || root.state !== 'admitted' || root.root_task_id !== execution.root.root_task_id
+      || root.root_trace_id !== execution.root.root_trace_id || root.namespace_id !== execution.root.namespace_id)
+      throw Error('task_coordination_root_mismatch')
+    await this.inspectCollaborationMembership(SessionId(root.source.session_id), WorkspaceId(root.source.workspace_id), owned)
+    return { execution, root }
+  }
+
+  /** Read only the real local Root and its original concrete commands for a signed stop control.
+   * @param canonical - Exact original Root coordinates verified by the private worker handler.
+   * @param signal - Original current Account control request cancellation.
+   * @returns Real admitted Root, original execution commands and exact durable consumer records; unknown roots reject.
+   */
+  async inspectCollaborationTaskRoot(canonical: Pick<CollaborationRootSubmission, 'namespace_id' | 'root_task_id' | 'root_trace_id'>,
+    signal: AbortSignal): Promise<{ root: Extract<CollaborationRootSubmission, { state: 'admitted' }>
+    executions: readonly CollaborationExecutionRecord[]
+    consumers: readonly CollaborationConsumptionRecord[] }> {
+    const facility = this.ctx.get('storageDomain'), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    if (!facility) throw Error('task_coordination_storage_unavailable')
+    this.collaborationRootJournal ??= openCollaborationRootJournal(facility)
+    this.collaborationRootExecutionJournal ??= openCollaborationRootExecutionJournal(facility)
+    const roots = await this.collaborationRootJournal, executions = await this.collaborationRootExecutionJournal
+    owned.throwIfAborted()
+    const root = roots.findCanonical(canonical)
+    if (!root || root.state !== 'admitted') throw Error('task_coordination_root_mismatch')
+    await this.inspectCollaborationMembership(SessionId(root.source.session_id), WorkspaceId(root.source.workspace_id), owned)
+    const local = executions.forRoot(root.command_id), commandIds = new Set(local.map(value => String(value.execution_command_id)))
+    const consumers = await this.openConsumptionJournal()
+    owned.throwIfAborted()
+    return { root, executions: local, consumers: consumers.records().filter(value => value.binding.namespace_id === root.namespace_id
+      && value.binding.root_task_id === root.root_task_id && value.binding.root_trace_id === root.root_trace_id
+      && commandIds.has(value.binding.execution_command_id)) }
+  }
+
+  private openRuntimeEntryFeedbackMetadata(): Promise<RuntimeEntryFeedbackMetadataJournal> {
+    const facility = this.ctx.get('storageDomain')
+    if (!facility) throw Error('runtime_entry_metadata_storage_unavailable')
+    return this.runtimeEntryFeedbackMetadata ??= openRuntimeEntryFeedbackMetadata(facility)
+  }
+
+  /** Read an actual execution and its first-durable terminal header without opening Root, Source, reply or Session history.
+   * @param value - Exact native-purpose read with the original delivery selector.
+   * @param signal - Current authenticated Account request.
+   * @returns Original body-free metadata, or explicit local unsupported before any Source grant.
+   */
+  async collaborationRuntimeEntryExecution(value: unknown, signal: AbortSignal): Promise<{
+    supported: boolean
+    record: CollaborationExecutionRecord | null
+  }> {
+    const parsed = parseRuntimeEntryAnalysisCommand({ action: 'root_execution_journal', purpose: 'runtime_entry', operation: value })
+    if (parsed.action !== 'root_execution_journal') throw Error('runtime_entry_execution_invalid')
+    const operation = parsed.operation, host = this.ctx.get('runtimeEntryConsumerHost'), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const sessionId = SessionId(operation.target.session_id), workspaceId = WorkspaceId(operation.target.workspace_id)
+    const agent = this.ctx.agents.get(sessionId), session = this.ctx.sessions.get(sessionId),
+      workspace = this.ctx.workspaceRegistry.get(workspaceId)
+    if (!host || !agent || !session || agent.session !== session || !host.supports(agent)) return { supported: false, record: null }
+    const current = () => {
+      owned.throwIfAborted(); host.lifetime.throwIfAborted()
+      if (this.ctx.get('runtimeEntryConsumerHost') !== host || this.ctx.agents.get(sessionId) !== agent
+        || this.ctx.sessions.get(sessionId) !== session || this.ctx.workspaceRegistry.get(workspaceId) !== workspace
+        || !host.supports(agent)) throw Error('runtime_entry_consumer_authority_lost')
+    }
+    current()
+    await this.inspectCollaborationMembership(sessionId, workspaceId, owned); current()
+    const facility = this.ctx.get('storageDomain')
+    if (!facility) throw Error('runtime_entry_metadata_storage_unavailable')
+    const executions = await (this.collaborationRootExecutionJournal ??= openCollaborationRootExecutionJournal(facility))
+    let header: ReturnType<RuntimeEntryFeedbackMetadataJournal['read']>
+    try {
+      const headers = await this.openRuntimeEntryFeedbackMetadata(); current()
+      header = headers.read(operation.target.namespace_id, operation.delivery_id)
+    } catch { current(); return { supported: false, record: null } }
+    if (!header || Object.entries(header.source_locator).some(([key, field]) =>
+      operation.target[key as keyof typeof operation.target] !== field)) return { supported: false, record: null }
+    const matches = executions.forRoot(operation.target.command_id).filter(record => record.state === 'admitted'
+      && record.root.namespace_id === operation.target.namespace_id && isDeepStrictEqual(record.selection, operation.selection)
+      && record.root.source_digest === header.source_snapshot_digest && record.receipt.invocation_id === header.invocation_id
+      && record.selection.plan_id === header.plan_id && record.selection.task_id === header.task_id
+      && record.selection.task_revision === header.task_revision)
+    if (matches.length !== 1) throw Error('runtime_entry_execution_missing')
+    const execution = matches[0]
+    if (!execution) throw Error('runtime_entry_execution_missing')
+    const consumers = await this.openConsumptionJournal(); current()
+    const existing = consumers.read({ namespace_id: header.namespace_id, root_task_id: execution.root.root_task_id,
+      root_trace_id: execution.root.root_trace_id, execution_command_id: execution.execution_command_id,
+      invocation_id: header.invocation_id, delivery_id: header.delivery_id, result_digest: header.result_digest,
+      source_snapshot_digest: header.source_snapshot_digest, source_locator: header.source_locator,
+      message_id: collaborationFeedbackMessageId(execution, header) })
+    if (!host.canPrepare(existing?.command.command_id)) return { supported: false, record: null }
+    const snapshot = await host.readLoadedSession(agent); current()
+    if (!snapshot || snapshot.session !== session || !snapshot.isCurrent() || snapshot.prefixLogDigest === undefined)
+      return { supported: false, record: null }
+    return { supported: true, record: matches[0] ?? null }
+  }
+
+  /** Read the original native candidate's consumer identity without restoring an Agent or reading feedback bodies.
+   * @param value - Exact original Root, task selection and terminal delivery.
+   * @param signal - Current authenticated Account/Profile request.
+   * @returns Existing original consumer record; absence supplies no execution or publication authority. */
+  async inspectRuntimeEntryConsumer(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionRecord | null> {
+    const command = parseRuntimeEntryOriginCommand(value), owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
+    const target = command.target, sessionId = SessionId(target.session_id), workspaceId = WorkspaceId(target.workspace_id)
+    await this.inspectCollaborationMembership(sessionId, workspaceId, owned)
+    const facility = this.ctx.get('storageDomain')
+    if (!facility) throw Error('runtime_entry_metadata_storage_unavailable')
+    const journal = await (this.collaborationRootExecutionJournal ??= openCollaborationRootExecutionJournal(facility))
+    const headers = await this.openRuntimeEntryFeedbackMetadata(), consumers = await this.openConsumptionJournal()
+    owned.throwIfAborted()
+    const header = headers.read(target.namespace_id, command.delivery_id)
+    if (!header || Object.entries(header.source_locator).some(([key, item]) => target[key as keyof typeof target] !== item)) return null
+    const records = journal.forRoot(target.command_id).filter(r => r.state === 'admitted' && r.root.namespace_id === target.namespace_id
+      && r.root.source_digest === header.source_snapshot_digest && r.receipt.invocation_id === header.invocation_id
+      && isDeepStrictEqual(r.selection, command.selection))
+    const execution = records.length === 1 ? records[0] : undefined
+    if (!execution || execution.state !== 'admitted') throw Error('runtime_entry_execution_missing')
+    await this.inspectCollaborationMembership(sessionId, workspaceId, owned); owned.throwIfAborted()
+    return consumers.records().find(record => record.binding.namespace_id === target.namespace_id
+      && record.binding.root_task_id === execution.root.root_task_id && record.binding.root_trace_id === execution.root.root_trace_id
+      && record.binding.execution_command_id === execution.execution_command_id && record.binding.delivery_id === header.delivery_id
+      && record.binding.invocation_id === header.invocation_id && record.binding.result_digest === header.result_digest
+      && record.binding.message_id === collaborationFeedbackMessageId(execution, header)) ?? null
+  }
+
+  /** Consume through the actual original-entry driver, with no body/history reads before its durable entry.
+   * @param value - Closed native read/prepare/start operation under authenticated Main.
+   * @param signal - Original current Account and worker request cancellation.
+   * @param account - Actual Parent identity for denial-only canonical floors.
+   * @returns Existing consumption vocabulary; loss after Source dispatch never falls back or wakes again.
+   */
+  async collaborationRuntimeEntryConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise<
+    CollaborationConsumptionResult
+  > {
+    const command = parseCollaborationFeedbackOperation(value)
+    if (command.action !== 'consumer_read' && command.action !== 'consumer_prepare' && command.action !== 'consumer_start')
+      throw Error('runtime_entry_consumer_operation_invalid')
+    const host = this.ctx.get('runtimeEntryConsumerHost')
+    const owned = AbortSignal.any([signal, this.collaborationLifetime.signal, ...(host ? [host.lifetime] : [])]),
+      sessionId = SessionId(command.target.session_id)
+    const workspaceId = WorkspaceId(command.target.workspace_id), agent = this.ctx.agents.get(sessionId)
+    const session = this.ctx.sessions.get(sessionId), workspace = this.ctx.workspaceRegistry.get(workspaceId)
+    if (!host || !agent || !session || agent.session !== session || !host.supports(agent)) throw Error('runtime_entry_unsupported')
+    const controller = new AbortController(), deadline = command.action === 'consumer_start' ? Date.parse(command.grant.expires_at) : undefined
+    if (deadline !== undefined && deadline <= Date.now()) throw Error('collaboration_consumption_grant_expired')
+    const active = deadline === undefined ? owned : AbortSignal.any([owned, controller.signal,
+      AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+    const matches = () => !active.aborted && !host.lifetime.aborted && this.ctx.get('runtimeEntryConsumerHost') === host
+      && this.ctx.agents.get(sessionId) === agent && this.ctx.sessions.get(sessionId) === session
+      && this.ctx.workspaceRegistry.get(workspaceId) === workspace && host.supports(agent)
+    const current = () => { active.throwIfAborted(); if (!matches()) throw Error('runtime_entry_consumer_authority_lost') }
+    const selected = await this.collaborationRuntimeEntryExecution({ action: 'read', target: command.target,
+      selection: command.selection, delivery_id: command.delivery_id }, active)
+    current()
+    const execution = selected.record
+    if (!selected.supported || !execution || execution.state !== 'admitted') throw Error('runtime_entry_unsupported')
+    const operation = this.collaborationCaptureTail.then(async () => {
+      await this.inspectCollaborationMembership(sessionId, workspaceId, active); current()
+      const headers = await this.openRuntimeEntryFeedbackMetadata(), consumers = await this.openConsumptionJournal()
+      const coordination = await this.openCollaborationTaskCoordinationJournal(); current()
+      const header = headers.read(command.target.namespace_id, command.delivery_id)
+      if (!header) throw Error('runtime_entry_unsupported')
+      const messageId = collaborationFeedbackMessageId(execution, header)
+      const binding = Object.freeze({ namespace_id: header.namespace_id, root_task_id: execution.root.root_task_id,
+        root_trace_id: execution.root.root_trace_id, execution_command_id: execution.execution_command_id,
+        invocation_id: header.invocation_id, delivery_id: header.delivery_id, result_digest: header.result_digest,
+        source_snapshot_digest: header.source_snapshot_digest, source_locator: header.source_locator, message_id: messageId })
+      const canonicalDigest = collaborationJournalDigest({ namespace_id: execution.root.namespace_id,
+        root_task_id: execution.root.root_task_id, root_trace_id: execution.root.root_trace_id })
+      const association = coordination.association(execution.execution_command_id)
+      const checkFloor = () => {
+        if (association && coordination.blocked(association.floorDigest)) throw Error('task_coordination_closed')
+        if (!coordination.canonicalBlocked(canonicalDigest)) return
+        if (!account) throw Error('task_coordination_identity_unavailable')
+        const floor = this.ctx.get('collaborationTaskFloors')
+        if (!floor || floor.read(canonicalDigest, account) !== null) throw Error('task_coordination_closed')
+      }
+      const snapshot = await host.readLoadedSession(agent); current(); checkFloor()
+      if (!snapshot || snapshot.session !== session || !snapshot.isCurrent() || snapshot.prefixLogDigest === undefined)
+        throw Error('runtime_entry_unsupported')
+      const prefixDigest = snapshot.prefixLogDigest
+      const result = (record: CollaborationConsumptionRecord | null): CollaborationConsumptionResult => {
+        const observation: CollaborationFeedbackObservation = record?.state === 'consumed'
+          ? { message_id: messageId, status: 'context_applied', event_count: record.evidence.session_prefix.event_count,
+            log_digest: record.evidence.session_prefix.log_digest,
+            session_event_seq: record.evidence.session_event_seq, consuming_step: record.evidence.consuming_step,
+            continuation_observed: false }
+          : { message_id: messageId, status: record?.state === 'started' ? 'claimed_or_removed' : 'not_enqueued',
+            event_count: snapshot.logOffset, log_digest: prefixDigest, continuation_observed: false }
+        const commit = record ? collaborationConsumptionCommit(record) : undefined
+        return { kind: 'consumer', record, observation, ...(commit ? { commit } : {}) }
+      }
+      if (command.action === 'consumer_read') return result(consumers.read(binding) ?? null)
+      if (command.action === 'consumer_prepare' && (command.expected_event_count !== snapshot.logOffset
+        || command.expected_log_digest !== snapshot.prefixLogDigest)) throw Error('collaboration_feedback_session_changed')
+      const preparation = await new RuntimeEntryConsumer(consumers).prepare({ agent, execution, header, signal: active,
+        readSnapshot: () => host.readLoadedSession(agent), isSupported: () => host.supports(agent), isCurrent: matches,
+        preflight: async () => {
+          current(); checkFloor()
+          const observer = await this.ctx.serial('task-coordination/consumer-prepare', {
+            commandId: execution.execution_command_id, agent, signal: active,
+          })
+          current(); checkFloor()
+          if (association && observer !== true) throw Error('task_coordination_observer_unavailable')
+        } })
+      current(); checkFloor()
+      if (preparation.kind === 'unsupported') throw Error('runtime_entry_unsupported')
+      if (preparation.kind === 'historical' || command.action === 'consumer_prepare') return result(preparation.record)
+      let job: CollaborationTaskControllerJob | undefined
+      const cancelled = () => { agent.cancel({ kind: 'parent' }, { keepInbox: true }) }
+      const started = await preparation.start({
+        requestOriginalMetadata: async () => { const original = await host.readOriginal(preparation.record.command.command_id, active)
+          current(); checkFloor(); return original },
+        prepareEntry: async (_agent, commandId) => { const entry = await host.prepareEntry(agent, commandId, active)
+          current(); checkFloor(); return entry },
+        materialize: async (materializeSignal) => {
+          // The real driver committed/read back its entry and awaited the opaque event before this body reader.
+          const running = AbortSignal.any([active, materializeSignal])
+          running.throwIfAborted(); current(); checkFloor()
+          await this.inspectCollaborationMembership(sessionId, workspaceId, running); current(); checkFloor()
+          const facility = this.ctx.get('storageDomain')
+          if (!facility) throw Error('runtime_entry_metadata_storage_unavailable')
+          const roots = await (this.collaborationRootJournal ??= openCollaborationRootJournal(facility))
+          current(); checkFloor()
+          const root = roots.read(command.target.command_id)
+          if (!root || root.state !== 'admitted' || !isDeepStrictEqual(root.command_id, execution.root.command_id)
+            || root.namespace_id !== binding.namespace_id || root.root_task_id !== binding.root_task_id
+            || root.root_trace_id !== binding.root_trace_id || root.source_digest !== header.source_snapshot_digest
+            || root.continuation_policy !== 'follow_authorized_plan') throw Error('runtime_entry_consumer_original_mismatch')
+          const replies = await (this.collaborationDeliveryJournal ??= headers.openDeliveryJournal()); current(); checkFloor()
+          const reply = [...replies.records(header.namespace_id, header.source_locator)].find(row => row.delivery_id === header.delivery_id)
+          if (!reply || reply.host_journal_commit.content_digest !== header.host_journal_commit.content_digest)
+            throw Error('runtime_entry_consumer_original_mismatch')
+          running.throwIfAborted(); current(); checkFloor()
+          return createCollaborationFeedbackMessage(execution, reply, root.source)
+        },
+        beforeWake: async (record) => {
+          if (record.state === 'prepared' || deadline === undefined) throw Error('runtime_entry_consumer_original_mismatch')
+          current(); checkFloor()
+          this.collaborationConsumerLive.set(messageId, { sessionId, expiresAt: deadline, signal: active,
+            commandId: execution.execution_command_id, controller, canonicalDigest, ...(account ? { account } : {}) })
+          active.addEventListener('abort', cancelled, { once: true })
+          if (association) job = { itemId: record.grant.consumer_attempt_id, jobId: record.grant.consumer_attempt_id,
+            commandId: execution.execution_command_id, invocationId: execution.receipt.invocation_id, sessionId, state: 'queued' }
+          if (job) await coordination.recordJob(job)
+          const observing = await this.ctx.serial('task-coordination/consumer-start', {
+            commandId: execution.execution_command_id, agent, signal: active,
+          })
+          current(); checkFloor()
+          if (association && observing !== true) throw Error('task_coordination_observer_unavailable')
+          if (job) await coordination.recordJob({ ...job, state: 'running' })
+        },
+        afterIdle: async () => {
+          if (!job) return
+          await coordination.recordJob({ ...job, state: 'returned_not_durable' })
+          if (!await this.ctx.sessions.flush(session)) throw Error('task_coordination_result_not_durable')
+          await this.ctx.serial('task-coordination/consumer-settling', { commandId: execution.execution_command_id, agent, signal: active })
+          await coordination.recordJob({ ...job, state: 'settled' })
+        },
+        finished: async () => {
+          if (agent.status !== 'idle') { cancelled(); await agent.whenIdle() }
+          active.removeEventListener('abort', cancelled)
+          this.collaborationConsumerLive.delete(messageId)
+          await this.ctx.serial('task-coordination/consumer-finished', { commandId: execution.execution_command_id, agent, signal: active })
+        },
+      })
+      if (started.kind === 'gap') throw Error('runtime_entry_consumer_' + started.reason)
+      current()
+      return result(started.record)
+    })
+    this.collaborationCaptureTail = operation.then(() => {}, () => {})
+    return operation
   }
 
   private async openConsumptionJournal() {
@@ -998,6 +1445,9 @@ export class SessionController extends TypertRemoteService {
         const live = this.collaborationConsumerLive.get(record.binding.message_id)
         if (!live || live.sessionId !== sessionId || live.signal.aborted || Date.now() >= live.expiresAt)
           throw Error('collaboration_consumption_reconciliation_required')
+        if (!live.execution) live.execution = Object.freeze({ commandId: live.commandId, sessionId,
+          turn: currentStep.data.turn, signal: live.signal })
+        if (live.execution.turn !== currentStep.data.turn) throw Error('task_coordination_consumer_turn_changed')
         await journal.consume(record.binding, observation, this.collaborationLifetime.signal)
         live.signal.throwIfAborted()
         const request = await journal.request(record.binding, currentStep.data, live.signal)
@@ -1007,7 +1457,7 @@ export class SessionController extends TypertRemoteService {
     } finally { await handle.close() }
   }
 
-  private async accessCollaborationFeedback(value: unknown, signal: AbortSignal) {
+  private async accessCollaborationFeedback(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount) {
     const command = parseCollaborationFeedbackOperation(value)
     const owned = AbortSignal.any([signal, this.collaborationLifetime.signal])
     const sessionId = SessionId(command.target.session_id), workspaceId = WorkspaceId(command.target.workspace_id)
@@ -1026,7 +1476,10 @@ export class SessionController extends TypertRemoteService {
       if (!this.collaborationDeliveryJournal) {
         const facility = this.ctx.get('storageDomain')
         if (!facility) throw Error('collaboration_delivery_journal_unavailable')
-        this.collaborationDeliveryJournal = openCollaborationDeliveryJournal(facility)
+        this.collaborationDeliveryJournal = this.ctx.get('runtimeEntryConsumerHost')
+          ? this.openRuntimeEntryFeedbackMetadata().then(headers => headers.openDeliveryJournal())
+            .catch(() => openCollaborationDeliveryJournal(facility))
+          : openCollaborationDeliveryJournal(facility)
       }
       const journal = await waitForCollaborationSourceRead(this.collaborationDeliveryJournal, owned)
       const delivery = [...journal.records(root.namespace_id, { workspace_id: root.source.workspace_id, session_id: root.source.session_id,
@@ -1099,6 +1552,26 @@ export class SessionController extends TypertRemoteService {
           await current()
           return { kind: 'consumer' as const, record, observation: before }
         }
+        const coordination = await this.openCollaborationTaskCoordinationJournal()
+        const association = coordination.association(execution.execution_command_id)
+        const canonicalDigest = collaborationJournalDigest({ namespace_id: root.namespace_id,
+          root_task_id: root.root_task_id, root_trace_id: root.root_trace_id })
+        const checkFloor = () => {
+          if (association && coordination.blocked(association.floorDigest)) throw Error('task_coordination_closed')
+          if (!coordination.canonicalBlocked(canonicalDigest)) return
+          if (!account) throw Error('task_coordination_identity_unavailable')
+          const reader = this.ctx.get('collaborationTaskFloors')
+          if (!reader) throw Error('task_coordination_floor_unavailable')
+          if (reader.read(canonicalDigest, account) !== null) throw Error('task_coordination_closed')
+        }
+        checkFloor()
+        await current()
+        const observer = await this.ctx.serial('task-coordination/consumer-prepare', {
+          commandId: execution.execution_command_id, agent, signal: owned,
+        })
+        if (association && observer !== true) throw Error('task_coordination_observer_unavailable')
+        await current()
+        checkFloor()
         const started = await consumers.start(binding, command.grant, owned)
         await current()
         /* v8 ignore else -- Serialized starts return replays above; this private journal has one writer. */
@@ -1106,17 +1579,44 @@ export class SessionController extends TypertRemoteService {
           if (started.record.state === 'prepared' || session.seq !== before.event_count || !idle()) throw Error('collaboration_consumption_reconciliation_required')
           const deadline = Date.parse(started.record.grant.expires_at)
           if (Date.now() >= deadline) throw Error('collaboration_consumption_grant_expired')
-          const active = AbortSignal.any([owned, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
+          const controller = new AbortController()
+          const active = AbortSignal.any([owned, controller.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))])
           const cancelled = () => { agent.cancel({ kind: 'parent' }, { keepInbox: true }) }
-          this.collaborationConsumerLive.set(message.id, { sessionId, expiresAt: deadline, signal: active })
+          checkFloor()
+          active.throwIfAborted()
+          this.collaborationConsumerLive.set(message.id, { sessionId, expiresAt: deadline, signal: active,
+            commandId: execution.execution_command_id, controller, canonicalDigest, ...(account ? { account } : {}) })
           active.addEventListener('abort', cancelled, { once: true })
+          const job: CollaborationTaskControllerJob | undefined = association ? {
+            itemId: started.record.grant.consumer_attempt_id, jobId: started.record.grant.consumer_attempt_id,
+            commandId: execution.execution_command_id, invocationId: execution.receipt.invocation_id,
+            sessionId, state: 'queued',
+          } : undefined
           try {
             active.throwIfAborted()
+            if (job) await coordination.recordJob(job)
+            const observing = await this.ctx.serial('task-coordination/consumer-start', { commandId: execution.execution_command_id, agent, signal: active })
+            if (association && observing !== true) throw Error('task_coordination_observer_unavailable')
+            active.throwIfAborted()
+            checkFloor()
             agent.send(message, 'next-step', true)
+            if (job) await coordination.recordJob({ ...job, state: 'running' })
             await agent.whenIdle()
+            if (job) {
+              await coordination.recordJob({ ...job, state: 'returned_not_durable' })
+              if (!await this.ctx.sessions.flush(session)) throw Error('task_coordination_result_not_durable')
+              await this.ctx.serial('task-coordination/consumer-settling', {
+                commandId: execution.execution_command_id, agent, signal: active,
+              })
+              await coordination.recordJob({ ...job, state: 'settled' })
+            }
           } finally {
+            if (agent.status !== 'idle') { cancelled(); await agent.whenIdle() }
             active.removeEventListener('abort', cancelled)
             this.collaborationConsumerLive.delete(message.id)
+            await this.ctx.serial('task-coordination/consumer-finished', {
+              commandId: execution.execution_command_id, agent, signal: active,
+            })
           }
           await current()
           const retained = consumers.read(binding)
@@ -1373,7 +1873,10 @@ export class SessionController extends TypertRemoteService {
       if (this.collaborationDeliveryJournal === undefined) {
         const facility = this.ctx.get('storageDomain')
         if (facility === undefined) throw Error('collaboration_delivery_journal_unavailable')
-        this.collaborationDeliveryJournal = openCollaborationDeliveryJournal(facility)
+        this.collaborationDeliveryJournal = this.ctx.get('runtimeEntryConsumerHost')
+          ? this.openRuntimeEntryFeedbackMetadata().then(headers => headers.openDeliveryJournal())
+            .catch(() => openCollaborationDeliveryJournal(facility))
+          : openCollaborationDeliveryJournal(facility)
       }
       const journal = await wait(this.collaborationDeliveryJournal)
       await current()
@@ -1590,7 +2093,9 @@ export class SessionController extends TypertRemoteService {
    * Describe the serving desktop for authenticated file-action routes.
    * @returns Host name, configured availability, and platform-specific file-manager behavior.
    */
-  workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 'explorer' | 'directory' | null } {
+  workspaceDesktop(): { name: string
+    available: boolean
+    fileManager: 'finder' | 'explorer' | 'directory' | null } {
     const fileManager = nativeFileManager()
     return { name: hostname(), available: fileManager !== null && this.canOpenPath(), fileManager }
   }
@@ -1891,7 +2396,8 @@ function readCollaborationMembershipRequest(raw: unknown): SessionCollaborationM
   if (!Array.isArray(rawEntries) || rawEntries.length < 1 || rawEntries.length > 50) throw Error('collaboration_membership_query_invalid')
   const workspacePattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
   const sessionPattern = /^[!-~]{1,256}$/u
-  const entries: { workspaceId: string; sessionId: string }[] = []
+  const entries: { workspaceId: string
+    sessionId: string }[] = []
   const seen = new Set<string>()
   for (const candidate of rawEntries) {
     const value: unknown = candidate

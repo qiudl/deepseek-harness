@@ -18,14 +18,14 @@
   en: 1647e1b6bb111638
   zh: a6ed5142d24c7c9c
 /dsh-desktop-host/profile-and-execution-authority:
-  en: 1ea1b36c2cb8566f
-  zh: 1593a6965b022ef5
+  en: 51d5be2a2cac246c
+  zh: b4d03ac1261dd0d1
 /dsh-desktop-host/runtime-invariants:
-  en: 618fc1dda1500d52
-  zh: 4dd4ab18bd21abce
+  en: 996db0e759e79b43
+  zh: 2f10988b776725de
 /dsh-desktop-host/runtime-invariants/remote-workspace-directories:
-  en: 26775327a89525f7
-  zh: bd5a9a54b8aff970
+  en: 6a7f3c24a3456956
+  zh: 40172e97325bfeaf
 /dsh-desktop-host/model-experience:
   en: 08355616213e6a07
   zh: c5d8472d5e2993e2
@@ -36,5 +36,5 @@
   en: 79fc86c99c4aba67
   zh: 05bbe1fac8f7765e
 /dsh-desktop-host/known-limitations-and-deferred-work/dev-note:
-  en: 5be289423f367bfb
-  zh: f17cae6b6b7e5d08
+  en: 199fb905295fdedf
+  zh: ecdc100cc7023f58

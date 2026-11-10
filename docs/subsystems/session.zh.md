@@ -6,6 +6,8 @@
 
 源码：[`packages/core/session/src/types.ts`](../../packages/core/session/src/types.ts)
 
+`CollaborationTaskDurableCut` 是 Host 专用的同 worker 持久前缀见证：原调用、结果事件引用及当前 turn 结束，均与实际已加载 Session 和存储事件核对，不含消息正文或执行许可。终态前缀不能证明异步子进程或 provider 已结束；除非所有受监控正文均在 dispatch 前取消且原取消结果与 turn 结束均已持久化，否则整体 quiescence 保持 unknown。
+
 ## `SessionEventMap`：事件词汇
 
 仅追加的事件类型。可通过声明合并扩展：插件通过 declaration merging 声明额外的事件类型。例如[压缩（compaction） seam](compaction.zh.md) 添加了 `compaction/start` / `compaction/summary` / `compaction/end`，`@deepseek-ai/dsh-hook-protocol` 为钩子桥接添加了仅记录日志的 `hook/invoked` / `hook/result` 记录。与 `compaction/*` 一样，这些都不是 `SurfaceEventType`（没有 `surfaceOp`）。生成的[持久化日志事件目录](../persistence-catalog.zh.md)列举了所有成员（核心与合并扩展的），包含其 payload、surface 标记与声明位置。
@@ -821,6 +823,10 @@ interface PluginRecord {
 
 可选的 `application` 指定文件关联应用，不修改系统默认值；`workspacePathApplications({ path })` 在校验 Host 路径后返回当前关联应用、名称、图标和默认项。
 
+可选 `projectOperationOrigins` 读取器为精确的原生事件提供原 Root 主体及项目的历史引用。不透明 token 仅能在等待中的 `project-operation/origin` 事件内、取消或已验证的 Cloud 截止时间之前使用。消费者仅确认完整提交或幂等匹配的引用修订；未确认时保留空缺，等待全新核对。[Session Controller](../../packages/api/session-controller/README.zh.md) 负责捕获，[Web App](../../packages/bundle/web-app/README.zh.md) 负责私有验证及发布。
+
+可选服务 `projectOperationMemoryAuthorizations.read(token)` 仅对仍有效的不透明 `ProjectOperationMemoryAuthorizationToken` 返回深度不可变的 `ProjectOperationMemoryAuthorization`。私有 Host 创建 token，并在取消、截止时间或 provider 被替换时永久撤销。`source_read` 只允许五种源读取操作；`binding_activation_anchor` 只允许捕获原始确认元数据。原 anchor 始终保留历史含义，每个新读取计划另行固定实际当前源修订。token 不能排队，也不能用于铸造 SourceProof。此 owner-private 实现仍不提供 retained-recipient 操作，也不广告公共记忆 capability。
+
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
 <a id="cordis-surface"></a>
@@ -828,6 +834,144 @@ interface PluginRecord {
 ## Cordis API
 
 Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnpm run verify-cordis-catalog` in doc-sync; regenerate with `pnpm run gen-cordis-catalog`) — the language sides differ only in locale-specific paired document paths. Signature blocks use a `ts cordis-catalog` fence and keep the original source JSDoc; dispatch modes are defined in the [primer](../cordis-primer.zh.md#dispatch-modes), and the framework-inherited `ctx` API lives in [cordis-api/inherited.md](../cordis-api/inherited.md).
+
+<a id="ctxcollaborationtaskexecutions--collaborationtaskexecutions"></a>
+
+### `ctx.collaborationTaskExecutions` — `CollaborationTaskExecutions`
+
+Optional observation service provided only by the actual SessionController consumer lifecycle.
+
+```ts cordis-catalog
+/** Read original execution facts; a retained object grants no right after its signal is cancelled or its provider changes.
+ * @param sessionId - Actual Agent Session.
+ * @param turn - Actual batch consuming turn.
+ * @returns The original live request fact, or null outside that consuming turn.
+ */
+read(sessionId: SessionId, turn: number): CollaborationTaskExecution | null
+
+/** Capture metadata through the actual loaded Session writer, never a caller prefix or a cold restoration.
+ * @param commandId - Original command currently owned by this consumer lifecycle.
+ * @param agent - Actual already-loaded Agent belonging to that lifecycle.
+ * @returns Exact durable prefix and folded event references, or null when unsupported/current ownership is lost.
+ */
+captureDurable?(commandId: CollaborationExecutionCommandId, agent: Agent): Promise<CollaborationTaskDurableCut | null>
+```
+
+Types: [Agent](core.zh.md) · [SessionId](core.zh.md)
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
+
+<a id="ctxcollaborationtaskfloors--collaborationtaskfloors"></a>
+
+### `ctx.collaborationTaskFloors` — `CollaborationTaskFloors`
+
+Readonly denial lookup; null never supplies execution permission.
+
+```ts cordis-catalog
+/** Verify original signed-floor candidates selected from an actual original local Root.
+ * @param canonicalDigest - Independently recomputed exact local Root coordinates.
+ * @param account - Actual current parent identity; no owner or original epoch is guessed from it.
+ * @returns Closed/unknown denial, or null when this original Root has no matching floor.
+ */
+read(canonicalDigest: string, account: CollaborationTaskCurrentAccount): 'closed' | 'unknown' | null
+```
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
+
+<a id="ctxprojectoperationmemoryauthorizations--projectoperationmemoryauthorizations"></a>
+
+### `ctx.projectOperationMemoryAuthorizations` — `ProjectOperationMemoryAuthorizations`
+
+Read-only request owner; no public mint, assertion callback, queue or transferable grant exists.
+
+```ts cordis-catalog
+/** Read while the captured request, local provider/worker and deadline remain live.
+ * The owning Host separately rechecks actual Account before publication.
+ * @param token - Opaque object supplied by the private authenticated Host call.
+ * @returns Deeply immutable exact permission, or null on unknown/replaced/cancelled/expired/settled tokens.
+ */
+read(token: ProjectOperationMemoryAuthorizationToken): ProjectOperationMemoryAuthorization | null
+
+/** Resolve only original effect metadata while this source-read token and its fixed facility remain current.
+ * @param token - Current source-read token, never an anchor or retained-recipient token.
+ * @param reference - Original entry identity and digest pins; no caller sequence or path is accepted.
+ * @returns Exact original effect coordinates, or null without the actual facility/entry.
+ */
+readRuntimeEntryEffect?( token: ProjectOperationMemoryAuthorizationToken, reference: Readonly<{ entryId: ProjectOperationMemoryId entryReceiptDigest: ProjectOperationMemoryDigest manifestDigest: ProjectOperationMemoryDigest }>, ): Promise<ProjectOperationMemoryRuntimeEntryEffect | null>
+```
+
+Source: [`packages/api/session-controller/src/project-operation-memory-authorizations.ts`](../../packages/api/session-controller/src/project-operation-memory-authorizations.ts)
+
+<a id="ctxprojectoperationorigins--projectoperationorigins"></a>
+
+### `ctx.projectOperationOrigins` — `ProjectOperationOrigins`
+
+Read-only consumer seam; no public method can mint or retain a live token.
+
+```ts cordis-catalog
+/** Read original references during publication.
+ * @param token - Token supplied by the current origin event.
+ * @returns Immutable references, or null after publication or for another provider's token.
+ */
+read(token: ProjectOperationOriginToken): readonly ProjectOperationOriginReference[] | null
+
+/** Read one actual durable entry before feedback body materialization; absence means this provider cannot publish native entries.
+ * @param token - Original process-local token from the awaited runtime-entry event.
+ * @returns The same deeply immutable original candidate while its provider and request remain current, otherwise null.
+ */
+readRuntimeEntry?(token: ProjectOperationOriginToken): ProjectOperationRuntimeEntryCandidate | null
+
+/** Verify the actual consumer-allocated mapping independently and publish through the original Cloud attribution chain.
+ * @param token - The same live runtime-entry token; retained or queued tokens supply no authority.
+ * @param reference - Only the original allocated event identity and revision; no body, sequence, owner or caller path is accepted.
+ * @returns Verified historical metadata after current-authority checks, or null without a publication grant.
+ */
+bindRuntimeEntry?(token: ProjectOperationOriginToken, reference: Readonly<{ sourceEventId: Branded<'ProjectOperationSourceEventId'> sourceRevision: string }>): Promise<ProjectOperationRuntimeEntryPublication | null>
+```
+
+Types: [Branded](core.zh.md)
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
+
+<a id="ctxruntimeentryconsumerhost--runtimeentryconsumerhost"></a>
+
+### `ctx.runtimeEntryConsumerHost` — `RuntimeEntryConsumerHost`
+
+Implemented only by the actual authenticated worker bootstrap and retained across each original consumer request.
+
+```ts cordis-catalog
+/** Check the original loaded Agent against this boot's actual pinned providers.
+ * @param agent - Actual registered loaded Agent.
+ * @returns Whether the bootstrap's pinned implementation and selected tools remain installed. */
+supports(agent: Agent): boolean
+
+/** Check the original command's bounded metadata and pair admission before Source dispatch.
+ * @param commandId - Existing prepared local command, if any.
+ * @returns Whether bounded proof/pair admission is available before the first Source grant. */
+canPrepare(commandId?: string): boolean
+
+/** Read only the actual loaded Session's durable exclusive prefix.
+ * @param agent - Same already-loaded runtime.
+ * @returns Actual exclusive writer cut, or unsupported without restoring history. */
+readLoadedSession(agent: Agent): Promise<RuntimeEntryLoadedSession | undefined>
+
+/** Read only the original signed-proof context already verified by Main for this private request.
+ * @param commandId - Existing durable consumer command.
+ * @param signal - The original owned request cancellation.
+ * @returns Original metadata and raw grant from that same response, without a new Source request. */
+readOriginal(commandId: string, signal: AbortSignal): Promise<RuntimeEntryConsumerOriginal>
+
+/** Prepare the original invocation through the private captured proof and driver.
+ * @param agent - Actual retained Agent.
+ * @param commandId - Existing original consumer command.
+ * @param signal - Current owned lifecycle; no caller metadata enters the factory.
+ * @returns Actual opaque driver preparation using only its private captured original-proof context. */
+prepareEntry(agent: Agent, commandId: string, signal: AbortSignal): Promise<RuntimeEntryPreparation>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/api/session-controller/src/runtime-entry-consumer-host.ts`](../../packages/api/session-controller/src/runtime-entry-consumer-host.ts)
 
 <a id="ctxsessioncontroller--sessioncontroller"></a>
 
@@ -874,7 +1018,7 @@ async inspectWorkspaceModelSelection( sessionId: SessionId, workspaceId: Workspa
  * @returns workspace/session identities and the captured executable model call with an 8192-token output cap.
  * @throws on ownership/selection change, unsupported capture, preparation failure or cancellation.
  */
-async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId; sessionId: SessionId; prepared: PreparedLlmSnapshotCall }>>
+async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: WorkspaceId, signal: AbortSignal, ): Promise<Readonly<{ workspaceId: WorkspaceId sessionId: SessionId prepared: PreparedLlmSnapshotCall }>>
 
 /**
  * Capture user content under this Profile's registry and actual prepared model.
@@ -889,7 +1033,7 @@ async prepareWorkspaceModelSnapshot( sessionId: SessionId, workspaceId: Workspac
  * @returns first durable capture with its one-shot call, or original non-executable recovery.
  * @throws on invalid input, unavailable journal, changed ownership/selection, conflict or cancellation.
  */
-async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: 'captured' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: 'recovered'; snapshot: CollaborationSourceSnapshot }> >
+async captureCollaborationSource(input: CollaborationSourceInput, signal: AbortSignal): Promise< | Readonly<{ kind: 'captured' snapshot: CollaborationSourceSnapshot prepared: PreparedLlmSnapshotCall analyze: (persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> analyzeClarification: (input: CollaborationClarificationInput, persist: (manifest: CollaborationAnalysisManifest, signal: AbortSignal) => Promise<void>, cancellation: AbortSignal) => Promise<CollaborationAnalysisResult> }> | Readonly<{ kind: 'recovered' snapshot: CollaborationSourceSnapshot }> >
 
 /**
  * Persist a new logical root before exposing its prepared analysis call. This opt-in Host API
@@ -966,9 +1110,68 @@ async collaborationRootFeedback(value: unknown, signal: AbortSignal): Promise<Co
 /** Execute a private durable consumer command under authenticated Main's current authority.
  * @param value - Consumer or first-reply operation with the original root and delivery; start requires a fresh cloud grant.
  * @param signal - Current parent and Profile lifetime; recovery never restores live wake permission.
+ * @param account - Current parent-owned Account identity used only by denial floors.
  * @returns Durable consumer record or independent first-reply commit; only first start may wake the attached original Agent.
  */
-async collaborationRootConsumption(value: unknown, signal: AbortSignal): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >
+async collaborationRootConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise< CollaborationConsumptionResult | CollaborationContinuationResult >
+
+/** Capture the exact original consumed-step prefix through the Profile's real persistence barrier.
+ * @param value - Original root, frozen execution and delivery; no caller event metadata.
+ * @param signal - Authenticated parent request lifetime.
+ * @returns Original durable Root/consumption and raw prefix for the private observer only.
+ */
+async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): Promise<{ root: CollaborationRootSubmission record: Extract<CollaborationConsumptionRecord, { state: 'consumed' }> events: readonly import('@deepseek-ai/dsh-session').SessionEvent[] inheritedEventCount: number consumptionCommitDigest: string }>
+
+/** Read the independent coordination metadata writer; this does not authorize an association or execution.
+ * @returns The Profile-owned journal, closed only after live original consumers drain.
+ */
+async openCollaborationTaskCoordinationJournal(): Promise<CollaborationTaskCoordinationJournal>
+
+/** Cancel only the live original consumer of an already-associated local command.
+ * @param commandId - Original command selected by the authenticated stop control.
+ */
+stopCollaborationTaskExecution(commandId: string): void
+
+/** Stop actual legacy consumers of the exact persisted Root under the same current parent identity.
+ * @param canonicalDigest - Recomputed original local Root coordinates, never a new Root.
+ * @param account - Original Account/environment/Profile facts verified by the authenticated stop handler.
+ */
+stopCollaborationTaskRoot(canonicalDigest: string, account: CollaborationTaskCurrentAccount): void
+
+/** Inspect actual original command, Root and source membership for private task coordination.
+ * @param commandId - Existing concrete local execution command, never a new Root selector.
+ * @param signal - Current authenticated parent request cancellation.
+ * @returns Original admitted command and Root; no Cloud birth snapshot is inferred from them.
+ */
+async inspectCollaborationTaskExecution(commandId: string, signal: AbortSignal): Promise<{ execution: Extract<CollaborationExecutionRecord, { state: 'admitted' }> root: Extract<CollaborationRootSubmission, { state: 'admitted' }> }>
+
+/** Read only the real local Root and its original concrete commands for a signed stop control.
+ * @param canonical - Exact original Root coordinates verified by the private worker handler.
+ * @param signal - Original current Account control request cancellation.
+ * @returns Real admitted Root, original execution commands and exact durable consumer records; unknown roots reject.
+ */
+async inspectCollaborationTaskRoot(canonical: Pick<CollaborationRootSubmission, 'namespace_id' | 'root_task_id' | 'root_trace_id'>, signal: AbortSignal): Promise<{ root: Extract<CollaborationRootSubmission, { state: 'admitted' }> executions: readonly CollaborationExecutionRecord[] consumers: readonly CollaborationConsumptionRecord[] }>
+
+/** Read an actual execution and its first-durable terminal header without opening Root, Source, reply or Session history.
+ * @param value - Exact native-purpose read with the original delivery selector.
+ * @param signal - Current authenticated Account request.
+ * @returns Original body-free metadata, or explicit local unsupported before any Source grant.
+ */
+async collaborationRuntimeEntryExecution(value: unknown, signal: AbortSignal): Promise<{ supported: boolean record: CollaborationExecutionRecord | null }>
+
+/** Read the original native candidate's consumer identity without restoring an Agent or reading feedback bodies.
+ * @param value - Exact original Root, task selection and terminal delivery.
+ * @param signal - Current authenticated Account/Profile request.
+ * @returns Existing original consumer record; absence supplies no execution or publication authority. */
+async inspectRuntimeEntryConsumer(value: unknown, signal: AbortSignal): Promise<CollaborationConsumptionRecord | null>
+
+/** Consume through the actual original-entry driver, with no body/history reads before its durable entry.
+ * @param value - Closed native read/prepare/start operation under authenticated Main.
+ * @param signal - Original current Account and worker request cancellation.
+ * @param account - Actual Parent identity for denial-only canonical floors.
+ * @returns Existing consumption vocabulary; loss after Source dispatch never falls back or wakes again.
+ */
+async collaborationRuntimeEntryConsumption(value: unknown, signal: AbortSignal, account?: CollaborationTaskCurrentAccount): Promise< CollaborationConsumptionResult >
 
 /**
  * Read one durable Source from the owning Profile without model preparation or Agent activation.
@@ -1099,7 +1302,7 @@ async receiveCollaborationDelivery(value: unknown, signal: AbortSignal): Promise
  * Describe the serving desktop for authenticated file-action routes.
  * @returns Host name, configured availability, and platform-specific file-manager behavior.
  */
-workspaceDesktop(): { name: string; available: boolean; fileManager: 'finder' | 'explorer' | 'directory' | null }
+workspaceDesktop(): { name: string available: boolean fileManager: 'finder' | 'explorer' | 'directory' | null }
 
 /**
  * Open a verified Host path through its selected native application.
@@ -1495,6 +1698,46 @@ Types: [SessionId](core.zh.md)
 
 Source: [`packages/api/session-controller/src/types.ts`](../../packages/api/session-controller/src/types.ts)
 
+<a id="project-operation-events"></a>
+
+### `project-operation/*` events
+
+<a id="project-operationorigin--serial"></a>
+
+#### `project-operation/origin` — serial
+
+Await consumers within the authenticated bind request; tokens expire before it returns.
+
+```ts cordis-catalog
+/** Await consumers within the authenticated bind request; tokens expire before it returns.
+ * @mode serial
+ * @param token - Opaque token readable only from this publication's provider.
+ * @param signal - Original authenticated request and Profile lifetime.
+ * @returns True only after all matching reference revisions commit or already match; otherwise false or no acknowledgment.
+ */
+'project-operation/origin'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
+
+<a id="project-operationruntime-entry--serial"></a>
+
+#### `project-operation/runtime-entry` — serial
+
+Append an original durable entry candidate and verify its independently read mapping before feedback body materialization.
+
+```ts cordis-catalog
+/** Append an original durable entry candidate and verify its independently read mapping before feedback body materialization.
+ * @mode serial
+ * @param token - Opaque token whose lifetime ends when this awaited event finishes; no public factory exists.
+ * @param signal - Original execution and Profile lifetime; publication must remain current across every await.
+ * @returns True only after the actual candidate and verified publication commit or already match, otherwise false or no acknowledgment.
+ */
+'project-operation/runtime-entry'(token: ProjectOperationOriginToken, signal: AbortSignal): Promise<boolean | void>
+```
+
+Source: [`packages/api/session-controller/src/project-operation-origins.ts`](../../packages/api/session-controller/src/project-operation-origins.ts)
+
 <a id="session-events"></a>
 
 ### `session/*` events
@@ -1591,4 +1834,80 @@ Awaited parallel durability checkpoint: every listener runs and the caller await
 Types: [Scoped](scope.zh.md)
 
 Source: [`packages/core/session/src/index.ts`](../../packages/core/session/src/index.ts)
+
+<a id="task-coordination-events"></a>
+
+### `task-coordination/*` events
+
+<a id="task-coordinationconsumer-finished--serial"></a>
+
+#### `task-coordination/consumer-finished` — serial
+
+Release denial-only bindings after the original Agent and cancellation drain have completed.
+
+```ts cordis-catalog
+/** Release denial-only bindings after the original Agent and cancellation drain have completed.
+ * @mode serial
+ * @param payload - The same original execution identity and owned signal; creates no permission.
+ */
+'task-coordination/consumer-finished'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): void | Promise<void>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
+
+<a id="task-coordinationconsumer-prepare--serial"></a>
+
+#### `task-coordination/consumer-prepare` — serial
+
+Check the actual executor before consuming the original durable grant.
+
+```ts cordis-catalog
+/** Check the actual executor before consuming the original durable grant.
+ * @mode serial
+ * @param payload - Original local command, actual idle Agent and request cancellation.
+ */
+'task-coordination/consumer-prepare'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): true | undefined | Promise<true | undefined>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
+
+<a id="task-coordinationconsumer-settling--serial"></a>
+
+#### `task-coordination/consumer-settling` — serial
+
+Verify the original observer after the actual persistence barrier and before marking settlement.
+
+```ts cordis-catalog
+/** Verify the original observer after the actual persistence barrier and before marking settlement.
+ * @mode serial
+ * @param payload - Original execution identity and captured request cancellation.
+ */
+'task-coordination/consumer-settling'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): void | Promise<void>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
+
+<a id="task-coordinationconsumer-start--serial"></a>
+
+#### `task-coordination/consumer-start` — serial
+
+Prepare restrictions for the original admitted consumer before it is sent to its actual idle Agent.
+
+```ts cordis-catalog
+/** Prepare restrictions for the original admitted consumer before it is sent to its actual idle Agent.
+ * @mode serial
+ * @param payload - Existing local command, actual Agent and original request cancellation; emits no new grant.
+ */
+'task-coordination/consumer-start'(payload: { commandId: CollaborationExecutionCommandId agent: Agent signal: AbortSignal }): true | undefined | Promise<true | undefined>
+```
+
+Types: [Agent](core.zh.md)
+
+Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
 <!-- END GENERATED cordis-surface -->

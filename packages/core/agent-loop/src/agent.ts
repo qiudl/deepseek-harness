@@ -17,7 +17,11 @@ import type {
   InboxState,
   PreStepDecision,
   RequestErrorAction,
+  OriginalInvocationEntryOccurrence,
+  OriginalInvocationEntryDriver,
 } from '@deepseek-ai/dsh-agent'
+import { randomUUID } from 'node:crypto'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import { AgentModel, agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
@@ -189,7 +193,38 @@ export class ReactLoopAgent implements Agent {
     this.send(input, 'next-step', false)
   }
 
+  /** Current private queue/activity generation; this is not a durable cursor or an execution permission. */
+  get originalInvocationEntryGeneration(): string { return this.inbox.mutationGeneration }
+
+  /** Reserve a sole opaque occurrence without emitting status or reading feedback content.
+   * @param occurrence - Private current-worker factory input, never a public prompt.
+   * @returns False without wake when an activity or pending input already owns the Agent.
+   */
+  startOriginalInvocationEntry(occurrence: OriginalInvocationEntryOccurrence): boolean {
+    if (this.phase.kind !== 'idle') return false
+    const generation = this.inbox.reserveOpaque(occurrence)
+    if (generation === undefined) return false
+    const driver = Promise.withResolvers<void>()
+    const phase: Extract<Phase, { kind: 'running' }> = {
+      kind: 'running', abort: new AbortController(), turn: this.phase.lastTurn, step: 0, wakeRequested: false,
+    }
+    this.activityDone = driver.promise
+    // This assignment deliberately precedes every status/pre-inbox/turn callback.
+    this.phase = phase
+    const sessionSeq = this.session.seq
+    const surfaceGeneration = this.session.surface.contentGeneration
+    this.loopCtx.agents.withInitiator(this, () => this.kick({ occurrence, generation,
+      enter: () => { occurrence.enter({ agent: this, session: this.session, queueGeneration: generation,
+        driverReservationId: brandString<OriginalInvocationEntryDriver['driverReservationId']>(randomUUID()), signal: phase.abort.signal,
+        isCurrent: () => this.phase === phase && !phase.abort.signal.aborted
+          && this.session.seq === sessionSeq && this.session.surface.contentGeneration === surfaceGeneration
+          && this.inbox.isOpaqueHead(occurrence, generation),
+      }) } })).then(driver.resolve, driver.reject)
+    return true
+  }
+
   cancel(cause: AgentCancelCause, options: CancelOptions = {}): void {
+    this.inbox.noteActivity()
     if (!options.keepInbox) {
       this.inbox.clear()
       if (this.phase.kind !== 'idle') this.phase.wakeRequested = false
@@ -199,6 +234,7 @@ export class ReactLoopAgent implements Agent {
 
   runMaintenance<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
     if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
+    this.inbox.noteActivity()
     const done = Promise.withResolvers<void>()
     const maintenance: Phase = {
       kind: 'maintenance',
@@ -266,12 +302,26 @@ export class ReactLoopAgent implements Agent {
     throw error
   }
 
-  private async kick(): Promise<void> {
+  private async kick(opaque?: { occurrence: OriginalInvocationEntryOccurrence; generation: string; enter(): void }): Promise<void> {
     try {
+      if (opaque !== undefined) {
+        try {
+          opaque.enter()
+          this.dispatch.emit('agent/status', { status: 'running' })
+          if (this.phase.kind !== 'running') throw new Error('runtime_entry_driver_lost')
+          const signal = this.phase.abort.signal
+          signal.throwIfAborted()
+          const message = await opaque.occurrence.materialize(signal)
+          signal.throwIfAborted()
+          this.dispatch.bail('agent/pre-inbox', { message, target: 'next-turn' })
+          this.inbox.materializeOpaque(opaque.occurrence, message)
+        } catch (error) { this.throwError(error) }
+      }
       while (await this.turn()) {}
     } catch (_error) {
       // Reported failures and cancellation are contained at the driver boundary.
     } finally {
+      if (opaque !== undefined) this.inbox.discardOpaque(opaque.occurrence)
       /* v8 ignore next -- kick owns a running phase until this driver boundary */
       if (this.phase.kind === 'running') {
         const { turn, wakeRequested } = this.phase

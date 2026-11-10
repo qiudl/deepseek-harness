@@ -1,3 +1,16 @@
+import { parseRuntimeEntryAnalysisCommand, parseRuntimeEntryOriginCommand, parseRuntimeEntryOriginResult } from './runtime-entry-carrier.ts'
+import { parseHostProjectMemoryJson } from './project-operation-memory-json.ts'
+import { parseHostTaskCoordinationInput, parseHostTaskCoordinationReply } from './task-coordination.ts'
+import { parseHostProjectMemoryRequest } from './project-operation-memory-command.ts'
+import { parseHostProjectMemoryResponse } from './project-operation-read-result.ts'
+import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
+import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity } from './bot-session-identity.ts'
+import { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
+import type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
+import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
+import type { ProfileNativeRoomRetirementRequest, ProfileNativeRoomRetirementResult } from './types.ts'
+import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof } from './bound-bot-rooms.ts'
+import type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult, ProfileNativeRoomProjectionRequest, ProfileNativeRoomProjectionResult } from './types.ts'
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotChatRequest } from './bot-chat.ts'
 import { parseHostBotRoomListRequest } from './bot-room-list.ts'
@@ -118,6 +131,7 @@ import type {
   HostCollaborationRegistrationChallenge, HostCollaborationRegistrationAssertion,
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
+  ProfileBotSessionIdentityRequest, ProfileBotSessionIdentityResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
@@ -1694,10 +1708,32 @@ export function matchHostSourceAnalysisOutput(value: unknown, target: HostCollab
  */
 export function parseHostCollaborationAnalysisCommand(value: unknown): HostCollaborationAnalysisCommand {
   const row = registrationRecord(value)
-  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback')) {
+  if (Object.hasOwn(row, 'purpose')) {
+    const parsed = parseRuntimeEntryAnalysisCommand(row)
+    if (Buffer.byteLength(JSON.stringify(parsed), 'utf8') > 48 * 1024) reject()
+    return parsed
+  }
+  if (row.action === 'task_coordination') {
+    exactKeys(row, ['action', 'request'])
+    return { action: row.action, request: parseHostTaskCoordinationInput(row.request) }
+  }
+  if (row.action === 'project_operation_memory') {
+    exactKeys(row, ['action', 'request'])
+    const request = parseHostProjectMemoryJson(row.request)
+    parseHostProjectMemoryRequest(request)
+    if (Buffer.byteLength(JSON.stringify(request), 'utf8') > 48 * 1024) reject()
+    return { action: row.action, request }
+  }
+  if ((row.action === 'root_execution_journal' || row.action === 'root_feedback' || row.action === 'root_operation_origin')) {
     exactKeys(row, ['action', 'operation'])
     const operation = remoteSessionJson(row.operation)
-    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > 8192) reject()
+    if (row.action === 'root_operation_origin') {
+      if (operation && typeof operation === 'object' && Object.hasOwn(operation, 'purpose')) parseRuntimeEntryOriginCommand(operation)
+      else parseHostOperationOriginCommand(operation)
+    }
+    if (Buffer.byteLength(JSON.stringify(operation), 'utf8') > (row.action === 'root_operation_origin' ? 48 * 1024 : 8192)) reject()
+    if (row.action === 'root_execution_journal') return { action: row.action, operation }
+    if (row.action === 'root_feedback') return { action: row.action, operation }
     return { action: row.action, operation }
   }
   if (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') {
@@ -1740,6 +1776,10 @@ export function parseHostCollaborationAnalysisCommand(value: unknown): HostColla
  */
 export function parseHostCollaborationAnalysisResult(value: unknown): HostCollaborationAnalysisResult {
   const row = registrationRecord(value)
+  if (row.kind === 'task_coordination') {
+    exactKeys(row, ['kind', 'record'])
+    return { kind: row.kind, record: parseHostTaskCoordinationReply(row.record) }
+  }
   if (row.kind === 'root_capture_released') {
     exactKeys(row, ['kind', 'root'])
     return { kind: row.kind, root: parseHostRootSubmissionDescriptor(row.root) }
@@ -1768,10 +1808,21 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
     const descriptor = parseHostCollaborationSourceDescriptor(capture.descriptor)
     return { kind: 'reply_source', capture: remoteSessionJson({ kind: capture.kind, descriptor }) }
   }
-  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback')) {
+  if (row.kind === 'project_operation_memory') {
+    exactKeys(row, ['kind', 'record'])
+    const record = parseHostProjectMemoryJson(row.record)
+    parseHostProjectMemoryResponse(record)
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 48 * 1024) reject()
+    return { kind: row.kind, record }
+  }
+  if ((row.kind === 'root_execution_journal' || row.kind === 'root_feedback' || row.kind === 'root_operation_origin')) {
     exactKeys(row, ['kind', 'record'])
     const record = remoteSessionJson(row.record)
-    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > 8192) reject()
+    if (row.kind === 'root_operation_origin') {
+      if (record && typeof record === 'object' && Object.hasOwn(record, 'purpose')) parseRuntimeEntryOriginResult(record)
+      else parseHostOperationOriginResult(record)
+    }
+    if (Buffer.byteLength(JSON.stringify(record), 'utf8') > (row.kind === 'root_operation_origin' ? 40 * 1024 : 8192)) reject()
     return { kind: row.kind, record }
   }
   if (row.kind === 'root_attempt_evidence') {
@@ -1842,8 +1893,12 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
+  | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotSessionIdentityRequest
   | ProfileTwinBindingRequest | ProfileBotRosterRequest
+  | ProfileBoundBotRoomsRequest
+  | ProfileNativeRoomProjectionRequest
+  | ProfileNativeRoomRetirementRequest
+  | ProfileNativeRoomPreparationRequest
   | ProfileNativeRoomRequest
   | ProfileNativeRoomOperationRequest
   | ProfileNativeAgentResultRequest
@@ -2581,6 +2636,14 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params), ...parseHostBotIdentityTarget({ bot_id: params.bot_id }),
     } } satisfies ProfileBotIdentityV2Request
   }
+  if (frame.method === 'profile.bot_session_identity') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'bot_id', 'session_id'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params),
+      ...parseHostBotSessionTarget({ bot_id: params.bot_id, session_id: params.session_id }),
+    } } satisfies ProfileBotSessionIdentityRequest
+  }
   if (frame.method === 'profile.twin_binding') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'input'])
@@ -2595,6 +2658,34 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...collaborationAccountParams(params),
       ...parseHostBotRosterTarget({ after_bot_id: params.after_bot_id, limit: params.limit }),
     } } satisfies ProfileBotRosterRequest
+  }
+  if (frame.method === 'profile.bound_bot_rooms') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostBoundBotRoomsTarget(params.target),
+    } } satisfies ProfileBoundBotRoomsRequest
+  }
+  if (frame.method === 'profile.native_room_projection') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomProjectionTarget(params.target),
+    } } satisfies ProfileNativeRoomProjectionRequest
+  }
+  if (frame.method === 'profile.native_room_retirement') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomRetirementTarget(params.target),
+    } } satisfies ProfileNativeRoomRetirementRequest
+  }
+  if (frame.method === 'profile.native_room_preparation') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'target'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), target: parseHostNativeRoomPreparationTarget(params.target),
+    } } satisfies ProfileNativeRoomPreparationRequest
   }
   if (frame.method === 'profile.native_room') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
@@ -2705,8 +2796,12 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileRecoveryInspectResult | ProfileRecoverOfflineAccountResult
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
-  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result
+  | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result | ProfileBotSessionIdentityResult
   | ProfileTwinBindingResult | ProfileBotRosterResult
+  | ProfileBoundBotRoomsResult
+  | ProfileNativeRoomProjectionResult
+  | ProfileNativeRoomRetirementResult
+  | ProfileNativeRoomPreparationResult
   | ProfileNativeRoomResult
   | ProfileNativeRoomOperationResult
   | ProfileNativeAgentResultResult
@@ -3134,6 +3229,11 @@ function decodeProfileResult(frame: Record<string, unknown>):
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostBotIdentityV2(result.identity) } } satisfies ProfileBotIdentityV2Result
   }
+  if (frame.method === 'profile.bot_session_identity') {
+    exactKeys(result, ['identity'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { identity: parseHostAccountBotSessionIdentity(result.identity) } } satisfies ProfileBotSessionIdentityResult
+  }
   if (frame.method === 'profile.twin_binding') {
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: parseHostTwinBindingResult(result) } satisfies ProfileTwinBindingResult
@@ -3142,6 +3242,25 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['page'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { page: parseHostBotRosterPage(result.page) } } satisfies ProfileBotRosterResult
+  }
+  if (frame.method === 'profile.bound_bot_rooms') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostBoundBotRoomsResult(result) } satisfies ProfileBoundBotRoomsResult
+  }
+  if (frame.method === 'profile.native_room_projection') {
+    exactKeys(result, ['proof'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { proof: parseHostNativeRoomProjectionProof(result.proof) } } satisfies ProfileNativeRoomProjectionResult
+  }
+  if (frame.method === 'profile.native_room_retirement') {
+    exactKeys(result, ['proof'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { proof: parseHostNativeRoomRetirementProof(result.proof) } } satisfies ProfileNativeRoomRetirementResult
+  }
+  if (frame.method === 'profile.native_room_preparation') {
+    exactKeys(result, ['outcome'])
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: { outcome: parseHostNativeRoomPreparationOutcome(result.outcome) } } satisfies ProfileNativeRoomPreparationResult
   }
   if (frame.method === 'profile.native_room') {
     exactKeys(result, ['binding'])
@@ -3622,7 +3741,9 @@ function decodeObject(value: unknown): HostControlFrame {
 export function encodeHostControlFrame(frame: HostControlFrame): string {
   const normalized = decodeObject(frame)
   const encoded = `${JSON.stringify(normalized)}\n`
-  if (new TextEncoder().encode(encoded.slice(0, -1)).byteLength > HOST_CONTROL_MAX_FRAME_BYTES) {
+  const limit = 'method' in normalized && normalized.method === 'profile.native_room_preparation'
+    ? HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES : HOST_CONTROL_MAX_FRAME_BYTES
+  if (new TextEncoder().encode(encoded.slice(0, -1)).byteLength > limit) {
     reject('frame_too_large')
   }
   return encoded

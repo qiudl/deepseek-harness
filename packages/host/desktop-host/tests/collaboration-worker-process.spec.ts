@@ -1,6 +1,8 @@
+import { parseHostTaskCoordinationEnvironment, type HostTaskCoordinationEnvironment, parseHostNativeRoomRetirementCommand } from '@deepseek-ai/dsh-host-control-protocol'
 /** REQ-20260930-0004: original Profile worker communication through public handles. */
-import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash, generateKeyPairSync } from 'node:crypto'
+import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +12,7 @@ import { parseHostCollaborationDeliveryCapsule, parseHostCollaborationSourceTarg
   parseHostRemoteSessionJson,
   parseHostCollaborationReferenceContentTarget, parseHostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootSubmissionTarget, parseHostRootJournalCommand, parseHostRootJournalMetadata, parseHostRootPlanningAttemptDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBoundBotRoomsQuery } from '@deepseek-ai/dsh-host-control-protocol'
 import { DshWebProfileWorkerFactory } from '../src/dsh-web-profile-worker.ts'
 import type { ProfileWorkerHandle } from '../src/types.ts'
 
@@ -60,7 +63,10 @@ const capsule = parseHostCollaborationDeliveryCapsule({ namespace_id: 'namespace
 
 async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   fenceValue: typeof groupValue = groupValue, botIdentity: { bot_id: string; actor_ref: string; display_name: string } | null = null,
-  botGroupReply: unknown = { state: 'missing' }) {
+  botGroupReply: unknown = { state: 'missing' }, boundRoomsReply: unknown = { state: 'bot_unavailable' }, retirementReply: unknown = { state: 'left', left_room_seq: 0 },
+  botSessionIdentity: { bot_id: string; session_id: string } | null = null,
+  operationOriginKeyrings: readonly HostBotGroupPublicKeyring[] = [],
+  taskCoordinationEnvironments: readonly HostTaskCoordinationEnvironment[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'req-collaboration-worker-'))
   const acquired: { worker?: ProfileWorkerHandle } = {}
   onTestFinished(async () => {
@@ -72,6 +78,10 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
   const executable = join(root, 'worker.mjs')
   writeFileSync(executable, `
     import { createServer } from 'node:http'
+    import { writeFileSync } from 'node:fs'
+    writeFileSync(${JSON.stringify(join(root, 'origin-keyrings.json'))}, process.env.DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS)
+    writeFileSync(${JSON.stringify(join(root, 'task-policy.json'))}, JSON.stringify({
+      policies: JSON.parse(process.env.DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS), workerId: process.env.DSH_PROFILE_WORKER_ID }))
     const descriptor = ${JSON.stringify(descriptor)}
     const snapshot = ${JSON.stringify(snapshot)}
     const selectionRedirect = ${JSON.stringify(selectionRedirect ?? null)}
@@ -83,8 +93,11 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
       '/internal/desktop-group-input-fence': 'DSH_PROFILE_ARCHIVE_TRANSITION_TOKEN',
       '/internal/desktop-collaboration-source': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-identity': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bot-session-identity': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-roster': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-bound-bot-rooms': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room': 'DSH_PROFILE_SOURCE_TOKEN',
+      '/internal/desktop-native-room-retirement': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-native-room-operations': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-bot-group': 'DSH_PROFILE_SOURCE_TOKEN',
       '/internal/desktop-collaboration-reference-grant': 'DSH_PROFILE_SOURCE_TOKEN',
@@ -112,6 +125,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
         }
         const chunks = []; for await (const chunk of request) chunks.push(chunk)
         const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        if (url.pathname.endsWith('native-room-retirement')) writeFileSync(${JSON.stringify(join(root, 'retirement-request.json'))}, JSON.stringify(input))
         const value = url.pathname.endsWith('reference-capture') ? { untrusted_selection: input,
             independent_reference_capability: process.env.DSH_PROFILE_REFERENCE_TOKEN !== process.env.DSH_PROFILE_SOURCE_TOKEN }
           : url.pathname.endsWith('reference-content') ? { descriptor, reference_request_digest: input.reference_request_digest,
@@ -123,9 +137,12 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : input.action === 'inspect_root_attempt' ? { value: ${JSON.stringify(planning)} }
           : url.pathname.endsWith('source-snapshot') ? snapshot
           : url.pathname.endsWith('source') ? descriptor
+          : url.pathname.endsWith('bot-session-identity') ? ${JSON.stringify(botSessionIdentity)}
           : url.pathname.endsWith('bot-identity') ? ${JSON.stringify(botIdentity)}
           : url.pathname.endsWith('bot-roster') ? ${JSON.stringify(botIdentity === null ? null :
             { bots: [botIdentity], next_cursor: null })}
+          : url.pathname.endsWith('bound-bot-rooms') ? ${JSON.stringify(boundRoomsReply)}
+          : url.pathname.endsWith('native-room-retirement') ? ${JSON.stringify(retirementReply)}
           : url.pathname.endsWith('native-room') ? ${JSON.stringify(nativeRoom)}
           : url.pathname.endsWith('native-room-operations') ? input.operation === 'messages'
             ? { state: 'ok', room_id: input.room_id, next_seq: input.after_seq,
@@ -142,6 +159,7 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
           : input.action === 'read_source_output' ? { value: ${JSON.stringify(sourceOutput)} }
           : url.pathname.endsWith('analysis') ? { value: input }
           : { delivery_id: input.projection.delivery_id }
+        if (request.headers['x-dsh-native-drain']) response.setHeader('x-dsh-native-settled', request.headers['x-dsh-native-drain'])
         response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(value)); return
       }
       if (url.searchParams.get('token') === 'fixture-bootstrap') {
@@ -155,7 +173,8 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     })
     process.on('SIGTERM', () => { server.closeAllConnections(); server.close(() => process.exit(0)) })
   `, { mode: 0o600 })
-  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: executable,
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+    dshEntrypointPath: executable, operationOriginKeyrings, taskCoordinationEnvironments,
     attestListener: async (pid, origin) => {
       expect(pid).toBeGreaterThan(0)
       expect((await fetch(origin)).status).toBe(401)
@@ -168,20 +187,66 @@ async function harness(selectionRedirect?: string, archiveStagePhase = 'staged',
     captureCollaborationReferenceSelection, readCollaborationReferenceContent,
     inspectCollaborationArchiveState, inspectCollaborationArchiveIntent, transitionCollaborationArchive,
     installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup } = worker
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms, retireNativeRoom } = worker
   if (!inspectCollaborationSource || !readCollaborationSourceSnapshot || !collaborationAnalysis
     || !receiveCollaborationDelivery || !inspectWorkspaceModelSelection || !readCollaborationReferenceGrant
     || !captureCollaborationReferenceSelection || !readCollaborationReferenceContent
     || !inspectCollaborationArchiveState || !inspectCollaborationArchiveIntent || !transitionCollaborationArchive
     || !installGroupInputFence || !resolveBotIdentity || !listBotRoster
-    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup)
+    || !prepareNativeRoom || !operateNativeRoom || !operateBotGroup || !listBoundBotRooms || !retireNativeRoom)
     throw new Error('missing private worker capability')
   return { worker, inspectCollaborationSource, readCollaborationSourceSnapshot, collaborationAnalysis,
     receiveCollaborationDelivery, inspectWorkspaceModelSelection, readCollaborationReferenceGrant, captureCollaborationReferenceSelection,
     readCollaborationReferenceContent, inspectCollaborationArchiveState, inspectCollaborationArchiveIntent,
     transitionCollaborationArchive, installGroupInputFence, resolveBotIdentity, listBotRoster,
-    prepareNativeRoom, operateNativeRoom, operateBotGroup }
+    prepareNativeRoom, operateNativeRoom, operateBotGroup, listBoundBotRooms, retireNativeRoom, root }
 }
+
+it('reads bound Bot room inventory through the actual worker process and private token', async () => {
+  const page = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: [{ room_id: 'room-1', member_set_digest: 'b'.repeat(64) }], next_cursor: null }
+  const query = parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 20, cursor: null })
+  const h = await harness(undefined, undefined, undefined, null, undefined, page)
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bound-bot-rooms`, { method: 'POST' })).status).toBe(403)
+  expect(await h.listBoundBotRooms(query, new AbortController().signal)).toEqual(page)
+  await expect(h.listBoundBotRooms(query, AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' })
+  h.worker.abort()
+  await expect(h.listBoundBotRooms(query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it('keeps the private inventory deadline and reports its expiry as unavailable', async () => {
+  const h = await harness()
+  const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValueOnce(AbortSignal.abort(new DOMException('expired', 'TimeoutError')))
+  try {
+    await expect(h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: null }),
+      new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(timeout).toHaveBeenCalledWith(10_000)
+  } finally { timeout.mockRestore() }
+})
+
+it.each([
+  { state: 'upgrade_required' }, { state: 'snapshot_changed' },
+  { state: 'page', bot_id: 'other', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: [], next_cursor: null },
+])('preserves explicit worker inventory outcomes and refuses a different Bot: $state', async (reply) => {
+  const h = await harness(undefined, undefined, undefined, null, undefined, reply)
+  const result = h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 20, cursor: null }), new AbortController().signal)
+  if (reply.state === 'page') await expect(result).rejects.toMatchObject({ code: 'profile_mismatch' })
+  else expect(await result).toEqual(reply)
+})
+
+it.each(['excess', 'stuck', 'progress'] as const)('checks actual worker page bounds and cursor progress: %s', async (mode) => {
+  const page = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id, state_revision: 1,
+    membership_snapshot: 'a'.repeat(64), items: mode === 'excess' ? [
+      { room_id: 'room-1', member_set_digest: 'b'.repeat(64) },
+      { room_id: 'room-2', member_set_digest: 'b'.repeat(64) },
+    ] : [], next_cursor: mode === 'stuck' ? 'here' : 'next' }
+  const h = await harness(undefined, undefined, undefined, null, undefined, page)
+  const result = h.listBoundBotRooms(parseHostBoundBotRoomsQuery({ bot_id: 'operator', limit: 1, cursor: 'here' }),
+    new AbortController().signal)
+  if (mode === 'progress') expect(await result).toEqual(page)
+  else await expect(result).rejects.toMatchObject({ code: 'profile_mismatch' })
+})
 
 it('uses the private Profile token for native room Source and exact operation replies', async () => {
   const h = await harness(), signal = new AbortController().signal
@@ -198,13 +263,14 @@ it('uses the private Profile token for native room Source and exact operation re
     .toEqual({ state: 'left', left_room_seq: 3 })
   const response = vi.spyOn(globalThis, 'fetch')
   try {
-    response.mockResolvedValueOnce(new Response('null'))
+    const terminal = (body: string) => response.mockImplementationOnce(async (_url, init) => new Response(body,
+      { headers: { 'x-dsh-native-settled': new Headers(init?.headers).get('x-dsh-native-drain')! } }))
+    terminal('null')
     await expect(h.prepareNativeRoom('missing', signal)).resolves.toBeNull()
-    response.mockResolvedValueOnce(new Response(JSON.stringify({ ...nativeRoom, room_id: 'other' })))
+    terminal(JSON.stringify({ ...nativeRoom, room_id: 'other' }))
     await expect(h.prepareNativeRoom(nativeRoom.room_id, signal))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
-    response.mockResolvedValueOnce(new Response(JSON.stringify({ state: 'ok', room_id: 'other',
-      next_seq: 2, last_seq: 2, messages: [] })))
+    terminal(JSON.stringify({ state: 'ok', room_id: 'other', next_seq: 2, last_seq: 2, messages: [] }))
     await expect(h.operateNativeRoom(command, signal))
       .rejects.toMatchObject({ code: 'profile_mismatch' })
   } finally { response.mockRestore() }
@@ -539,4 +605,124 @@ it('reads the full 32 KiB saved Source output through its private worker without
   expect(() => parseHostRemoteSessionJson(sourceOutput)).toThrow()
   expect(await h.collaborationAnalysis({ action: 'read_source_output', target: { ...target } }, signal)).toEqual(sourceOutput)
   expect(signal.aborted).toBe(false)
+})
+
+it('closes an original member through the actual worker private token without Cloud target leakage', async () => {
+  const h = await harness()
+  const query = parseHostNativeRoomRetirementCommand({ operation: 'join', room_id: 'room-1',
+    group_id: '10000000-0000-4000-8000-000000000001', member_id: '20000000-0000-4000-8000-000000000002',
+    cycle: 1, project_id: 'project', agent_id: 'agent', name: 'Original name' })
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-native-room-retirement`, { method: 'POST' })).status).toBe(403)
+  expect(await h.retireNativeRoom(query, new AbortController().signal)).toEqual({ state: 'left', left_room_seq: 0 })
+  expect(JSON.parse(readFileSync(join(h.root, 'retirement-request.json'), 'utf8'))).toEqual(query)
+  await expect(h.retireNativeRoom(query, AbortSignal.abort())).rejects.toMatchObject({ name: 'AbortError' })
+  h.worker.abort()
+  await expect(h.retireNativeRoom(query, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+})
+
+it.each([
+  { state: 'upgrade_required' }, { state: 'conflict' }, { state: 'unavailable' }, { state: 'invalid' },
+  { state: 'left', left_room_seq: Number.MAX_SAFE_INTEGER },
+  { state: 'joined', joined_room_seq: 0 }, { state: 'left', left_room_seq: '0' },
+])('strictly captures the actual worker retirement reply: $state', async (reply) => {
+  const h = await harness(undefined, undefined, undefined, null, undefined, undefined, reply)
+  const query = parseHostNativeRoomRetirementCommand({ operation: 'join', room_id: 'room-1',
+    group_id: '10000000-0000-4000-8000-000000000001', member_id: '20000000-0000-4000-8000-000000000002',
+    cycle: 1, project_id: 'project', agent_id: 'agent', name: 'Original name' })
+  const result = h.retireNativeRoom(query, new AbortController().signal)
+  if (reply.state === 'joined' || typeof reply.left_room_seq === 'string') await expect(result).rejects.toThrow()
+  else expect(await result).toEqual(reply)
+})
+
+it('REQ-0006 passes pinned nonsecret Cloud keys through the real reserved worker environment', async () => {
+  const cloud = generateKeyPairSync('ed25519'), ring: HostBotGroupPublicKeyring = { version: 1, environmentId: archiveTarget.environment_id,
+    issuer: 'https://cloud.test', keys: [{ kid: 'dsh-assertion-current', publicKeyPem: cloud.publicKey.export({ format: 'pem', type: 'spki' }).toString(), validFrom: 1, validUntil: 2000 }] }
+  vi.stubEnv('DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS', 'untrusted-ambient')
+  try {
+    const h = await harness(undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, [ring])
+    expect(JSON.parse(readFileSync(join(h.root, 'origin-keyrings.json'), 'utf8'))).toEqual([ring])
+  } finally { vi.unstubAllEnvs() }
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath })
+  await expect(factory.create({ profileId: 'profile', profileRoot: tmpdir(), credentialHandle: 'fixture', pluginRoots: [],
+    env: { DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS: '[]' } })).rejects.toMatchObject({ code: 'invalid_input' })
+})
+
+it('reads exact Bot/Session coordinates through the actual child and rejects token, target and size mismatches', async () => {
+  const coordinates = { bot_id: 'bot_1', session_id: 'session_1' }
+  const h = await harness(undefined, 'staged', groupValue, null, undefined, undefined, undefined, coordinates)
+  const resolve = h.worker.resolveBotSessionIdentity
+  if (!resolve) throw Error('missing Bot/Session reader')
+  const signal = new AbortController().signal
+  expect((await fetch(`${h.worker.viewOrigin}/internal/desktop-bot-session-identity`, {
+    method: 'POST', body: JSON.stringify(coordinates),
+  })).status).toBe(403)
+  expect(await resolve(coordinates.bot_id, coordinates.session_id, signal)).toEqual(coordinates)
+  await expect(resolve('bot_2', coordinates.session_id, signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(resolve(coordinates.bot_id, 'session_2', signal)).rejects.toMatchObject({ code: 'profile_mismatch' })
+  await expect(resolve('../bot', coordinates.session_id, signal)).rejects.toThrow()
+  const response = vi.spyOn(globalThis, 'fetch')
+  try {
+    response.mockResolvedValueOnce(new Response(Buffer.alloc(2049)))
+    await expect(resolve(coordinates.bot_id, coordinates.session_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
+    response.mockResolvedValueOnce(new Response('null'))
+    expect(await resolve(coordinates.bot_id, coordinates.session_id, signal)).toBeNull()
+    const reply = new Response(JSON.stringify(coordinates))
+    const body = reply.body
+    if (!body) throw Error('missing response body')
+    const reader = body.getReader()
+    const cancel = vi.spyOn(reader, 'cancel').mockImplementationOnce(async () => { h.worker.abort() })
+    vi.spyOn(body, 'getReader').mockReturnValue(reader)
+    response.mockResolvedValueOnce(reply)
+    await expect(resolve(coordinates.bot_id, coordinates.session_id, signal)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(cancel).toHaveBeenCalledOnce()
+  } finally { response.mockRestore() }
+})
+
+it.each([null, { bot_id: 'bot_1', session_id: 'session_1' }])('retains the Bot/Session deadline through response cleanup for %j', async (identity) => {
+  const h = await harness(), resolve = h.worker.resolveBotSessionIdentity
+  if (!resolve) throw Error('missing Bot/Session reader')
+  const deadline = new AbortController()
+  const timer = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
+  const response = vi.spyOn(globalThis, 'fetch')
+  try {
+    const reply = new Response(JSON.stringify(identity)), body = reply.body
+    if (!body) throw Error('missing response body')
+    const reader = body.getReader()
+    vi.spyOn(reader, 'cancel').mockImplementationOnce(async () => {
+      deadline.abort(new DOMException('private read deadline elapsed', 'TimeoutError'))
+    })
+    vi.spyOn(body, 'getReader').mockReturnValue(reader)
+    response.mockResolvedValueOnce(reply)
+    const owner = new AbortController().signal
+    await expect(resolve('bot_1', 'session_1', owner)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(owner.aborted).toBe(false)
+    expect(timer).toHaveBeenCalledWith(10_000)
+  } finally { response.mockRestore(); timer.mockRestore() }
+})
+
+it('passes only the validated explicit task policy and newly owned worker identity through the actual child reserved environment', async () => {
+  vi.stubEnv('DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS', 'untrusted ambient environment')
+  vi.stubEnv('DSH_PROFILE_WORKER_ID', 'untrusted-worker')
+  onTestFinished(() => { vi.unstubAllEnvs() })
+  const keys = generateKeyPairSync('ed25519'), policy = parseHostTaskCoordinationEnvironment({
+    audience: 'urn:slark:task-coordination:v1', environmentKey: 'staging', keyring: { version: 1,
+      environmentId: '20000000-0000-4000-8000-000000000002', issuer: 'https://cloud.example.test', keys: [{
+        kid: 'dsh-assertion-task-worker-test', publicKeyPem: keys.publicKey.export({ format: 'pem', type: 'spki' }),
+        validFrom: 1, validUntil: 2_000_000_000_000,
+      }] },
+  })
+  const h = await harness(undefined, undefined, undefined, null, undefined, undefined, undefined, null, [], [policy])
+  const value = JSON.parse(readFileSync(join(h.root, 'task-policy.json'), 'utf8')) as { policies: unknown; workerId: string }
+  expect(value.policies).toEqual([policy])
+  expect(value.workerId).toBe(h.worker.workerId)
+  expect(value.workerId).toMatch(/^[0-9a-f-]{36}$/u)
+  expect(value.workerId).not.toBe('untrusted-worker')
+  const factory = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: process.execPath,
+    taskCoordinationEnvironments: [policy] })
+  for (const key of ['DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS', 'DSH_PROFILE_WORKER_ID'])
+    await expect(factory.create({ profileId: 'profile', profileRoot: h.root, credentialHandle: 'fixture', pluginRoots: [],
+      env: { [key]: 'untrusted caller field' } })).rejects.toMatchObject({ code: 'invalid_input' })
+  const bad = { ...policy, privateKeyPem: 'forbidden' }
+  expect(() => new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath,
+    dshEntrypointPath: process.execPath, taskCoordinationEnvironments: [bad] })).toThrow()
 })

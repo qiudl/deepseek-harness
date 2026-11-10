@@ -1,3 +1,4 @@
+import { generationLogPath as originLogPath } from '../../../session/session-persistence-jsonl/src/format.ts'
 /** REQ-20260930-0004: real Profile registry, model runtime and JSON Source persistence. */
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -14,7 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { freshConsumerGrant } from './collaboration-consumption-fixture.ts'
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest'
 import { createSessionTestController, testSessionPersistence } from './test-remote.ts'
 import { describeCollaborationSource, collaborationJournalDigest } from '../src/collaboration-source-journal.ts'
 import { parseCollaborationClarificationInput } from '../src/collaboration-clarification-input.ts'
@@ -2187,3 +2188,320 @@ it('refuses a first-reply observation when its independent storage owner is miss
       .rejects.toThrow('continuation_journal_unavailable')
   } finally { missing.mockRestore() }
 })
+
+// REQ-20261031-0006: actual Root/consumer domains and JSONL-backed origin publication.
+import * as JsonlOperationPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { MessageId, ToolCallId } from '@deepseek-ai/dsh-llm'
+import { DesktopOperationOrigin, parseOperationOriginKeyrings } from '../../../bundle/web-app/src/desktop-operation-origin.ts'
+import { parseHostOperationOriginObservation, parseHostOperationOriginAttribution,
+  encodeHostOperationOriginObservation, encodeHostOperationOriginAttribution } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostOperationOriginObservation } from '@deepseek-ai/dsh-host-control-protocol'
+import type { ProjectOperationOriginToken } from '../src/project-operation-origins.ts'
+
+async function operationOriginHarness(pairCount = 1, pairName = 'read') {
+  const f = await feedbackHarness(false, true), { h, signal, query, session, agent } = f
+  const before = await h.controller.collaborationRootFeedback(query, signal)
+  const prepared = await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_prepare',
+    expected_event_count: before.event_count, expected_log_digest: before.log_digest }, signal)
+  if (prepared.kind !== 'consumer' || !prepared.record) throw Error('consumer fixture')
+  Object.assign(agent, { send: (message: import('@deepseek-ai/dsh-llm').UserMessage) => {
+    f.inject(message); session.append('turn/start', { turn: 1 }); session.append('step/start', { turn: 1, step: 1 })
+    session.append('user/message', message, { surfaceOp: 'append' })
+  }, whenIdle: async () => {} })
+  await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_start',
+    grant: freshConsumerGrant(prepared.record.binding, prepared.record.command) }, signal)
+  await h.controller.collaborationRootConsumption({ ...query, action: 'consumer_read' }, signal)
+  const appendPair = (index: number, toolName = 'read') => {
+    const callId = ToolCallId('original-call-' + String(index)), block = { type: 'tool-call' as const, id: callId,
+      name: toolName, arguments: '{"path":"PRIVATE_INPUT"}' }
+    session.append('assistant/message', { turn: 1, step: 1, message: { id: MessageId('assistant-' + String(index)), role: 'assistant',
+      source: { kind: 'model', provider: 'mock', model: 'mock' }, content: [block] },
+    stream: [{ type: 'chunk', time: 1, chunk: { type: 'block-end', index: 0, block } }] }, { surfaceOp: 'append' })
+    session.append('tool/call', { turn: 1, step: 1, callId, name: block.name, arguments: block.arguments })
+    session.append('tool/result', { turn: 1, step: 1, message: { id: MessageId('result-' + String(index)), role: 'tool', toolCallId: callId,
+      source: { kind: 'tool', callId }, content: [{ type: 'text', text: 'PRIVATE_OUTPUT' }], isError: false } },
+    { surfaceOp: 'append', sourceEventSeqs: [SessionSeq(session.seq - 1)] })
+  }
+  for (let i = 0; i < pairCount; i++) appendPair(i, pairName)
+  const disk = new Context()
+  await disk.plugin(SessionStore)
+  await disk.plugin(JsonlOperationPersistence, { root: join(h.root, 'origin-logs'), compression: 'none' })
+  onTestFinished(() => disk.fiber.dispose())
+  const writer = await disk.sessionPersistence.create(session.header, { inheritedEventCount: session.inheritedEventCount })
+  await writer.append(session.snapshotEvents()); await writer.close()
+  h.removePersistence!()
+  const removeOperationPersistence = h.controllerContext.provide('sessionPersistence', disk.sessionPersistence)
+  const install = generateKeyPairSync('ed25519'), cloud = generateKeyPairSync('ed25519'), now = Date.now()
+  const actualAccount = { authorityEnvironmentId: randomUUID(), accountIssuer: 'https://account.test', accountSubject: 'account',
+    accountBindingId: 'host-alias', accountBindingVersion: 2, hostProfileId: randomUUID() }
+  const actualPeer = { installationId: randomUUID(), publicKey: (install.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url'),
+    hostInstanceId: randomUUID(), processNonce: 'current-process' }
+  const keyrings = [{ version: 1, environmentId: actualAccount.authorityEnvironmentId, issuer: 'https://cloud.test',
+    keys: [{ kid: 'dsh-assertion-current', publicKeyPem: cloud.publicKey.export({ format: 'pem', type: 'spki' }).toString(), validFrom: now - 1000, validUntil: now + 240000 }] }]
+  const lifetime = new AbortController(), runtime = new DesktopOperationOrigin(h.controllerContext, h.controller,
+    parseOperationOriginKeyrings(JSON.stringify(keyrings)), actualAccount.hostProfileId, lifetime.signal)
+  const description = vi.fn(async ({ sessionId }: { sessionId: string }) => ({ sessionId, botId: 'actual-bot' }))
+  const removeProducer = h.controllerContext.provide('dsBotSlarkExternalGroup', { describeLocalBotSession: description })
+  const removeReader = h.controllerContext.provide('projectOperationOrigins', runtime.reader)
+  const read = (overrides = {}) => runtime.execute({ actualAccount, actualPeer,
+    operation: { ...query, action: 'read', request_id: randomUUID(), nonce: 'a'.repeat(64), after_result_seq: null, ...overrides } }, signal)
+  const signed = (value: unknown) => {
+    const observation = parseHostOperationOriginObservation(value)
+    return parseHostOperationOriginObservation({ ...observation,
+      signature: sign(null, Buffer.from(encodeHostOperationOriginObservation(observation)), install.privateKey).toString('base64url') })
+  }
+  const claim = (observation: HostOperationOriginObservation, patch = {}) => {
+    const b = observation.binding
+    const unsigned = parseHostOperationOriginAttribution({ ...actualAccount, botId: observation.botId, peer: actualPeer,
+      schemaVersion: 1, purpose: 'project_operation_origin_attribution', issuer: keyrings[0]!.issuer, keyId: keyrings[0]!.keys[0]!.kid,
+      requestId: observation.requestId, nonce: observation.nonce, issuedAt: Date.now(), expiresAt: observation.expiresAt,
+      observationDigest: createHash('sha256').update(encodeHostOperationOriginObservation(observation)).digest('hex'),
+      admissionId: randomUUID(), consumptionId: observation.consumption.consumptionId, namespaceId: b.namespaceId,
+      rootTaskId: b.rootTaskId, rootTraceId: b.rootTraceId, executionCommandId: b.executionCommandId,
+      deliveryId: b.deliveryId, invocationId: b.invocationId, sourceDigest: b.sourceDigest, ownerUserId: 'original-root-owner',
+      projectId: '212', bindingId: randomUUID(), bindingGeneration: '9007199254740993', scopeVersion: '2', signature: 'A'.repeat(86), ...patch })
+    return { ...unsigned, signature: sign(null, Buffer.from(encodeHostOperationOriginAttribution(unsigned)), cloud.privateKey).toString('base64url') }
+  }
+  const bind = (observation: HostOperationOriginObservation, attribution = claim(observation), cancellation = signal) =>
+    runtime.execute({ actualAccount, actualPeer, operation: { ...query, action: 'bind', observation, attribution } }, cancellation)
+  return { ...f, disk, actualAccount, actualPeer, install, cloud, keyrings, lifetime, runtime, description, read, signed, claim, bind,
+    removeProducer, removeReader, removeOperationPersistence, appendPair }
+}
+
+it('REQ-0006 publishes real original JSONL events only through an awaited opaque token', async () => {
+  const f = await operationOriginHarness(), response = await f.read() as { observation: unknown; eof: boolean; next_result_seq: number }
+  const observation = f.signed(response.observation)
+  expect(response).toMatchObject({ eof: true, next_result_seq: observation.pairs.at(-1)!.resultSeq })
+  expect(JSON.stringify(response)).not.toMatch(/PRIVATE_INPUT|PRIVATE_OUTPUT/)
+  let token: ProjectOperationOriginToken | undefined, release!: () => void
+  const ready = Promise.withResolvers<undefined>()
+  f.h.controllerContext.on('project-operation/origin', async (value, signal) => {
+    token = value
+    expect(Object.keys(value)).toEqual([])
+    expect(f.runtime.reader.read(value)).toEqual([{ ...observation.pairs[0],
+      authorityRef: expect.stringMatching(/^origin:[a-f0-9]{64}$/u) as string,
+      ownerUserId: 'original-root-owner', projectId: '212', hostProfileId: f.actualAccount.hostProfileId, botId: 'actual-bot',
+      sessionId: f.session.id, turn: 1, step: 1, startEventSeq: observation.consumption.startEventSeq,
+      rootRef: observation.binding.rootTaskId, invocationRef: observation.binding.invocationId, taskRef: null }])
+    expect(signal.aborted).toBe(false)
+    ready.resolve(undefined); await new Promise<void>((resolve) => { release = resolve }); return true
+  })
+  const binding = f.bind(observation)
+  let settled = false; void binding.then(() => { settled = true })
+  await ready.promise
+  expect(settled).toBe(false)
+  release()
+  expect(await binding).toEqual({ published: true })
+  expect(f.runtime.reader.read(token!)).toBeNull()
+  await expect(f.bind(observation)).rejects.toThrow('unavailable')
+  expect(f.h.stream).not.toHaveBeenCalled()
+})
+
+it.each(['owner', 'project', 'environment', 'issuer', 'key', 'nonce', 'request', 'binding', 'peer', 'bot', 'consumption', 'root', 'digest', 'signature', 'future', 'expired', 'key-window'])(
+  'REQ-0006 rejects a detached Cloud attribution with changed %s before publication', async (mode) => {
+    const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+    const observation = f.signed(response.observation)
+    const patch: Record<string, unknown> = mode === 'owner' ? { accountSubject: 'other-owner' }
+      : mode === 'project' ? { sourceDigest: 'b'.repeat(64) }
+        : mode === 'environment' ? { authorityEnvironmentId: randomUUID() } : mode === 'issuer' ? { issuer: 'https://foreign.test' }
+          : mode === 'key' ? { keyId: 'different' } : mode === 'nonce' ? { nonce: 'b'.repeat(64) }
+            : mode === 'request' ? { requestId: randomUUID() } : mode === 'binding' ? { accountBindingVersion: 3 }
+              : mode === 'peer' ? { peer: { ...f.actualPeer, processNonce: 'old-peer' } } : mode === 'bot' ? { botId: 'other-bot' }
+                : mode === 'consumption' ? { consumptionId: randomUUID() } : mode === 'root' ? { rootTaskId: randomUUID() }
+                  : mode === 'digest' ? { observationDigest: 'b'.repeat(64) }
+                    : mode === 'future' ? { issuedAt: observation.issuedAt + 60000 } : mode === 'expired' ? { issuedAt: observation.issuedAt - 1000, expiresAt: observation.issuedAt }
+                      : mode === 'key-window' ? { expiresAt: observation.expiresAt + 1 } : {}
+    const claim = f.claim(observation, patch), publish = vi.fn(async () => {})
+    if (mode === 'signature') claim.signature = Buffer.alloc(64, 1).toString('base64url')
+    f.h.controllerContext.on('project-operation/origin', publish)
+    await expect(f.bind(observation, claim)).rejects.toThrow('unavailable')
+    expect(publish).not.toHaveBeenCalled(); expect(f.h.stream).not.toHaveBeenCalled()
+  },
+)
+it.each(['producer', 'reader', 'bot', 'missing', 'unsupported', 'cancelled', 'observation', 'installation-signature', 'expired-observation'])(
+  'REQ-0006 preserves the gap after %s changes under the bind scope', async (mode) => {
+    const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+    let observation = f.signed(response.observation)
+    if (mode === 'producer') { f.removeProducer(); f.h.controllerContext.provide('dsBotSlarkExternalGroup', { describeLocalBotSession: f.description }) }
+    if (mode === 'reader') { f.removeReader(); f.h.controllerContext.provide('projectOperationOrigins', { read: () => null }) }
+    if (mode === 'missing') f.removeProducer()
+    if (mode === 'unsupported') { f.removeProducer(); f.h.controllerContext.provide('dsBotSlarkExternalGroup', {}) }
+    if (mode === 'bot') f.description.mockResolvedValue({ sessionId: f.session.id, botId: 'reassigned' })
+    if (mode === 'observation') observation = f.signed({ ...observation, nonce: 'b'.repeat(64) })
+    if (mode === 'installation-signature') observation = { ...observation, signature: Buffer.alloc(64, 2).toString('base64url') }
+    const claim = f.claim(observation)
+    const cancellation = new AbortController()
+    if (mode === 'cancelled') cancellation.abort()
+    const clock = mode === 'expired-observation' ? vi.spyOn(Date, 'now').mockReturnValue(observation.expiresAt) : undefined
+    const publish = vi.fn(async () => {}); f.h.controllerContext.on('project-operation/origin', publish)
+    try { await expect(f.bind(observation, claim, cancellation.signal)).rejects.toThrow() }
+    finally { clock?.mockRestore() }
+    expect(publish).not.toHaveBeenCalled(); expect(f.h.stream).not.toHaveBeenCalled()
+  },
+)
+it.each([false, true])('REQ-0006 invalidates a token after observer failure or cancellation (%s)', async (cancelled) => {
+  const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+  const observation = f.signed(response.observation)
+  let token: ProjectOperationOriginToken | undefined
+  const cancellation = new AbortController()
+  f.h.controllerContext.on('project-operation/origin', async (value) => {
+    token = value
+    expect(f.runtime.reader.read(value)).not.toBeNull()
+    if (cancelled) { cancellation.abort(); expect(f.runtime.reader.read(value)).toBeNull() }
+    else throw Error('observer-unavailable')
+  })
+  await expect(f.bind(observation, f.claim(observation), cancellation.signal)).rejects.toThrow()
+  expect(f.runtime.reader.read(token!)).toBeNull()
+})
+it('REQ-0006 has bounded original result pages and an empty page advances no cursor', async () => {
+  const f = await operationOriginHarness(51)
+  const first = await f.read() as { observation: unknown; eof: boolean; next_result_seq: number }
+  expect(f.signed(first.observation).pairs).toHaveLength(50); expect(first.eof).toBe(false)
+  const second = await f.read({ after_result_seq: first.next_result_seq }) as {
+    observation: unknown
+    eof: boolean
+    next_result_seq: number
+  }
+  const observation = f.signed(second.observation)
+  expect(observation.pairs).toHaveLength(1); expect(second.eof).toBe(true)
+  f.h.controllerContext.on('project-operation/origin', async () => true)
+  expect(await f.bind(observation)).toEqual({ published: true })
+  expect(await f.read({ after_result_seq: second.next_result_seq })).toEqual({ observation: null, eof: true, next_result_seq: null })
+  const empty = await operationOriginHarness(0)
+  expect(await empty.read()).toEqual({ observation: null, eof: true, next_result_seq: null })
+})
+it('REQ-0006 rejects duplicate request IDs, detached producer descriptions and invalid private context', async () => {
+  const f = await operationOriginHarness(), request_id = randomUUID()
+  await f.read({ request_id })
+  await expect(f.read({ request_id })).rejects.toThrow('unavailable')
+  f.description.mockResolvedValue({ sessionId: 'other-session', botId: 'actual-bot' })
+  await expect(f.read()).rejects.toThrow('unavailable')
+  await expect(f.runtime.execute({ operation: {}, actualAccount: {}, actualPeer: {} }, f.signal)).rejects.toThrow()
+  await expect(f.runtime.execute(null, f.signal)).rejects.toThrow()
+  await expect(f.runtime.execute({ operation: { ...f.query, action: 'read', request_id: randomUUID(), nonce: 'a'.repeat(64), after_result_seq: null },
+    actualAccount: { ...f.actualAccount, hostProfileId: randomUUID() }, actualPeer: f.actualPeer }, f.signal)).rejects.toThrow('unavailable')
+})
+it('REQ-0006 pins only explicitly supplied Ed25519 environment keyrings', () => {
+  expect(parseOperationOriginKeyrings(undefined)).toEqual([])
+  expect(parseOperationOriginKeyrings('[]')).toEqual([])
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  const ring = { version: 1, environmentId: randomUUID(), issuer: 'https://cloud.test', keys: [{ kid: 'dsh-assertion-rsa',
+    publicKeyPem: rsa.publicKey.export({ format: 'pem', type: 'spki' }).toString(), validFrom: 1, validUntil: 2 }] }
+  for (const raw of [' '.repeat(32769), '{}', '[{},{},{},{},{}]', JSON.stringify([ring, ring]), JSON.stringify([ring])])
+    expect(() => parseOperationOriginKeyrings(raw)).toThrow()
+})
+
+it.each([undefined, false, true])('REQ-0006 requires actual consumer acknowledgment (%s)', async (accepted) => {
+  const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+  if (accepted !== undefined) f.h.controllerContext.on('project-operation/origin', async () => accepted)
+  expect(await f.bind(f.signed(response.observation))).toEqual({ published: accepted === true })
+})
+
+it('REQ-0006 pages whole metadata pairs under the complete observation byte budget', async () => {
+  const f = await operationOriginHarness(50, 'tool-' + 'x'.repeat(500))
+  const first = await f.read() as { observation: unknown; eof: boolean; next_result_seq: number }
+  const observation = f.signed(first.observation)
+  expect(Buffer.byteLength(JSON.stringify(observation))).toBeLessThanOrEqual(32768)
+  expect(observation.pairs.length).toBeGreaterThan(0); expect(observation.pairs.length).toBeLessThan(50)
+  expect(first.eof).toBe(false)
+  const next = await f.read({ after_result_seq: first.next_result_seq }) as { observation: unknown }
+  expect(f.signed(next.observation).pairs[0]!.resultSeq).toBeGreaterThan(first.next_result_seq)
+  await expect(f.runtime.execute({ actualAccount: { ...f.actualAccount, accountSubject: 'x'.repeat(40000) }, actualPeer: f.actualPeer,
+    operation: { ...f.query, action: 'read', request_id: randomUUID(), nonce: 'a'.repeat(64), after_result_seq: null } }, f.signal)).rejects.toThrow()
+})
+it.each(['during-describe', 'between-describes', 'bot'] as const)('REQ-0006 refuses a producer change %s before signing', async (mode) => {
+  const f = await operationOriginHarness()
+  if (mode === 'during-describe') f.description.mockImplementationOnce(async ({ sessionId }) => {
+    f.removeProducer(); f.h.controllerContext.provide('dsBotSlarkExternalGroup', { describeLocalBotSession: f.description })
+    return { sessionId, botId: 'actual-bot' }
+  })
+  else if (mode === 'between-describes') {
+    const capture = f.h.controller.captureCollaborationOperationOrigin.bind(f.h.controller)
+    vi.spyOn(f.h.controller, 'captureCollaborationOperationOrigin').mockImplementationOnce(async (...args) => {
+      const captured = await capture(...args)
+      f.removeProducer(); f.h.controllerContext.provide('dsBotSlarkExternalGroup', { describeLocalBotSession: f.description })
+      return captured
+    })
+  } else f.description.mockResolvedValueOnce({ sessionId: f.session.id, botId: 'actual-bot' }).mockResolvedValueOnce({ sessionId: f.session.id, botId: 'changed' })
+  await expect(f.read()).rejects.toThrow('unavailable')
+})
+it('REQ-0006 revokes scoped reads at the verified Cloud deadline', async () => {
+  const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+  const observation = f.signed(response.observation)
+  const claim = f.claim(observation, { expiresAt: Date.now() + 1000 })
+  let token: ProjectOperationOriginToken | undefined, clock: MockInstance<() => number> | undefined
+  f.h.controllerContext.on('project-operation/origin', async (value) => {
+    token = value; expect(f.runtime.reader.read(value)).not.toBeNull()
+    clock = vi.spyOn(Date, 'now').mockReturnValue(claim.expiresAt)
+    expect(f.runtime.reader.read(value)).toBeNull()
+    return true
+  })
+  try { expect(await f.bind(observation, claim)).toEqual({ published: false }) } finally { clock?.mockRestore() }
+  expect(f.runtime.reader.read(token!)).toBeNull()
+})
+
+it.each(['call', 'result', 'consumed-input'] as const)('REQ-0006 rechecks the actual original JSONL prefix after changed %s bytes', async (mode) => {
+  const f = await operationOriginHarness(), response = await f.read() as { observation: unknown }
+  const observation = f.signed(response.observation)
+  const path = originLogPath(join(f.h.root, 'origin-logs'), f.session.header.cwd, f.session.id, SESSION_FORMAT_VERSION, 'none')
+  const bytes = await readFile(path, 'utf8'), lines = bytes.trimEnd().split('\n').map(line => JSON.parse(line) as Record<string, unknown>)
+  const index = lines.findIndex(line => line.type === (mode === 'call' ? 'tool/call' : mode === 'result' ? 'tool/result' : 'user/message'))
+  const line = lines[index]!, data = line.data as Record<string, unknown>
+  if (mode === 'call') data.arguments = '{"path":"changed-original"}'
+  else if (mode === 'result') {
+    const message = data.message as Record<string, unknown>; message.content = [{ type: 'text', text: 'changed original output' }]
+  } else data.content = [{ type: 'text', text: 'changed original feedback' }]
+  await writeFile(path, lines.map(line => JSON.stringify(line)).join('\n') + '\n')
+  const published = vi.fn(async () => true); f.h.controllerContext.on('project-operation/origin', published)
+  await expect(f.bind(observation)).rejects.toThrow()
+  expect(published).not.toHaveBeenCalled(); expect(f.h.stream).not.toHaveBeenCalled()
+})
+
+it('REQ-0006 leaves the reserved PTC program transport outside native attribution', async () => {
+  const f = await operationOriginHarness(1, 'run_code'), publish = vi.fn(async () => true)
+  f.h.controllerContext.on('project-operation/origin', publish)
+  expect(await f.read()).toEqual({ observation: null, eof: true, next_result_seq: null })
+  expect(publish).not.toHaveBeenCalled(); expect(f.h.stream).not.toHaveBeenCalled()
+})
+
+it('REQ-0006 original prefix capture supports a detached persisted Session without waking it', async () => {
+  const f = await operationOriginHarness(), read = { ...f.query, action: 'consumer_read' }
+  const live = await f.h.controller.captureCollaborationOperationOrigin(read, f.signal)
+  await f.unregister(); f.detach()
+  const cold = await f.h.controller.captureCollaborationOperationOrigin(read, f.signal)
+  expect(cold).toEqual(live); expect(f.h.stream).not.toHaveBeenCalled()
+})
+it('REQ-0006 original prefix capture refuses another purpose or absent actual consumption', async () => {
+  const f = await feedbackHarness()
+  await expect(f.h.controller.captureCollaborationOperationOrigin(f.query, f.signal)).rejects.toThrow('operation_origin_command')
+  await expect(f.h.controller.captureCollaborationOperationOrigin({ ...f.query, action: 'consumer_read' }, f.signal))
+    .rejects.toThrow('operation_origin_not_consumed')
+  const continuation = await f.h.controller.collaborationRootConsumption({ ...f.query, action: 'continuation_read' }, f.signal)
+  vi.spyOn(f.h.controller, 'collaborationRootConsumption').mockResolvedValueOnce(continuation)
+  await expect(f.h.controller.captureCollaborationOperationOrigin({ ...f.query, action: 'consumer_read' }, f.signal))
+    .rejects.toThrow('operation_origin_not_consumed')
+})
+it.each(['persistence', 'prefix', 'session', 'cancelled'] as const)(
+  'REQ-0006 original prefix capture refuses a changed %s owner at its actual read barrier', async (mode) => {
+    const f = await operationOriginHarness(), command = { ...f.query, action: 'consumer_read' }
+    const consumed = await f.h.controller.collaborationRootConsumption(command, f.signal)
+    vi.spyOn(f.h.controller, 'collaborationRootConsumption').mockResolvedValueOnce(consumed)
+    const readRoot = f.h.controller.readCollaborationRoot.bind(f.h.controller)
+    if (mode === 'persistence' || mode === 'prefix') vi.spyOn(f.h.controller, 'readCollaborationRoot').mockImplementationOnce(async (...args) => {
+      const root = await readRoot(...args)
+      if (mode === 'persistence') f.removeOperationPersistence()
+      else f.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [] })
+      return root
+    })
+    const cancellation = new AbortController(), flush = f.disk.sessionPersistence.flush.bind(f.disk.sessionPersistence)
+    if (mode === 'session' || mode === 'cancelled') vi.spyOn(f.disk.sessionPersistence, 'flush').mockImplementationOnce(async () => {
+      await flush()
+      if (mode === 'session') { await f.unregister(); f.detach() }
+      else cancellation.abort(Error('operation-origin-cancelled'))
+    })
+    await expect(f.h.controller.captureCollaborationOperationOrigin(command, cancellation.signal)).rejects
+      .toThrow(mode === 'cancelled' ? 'operation-origin-cancelled' : 'operation_origin_' + mode)
+    expect(f.h.stream).not.toHaveBeenCalled()
+  },
+)

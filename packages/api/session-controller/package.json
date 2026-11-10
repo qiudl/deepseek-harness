@@ -40,7 +40,31 @@
     },
     "./src/*": "./src/*",
     "./package.json": "./package.json",
-    "./locale/*.json": "./locale/*.json"
+    "./locale/*.json": "./locale/*.json",
+    "./host/runtime-entry": {
+      "types": "./lib/types/runtime-entry.d.ts",
+      "default": "./lib/types/runtime-entry.js"
+    },
+    "./host/runtime-entry-journal": {
+      "types": "./lib/types/runtime-entry-journal.d.ts",
+      "default": "./lib/types/runtime-entry-journal.js"
+    },
+    "./host/collaboration-source-journal": {
+      "types": "./lib/types/collaboration-source-journal.d.ts",
+      "default": "./lib/types/collaboration-source-journal.js"
+    },
+    "./host/runtime-entry-consumer-host": {
+      "types": "./lib/types/runtime-entry-consumer-host.d.ts"
+    },
+    "./host/runtime-entry-consumer": {
+      "types": "./lib/types/runtime-entry-consumer.d.ts"
+    },
+    "./host/collaboration-task-coordination": {
+      "types": "./lib/types/collaboration-task-coordination.d.ts"
+    },
+    "./host/collaboration-task-coordination-journal": {
+      "types": "./lib/types/collaboration-task-coordination-journal.d.ts"
+    }
   },
   "dsh": {
     "client": {
@@ -112,7 +136,9 @@
     "@deepseek-ai/dsh-util-workspace-path": "workspace:*",
     "@deepseek-ai/dsh-workspace": "workspace:*",
     "@deepseek-ai/dsh-working-directory": "workspace:*",
-    "@deepseek-ai/dsh-storage-domain": "workspace:*"
+    "@deepseek-ai/dsh-storage-domain": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*",
+    "@deepseek-ai/dsh-host-control-protocol": "workspace:*"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session-persistence": {
@@ -170,6 +196,7 @@
     "@deepseek-ai/dsh-util-workspace-path": "workspace:*",
     "@deepseek-ai/dsh-workspace": "workspace:*",
     "@types/mime-types": "^3.0.1",
-    "@deepseek-ai/dsh-working-directory": "workspace:*"
+    "@deepseek-ai/dsh-working-directory": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*"
   }
 }

@@ -1,0 +1,49 @@
+{
+  "description": "Synthetic deterministic test-only Ed25519 fixture; contains no private key or user state.",
+  "public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+  "payload_base64url": "ZHNoLW5hdGl2ZS1yb29tLXJldGlyZW1lbnQvdjEAWzEsIm5hdGl2ZV9yb29tX3JldGlyZW1lbnQiLFsiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsMjAwMCwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiOTAwNzE5OTI1NDc0MDk5MyIsIjMwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsWyJqb2luIiwicm9vbS0xIiwiMTAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwiMjAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwxLCJwcm9qZWN0IiwibXktdHdpbiIsIk15IHR3aW4iXSwiNDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IixbImxlYXZlIiwicm9vbS0xIiwiMjAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAyIiwxXV0sWyJsZWZ0IiwwXSxbIjMwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMyIsIjQwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwNCIsImJpbmRpbmctMSIsMSwiaHR0cHM6Ly9hY2NvdW50cy5leGFtcGxlLnRlc3QiLCIyMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDIiLCIzMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDMiLCJHWDlySS1Gc2hUTEdxOGc0LXMxZXA0bS1ESGF5a2dNMEE1djZpejAyaldFIiwiNDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0IiwiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsMTAwMF1d",
+  "proof": {
+    "schema_version": 1,
+    "purpose": "native_room_retirement",
+    "target": {
+      "challenge_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expires_at": 2000,
+      "binding_id": "10000000-0000-4000-8000-000000000001",
+      "binding_generation": "9007199254740993",
+      "join_command_request_id": "30000000-0000-4000-8000-000000000003",
+      "join_command": {
+        "operation": "join",
+        "room_id": "room-1",
+        "group_id": "10000000-0000-4000-8000-000000000001",
+        "member_id": "20000000-0000-4000-8000-000000000002",
+        "cycle": 1,
+        "project_id": "project",
+        "agent_id": "my-twin",
+        "name": "My twin"
+      },
+      "leave_command_request_id": "40000000-0000-4000-8000-000000000004",
+      "leave_command": {
+        "operation": "leave",
+        "room_id": "room-1",
+        "member_id": "20000000-0000-4000-8000-000000000002",
+        "cycle": 1
+      }
+    },
+    "reply": {
+      "state": "left",
+      "left_room_seq": 0
+    },
+    "host_profile_id": "30000000-0000-4000-8000-000000000003",
+    "authority_environment_id": "40000000-0000-4000-8000-000000000004",
+    "account_binding_handle": "binding-1",
+    "authority_binding_version": 1,
+    "account_issuer": "https://accounts.example.test",
+    "account_subject": "20000000-0000-4000-8000-000000000002",
+    "installation_id": "30000000-0000-4000-8000-000000000003",
+    "installation_public_key": "GX9rI-FshTLGq8g4-s1ep4m-DHaykgM0A5v6iz02jWE",
+    "host_instance_id": "40000000-0000-4000-8000-000000000004",
+    "process_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "issued_at": 1000,
+    "signature": "OQSw4KIvzH3qB35riaUOAVIz_ttaqAJkPSwzzvq05I7zUian8mEuE_NEG6zxF4H7dxrXEeLekO8vgwODnEfsAA"
+  }
+}

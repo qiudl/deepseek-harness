@@ -1,8 +1,13 @@
+import { parseHostBotSessionIdentity } from '@deepseek-ai/dsh-host-control-protocol'
+import type { BotSessionIdentityReceiver } from './types.ts'
+import { parseHostNativeRoomRetirementReply, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostNativeRoomPreparationWorkerRead, matchHostNativeRoomPreparationWorkerRead } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBoundBotRoomsQuery, HostBoundBotRoomsRead } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootPlanningAttemptTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootPlanningAttemptDescriptor, HostControlRequestId } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostRootJournalCommand, matchHostRootJournalMetadata, type HostRootJournalCommand, type HostRootJournalMetadata } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRootSubmissionTarget, HostRootSubmissionDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
+import type { ProfileWorkerFactory, ProfileWorkerHandle, ProfileWorkerSpec, NativeRoomPreparationReceiver } from './types.ts'
 import type { HostCollaborationReferenceGrant, HostControlSha256, HostCollaborationReferenceSelection,
   HostCollaborationReferenceContentTarget, HostCollaborationReferenceContentChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostWorkspaceModelSelectionTarget, HostWorkspaceModelSelection, HostCollaborationSourceTarget, HostCollaborationSourceDescriptor, HostCollaborationSourceSnapshot, HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
@@ -16,6 +21,7 @@ import type { CollaborationDeliveryReceiver } from './collaboration-delivery-upl
 import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
+import type { TaskCoordinationReceiver } from './account-task-coordination.ts'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
@@ -29,6 +35,7 @@ export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
   private readonly pending = new Map<string, Promise<void>>()
+  private readonly collaborationRequests = new Map<ProfileWorkerHandle, Set<AbortController>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
 
   /**
@@ -47,6 +54,26 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (result !== null && result.bot_id !== botId) throw new HostAuthorityError('profile_mismatch')
     return result
+  }
+
+  /** Retain the exact Profile worker through final coordinate publication.
+   * @param profileId Account Profile selected by the Parent.
+   * @returns A private reader and synchronous guard for that original worker.
+   */
+  botSessionIdentityReceiver(profileId: string): BotSessionIdentityReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.resolveBotSessionIdentity) throw new HostAuthorityError('upgrade_required')
+    const read = worker.resolveBotSessionIdentity.bind(worker)
+    const assertCurrent = () => { this.assertCurrentWorker(profileId, worker) }
+    return { assertCurrent, read: async (target, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = parseHostBotSessionIdentity(await read(target.bot_id, target.session_id, signal))
+      signal.throwIfAborted(); assertCurrent()
+      if (result !== null && (result.bot_id !== target.bot_id || result.session_id !== target.session_id))
+        throw new HostAuthorityError('profile_mismatch')
+      return result
+    } }
   }
 
   /**
@@ -70,6 +97,26 @@ export class ProfileWorkerSupervisor {
     return page
   }
 
+  /** Read participation only from the same selected live worker.
+   * @param profileId Actual Account Profile.
+   * @param query Original private Bot/page selector.
+   * @param signal Caller cancellation.
+   * @returns Current bounded read outcome.
+   */
+  async listBoundBotRooms(profileId: string, query: HostBoundBotRoomsQuery,
+    signal: AbortSignal): Promise<HostBoundBotRoomsRead> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.listBoundBotRooms) throw new HostAuthorityError('upgrade_required')
+    const result = await worker.listBoundBotRooms(query, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    if (result.state === 'page' && (result.bot_id !== query.bot_id || result.items.length > query.limit ||
+      result.next_cursor !== null && result.next_cursor === query.cursor)) throw new HostAuthorityError('profile_mismatch')
+    return result
+  }
+
   /**
    * Prepare one native room only in the current Account Profile worker.
    * @param profileId - Selected Account Profile.
@@ -87,6 +134,24 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (binding !== null && binding.room_id !== roomId) throw new HostAuthorityError('profile_mismatch')
     return binding
+  }
+
+  /** Capture one live worker through the parent's final proof publication.
+   * @param profileId Authorized Account Profile.
+   * @returns Phase reader and synchronous guard for that exact worker generation.
+   */
+  nativeRoomPreparationReceiver(profileId: string): NativeRoomPreparationReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.prepareNativeRoomPhase) throw new HostAuthorityError('upgrade_required')
+    const read = worker.prepareNativeRoomPhase.bind(worker)
+    const assertCurrent = () => { this.assertCurrentWorker(profileId, worker) }
+    return { assertCurrent, read: async (target, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const value = await read(target, signal)
+      signal.throwIfAborted(); assertCurrent()
+      return matchHostNativeRoomPreparationWorkerRead(parseHostNativeRoomPreparationWorkerRead(value), target)
+    } }
   }
 
   /**
@@ -123,6 +188,24 @@ export class ProfileWorkerSupervisor {
     this.assertCurrentWorker(profileId, worker)
     if (!matchesHostNativeRoomReply(reply, command)) throw new HostAuthorityError('profile_mismatch')
     return reply
+  }
+
+  /** Close only the original cycle in the same current Profile worker.
+   * @param profileId Actual Account Profile.
+   * @param command Complete frozen original join identity.
+   * @param signal Caller cancellation.
+   * @returns Durable left or explicit inability to close the cycle.
+   */
+  async retireNativeRoom(profileId: string, command: HostNativeRoomRetirementCommand,
+    signal: AbortSignal): Promise<HostNativeRoomRetirementReply> {
+    signal.throwIfAborted()
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.retireNativeRoom) throw new HostAuthorityError('upgrade_required')
+    const reply = await worker.retireNativeRoom(command, signal)
+    signal.throwIfAborted()
+    this.assertCurrentWorker(profileId, worker)
+    return parseHostNativeRoomRetirementReply(reply)
   }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
@@ -452,10 +535,34 @@ export class ProfileWorkerSupervisor {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker?.collaborationAnalysis) throw new HostAuthorityError('unavailable')
     const current = () => !this.closed && this.workers.get(profileId) === worker
-    const result = await worker.collaborationAnalysis(command, signal)
-    signal.throwIfAborted()
-    if (!current()) throw new HostAuthorityError('stale')
-    return result
+    const controller = new AbortController(), requests = this.collaborationRequests.get(worker) ?? new Set<AbortController>()
+    requests.add(controller); this.collaborationRequests.set(worker, requests)
+    const owned = AbortSignal.any([signal, controller.signal])
+    try {
+      const result = await worker.collaborationAnalysis(command, owned)
+      owned.throwIfAborted()
+      if (!current()) throw new HostAuthorityError('stale')
+      return result
+    } finally {
+      requests.delete(controller)
+      if (!requests.size) this.collaborationRequests.delete(worker)
+    }
+  }
+
+  /** Capture one actual child through original cut read, installation signing and Ack persistence.
+   * @param profileId - Current Account Profile resolved by the parent.
+   * @returns Private receiver rejecting replacement or disposal of the original worker.
+   */
+  taskCoordinationReceiver(profileId: string): TaskCoordinationReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker?.collaborationAnalysis || !worker.workerId) throw new HostAuthorityError('unavailable')
+    const assertCurrent = () =>{  this.assertCurrentWorker(profileId, worker) }
+    return { workerId: worker.workerId, assertCurrent, execute: async (command, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = await this.collaborationAnalysis(profileId, command, signal)
+      signal.throwIfAborted(); assertCurrent()
+      return result
+    } }
   }
   /**
    * Capture a current worker for the complete original reply upload and durable commit.
@@ -564,6 +671,7 @@ export class ProfileWorkerSupervisor {
   private async disposeOwned(profileId: string): Promise<void> {
     const worker = this.workers.get(profileId)
     if (!worker) return
+    for (const controller of this.collaborationRequests.get(worker) ?? []) controller.abort(new HostAuthorityError('stale'))
     this.workers.delete(profileId)
     worker.closeNotifications()
     worker.abort()
@@ -584,6 +692,8 @@ export class ProfileWorkerSupervisor {
   /** Permanently refuse new starts and dispose all children, including pending starts, despite individual failures. */
   async disposeAll(): Promise<void> {
     this.closed = true
+    for (const requests of this.collaborationRequests.values()) for (const controller of requests)
+      controller.abort(new HostAuthorityError('stale'))
     const ids = new Set([...this.workers.keys(), ...this.pending.keys()])
     const results = await Promise.allSettled([...ids].map(profileId => this.dispose(profileId)))
     const failed = results.find(result => result.status === 'rejected')

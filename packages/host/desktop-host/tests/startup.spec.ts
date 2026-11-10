@@ -70,7 +70,9 @@ describe.skipIf(process.platform === 'win32')('desktop Host application composit
       executable_signature_digest: config.executableSignatureDigest,
     })
     await expect(start(config)).rejects.toMatchObject({ code: 'conflict' })
-    await app.close()
+    const closing = app.close()
+    expect(app.close()).toBe(closing)
+    await closing
     expect(existsSync(join(root, 'host.sock'))).toBe(false)
     expect(existsSync(join(root, 'host.lock'))).toBe(false)
     const registration = join(legacyDshRoot, 'host', 'registration.v1.json')

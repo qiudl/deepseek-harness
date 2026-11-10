@@ -29,6 +29,7 @@
  */
 
 import { mkdir, open, stat } from 'node:fs/promises'
+import { fstatSync, statSync } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock'
@@ -41,7 +42,7 @@ export { LEASE_FILENAME } from './lease-filename.ts'
 
 /** The held kernel lock: a POSIX descriptor or a Win32 semaphore handle. */
 type HeldLock =
-  | { readonly kind: 'posix'; readonly handle: FileHandle }
+  | { readonly kind: 'posix'; readonly handle: FileHandle; readonly path: string }
   | { readonly kind: 'win32'; readonly handle: number }
 
 /** Whether a flock failure means another descriptor holds the lock. */
@@ -102,7 +103,7 @@ export class SessionWriteLease {
           throw error
         })
         if (current !== undefined && current.ino === held.ino && current.dev === held.dev) {
-          return new SessionWriteLease({ kind: 'posix', handle })
+          return new SessionWriteLease({ kind: 'posix', handle, path })
         }
       } catch (error: unknown) {
         await handle.close()
@@ -113,6 +114,22 @@ export class SessionWriteLease {
       await handle.close()
     }
     throw new SessionAlreadyOwnedError(id)
+  }
+
+  /** Check this exact held kernel lease synchronously without acquiring or renewing ownership.
+   * @returns False after release, descriptor loss, or POSIX lock-path inode replacement.
+   */
+  isCurrent(): boolean {
+    if (this.released) return false
+    if (this.held.kind === 'win32') return true
+    try {
+      const held = fstatSync(this.held.handle.fd, { bigint: true })
+      const current = statSync(this.held.path, { bigint: true })
+      return held.ino === current.ino && held.dev === current.dev
+    } catch (_error) {
+      // A closed descriptor or removed path cannot prove the original exclusive writer.
+      return false
+    }
   }
 
   /**
