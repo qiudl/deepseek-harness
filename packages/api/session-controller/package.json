@@ -64,6 +64,13 @@
     },
     "./host/collaboration-task-coordination-journal": {
       "types": "./lib/types/collaboration-task-coordination-journal.d.ts"
+    },
+    "./host/paired-task-target-journal": {
+      "types": "./lib/types/paired-task-target-journal.d.ts",
+      "default": "./lib/types/paired-task-target-journal.js"
+    },
+    "./host/paired-task-target-consumer-host": {
+      "types": "./lib/types/paired-task-target-consumer-host.d.ts"
     }
   },
   "dsh": {

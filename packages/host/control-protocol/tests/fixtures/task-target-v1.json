@@ -1,0 +1,1005 @@
+{
+  "notice": "Pure protocol vectors only: deterministic nonsecret fixture signers, no authorization or execution.",
+  "provider": {
+    "implementationDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "compositionDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "digest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703"
+  },
+  "prepare": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_target_prepare_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "dsh-assertion-paired-golden",
+    "requestId": "00000053-1111-4111-8111-000000000053",
+    "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "issuedAt": 1800000000000,
+    "expiresAt": 1800000015000,
+    "audience": "urn:slark:task-target-prepare:v1",
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "scopeDigest": "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+    "floorDigest": "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+    "accountBindingId": "host-account-original",
+    "accountBindingVersion": 1,
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "originalStep": {
+      "revisionId": "revision:original-2",
+      "handoffId": "handoff-original",
+      "taskVersion": "2",
+      "preparationCommandId": "correction-original",
+      "originalGrantSnapshotId": "00000051-1111-4111-8111-000000000051",
+      "invocationId": "followup-original",
+      "executionKey": "handoff:original:followup:2",
+      "requestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stepPayloadDigest": "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+    },
+    "signature": "DBIWKa1lpIATRbqd8WFUrIjJYaM5reYPBjukCWnznHgXkUDK6H9Sbj9NM9xtAdiOSfMf1Nz2D3BZiAFCvt-yDg"
+  },
+  "descriptor": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_target_descriptor_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "00000003-1111-4111-8111-000000000003",
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "originalStepHash": "fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb",
+    "target": {
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "sessionId": "actual-session-original",
+      "commandId": "00000054-1111-4111-8111-000000000054",
+      "workerId": "worker-original",
+      "journalEpoch": "00000055-1111-4111-8111-000000000055",
+      "providerId": "dsh.native-task-step/v1",
+      "providerDigest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+      "prefixEventCount": 17,
+      "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "descriptorDigest": "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "preparedAt": 1800000000001,
+    "signature": "_vxFwNkbtxQ9eFBVpbdfjcOvT_3comeGt65XdN6YhfzEzNTCME-6iJDvFbvuwpeItSMrHqDWheg1C0h2tO_ADg"
+  },
+  "ready": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_ready_admission_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "dsh-assertion-paired-golden",
+    "requestId": "00000056-1111-4111-8111-000000000056",
+    "nonce": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+    "issuedAt": 1800000000000,
+    "expiresAt": 1800000015000,
+    "audience": "urn:slark:task-ready-admission:v1",
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "scopeDigest": "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+    "floorDigest": "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+    "accountBindingId": "host-account-original",
+    "accountBindingVersion": 1,
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readyReceiptId": "00000057-1111-4111-8111-000000000057",
+      "cutDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "originalStep": {
+      "revisionId": "revision:original-2",
+      "handoffId": "handoff-original",
+      "taskVersion": "2",
+      "preparationCommandId": "correction-original",
+      "originalGrantSnapshotId": "00000051-1111-4111-8111-000000000051",
+      "invocationId": "followup-original",
+      "executionKey": "handoff:original:followup:2",
+      "requestHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stepPayloadDigest": "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+    },
+    "signature": "ruh4eejAqapJJxIWp0VTlefWohYmKCK_Tz9le_4A2ir5UL6hwYQ4Q3fqydMuiDogqYKbbP82dpHfPwQx-DrGCw",
+    "newCoordinationEpoch": "2",
+    "targetCoordinatorRef": {
+      "side": "dsh",
+      "host_profile_id": "00000002-1111-4111-8111-000000000002",
+      "bot_root_id": "bot_1"
+    },
+    "newSourceGrant": {
+      "admissionId": "00000058-1111-4111-8111-000000000058",
+      "snapshotId": "00000059-1111-4111-8111-000000000059",
+      "invocationId": "followup-original",
+      "executionKey": "handoff:original:followup:2",
+      "originDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "epoch": "2"
+    },
+    "target": {
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "sessionId": "actual-session-original",
+      "commandId": "00000054-1111-4111-8111-000000000054",
+      "workerId": "worker-original",
+      "journalEpoch": "00000055-1111-4111-8111-000000000055",
+      "providerId": "dsh.native-task-step/v1",
+      "providerDigest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+      "prefixEventCount": 17,
+      "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "descriptorDigest": "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+    "stepPayloadDigest": "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+  },
+  "stepBody": "原计划下一步：printf paired-task-step；不读写文件，不访问网络。",
+  "tuples": {
+    "prepare": [
+      1,
+      "task_coordination_target_prepare_v1",
+      "https://cloud.example.test",
+      "dsh-assertion-paired-golden",
+      "00000053-1111-4111-8111-000000000053",
+      "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+      1800000000000,
+      1800000015000,
+      "urn:slark:task-target-prepare:v1",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+      "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+      "host-account-original",
+      1,
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      [
+        "revision:original-2",
+        "handoff-original",
+        "2",
+        "correction-original",
+        "00000051-1111-4111-8111-000000000051",
+        "followup-original",
+        "handoff:original:followup:2",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+      ]
+    ],
+    "descriptor": [
+      1,
+      "task_coordination_target_descriptor_v1",
+      "https://cloud.example.test",
+      "00000003-1111-4111-8111-000000000003",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb",
+      [
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "actual-session-original",
+        "00000054-1111-4111-8111-000000000054",
+        "worker-original",
+        "00000055-1111-4111-8111-000000000055",
+        "dsh.native-task-step/v1",
+        "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+        17,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ],
+      1800000000001,
+      "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0"
+    ],
+    "ready": [
+      1,
+      "task_coordination_ready_admission_v1",
+      "https://cloud.example.test",
+      "dsh-assertion-paired-golden",
+      "00000056-1111-4111-8111-000000000056",
+      "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk",
+      1800000000000,
+      1800000015000,
+      "urn:slark:task-ready-admission:v1",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+      "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+      "host-account-original",
+      1,
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000057-1111-4111-8111-000000000057",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      [
+        "revision:original-2",
+        "handoff-original",
+        "2",
+        "correction-original",
+        "00000051-1111-4111-8111-000000000051",
+        "followup-original",
+        "handoff:original:followup:2",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+      ],
+      "2",
+      [
+        "dsh",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1"
+      ],
+      [
+        "00000058-1111-4111-8111-000000000058",
+        "00000059-1111-4111-8111-000000000059",
+        "followup-original",
+        "handoff:original:followup:2",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2"
+      ],
+      [
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "actual-session-original",
+        "00000054-1111-4111-8111-000000000054",
+        "worker-original",
+        "00000055-1111-4111-8111-000000000055",
+        "dsh.native-task-step/v1",
+        "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+        17,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+      "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308"
+    ],
+    "consumeChallenge": [
+      1,
+      "task_coordination_target_consume_challenge_v1",
+      "https://cloud.example.test",
+      "00000003-1111-4111-8111-000000000003",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000057-1111-4111-8111-000000000057",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      "00000058-1111-4111-8111-000000000058",
+      "6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e",
+      "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+      [
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "actual-session-original",
+        "00000054-1111-4111-8111-000000000054",
+        "worker-original",
+        "00000055-1111-4111-8111-000000000055",
+        "dsh.native-task-step/v1",
+        "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+        17,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "0000005b-1111-4111-8111-00000000005b",
+      "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+      1800000000002,
+      1800000015000,
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ]
+    ],
+    "consumeReceipt": [
+      1,
+      "task_coordination_target_consume_receipt_v1",
+      "https://cloud.example.test",
+      "dsh-assertion-paired-golden",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "00000057-1111-4111-8111-000000000057",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      ],
+      [
+        "00000058-1111-4111-8111-000000000058",
+        "00000059-1111-4111-8111-000000000059",
+        "followup-original",
+        "handoff:original:followup:2",
+        "1111111111111111111111111111111111111111111111111111111111111111",
+        "2"
+      ],
+      [
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "actual-session-original",
+        "00000054-1111-4111-8111-000000000054",
+        "worker-original",
+        "00000055-1111-4111-8111-000000000055",
+        "dsh.native-task-step/v1",
+        "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+        17,
+        "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ],
+      "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+      "6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e",
+      "0000005b-1111-4111-8111-00000000005b",
+      "aaaa086db596468c14b4940f41c2ac5016ec6f582a02fd78c82147039c6125de",
+      "0000005c-1111-4111-8111-00000000005c",
+      1800000000003,
+      1800000015000,
+      "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308",
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ]
+    ],
+    "observeRequest": [
+      1,
+      "task_coordination_target_observe_v1",
+      "https://cloud.example.test",
+      "dsh-assertion-paired-golden",
+      "00000053-1111-4111-8111-000000000053",
+      "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+      1800000000000,
+      1800000015000,
+      "urn:slark:task-target-observe:v1",
+      [
+        "00000001-1111-4111-8111-000000000001",
+        "staging",
+        "owner-1",
+        "https://cloud.example.test",
+        "subject-1",
+        "00000002-1111-4111-8111-000000000002",
+        "bot_1",
+        "project-1",
+        [
+          "slark_issue",
+          "project-1",
+          "issue:@#-_.9"
+        ],
+        "00000006-1111-4111-8111-000000000006",
+        "7",
+        [
+          "slark",
+          "project-1",
+          "twin-original"
+        ],
+        "1",
+        "2"
+      ],
+      "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+      "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+      "host-account-original",
+      1,
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ],
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      null,
+      null
+    ],
+    "observation": [
+      1,
+      "task_coordination_target_observation_v1",
+      "https://cloud.example.test",
+      "00000003-1111-4111-8111-000000000003",
+      "00000053-1111-4111-8111-000000000053",
+      "996ca802a412c49cafbd339bb9a66ccc666102362316b5b46dd51d09c5697a86",
+      1800000000000,
+      1800000015000,
+      "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+      "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+      [
+        "00000052-1111-4111-8111-000000000052",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ],
+      "00000055-1111-4111-8111-000000000055",
+      "66666666-6666-4666-8666-666666666666",
+      "5961be052dae8ac65dce8d6b483189cb4c13dca8556dc9320c7c4ffdf8ec28c0",
+      1,
+      [
+        [
+          "55555555-5555-4555-8555-555555555555",
+          "projection",
+          "00000054-1111-4111-8111-000000000054",
+          "00000052-1111-4111-8111-000000000052",
+          "1",
+          "fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb",
+          "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+          [
+            "00000002-1111-4111-8111-000000000002",
+            "bot_1",
+            "actual-session-original",
+            "00000054-1111-4111-8111-000000000054",
+            "worker-original",
+            "00000055-1111-4111-8111-000000000055",
+            "dsh.native-task-step/v1",
+            "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+            17,
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          "closed_before_start",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          "1bb29fb79a48583ea125fcd8541f7c99a3fc7bbe842d54a1f47094b549ff7e77",
+          "closed_before_start"
+        ]
+      ],
+      null,
+      true,
+      "complete",
+      "quiescent",
+      1800000000004,
+      "worker-original",
+      [
+        "computer-1",
+        "00000003-1111-4111-8111-000000000003",
+        "registry-1",
+        "1",
+        "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+        "00000004-1111-4111-8111-000000000004",
+        "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+      ]
+    ]
+  },
+  "preimages": {
+    "prepare": "slark.task-target.prepare/v1\u0000[1,\"task_coordination_target_prepare_v1\",\"https://cloud.example.test\",\"dsh-assertion-paired-golden\",\"00000053-1111-4111-8111-000000000053\",\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\",1800000000000,1800000015000,\"urn:slark:task-target-prepare:v1\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],\"91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f\",\"2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784\",\"host-account-original\",1,[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],[\"revision:original-2\",\"handoff-original\",\"2\",\"correction-original\",\"00000051-1111-4111-8111-000000000051\",\"followup-original\",\"handoff:original:followup:2\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308\"]]",
+    "descriptor": "slark.task-target.descriptor/v1\u0000[1,\"task_coordination_target_descriptor_v1\",\"https://cloud.example.test\",\"00000003-1111-4111-8111-000000000003\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb\",[\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"actual-session-original\",\"00000054-1111-4111-8111-000000000054\",\"worker-original\",\"00000055-1111-4111-8111-000000000055\",\"dsh.native-task-step/v1\",\"4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703\",17,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],1800000000001,\"a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0\"]",
+    "ready": "slark.task-target.ready-admission/v1\u0000[1,\"task_coordination_ready_admission_v1\",\"https://cloud.example.test\",\"dsh-assertion-paired-golden\",\"00000056-1111-4111-8111-000000000056\",\"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk\",1800000000000,1800000015000,\"urn:slark:task-ready-admission:v1\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],\"91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f\",\"2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784\",\"host-account-original\",1,[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"00000057-1111-4111-8111-000000000057\",\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"],[\"revision:original-2\",\"handoff-original\",\"2\",\"correction-original\",\"00000051-1111-4111-8111-000000000051\",\"followup-original\",\"handoff:original:followup:2\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308\"],\"2\",[\"dsh\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\"],[\"00000058-1111-4111-8111-000000000058\",\"00000059-1111-4111-8111-000000000059\",\"followup-original\",\"handoff:original:followup:2\",\"1111111111111111111111111111111111111111111111111111111111111111\",\"2\"],[\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"actual-session-original\",\"00000054-1111-4111-8111-000000000054\",\"worker-original\",\"00000055-1111-4111-8111-000000000055\",\"dsh.native-task-step/v1\",\"4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703\",17,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],\"a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0\",\"7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308\"]",
+    "consumeChallenge": "slark.task-target.consume-challenge/v1\u0000[1,\"task_coordination_target_consume_challenge_v1\",\"https://cloud.example.test\",\"00000003-1111-4111-8111-000000000003\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"00000057-1111-4111-8111-000000000057\",\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"],\"00000058-1111-4111-8111-000000000058\",\"6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e\",\"a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0\",[\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"actual-session-original\",\"00000054-1111-4111-8111-000000000054\",\"worker-original\",\"00000055-1111-4111-8111-000000000055\",\"dsh.native-task-step/v1\",\"4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703\",17,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],\"0000005b-1111-4111-8111-00000000005b\",\"CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws\",1800000000002,1800000015000,[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"]]",
+    "consumeReceipt": "slark.task-target.consume-receipt/v1\u0000[1,\"task_coordination_target_consume_receipt_v1\",\"https://cloud.example.test\",\"dsh-assertion-paired-golden\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"00000057-1111-4111-8111-000000000057\",\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"],[\"00000058-1111-4111-8111-000000000058\",\"00000059-1111-4111-8111-000000000059\",\"followup-original\",\"handoff:original:followup:2\",\"1111111111111111111111111111111111111111111111111111111111111111\",\"2\"],[\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"actual-session-original\",\"00000054-1111-4111-8111-000000000054\",\"worker-original\",\"00000055-1111-4111-8111-000000000055\",\"dsh.native-task-step/v1\",\"4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703\",17,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],\"a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0\",\"6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e\",\"0000005b-1111-4111-8111-00000000005b\",\"aaaa086db596468c14b4940f41c2ac5016ec6f582a02fd78c82147039c6125de\",\"0000005c-1111-4111-8111-00000000005c\",1800000000003,1800000015000,\"7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308\",[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"]]",
+    "observeRequest": "slark.task-target.observe-request/v1\u0000[1,\"task_coordination_target_observe_v1\",\"https://cloud.example.test\",\"dsh-assertion-paired-golden\",\"00000053-1111-4111-8111-000000000053\",\"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\",1800000000000,1800000015000,\"urn:slark:task-target-observe:v1\",[\"00000001-1111-4111-8111-000000000001\",\"staging\",\"owner-1\",\"https://cloud.example.test\",\"subject-1\",\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"project-1\",[\"slark_issue\",\"project-1\",\"issue:@#-_.9\"],\"00000006-1111-4111-8111-000000000006\",\"7\",[\"slark\",\"project-1\",\"twin-original\"],\"1\",\"2\"],\"91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f\",\"2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784\",\"host-account-original\",1,[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"],[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],null,null]",
+    "observation": "slark.task-target.observation/v1\u0000[1,\"task_coordination_target_observation_v1\",\"https://cloud.example.test\",\"00000003-1111-4111-8111-000000000003\",\"00000053-1111-4111-8111-000000000053\",\"996ca802a412c49cafbd339bb9a66ccc666102362316b5b46dd51d09c5697a86\",1800000000000,1800000015000,\"91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f\",\"2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784\",[\"00000052-1111-4111-8111-000000000052\",\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"],\"00000055-1111-4111-8111-000000000055\",\"66666666-6666-4666-8666-666666666666\",\"5961be052dae8ac65dce8d6b483189cb4c13dca8556dc9320c7c4ffdf8ec28c0\",1,[[\"55555555-5555-4555-8555-555555555555\",\"projection\",\"00000054-1111-4111-8111-000000000054\",\"00000052-1111-4111-8111-000000000052\",\"1\",\"fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb\",\"a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0\",[\"00000002-1111-4111-8111-000000000002\",\"bot_1\",\"actual-session-original\",\"00000054-1111-4111-8111-000000000054\",\"worker-original\",\"00000055-1111-4111-8111-000000000055\",\"dsh.native-task-step/v1\",\"4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703\",17,\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"],\"closed_before_start\",null,null,null,null,null,null,\"1bb29fb79a48583ea125fcd8541f7c99a3fc7bbe842d54a1f47094b549ff7e77\",\"closed_before_start\"]],null,true,\"complete\",\"quiescent\",1800000000004,\"worker-original\",[\"computer-1\",\"00000003-1111-4111-8111-000000000003\",\"registry-1\",\"1\",\"bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs\",\"00000004-1111-4111-8111-000000000004\",\"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI\"]]"
+  },
+  "preimageSha256": {
+    "prepare": "8fd030d6e6c0251b8b948f1adf5d2da9f202adcd3dc3d359c1713207be75c361",
+    "descriptor": "c05263e808c31cbc7bc39464eada91954d7c77bb1cc959d7b64ed212c3dcda63",
+    "ready": "31b0020e7502ee787db24abcf0020e58eb84e1aa2046a3ed476037578fa78be6",
+    "consumeChallenge": "ac368f2c6788f9be43f666c717f7a81c53413f3adc7796e3a5aa4de014bc655b",
+    "consumeReceipt": "3fe58a5145ce311e9111c830307a93943efcd0950c79b7c4daea72af39237a1d",
+    "observeRequest": "996ca802a412c49cafbd339bb9a66ccc666102362316b5b46dd51d09c5697a86",
+    "observation": "7df16addb13fc6605829207ae7c6d1b1b56f4dd7e58c39bfee4c166bcfd20799"
+  },
+  "publicKeys": {
+    "cloud": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQwRr/kCSs+lJlOraFdzCDYqqB7ZY/TlU644O+4vcpd4=\n-----END PUBLIC KEY-----\n",
+    "host": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs=\n-----END PUBLIC KEY-----\n"
+  },
+  "consumeChallenge": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_target_consume_challenge_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "00000003-1111-4111-8111-000000000003",
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readyReceiptId": "00000057-1111-4111-8111-000000000057",
+      "cutDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "admissionId": "00000058-1111-4111-8111-000000000058",
+    "readyDirectiveDigest": "6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e",
+    "descriptorDigest": "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+    "target": {
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "sessionId": "actual-session-original",
+      "commandId": "00000054-1111-4111-8111-000000000054",
+      "workerId": "worker-original",
+      "journalEpoch": "00000055-1111-4111-8111-000000000055",
+      "providerId": "dsh.native-task-step/v1",
+      "providerDigest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+      "prefixEventCount": 17,
+      "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "consumeIntentId": "0000005b-1111-4111-8111-00000000005b",
+    "nonce": "CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws",
+    "issuedAt": 1800000000002,
+    "expiresAt": 1800000015000,
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "signature": "TkrMkgI6qdNo5greumf2yXxE35auFqauMsURaV0aFwDy16-QWqG08arWyyKHEYOPpDqcwaQUqE3Yxcd4sjZTBQ"
+  },
+  "consumeReceipt": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_target_consume_receipt_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "dsh-assertion-paired-golden",
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readyReceiptId": "00000057-1111-4111-8111-000000000057",
+      "cutDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "newSourceGrant": {
+      "admissionId": "00000058-1111-4111-8111-000000000058",
+      "snapshotId": "00000059-1111-4111-8111-000000000059",
+      "invocationId": "followup-original",
+      "executionKey": "handoff:original:followup:2",
+      "originDigest": "1111111111111111111111111111111111111111111111111111111111111111",
+      "epoch": "2"
+    },
+    "target": {
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "sessionId": "actual-session-original",
+      "commandId": "00000054-1111-4111-8111-000000000054",
+      "workerId": "worker-original",
+      "journalEpoch": "00000055-1111-4111-8111-000000000055",
+      "providerId": "dsh.native-task-step/v1",
+      "providerDigest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+      "prefixEventCount": 17,
+      "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    "descriptorDigest": "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+    "readyDirectiveDigest": "6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e",
+    "consumeIntentId": "0000005b-1111-4111-8111-00000000005b",
+    "challengeDigest": "aaaa086db596468c14b4940f41c2ac5016ec6f582a02fd78c82147039c6125de",
+    "receiptId": "0000005c-1111-4111-8111-00000000005c",
+    "consumedAt": 1800000000003,
+    "expiresAt": 1800000015000,
+    "stepPayloadDigest": "7ecdd01d5bf3ac93b5a9370f99d67daeed0cc8e170c00bbf55366b08c7e57308",
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "signature": "qRgI6H3iSlXZEcHOJXc8cUxlLVP6hvyJhSmGz6lGDCbbywEAw7nsHVc0XaMHNfCTzndo1n3w4nrUEpc079y3DQ"
+  },
+  "digests": {
+    "signedReadyDirective": "6e3dd268752872b62c3fd45bf3735c9473535155a3f5d750b53cf09b8bdb705e",
+    "signedConsumeChallenge": "aaaa086db596468c14b4940f41c2ac5016ec6f582a02fd78c82147039c6125de"
+  },
+  "canonicalStepBody": {
+    "bytes": "{\"schemaVersion\":1,\"text\":\"处理原计划中的下一步。\",\"permissions\":{\"forceReadOnly\":true,\"routeReadOnly\":true,\"filesystem\":\"read-only\",\"networkAccess\":false,\"skills\":[],\"toolAllowlist\":[]}}",
+    "value": {
+      "schemaVersion": 1,
+      "text": "处理原计划中的下一步。",
+      "permissions": {
+        "forceReadOnly": true,
+        "routeReadOnly": true,
+        "filesystem": "read-only",
+        "networkAccess": false,
+        "skills": [],
+        "toolAllowlist": []
+      }
+    },
+    "sha256": "493343b8c33ac2efadf32027f2ba402709c0d55480c8cac31e3cf7836ce328b9"
+  },
+  "observeRequest": {
+    "schemaVersion": 1,
+    "issuer": "https://cloud.example.test",
+    "keyId": "dsh-assertion-paired-golden",
+    "requestId": "00000053-1111-4111-8111-000000000053",
+    "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
+    "issuedAt": 1800000000000,
+    "expiresAt": 1800000015000,
+    "scope": {
+      "authorityEnvironmentId": "00000001-1111-4111-8111-000000000001",
+      "environmentKey": "staging",
+      "ownerUserId": "owner-1",
+      "accountIssuer": "https://cloud.example.test",
+      "accountSubject": "subject-1",
+      "hostProfileId": "00000002-1111-4111-8111-000000000002",
+      "botId": "bot_1",
+      "projectId": "project-1",
+      "canonicalRef": {
+        "kind": "slark_issue",
+        "project_id": "project-1",
+        "issue_id": "issue:@#-_.9"
+      },
+      "bindingId": "00000006-1111-4111-8111-000000000006",
+      "bindingGeneration": "7",
+      "fromCoordinatorRef": {
+        "side": "slark",
+        "project_id": "project-1",
+        "twin_agent_id": "twin-original"
+      },
+      "expectedCoordinationEpoch": "1",
+      "acceptedCoordinationEpoch": "2"
+    },
+    "scopeDigest": "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+    "floorDigest": "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+    "accountBindingId": "host-account-original",
+    "accountBindingVersion": 1,
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "signature": "3d9TYDbH5_EjBIU2JTZc5cVEuaDC9CtfIGtHCihOjdMGm0DNPqRsmR9C_IaMVtdnz-f47Gw17fsd8C5UH5-TAQ",
+    "purpose": "task_coordination_target_observe_v1",
+    "audience": "urn:slark:task-target-observe:v1",
+    "inventoryId": null,
+    "cursor": null
+  },
+  "observation": {
+    "schemaVersion": 1,
+    "purpose": "task_coordination_target_observation_v1",
+    "issuer": "https://cloud.example.test",
+    "keyId": "00000003-1111-4111-8111-000000000003",
+    "requestId": "00000053-1111-4111-8111-000000000053",
+    "directiveDigest": "996ca802a412c49cafbd339bb9a66ccc666102362316b5b46dd51d09c5697a86",
+    "issuedAt": 1800000000000,
+    "expiresAt": 1800000015000,
+    "scopeDigest": "91fcbed7b12f7dffdfbb03c1762e9dcf7df108d79eac7c93afd336fb72f71f0f",
+    "floorDigest": "2ca763fc577a8c286db98b13f1834fcc64088bc496e4985e4dddc0e2a8e73784",
+    "transfer": {
+      "requestId": "00000052-1111-4111-8111-000000000052",
+      "payloadDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "journalEpoch": "00000055-1111-4111-8111-000000000055",
+    "inventoryId": "66666666-6666-4666-8666-666666666666",
+    "inventoryDigest": "5961be052dae8ac65dce8d6b483189cb4c13dca8556dc9320c7c4ffdf8ec28c0",
+    "totalCount": 1,
+    "items": [
+      {
+        "itemId": "55555555-5555-4555-8555-555555555555",
+        "kind": "projection",
+        "commandId": "00000054-1111-4111-8111-000000000054",
+        "transferRequestId": "00000052-1111-4111-8111-000000000052",
+        "coordinationEpoch": "1",
+        "originalStepHash": "fcf6f03e6c7b3d9c802d7183d6fd96fe8c6a41468d650069c53d8acc393b3bfb",
+        "descriptorDigest": "a1a4d9931e74cb8f9125633b7b5e81a03c11e129550fe2a0b6e6e0d72e2d4ea0",
+        "target": {
+          "hostProfileId": "00000002-1111-4111-8111-000000000002",
+          "botId": "bot_1",
+          "sessionId": "actual-session-original",
+          "commandId": "00000054-1111-4111-8111-000000000054",
+          "workerId": "worker-original",
+          "journalEpoch": "00000055-1111-4111-8111-000000000055",
+          "providerId": "dsh.native-task-step/v1",
+          "providerDigest": "4099303636a52051f9a84a91a6a51960cb8a437b42d092d2e0174bf66a3bf703",
+          "prefixEventCount": 17,
+          "prefixLogDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        "state": "closed_before_start",
+        "admissionId": null,
+        "consumeIntentId": null,
+        "sourceConsumeReceiptDigest": null,
+        "messageId": null,
+        "turn": null,
+        "step": null,
+        "recordDigest": "1bb29fb79a48583ea125fcd8541f7c99a3fc7bbe842d54a1f47094b549ff7e77",
+        "disposition": "closed_before_start"
+      }
+    ],
+    "nextCursor": null,
+    "eof": true,
+    "coverage": "complete",
+    "quiescence": "quiescent",
+    "observedAt": 1800000000004,
+    "workerId": "worker-original",
+    "peer": {
+      "computerId": "computer-1",
+      "installationId": "00000003-1111-4111-8111-000000000003",
+      "hostRegistryId": "registry-1",
+      "hostEpoch": "1",
+      "publicKey": "bjLBl0Hwr4JgYSrpn9E9ijiURyLgiWTdI5c49VKmFTs",
+      "hostInstanceId": "00000004-1111-4111-8111-000000000004",
+      "processNonce": "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI"
+    },
+    "signature": "oWdBm84UiOoRc8J2TSL-1ERgCrS5B_mZrXp-Cez-sR4YYkvTD9haqm-JNFoA2eQfIQxGt9IKzXkNPBxe_3MLDw"
+  },
+  "signedConsumeReceiptDigest": "f563e852a29d388ce4593eaa2878d4604f239139efd385db1c019bc311d88647"
+}

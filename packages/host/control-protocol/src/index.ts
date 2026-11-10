@@ -381,3 +381,32 @@ export type { RuntimeEntryAnalysisCommand, RuntimeEntryOriginCommand, RuntimeEnt
 
 export { parseHostRuntimeEntryOriginsConfiguration, parseHostRuntimeEntryOriginsJson } from './runtime-entry-bootstrap.ts'
 export type { HostRuntimeEntryOriginsConfiguration } from './runtime-entry-bootstrap.ts'
+
+export { HOST_TASK_TARGET_PREPARE_AUDIENCE, HOST_TASK_READY_ADMISSION_AUDIENCE,
+  parseHostTaskTargetOriginalStep, parseHostTaskTarget, parseHostTaskTargetPrepareDirective,
+  hostTaskTargetScopeTuple, hostTaskTargetOriginalStepTuple, hostTaskTargetTuple,
+  hostTaskTargetOriginalStepHash, hostTaskTargetProviderDigest, hostTaskTargetPrepareTuple,
+  encodeHostTaskTargetPrepareDirective, parseHostTaskTargetDescriptor, hostTaskTargetDescriptorDigest,
+  hostTaskTargetDescriptorTuple, encodeHostTaskTargetDescriptor, parseHostTaskReadyAdmissionDirective,
+  hostTaskReadyAdmissionTuple, encodeHostTaskReadyAdmissionDirective, hostTaskStepPayloadDigest,
+  parseHostTaskReadyAdmissionInput,
+} from './task-target.ts'
+export type { HostTaskTargetOriginalStep, HostTaskTarget, HostTaskTargetPrepareDirective,
+  HostTaskTargetDescriptor, HostTaskReadyAdmissionDirective } from './task-target.ts'
+
+export { parseHostTaskTargetDescriptorForPrepare, parseHostTaskTargetStepBody,
+  hostTaskReadyAdmissionDirectiveDigest, parseHostTaskTargetConsumeChallenge,
+  hostTaskTargetConsumeChallengeTuple, encodeHostTaskTargetConsumeChallenge, hostTaskTargetConsumeChallengeDigest,
+  parseHostTaskTargetConsumeReceipt, hostTaskTargetConsumeReceiptTuple, encodeHostTaskTargetConsumeReceipt,
+  parseHostTaskTargetConsumeChallengeForProposal, parseHostTaskTargetConsumeReceiptForChallenge,
+  parseHostTaskTargetReadyStartInput, HOST_TASK_TARGET_OBSERVE_AUDIENCE, parseHostTaskTargetObserveDirective,
+  hostTaskTargetObserveTuple, encodeHostTaskTargetObserveDirective, hostTaskTargetObserveDirectiveDigest,
+  parseHostTaskTargetObservationItem, hostTaskTargetObservationItemTuple, hostTaskTargetInventoryDigest,
+  parseHostTaskTargetObservation, hostTaskTargetObservationTuple, encodeHostTaskTargetObservation,
+  parseHostTaskTargetObservationForDirective } from './task-target.ts'
+export type { HostTaskTargetStepBody, HostTaskTargetConsumeChallenge, HostTaskTargetConsumeReceipt,
+  HostTaskTargetObserveDirective, HostTaskTargetObservationItem, HostTaskTargetObservation } from './task-target.ts'
+export { hostTaskTargetConsumeReceiptDigest } from './task-target.ts'
+export { HOST_TASK_TARGET_PROTOCOL_VERSION, captureHostTaskTargetCall,
+  hostTaskTargetCallHeader, captureHostTaskTargetResult } from './task-target-control.ts'
+export type { HostTaskTargetCall, HostTaskTargetResult, HostTaskTargetErrorCode } from './task-target-control.ts'

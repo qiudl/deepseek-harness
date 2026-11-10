@@ -150,6 +150,8 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 ## Dev Note
 
+The paired-target codecs retain original logical-step, physical target, Source ready proposal and one-use challenge/receipt coordinates. Signing tuples remain fixed by the literal vectors; exact parsers reject mismatched associations and unknown fields. A step body is canonical UTF-8 JSON bounded to16KiB, including permission ceilings, inside a32KiB control envelope. Parsing and hashing do not verify signatures or current authority. Observation pages retain original projection/admission anchors; an unknown attempt cannot be read as completed work.
+
 <details>
 <summary>Working context for maintainers — click to expand</summary>
 

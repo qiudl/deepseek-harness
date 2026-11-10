@@ -237,6 +237,8 @@ The startup compositions relay reference-grant reads to the original current Pro
 
 ### Dev Note
 
+Paired original-step control verifies the current Account, Source signature and captured worker before installation signing or execution admission. A durable input claim returns through a short request; the existing Account registration remains active until the separate original worker execution and cleanup complete. Revoking that Account or replacing its worker still cancels the owned execution after the short response. The installation signer commits only the exact original descriptor or challenge. These primitives require the embedding to supply the actual private worker receiver before they can be mounted.
+
 Protocol authority tests use instance-local JSON registry hooks on every platform. POSIX and Windows storage suites own filesystem permission checks. Bundled archive storage tests require POSIX UID and mode bits; Windows private-file, named-pipe, ACL, and native PowerShell suites remain required.
 
 <details>

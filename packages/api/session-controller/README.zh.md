@@ -150,6 +150,8 @@ Agent 拥有会话级选择，并通过 `Agent.model` 记录显式选择。`sele
 
 ## 协同 Source 与 journal
 
+独立的 `paired_task_targets_v1` domain 保留物理 target projection、不可变的 Source consume intent 和 receipt，并为每个原逻辑步骤只保留一次 start intent。重启恢复的未完成尝试保持 unknown，绝不再次唤醒 Agent。`consumePairedTaskTarget` 只接受当前 worker factory 的私有 capability，实际已加载 Agent 独占本次输入区间，拒绝插入其他唤醒消息。模型派发前，Host 私有的 `paired-task-target-input` projection 在 Session flush 后核对完整原消息及当前 turn/step，再提交首次 claim。接受输入与区间最终完成分别由两个 Promise 表示；短准入请求可在 claim 前取消，claim 后仍受实际 Account、worker 和关闭下限的生命周期控制。失败且未领取的输入按原消息标识精确移除，flush 确认后才释放原 guard。这些元数据和检查点不提供 Source 授权或工具权限。Controller 在 Profile 激活时先安装只读 projection 和拒绝检查点，再暴露消费方法；激活不打开写 journal。Profile 关闭时先取消并排空已接受区间，再关闭此 journal。
+
 独立的 `collaboration_task_coordination_v1` domain 保留原本地 command 关联、关闭的 epoch 下限、native 调用及 controller job 元数据，以及不可变的 stop cut 和安装密钥签名 Ack。它不重新开放 Root。已验证 stop 在异步持久化前锁定拒绝；写入失败后，此 owner 必须重新打开才能使用。原签名中的 owner、环境、Account、Profile 锚点还限制同一原 canonical Root 未关联的 command，不影响其他 Root。重启后未结束的调用或 job 变为 `unknown`，绝不重放。替换 worker 不能重采缺失的原 stop cut；下限继续关闭，receipt 恢复仍返回缺失。永久元数据有容量上限，仅过期分页快照可以清理；既有 Source、Root、Session 格式不变。库存关联原持久 consumer command：prepared command 保持排队，缺少已监控生命周期的既有 consumer 在关联后仍为 unknown。读取按已验证 Root command 集合对每张有界元数据表扫描一次。
 
 可选只读 execution 服务仅在原 consuming turn 存活期间暴露事实。native wrapper 的异步等待后及工具体调用前，会重新核对同一 provider、原请求 signal 和关闭下限。视图消失不能让该 consumer 回退到普通执行路径。私有 consumer 生命周期仅在实际 Agent 排空后释放限制；保留的事实不授予执行权限。
@@ -216,6 +218,8 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 #### Token 影响
 
+配对任务只把获授权的原步骤文字作为一条普通 user 消息写入日志；准入、签名及检查点元数据不加入提示词。
+
 每次调用包含完整提示词、Source JSON 与所提供目录；请求预算为 16 KiB UTF-8，提供方输出最多 8192 token，累计流文本最多 32 KiB。超限拒绝，不截断。
 
 #### KV Cache 影响
@@ -228,6 +232,7 @@ Analyze only the supplied user message and explicit @ mentions. Return a single 
 
 <a id="known-limitations-and-deferred-work"></a>
 
+- 配对步骤 consumer 需要另外安装经过鉴权的 worker factory 及实际 Native 限制；claim 只表示输入持久消费，不证明工具体完成或后代进程已排空。
 - 单个摘要、查询提供方自身的枚举、最终排序和响应序列化都可能超出列表时间片目标；它不是 Host 延迟的硬上限。
 - 图片字节上限不校验解码后的尺寸或像素数。
 - follow 恢复失败会对调用方可见，而不会无限重试。

@@ -19,6 +19,9 @@ import type { CollaborationFeedbackObservation } from './collaboration-feedback.
 import { openCollaborationRootExecutionJournal, parseCollaborationExecutionOperation } from './collaboration-root-execution-journal.ts'
 import type { CollaborationRootExecutionJournal, CollaborationExecutionRecord } from './collaboration-root-execution-journal.ts'
 import { openCollaborationTaskCoordinationJournal } from './collaboration-task-coordination-journal.ts'
+import { PairedTaskTargetConsumer, type PairedTaskTargetRun } from './paired-task-target-consumer.ts'
+import type { PairedTaskStepCapability } from './paired-task-target-consumer-host.ts'
+import { openPairedTaskTargetJournal, type PairedTaskTargetJournal } from './paired-task-target-journal.ts'
 import type { CollaborationTaskCoordinationJournal, CollaborationTaskControllerJob } from './collaboration-task-coordination-journal.ts'
 import type { CollaborationTaskExecution, CollaborationTaskCurrentAccount } from './collaboration-task-coordination.ts'
 /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
@@ -318,6 +321,8 @@ export class SessionController extends TypertRemoteService {
     execution?: CollaborationTaskExecution }>()
   private collaborationTaskDurability!: ProjectionHandle<CollaborationTaskDurabilityState>
   private collaborationTaskJournal?: Promise<CollaborationTaskCoordinationJournal>
+  private pairedTaskTargetJournal?: Promise<PairedTaskTargetJournal>
+  private pairedTaskTargetConsumer?: PairedTaskTargetConsumer
   private collaborationDeliveryJournal?: Promise<CollaborationDeliveryJournal>
   private runtimeEntryFeedbackMetadata?: Promise<RuntimeEntryFeedbackMetadataJournal>
 
@@ -399,6 +404,7 @@ export class SessionController extends TypertRemoteService {
     this.receiveCollaborationDelivery = this.receiveCollaborationDelivery.bind(this)
     ctx.effect(() => async () => {
       this.collaborationLifetime.abort(new DOMException('Profile source capture disposed', 'AbortError'))
+      await this.pairedTaskTargetConsumer?.close()
       await Promise.allSettled([...this.collaborationReferenceOperations])
       await this.collaborationCaptureTail
       const journal = await this.collaborationJournal?.catch(() => undefined)
@@ -409,6 +415,8 @@ export class SessionController extends TypertRemoteService {
       await executions?.close()
       const coordination = await this.collaborationTaskJournal?.catch(() => undefined)
       await coordination?.close()
+      const pairedTargets = await this.pairedTaskTargetJournal?.catch(() => undefined)
+      await pairedTargets?.close()
       const roots = await this.collaborationRootJournal?.catch(() => undefined)
       await roots?.close()
       const replies = await this.collaborationDeliveryJournal?.catch(() => undefined)
@@ -445,7 +453,6 @@ export class SessionController extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
-    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     ctx.typert.resources.register('session', { resolve: resolveSessionResource })
     this.agents = new ApiSessionAgentController(ctx)
     this.agents.initialize()
@@ -492,6 +499,10 @@ export class SessionController extends TypertRemoteService {
     this.historyController = new HistoryController(ctx)
     this.stateController = new StateController(ctx, this.historyController)
     this.webController = new WebController(ctx, this.historyController, (observation) => { this.promote(observation) })
+    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
+    this.pairedTaskTargetConsumer = new PairedTaskTargetConsumer(ctx, () => this.openPairedTaskTargetJournal(),
+      this.collaborationLifetime.signal)
+    await this.pairedTaskTargetConsumer.activate()
     this.listState = new ApiSessionList(ctx, this.listWorkSliceMs)
     await this.listState.initialize()
     ctx.plugin(SessionFileReferences)
@@ -1107,6 +1118,32 @@ export class SessionController extends TypertRemoteService {
       this.collaborationTaskJournal = openCollaborationTaskCoordinationJournal(facility)
     }
     return this.collaborationTaskJournal
+  }
+
+  /** Open the Profile-owned paired-step metadata writer without granting execution or clearing permanent floors.
+   * @returns The original journal, retained until the controller's lifecycle has drained.
+   */
+  async openPairedTaskTargetJournal(): Promise<PairedTaskTargetJournal> {
+    this.collaborationLifetime.signal.throwIfAborted()
+    if (!this.pairedTaskTargetJournal) {
+      const facility = this.ctx.get('storageDomain')
+      if (!facility) throw Error('paired_target_storage_unavailable')
+      this.pairedTaskTargetJournal = openPairedTaskTargetJournal(facility)
+    }
+    return this.pairedTaskTargetJournal
+  }
+
+  /** Execute the original step only through the current worker's private one-use capability.
+   * @param capability - Original object captured by the authenticated paired target factory.
+   * @param signal - Current authenticated request cancellation.
+   * @returns Actual input acceptance and interval completion; neither asserts descendant-process quiescence.
+   */
+  async consumePairedTaskTarget(capability: PairedTaskStepCapability, signal: AbortSignal): Promise<PairedTaskTargetRun> {
+    this.collaborationLifetime.signal.throwIfAborted()
+    const consumer = this.pairedTaskTargetConsumer
+    if (!consumer) throw Error('paired_target_consumer_unavailable')
+    this.collaborationLifetime.signal.throwIfAborted()
+    return consumer.begin(capability, signal)
   }
 
   /** Cancel only the live original consumer of an already-associated local command.
