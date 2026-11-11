@@ -28,6 +28,10 @@ describe('native Bot profile edit', () => {
       change: { kind: 'main', value: true } }).change.value).toBe(true)
     expect(parseHostBotSettingsUpdateRequest({ ...request,
       change: { kind: 'primary', value: 'other' } }).change.value).toBe('other')
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'work-dir', value: 'C:\\Team\\Project' } }).change.value).toBe('C:\\Team\\Project')
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'work-dir', value: '' } }).change.value).toBe('')
   })
   it('rejects forged selectors, unsupported fields and mismatched receipts', () => {
     for (const patch of [{ sessionId: '../other' }, { account: 'other' },
@@ -37,6 +41,7 @@ describe('native Bot profile edit', () => {
       { change: { kind: 'effort', value: '' } },
       { change: { kind: 'main', value: 'yes' } },
       { change: { kind: 'primary', value: '../other' } },
+      { change: { kind: 'work-dir', value: '/team\nsecret' } },
       { change: { kind: 'role', value: 'x'.repeat(25) } }])
       expect(() => parseHostBotSettingsUpdateRequest({ ...request, ...patch })).toThrow()
     const parsed = parseHostBotSettingsUpdateRequest(request)
