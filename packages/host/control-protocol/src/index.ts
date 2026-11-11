@@ -82,6 +82,8 @@ export { parseHostBotRoomListRequest, parseHostBotRoomList } from './bot-room-li
 export type { HostBotRoomListRequest, HostBotRoomList, HostBotRoomId } from './bot-room-list.ts'
 export { parseHostBotRoomHistoryRequest, parseHostBotRoomHistory } from './bot-room-history.ts'
 export type { HostBotRoomHistoryRequest, HostBotRoomHistory } from './bot-room-history.ts'
+export { parseHostBotRoomDetailsRequest, parseHostBotRoomDetails } from './bot-room-details.ts'
+export type { HostBotRoomDetailsRequest, HostBotRoomDetails } from './bot-room-details.ts'
 export { parseHostBotRoomSubmission, parseHostBotRoomReceipt } from './bot-room-submission.ts'
 export type { HostBotRoomSubmission, HostBotRoomReceipt, HostBotRoomSubmissionId } from './bot-room-submission.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
