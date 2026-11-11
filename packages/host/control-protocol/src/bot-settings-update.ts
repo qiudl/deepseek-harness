@@ -29,6 +29,13 @@ const botIdValid = (value: unknown): value is string =>
 const sessionValid = (value: unknown): value is string =>
   typeof value === 'string' && /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
 const colorValid = (value: string) => /^(?:#[0-9a-fA-F]{6}|[a-z][a-z0-9-]{0,63})$/u.test(value)
+const noAsciiControl = (value: string) => {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index)
+    if (unit <= 31 || unit === 127) return false
+  }
+  return true
+}
 
 /** Parse an exact bounded edit before the Profile worker sees it.
  * @param value - Decoded command request.
@@ -47,15 +54,15 @@ export function parseHostBotSettingsUpdateRequest(value: unknown): HostBotSettin
   else if (kind === 'role' && bounded(setting, 72) && setting.length <= 24 && setting === setting.trim())
     change = { kind, value: setting }
   else if (kind === 'model' && bounded(setting, 512) && setting === setting.trim() &&
-    setting.includes('/') && [...setting].every(char => char.charCodeAt(0) > 31 && char.charCodeAt(0) !== 127))
+    setting.includes('/') && noAsciiControl(setting))
     change = { kind, value: setting }
   else if (kind === 'primary' && botIdValid(setting))
     change = { kind, value: setting }
   else if (kind === 'work-dir' && bounded(setting, 4096) && setting === setting.trim() &&
-    [...setting].every(char => char.charCodeAt(0) > 31 && char.charCodeAt(0) !== 127))
+    noAsciiControl(setting))
     change = { kind, value: setting }
   else if (kind === 'effort' && (setting === null || (bounded(setting, 128) && setting.length > 0 &&
-    setting === setting.trim() && [...setting].every(char => char.charCodeAt(0) > 31 && char.charCodeAt(0) !== 127))))
+    setting === setting.trim() && noAsciiControl(setting))))
     change = { kind, value: setting }
   else if (kind === 'instructions' && bounded(setting, 32768) && setting === setting.trim())
     change = { kind, value: setting }
