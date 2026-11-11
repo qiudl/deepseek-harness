@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
-import { parseHostBotChatSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
+import { parseHostBotChatSubmission, parseHostBotRoomSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
@@ -23,6 +23,26 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('uses the fixed room provider under original room control and rejects substituted receipts', async () => {
+    const request = parseHostBotRoomSubmission({ roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' })
+    const result = { roomId: 'room-1', submissionId: request.submissionId, state: 'accepted' }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'room-1')
+    const invoke = vi.fn(() => { throw Error('no generic Session prompt') })
+    const botRoom = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control,
+      undefined, undefined, botRoom)
+    const send = { operation: 'bot.room.send' as const, command_id: randomUUID() as never,
+      session_id: 'room-1', control: proof, request }
+    const receipt = { operation: 'bot.room.receipt' as const, command_id: randomUUID() as never, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
+    expect(botRoom).toHaveBeenCalledTimes(2)
+    expect(invoke).not.toHaveBeenCalled()
+    botRoom.mockResolvedValueOnce({ ...result, roomId: 'other' })
+    await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_room_receipt')
+  })
   it('routes terminal writes and resizes through the stream under the live control claim', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'session-1')

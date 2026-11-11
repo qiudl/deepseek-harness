@@ -696,6 +696,15 @@ export function apply(ctx: Context, config: Config): void {
           const method = operation === 'bot.chat.send' ? service?.sendLocalBotChat : service?.readLocalBotChatReceipt
           if (!method) return null
           return method.call(service, request, signal)
+        }, async (operation, request, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            sendLocalBotRoom?: (input: typeof request, signal: AbortSignal) => Promise<unknown>
+            readLocalBotRoomReceipt?: (input: typeof request, signal: AbortSignal) => Promise<unknown>
+          }
+          const method = operation === 'bot.room.send' ? service?.sendLocalBotRoom : service?.readLocalBotRoomReceipt
+          if (!method) return null
+          return method.call(service, request, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

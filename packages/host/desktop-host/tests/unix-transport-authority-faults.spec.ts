@@ -340,6 +340,22 @@ describe('Unix transport authority failures', () => {
     expect(missing.client.inspection.capabilities).not.toContain('profile.remote_session.bot_chat')
     missing.client.close()
   })
+  it('negotiates fixed Bot room admission separately and rejects a substituted receipt', async () => {
+    const request = { roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' } as never
+    const command = { operation: 'bot.room.receipt' as const, command_id: randomUUID() as never, request }
+    const result = { roomId: 'room-1', submissionId: (request as { submissionId: string }).submissionId,
+      state: 'accepted' }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotRoomSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_room')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, roomId: 'other' })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot chat through signed inspection and local SDK support before execution', async () => {
     const input = { ...opened, endpoint: 'bot/chat' as const, payload: { args: { botId: null } } }
     const execute = vi.fn(async (): Promise<unknown> => ({ revision: 4, defaultBotId: null, bot: null }))
