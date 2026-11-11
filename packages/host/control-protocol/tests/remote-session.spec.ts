@@ -223,6 +223,12 @@ describe('Profile remote UI read wire commands', () => {
       { roomId: 'room-1', afterSeq: 0, limit: 1, accountSubject: 'other' }])
       expect(() => decode(readFrame('bot/room-history', { args }))).toThrow()
   })
+  it('round-trips only exact owner Bot room details selector', () => {
+    const input = readFrame('bot/room-details', { args: { roomId: 'room-1' } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ roomId: '../other' }, { roomId: 'room-1', profileId: 'other' }, {}])
+      expect(() => decode(readFrame('bot/room-details', { args }))).toThrow()
+  })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
     for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {
