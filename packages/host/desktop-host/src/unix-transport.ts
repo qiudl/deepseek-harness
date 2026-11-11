@@ -1137,6 +1137,11 @@ export class HostControlAuthority {
   private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
   constructor(private readonly options: HostControlAuthorityOptions) {}
 
+  private taskTargetSupported(): boolean {
+    return !!(this.options.runtimeEntryOrigins?.schemaVersion === 3 && this.options.taskCoordinationEnvironments?.length
+      && this.options.taskCoordinationReceiver && this.options.collaborationAnalysis)
+  }
+
   private claimTaskCoordinationNonce(input: HostTaskCoordinationInput, now: number): void {
     for (const [key, entry] of this.taskCoordinationNonces) if (entry.expiresAt <= now) this.taskCoordinationNonces.delete(key)
     const d = input.directive, key = JSON.stringify([d.scope.authorityEnvironmentId, d.keyId, d.nonce])
@@ -2257,7 +2262,7 @@ export class HostControlAuthority {
               sign: (bytes: Uint8Array) => sign(null, bytes, privateKeyObject(identity.installationPrivateKey)).toString('base64url'), now: clock } : undefined
           if (command.action === 'task_target') {
             const receiver = this.options.taskCoordinationReceiver
-            if (!receiver || this.options.runtimeEntryOrigins?.schemaVersion !== 3) throw new HostAuthorityError('unavailable')
+            if (!this.taskTargetSupported() || !receiver) throw new HostAuthorityError('unavailable')
             const record = await operateAccountTaskTarget({ host: this.options.host,
               peer: actualPeer as Parameters<typeof operateAccountTaskTarget>[0]['peer'],
               environments: this.options.taskCoordinationEnvironments ?? [], receiver,
@@ -3144,6 +3149,7 @@ export class HostControlAuthority {
           ...(this.options.collaborationAnalysis && this.options.rootAnalysisRecoverySupported ? ['profile.root_analysis_recovery', 'profile.root_analysis_diagnostic'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootAnalysisSupported ? ['profile.root_analysis'] : []),
           ...(this.options.collaborationAnalysis && this.options.rootCaptureSupported ? ['profile.root_capture'] : []),
+          ...(this.taskTargetSupported() ? ['profile.task_target_v1'] : []),
           ...(this.options.collaborationAnalysis ? ['profile.collaboration_analysis'] : []),
           ...(this.options.collaborationDeliveryReceiver ? ['profile.collaboration_delivery'] : []),
           ...(this.options.inspectWorkspaceModelSelection ? ['profile.workspace_model_selection', 'profile.workspace_authority'] : []),
