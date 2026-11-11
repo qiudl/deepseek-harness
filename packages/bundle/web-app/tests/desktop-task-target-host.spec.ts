@@ -25,9 +25,11 @@ import { openPairedTaskTargetJournal } from '../../../api/session-controller/src
 import { openCollaborationTaskCoordinationJournal } from '../../../api/session-controller/src/collaboration-task-coordination-journal.ts'
 import { expect, it, vi, onTestFinished } from 'vitest'
 import { encodeHostTaskTargetPrepareDirective, encodeHostTaskTargetDescriptor, parseHostTaskTargetPrepareDirective,
+  parseHostTaskTargetDescriptor,
   captureHostTaskTargetResult, parseHostRuntimeEntryOriginsConfiguration, type HostTaskCoordinationEnvironment,
   parseHostTaskReadyAdmissionDirective, encodeHostTaskReadyAdmissionDirective, parseHostTaskTargetConsumeChallengeForProposal,
-  encodeHostTaskTargetConsumeChallenge, parseHostTaskTargetConsumeReceipt, encodeHostTaskTargetConsumeReceipt,
+  encodeHostTaskTargetConsumeChallenge, encodeHostTaskTargetObservation, parseHostTaskTargetConsumeReceipt,
+  encodeHostTaskTargetConsumeReceipt,
   hostTaskReadyAdmissionDirectiveDigest, hostTaskTargetConsumeChallengeDigest,
   hostTaskStepPayloadDigest, parseHostTaskTargetStepBody,
   hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest, parseHostTaskCoordinationScope,
@@ -44,7 +46,7 @@ const fixtureValue: unknown = JSON.parse(readFileSync(
   new URL('../../../host/control-protocol/tests/fixtures/task-target-v1.json', import.meta.url), 'utf8'))
 if (!fixtureValue || typeof fixtureValue !== 'object' || Array.isArray(fixtureValue)) throw Error('invalid fixture')
 const vector = fixtureValue as Record<string, unknown>
-async function fixture(pendingBootstrap = false, originalRead = false) {
+async function fixture(pendingBootstrap = false, originalRead = false, sourceIssuer?: string) {
   const root = await mkdtemp(join(tmpdir(), 'paired-host-')), ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root); ctx.storage.backend.register('json', backend)
@@ -79,7 +81,7 @@ async function fixture(pendingBootstrap = false, originalRead = false) {
   const canonicalBytes = originalRead ? JSON.stringify({ ...originalBody, permissions: {
     ...originalBody.permissions, toolAllowlist: ['read'] } }) : canonical.bytes
   const peer = { ...template.peer, publicKey: installation.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url') }
-  const draft = { ...template, peer, originalStep: { ...template.originalStep,
+  const draft = { ...template, issuer: sourceIssuer ?? template.issuer, peer, originalStep: { ...template.originalStep,
     stepPayloadDigest: hostTaskStepPayloadDigest(canonicalBytes) } }
   const directive = parseHostTaskTargetPrepareDirective({ ...draft,
     signature: sign(null, Buffer.from(encodeHostTaskTargetPrepareDirective(draft)), source.privateKey).toString('base64url') })
@@ -559,4 +561,54 @@ it('waits for the actual queued projection writer and retains its raced old-scop
     expect(f.journal.inventory(f.request.directive.scope).filter(entry => entry.kind === 'admission')).toEqual([])
     expect(f.adapter.requests).toHaveLength(0)
   } finally { release.resolve(undefined); putSpy.mockRestore(); drainSpy.mockRestore(); await f.close() }
+})
+
+it.each(['observation', 'challenge'] as const)('uses the Account issuer for installation-signed %s with a distinct Source issuer', async (kind) => {
+  const f = await fixture(false, false, 'https://source.fixture.invalid')
+  try {
+    const d = f.request.directive
+    expect(d.issuer).not.toBe(d.scope.accountIssuer)
+    expect(verify(null, Buffer.from(encodeHostTaskTargetPrepareDirective(d)), f.source.publicKey,
+      Buffer.from(d.signature, 'base64url'))).toBe(true)
+    expect(verify(null, Buffer.from(encodeHostTaskTargetPrepareDirective(d)), f.installation.publicKey,
+      Buffer.from(d.signature, 'base64url'))).toBe(false)
+    await commitOriginalProjection(f)
+    await f.control.operate(signedSlarkFence(f), f.account, f.localPeer, f.signal)
+    if (kind === 'observation') {
+      const observation = await readTargetObservation(f)
+      expect(observation.issuer).toBe(d.scope.accountIssuer)
+      expect(observation).toMatchObject({ totalCount: 1, coverage: 'complete', quiescence: 'quiescent',
+        items: [{ kind: 'projection', state: 'closed_before_start' }] })
+      const bytes = Buffer.from(encodeHostTaskTargetObservation(observation))
+      const signature = sign(null, bytes, f.installation.privateKey)
+      expect(verify(null, bytes, f.installation.publicKey, signature)).toBe(true)
+      expect(verify(null, bytes, f.source.publicKey, signature)).toBe(false)
+    } else {
+      const original = f.journal.inventory(d.scope).find(row => row.kind === 'projection')
+      if (!original || original.kind !== 'projection') throw Error('missing original projection')
+      const descriptor = parseHostTaskTargetDescriptor(JSON.parse(original.value.descriptorJson))
+      const draft = { ...parseHostTaskReadyAdmissionDirective(vector.ready), issuer: d.issuer, peer: d.peer,
+        target: descriptor.target, descriptorDigest: descriptor.descriptorDigest, originalStep: d.originalStep,
+        stepPayloadDigest: d.originalStep.stepPayloadDigest }
+      const proposal = parseHostTaskReadyAdmissionDirective({ ...draft, signature: sign(null,
+        Buffer.from(encodeHostTaskReadyAdmissionDirective(draft)), f.source.privateKey).toString('base64url') })
+      const request = { operation: 'ready_prepare' as const, directive: proposal }
+      const value = await f.host.execute('task_target', request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+      if (!value || typeof value !== 'object' || Array.isArray(value) || !('record' in value)) throw Error('missing intent')
+      const result = captureHostTaskTargetResult(value.record, request)
+      if (!result.ok || result.record.status !== 'consume_intent') throw Error('missing original challenge')
+      expect(result.record.challenge.issuer).toBe(d.scope.accountIssuer)
+      const challenge = parseHostTaskTargetConsumeChallengeForProposal({ ...result.record.challenge, signature: sign(null,
+        Buffer.from(encodeHostTaskTargetConsumeChallenge(result.record.challenge)), f.installation.privateKey).toString('base64url') }, proposal)
+      expect(verify(null, Buffer.from(encodeHostTaskTargetConsumeChallenge(challenge)), f.installation.publicKey,
+        Buffer.from(challenge.signature, 'base64url'))).toBe(true)
+      const committed = await f.host.execute('task_target_commit', request, f.account, f.localPeer, 'd'.repeat(64), f.signal,
+        { kind: 'challenge', value: challenge })
+      expect(committed).toMatchObject({ record: { record: { status: 'consume_intent', challenge } } })
+      expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.sourceReceiptJson).toBeNull()
+    }
+    expect(f.adapter.requests).toHaveLength(0)
+    expect(f.agent.inbox.nextStep).toHaveLength(0)
+    expect(f.agent.inbox.nextTurn).toHaveLength(0)
+  } finally { await f.close() }
 })

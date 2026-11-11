@@ -228,7 +228,7 @@ export class DesktopTaskTargetHost {
       admission = old.value
     } else {
       const challenge = parseHostTaskTargetConsumeChallengeForProposal({ schemaVersion: 1,
-        purpose: 'task_coordination_target_consume_challenge_v1', issuer: proposal.issuer, keyId: call.peer.installationId,
+        purpose: 'task_coordination_target_consume_challenge_v1', issuer: proposal.scope.accountIssuer, keyId: call.peer.installationId,
         scope: proposal.scope, transfer: proposal.transfer, admissionId: proposal.newSourceGrant.admissionId,
         readyDirectiveDigest: hostTaskReadyAdmissionDirectiveDigest(proposal), descriptorDigest: proposal.descriptorDigest,
         target: proposal.target, consumeIntentId: randomUUID(), nonce: randomBytes(32).toString('base64url'),
@@ -346,7 +346,7 @@ export class DesktopTaskTargetHost {
     call.current()
     // Only an owned, durable-floor-sealed projection with no admission or actual input can establish this no-body inventory.
     const observation = parseHostTaskTargetObservation({ schemaVersion: 1, purpose: 'task_coordination_target_observation_v1',
-      issuer: d.issuer, keyId: d.peer.installationId, requestId: d.requestId,
+      issuer: d.scope.accountIssuer, keyId: d.peer.installationId, requestId: d.requestId,
       directiveDigest: hostTaskTargetObserveDirectiveDigest(d), issuedAt: d.issuedAt, expiresAt: d.expiresAt,
       scopeDigest: d.scopeDigest, floorDigest: d.floorDigest, transfer: d.transfer, journalEpoch: journal.epoch,
       inventoryId, inventoryDigest: snapshot.digest, totalCount: snapshot.items.length, items: page, nextCursor, eof,
