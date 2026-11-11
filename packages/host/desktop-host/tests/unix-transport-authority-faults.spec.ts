@@ -365,14 +365,15 @@ describe('Unix transport authority failures', () => {
       replyMode: 'admin', relayLimit: null, permissionPreset: null, adminBotId: 'main',
       members: [{ botId: 'main', displayName: 'Main' }] }
     const result = { roomId: 'room-1', revision: 8, state: 'applied', details }
-    const execute = vi.fn(async (): Promise<unknown> => result)
+    const execute = vi.fn(async () => result)
     const old = await authorityClient({ remoteSession: execute })
     await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
     old.client.close()
     const enabled = await authorityClient({ remoteSession: execute, remoteBotRoomUpdateSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_room_update')
     await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
-    execute.mockResolvedValueOnce({ ...result, details: { ...details, workDir: '/private' } })
+    const hiddenResult = { ...result, details: { ...details, workDir: '/private' } }
+    execute.mockResolvedValueOnce(hiddenResult)
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
