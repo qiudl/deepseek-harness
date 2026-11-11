@@ -1138,6 +1138,7 @@ export class SessionController extends TypertRemoteService {
    * @param signal - Current authenticated request cancellation.
    * @returns Actual input acceptance and interval completion; neither asserts descendant-process quiescence.
    */
+  // oxlint-disable-next-line typescript/require-await -- Preserve Promise rejection for synchronous capability and cancellation failures.
   async consumePairedTaskTarget(capability: PairedTaskStepCapability, signal: AbortSignal): Promise<PairedTaskTargetRun> {
     this.collaborationLifetime.signal.throwIfAborted()
     const consumer = this.pairedTaskTargetConsumer
