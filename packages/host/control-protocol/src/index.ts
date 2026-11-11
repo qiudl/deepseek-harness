@@ -88,6 +88,8 @@ export { parseHostBotSettingsRequest, parseHostBotSettings } from './bot-setting
 export type { HostBotSettingsRequest, HostBotSettings } from './bot-settings.ts'
 export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.ts'
 export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
+export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'
+export type { HostBotAvatarRequest, HostBotAvatarChunk } from './bot-avatar.ts'
 export { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt } from './bot-settings-update.ts'
 export type { HostBotSettingsUpdateRequest, HostBotSettingsUpdateReceipt, HostBotSettingsUpdateChange } from './bot-settings-update.ts'
 export { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,

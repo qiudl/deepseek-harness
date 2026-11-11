@@ -39,6 +39,7 @@ import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest } from '@deepse
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettings, parseHostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
@@ -530,6 +531,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiBotRoomDetailsSupported?: boolean
   readonly remoteUiBotSettingsSupported?: boolean
   readonly remoteUiBotFoldersSupported?: boolean
+  readonly remoteUiBotAvatarSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
   /** Advertise source-side history fragmentation only when the worker implements it. */
@@ -697,7 +699,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2093,6 +2095,7 @@ export class HostControlAuthority {
               || (frame.params.endpoint === 'bot/room-details' && !this.options.remoteUiBotRoomDetailsSupported)
               || (frame.params.endpoint === 'bot/settings' && !this.options.remoteUiBotSettingsSupported)
               || (frame.params.endpoint === 'bot/folders' && !this.options.remoteUiBotFoldersSupported)
+              || (frame.params.endpoint === 'bot/avatar' && !this.options.remoteUiBotAvatarSupported)
               || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
               throw new HostAuthorityError('upgrade_required')
             }
@@ -2109,6 +2112,8 @@ export class HostControlAuthority {
               parseHostBotSettings(value, parseHostBotSettingsRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/folders')
               parseHostBotFolders(value, parseHostBotFoldersRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/avatar')
+              parseHostBotAvatar(value, parseHostBotAvatarRequest(frame.params.payload.args))
           }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
@@ -3180,6 +3185,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead && this.options.remoteUiBotRoomDetailsSupported ? ['profile.remote_ui_read.bot_room_details'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotSettingsSupported ? ['profile.remote_ui_read.bot_settings'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotFoldersSupported ? ['profile.remote_ui_read.bot_folders'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotAvatarSupported ? ['profile.remote_ui_read.bot_avatar'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
@@ -3362,6 +3368,7 @@ export class UnixHostClient {
   /** This client can decode the separate signed Bot settings read capability. */
   readonly remoteUiBotSettingsSupported = true
   readonly remoteUiBotFoldersSupported = true
+  readonly remoteUiBotAvatarSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
   /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
@@ -5885,6 +5892,8 @@ export class UnixHostClient {
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_settings' as HostControlCapability))
       || (input.endpoint === 'bot/folders'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_folders' as HostControlCapability))
+      || (input.endpoint === 'bot/avatar'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_avatar' as HostControlCapability))
       || (input.endpoint === 'asset/read-gzip-chunk'
         && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
       throw new HostAuthorityError('upgrade_required')

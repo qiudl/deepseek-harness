@@ -120,6 +120,24 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null } }, signal))
       .rejects.toThrow('invalid_bot_folders_result')
   })
+  it('reads bounded Bot avatar slices from the plugin service only', async () => {
+    const invoke = vi.fn()
+    const chunk = 'data:image/png;base64,AA=='
+    const value = { botId: 'main', totalBytes: chunk.length, offset: 0,
+      sha256: 'a'.repeat(64), chunk, hasMore: false }
+    const read = vi.fn(async (): Promise<unknown> => value)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 0 } }, signal))
+      .resolves.toEqual(value)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 1 } }, signal))
+      .rejects.toThrow('invalid_bot_avatar_request')
+    read.mockResolvedValueOnce({ ...value, botId: 'other' })
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 0 } }, signal))
+      .rejects.toThrow('invalid_bot_avatar_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)
