@@ -7,7 +7,7 @@ import type { HostBotChatId } from './bot-chat.js'
 export type HostBotSettingsUpdateChange =
   | { readonly kind: 'name' | 'role' | 'instructions' | 'model'; readonly value: string }
   | { readonly kind: 'color' | 'avatar-shape' | 'effort'; readonly value: string | null }
-  | { readonly kind: 'pinned' | 'hidden'; readonly value: boolean }
+  | { readonly kind: 'pinned' | 'hidden' | 'main'; readonly value: boolean }
 /** The Bot Session is verified separately by the Profile worker. */
 export interface HostBotSettingsUpdateRequest {
   readonly botId: HostBotChatId
@@ -59,7 +59,7 @@ export function parseHostBotSettingsUpdateRequest(value: unknown): HostBotSettin
   else if (kind === 'avatar-shape' && (setting === null ||
     (typeof setting === 'string' && /^[a-z][\w-]{0,31}$/u.test(setting))))
     change = { kind, value: setting }
-  else if ((kind === 'pinned' || kind === 'hidden') && typeof setting === 'boolean')
+  else if ((kind === 'pinned' || kind === 'hidden' || kind === 'main') && typeof setting === 'boolean')
     change = { kind, value: setting }
   else throw Error('invalid_bot_settings_update')
   return { botId: value.botId as HostBotChatId, sessionId: value.sessionId,
