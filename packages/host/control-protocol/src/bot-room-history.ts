@@ -69,7 +69,8 @@ export function parseHostBotRoomHistory(value: unknown, request: HostBotRoomHist
       typeof line.text !== 'string' || Buffer.byteLength(line.text, 'utf8') > 8192 ||
       (line.time !== null && (typeof line.time !== 'number' || !Number.isSafeInteger(line.time) || line.time < 0)))
       throw Error('invalid_bot_room_history_result')
-    messages.push(line as unknown as HostBotRoomHistory['messages'][number])
+    messages.push({ seq: line.seq, authorKind: line.authorKind as HostBotRoomHistory['messages'][number]['authorKind'],
+      authorName: line.authorName, authorRef: line.authorRef, kind: line.kind, text: line.text, time: line.time })
     previous = line.seq
   }
   if (value.nextCursor !== null && (messages.length === 0 || value.nextCursor !== previous))
