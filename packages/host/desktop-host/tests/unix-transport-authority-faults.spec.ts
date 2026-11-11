@@ -381,6 +381,23 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
     enabled.client.close()
   })
+  it('negotiates retained owner room messages only through the live Host reader', async () => {
+    const input = { ...opened, endpoint: 'bot/room-history' as const,
+      payload: { args: { roomId: 'room-1', afterSeq: 0, limit: 1 } } }
+    const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
+      truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
+        authorRef: 'design', kind: null, text: 'plan', time: null }], nextCursor: null }
+    const execute = vi.fn(async (): Promise<unknown> => page)
+    const old = await authorityClient({ remoteUiRead: execute })
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotRoomHistorySupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_room_history')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    execute.mockResolvedValueOnce({ ...page, messages: [{ ...page.messages[0], authorRef: null }] })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
     const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
       payload: { args: { url: '/plugins/a.js', offset: 0 } } }

@@ -335,6 +335,8 @@ macOS 和 Windows 通过共同的 worker 操作绑定根 journal、Source 检查
 
 `profile.remote_ui_read.bot_rooms` 仅在当前 Host 与本地 SDK 均实现固定的用户 Bot 群名册读取时允许调用。缺少该能力的 Profile worker 返回 `upgrade_required`；Host 在当前视图租约下返回结果前校验插件响应。
 
+`profile.remote_ui_read.bot_room_history` 独立允许读取用户群已保留的消息。Host 校验有界插件页面与当前视图租约；旧 worker 或 SDK 返回 `upgrade_required`。该读取不授予群发送、管理或设置权限。
+
 `profile.project_operation_origin` 在现有当前 Account/Profile 授权器下控制独立的私有来源 read/bind 用途。Unix 提供实际安装 peer，仅为匹配原 Root/delivery/Source 的观察字段签名。启动通过 worker 工厂保留的 `DSH_PROFILE_OPERATION_ORIGIN_KEYRINGS` 环境项明确传递已验证的非秘密 Cloud 公钥环；拒绝 Profile 环境覆盖。worker 验证 claim 并负责限域发布。Account 撤销独立于 worker 生命周期阻止新请求；已受理的有界元数据修订可以结束，但不授予执行或导出权限。
 
 `operateProjectOperationMemory` 通过已认证的当前 Account 连接承载封闭的冻结 v3 owner-private 请求。启动只接受明确的公开环境策略 JSON，audience 固定为 `urn:slark:project-memory:v1`；缺少策略时记忆不可用。macOS 使用 `DSH_HOST_PROJECT_OPERATION_MEMORY_ENVIRONMENTS`；worker 接收保留的 `DSH_PROFILE_PROJECT_OPERATION_MEMORY_ENVIRONMENTS` 投影。Windows 接受相同原始 JSON 或 typed 策略数组，不能同时提供。Profile 环境覆盖、未知/私钥字段及无关密钥均被拒绝。原确认在不变的 binding Ack 前持久记录 intent 和一次实际 producer anchor；无 anchor 的历史 Ack 不能用于 source export。读取在 Account 与截止时间复查后签署受控且有界的来源页面。source-export stage 只保存原签名页面 manifest、摘要和首次持久 Ack。固定密钥 Cloud receipt 不联系 Bot 即可 finalize 原元数据；history 和 reconciliation 不推进连续 delta 台账。这些记录只证明历史交付，不构成当前 grant 或原生材料 Right。retained-recipient 和反向 source 读取保持独立；native 来源页面要求独立核实的原 runtime entry。记忆 capability 广告保持禁用。

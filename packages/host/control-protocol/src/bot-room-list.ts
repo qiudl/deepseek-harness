@@ -18,9 +18,14 @@ export interface HostBotRoomList {
   }[]
   readonly nextCursor: HostBotRoomId | null
 }
-const roomIdValid = (value: unknown): value is string => typeof value === 'string' &&
-  value.length >= 1 && value.length <= 256 && value !== '.' && value !== '..' &&
-  !/[^!-~]|[/\\]/u.test(value)
+/** Validate a room identifier without accepting paths or client-selected scope.
+ * @param value - Untrusted room identity.
+ * @returns Whether the value is a bounded room ID.
+ */
+export function roomIdValid(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 1 && value.length <= 256 &&
+    value !== '.' && value !== '..' && !/[^!-~]|[/\\]/u.test(value)
+}
 
 /**
  * Reject caller-selected authority and unbounded paging.
