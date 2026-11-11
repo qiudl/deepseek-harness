@@ -7,10 +7,11 @@ import { parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host
 import { parseHostBotRoomList, parseHostBotRoomListRequest, type HostBotRoomListRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest, type HostBotRoomHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest, type HostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSettings, parseHostBotSettingsRequest, type HostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -28,7 +29,8 @@ export class DesktopRemoteUiExecutor {
     private readonly readBotChat?: (botId: string | null, signal: AbortSignal) => Promise<unknown>,
     private readonly listBotRooms?: (request: HostBotRoomListRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotRoomHistory?: (request: HostBotRoomHistoryRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly readBotRoomDetails?: (request: HostBotRoomDetailsRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly readBotRoomDetails?: (request: HostBotRoomDetailsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotSettings?: (request: HostBotSettingsRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -75,6 +77,14 @@ export class DesktopRemoteUiExecutor {
       const value = await this.readBotRoomDetails(request, signal)
       signal.throwIfAborted()
       return parseHostBotRoomDetails(value, request)
+    }
+    if (endpoint === 'bot/settings') {
+      const request = parseHostBotSettingsRequest(payload.args)
+      if (!this.readBotSettings) throw Error('desktop remote UI: Bot settings reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotSettings(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotSettings(value, request)
     }
     if (endpoint === 'boot/injections') {
       if (Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')
