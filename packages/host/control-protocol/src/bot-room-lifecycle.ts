@@ -40,18 +40,19 @@ const revision = (value: unknown): value is number => typeof value === 'number' 
  * @returns Bounded create input.
  */
 export function parseHostBotRoomCreateRequest(value: unknown): HostBotRoomCreateRequest {
+  const members = record(value) && Array.isArray(value.members) ? value.members as unknown[] : null
   if (!record(value) || !exact(value, ['ownerBotId', 'sessionId', 'expectedRevision', 'members',
     'name', 'notice', 'replyMode', 'adminBotId']) || !botId(value.ownerBotId) ||
     !roomIdValid(value.sessionId) || !revision(value.expectedRevision) ||
-    !Array.isArray(value.members) || value.members.length < 2 || value.members.length > 12 ||
-    value.members.some(id => !botId(id)) || new Set(value.members).size !== value.members.length ||
+    !members || members.length < 2 || members.length > 12 ||
+    members.some(id => !botId(id)) || new Set(members).size !== members.length ||
     !bounded(value.name, 512) || value.name.length > 60 ||
     !bounded(value.notice, 8192) || value.notice.length > 2000 ||
     (value.replyMode !== 'admin' && value.replyMode !== 'everyone') ||
-    (value.adminBotId !== null && (!botId(value.adminBotId) || !value.members.includes(value.adminBotId))))
+    (value.adminBotId !== null && (!botId(value.adminBotId) || !members.includes(value.adminBotId))))
     throw Error('invalid_bot_room_create')
   return { ownerBotId: value.ownerBotId, sessionId: value.sessionId,
-    expectedRevision: value.expectedRevision, members: [...value.members], name: value.name,
+    expectedRevision: value.expectedRevision, members: members.map(id => id as string), name: value.name,
     notice: value.notice, replyMode: value.replyMode, adminBotId: value.adminBotId }
 }
 
