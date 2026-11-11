@@ -13,6 +13,10 @@ import { parseHostBotRoomSubmission, parseHostBotRoomReceipt,
   type HostBotRoomSubmission } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
   type HostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
+  parseHostBotRoomCreateReceipt, parseHostBotRoomDeleteReceipt,
+  type HostBotRoomCreateRequest, type HostBotRoomDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import type { HostBotRoomDetails } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostRemoteSessionCommand, HostRemoteSessionJson } from '@deepseek-ai/dsh-host-control-protocol'
 import type { DesktopRemoteApprovalEvents } from './desktop-remote-ui-stream.ts'
 import { DesktopSessionControl, DesktopSessionControlBusyError, DesktopSessionControlLostError,
@@ -45,6 +49,19 @@ function controlResult(state: DesktopSessionControlState): HostRemoteSessionJson
   return 'claim' in state
     ? { outcome: state.outcome, claim: { ...state.claim } }
     : { outcome: state.outcome, generation: state.generation, epoch: state.epoch }
+}
+
+function roomDetailsJson(details: HostBotRoomDetails): HostRemoteSessionJson {
+  return { roomId: details.roomId, revision: details.revision,
+    displayName: details.displayName, notice: details.notice,
+    replyMode: details.replyMode, relayLimit: details.relayLimit,
+    permissionPreset: details.permissionPreset,
+    permissionChoices: details.permissionChoices === null ? null : {
+      options: details.permissionChoices.options.map(option => ({ value: option.value, name: option.name })),
+      defaultPreset: details.permissionChoices.defaultPreset,
+    }, adminBotId: details.adminBotId,
+    members: details.members.map(member => ({ botId: member.botId, displayName: member.displayName })),
+  }
 }
 
 function historyText(value: unknown): string {
@@ -93,7 +110,9 @@ export class DesktopRemoteSessionExecutor {
       request: HostBotChatSubmission, signal: AbortSignal) => Promise<unknown>,
     private readonly botRoom?: (operation: 'bot.room.send' | 'bot.room.receipt',
       request: HostBotRoomSubmission, signal: AbortSignal) => Promise<unknown>,
-    private readonly updateBotRoom?: (request: HostBotRoomUpdateRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly updateBotRoom?: (request: HostBotRoomUpdateRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly createBotRoom?: (request: HostBotRoomCreateRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly deleteBotRoom?: (request: HostBotRoomDeleteRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -103,7 +122,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -118,6 +137,27 @@ export class DesktopRemoteSessionExecutor {
   private async dispatch(command: HostRemoteSessionCommand,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
+      case 'bot.room.create': {
+        signal.throwIfAborted()
+        const request = parseHostBotRoomCreateRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot room: Session mismatch')
+        if (!this.createBotRoom) return null
+        const value = await this.createBotRoom(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotRoomCreateReceipt(value, request)
+        return receipt === null ? null : { state: receipt.state, revision: receipt.revision,
+          details: receipt.details === null ? null : roomDetailsJson(receipt.details) }
+      }
+      case 'bot.room.delete': {
+        signal.throwIfAborted()
+        const request = parseHostBotRoomDeleteRequest(command.request)
+        if (command.session_id !== request.roomId) throw Error('desktop Bot room: Session mismatch')
+        if (!this.deleteBotRoom) return null
+        const value = await this.deleteBotRoom(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotRoomDeleteReceipt(value, request)
+        return receipt === null ? null : { ...receipt }
+      }
       case 'bot.room.update': {
         signal.throwIfAborted()
         const request = parseHostBotRoomUpdateRequest(command.request)
@@ -127,17 +167,7 @@ export class DesktopRemoteSessionExecutor {
         signal.throwIfAborted()
         const receipt = parseHostBotRoomUpdateReceipt(value, request)
         return receipt === null ? null : { roomId: receipt.roomId, revision: receipt.revision,
-          state: receipt.state, details: receipt.details === null ? null : {
-            roomId: receipt.details.roomId, revision: receipt.details.revision,
-            displayName: receipt.details.displayName, notice: receipt.details.notice,
-            replyMode: receipt.details.replyMode, relayLimit: receipt.details.relayLimit,
-            permissionPreset: receipt.details.permissionPreset,
-            permissionChoices: receipt.details.permissionChoices === null ? null : {
-              options: receipt.details.permissionChoices.options.map(option => ({ value: option.value, name: option.name })),
-              defaultPreset: receipt.details.permissionChoices.defaultPreset,
-            }, adminBotId: receipt.details.adminBotId,
-            members: receipt.details.members.map(member => ({ botId: member.botId, displayName: member.displayName })),
-          } }
+          state: receipt.state, details: receipt.details === null ? null : roomDetailsJson(receipt.details) }
       }
       case 'bot.room.send':
       case 'bot.room.receipt': {

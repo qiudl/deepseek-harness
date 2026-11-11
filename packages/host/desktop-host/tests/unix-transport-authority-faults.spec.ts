@@ -377,6 +377,22 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('negotiates Bot room lifecycle separately and rejects a substituted result', async () => {
+    const request = { roomId: 'room-1', expectedRevision: 8 } as never
+    const command = { operation: 'bot.room.delete' as const, command_id: randomUUID() as never,
+      session_id: 'room-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const result = { roomId: 'room-1', state: 'deleted', revision: 9 }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotRoomLifecycleSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_room_lifecycle')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, roomId: 'other' })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot chat through signed inspection and local SDK support before execution', async () => {
     const input = { ...opened, endpoint: 'bot/chat' as const, payload: { args: { botId: null } } }
     const execute = vi.fn(async (): Promise<unknown> => ({ revision: 4, defaultBotId: null, bot: null }))
