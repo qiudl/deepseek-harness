@@ -21,6 +21,7 @@ import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './type
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
 import { parseHostBotRoomSubmission } from './bot-room-submission.ts'
 import { parseHostBotRoomUpdateRequest } from './bot-room-update.ts'
+import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.ts'
@@ -686,6 +687,22 @@ function remoteSessionControlProof(value: unknown): HostRemoteSessionControlProo
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'bot.room.create') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotRoomCreateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.room.delete') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotRoomDeleteRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.roomId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
   if (command.operation === 'bot.room.update') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotRoomUpdateRequest(command.request)

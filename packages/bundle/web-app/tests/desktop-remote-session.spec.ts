@@ -24,6 +24,37 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('uses separate controlled create/delete services and rejects hidden fields', async () => {
+    const control = new DesktopSessionControl()
+    const createProof = remoteProof(control, 'chat-1')
+    const deleteProof = remoteProof(control, 'room-1')
+    const create = { ownerBotId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+      members: ['main', 'design'], name: 'Planning', notice: 'Review',
+      replyMode: 'admin' as const, adminBotId: 'main' }
+    const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
+      replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null,
+      adminBotId: 'main', members: [{ botId: 'main', displayName: 'Main' },
+        { botId: 'design', displayName: 'Design' }] }
+    const createResult = { state: 'created', revision: 8, details }
+    const createBotRoom = vi.fn(async (): Promise<unknown> => createResult)
+    const deleteBotRoom = vi.fn(async (): Promise<unknown> =>
+      ({ roomId: 'room-1', state: 'deleted', revision: 9 }))
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, createBotRoom, deleteBotRoom)
+    const signal = new AbortController().signal
+    await expect(executor.execute({ operation: 'bot.room.create', command_id: randomUUID() as never,
+      session_id: 'chat-1', control: createProof, request: create }, signal)).resolves.toEqual(createResult)
+    await expect(executor.execute({ operation: 'bot.room.delete', command_id: randomUUID() as never,
+      session_id: 'room-1', control: deleteProof,
+      request: { roomId: 'room-1' as never, expectedRevision: 8 } }, signal))
+      .resolves.toEqual({ roomId: 'room-1', state: 'deleted', revision: 9 })
+    expect(createBotRoom).toHaveBeenCalledOnce()
+    expect(deleteBotRoom).toHaveBeenCalledOnce()
+    createBotRoom.mockResolvedValueOnce({ ...createResult, details: { ...details, workDir: '/private' } })
+    await expect(executor.execute({ operation: 'bot.room.create', command_id: randomUUID() as never,
+      session_id: 'chat-1', control: createProof, request: create }, signal))
+      .rejects.toThrow('invalid_bot_room_create_receipt')
+  })
   it('uses the fixed room update service under live room control and verifies the saved projection', async () => {
     const request = parseHostBotRoomUpdateRequest({ roomId: 'room-1', expectedRevision: 7,
       change: { kind: 'notice', value: 'Review' } })

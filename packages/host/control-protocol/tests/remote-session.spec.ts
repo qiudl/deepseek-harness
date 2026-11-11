@@ -15,6 +15,22 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips only fixed group create/delete commands under claimed Sessions', () => {
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const create = { operation: 'bot.room.create', command_id: randomUUID(),
+      session_id: 'chat-1', control,
+      request: { ownerBotId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+        members: ['main', 'design'], name: 'Planning', notice: 'Review', replyMode: 'admin', adminBotId: 'main' } }
+    const remove = { operation: 'bot.room.delete', command_id: randomUUID(),
+      session_id: 'room-1', control, request: { roomId: 'room-1', expectedRevision: 8 } }
+    for (const command of [create, remove]) {
+      const input = frame(command)
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+      expect(() => decode(frame({ ...command, session_id: 'other' }))).toThrow()
+      expect(() => decode(frame({ ...command, control: undefined }))).toThrow()
+      expect(() => decode(frame({ ...command, request: { ...command.request, profileId: 'other' } }))).toThrow()
+    }
+  })
   it('round trips only fixed owner room edits under the claimed room control', () => {
     const request = { roomId: 'room-1', expectedRevision: 7, change: { kind: 'notice', value: 'Review' } }
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
