@@ -2,6 +2,7 @@ import type { RuntimeEntryAnalysisCommand } from './runtime-entry-carrier.ts'
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
+import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
 import type { WorkbenchReadPayload, WorkbenchChangesPayload } from './workbench-read.js'
@@ -2045,6 +2046,14 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.room.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotRoomSubmission }
+  | { readonly operation: 'bot.room.receipt'
+    readonly command_id: HostControlRequestId
+    readonly request: HostBotRoomSubmission }
   | { readonly operation: 'bot.chat.send'
     readonly command_id: HostControlRequestId
     readonly session_id: string

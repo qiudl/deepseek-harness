@@ -48,6 +48,8 @@ kind: "package-reference"
 
 `profile.remote_session.bot_chat` 单独发布 `bot.chat.send` 和 `bot.chat.receipt`。二者将已有 Bot、预期私聊分段、稳定 submission UUID 与至多 16 KiB 的规范化文本绑定。发送持有既有 Session 控制权并调用显式启用的 Bot 提供者，保留能力准备与 prompt 语义。回执与原 Session 日志对应；unobserved 不代表可安全重试。提供者缺失仍返回 null。消费方同时要求已签名 capability 和 SDK 的 remoteBotChatSupported 标志；旧或自定义 worker 不隐式继承支持。
 
+`profile.remote_session.bot_room` 独立发布固定的 `bot.room.send` 和 `bot.room.receipt` 命令。精确请求绑定已有用户群、稳定 submission UUID 和至多 16 KiB 的文本。发送要求群 Session 控制权凭据；回执关联原群 Session 事件，不暴露输入内容。旧 worker 或 SDK 不继承该能力。群成员和设置需要独立命令。
+
 `profile.remote_ui_read.bot_rooms` 单独发布 `bot/rooms`。请求仅包含已有群游标和 1–100 的页大小；响应包含修订号、按序排列的群 ID、显示名称、Bot 数量、置顶与隐藏标记，以及下一页游标。Host 拒绝多余字段、插件私有数据、无效 ID 和游标不匹配。已签名的能力声明与本地 SDK 标志必须同时存在。
 
 `profile.remote_ui_read.bot_room_history` 单独发布 `bot/room-history`。请求仅包含群 ID、序号游标和 1–20 的页大小。响应包含修订号、已保留序号窗口、裁剪标记以及带真实作者身份的展示用消息字段。严格解析拒绝多余字段、被替换的群、无效作者和乱序消息。已签名的能力声明与本地 SDK 标志必须同时存在。

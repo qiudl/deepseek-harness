@@ -731,6 +731,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         ...rootWorkerOperations(workers),
         collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
+        remoteBotRoomSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiAssetGzipSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomsSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomHistorySupported: dependencies.createProfileWorkerFactory === undefined,

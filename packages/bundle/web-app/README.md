@@ -128,6 +128,8 @@ The private `bot/chat` read uses the selected Profile's opt-in Bot service to re
 
 The private `bot/rooms` read uses the same opt-in service for a page of owner-visible room summaries. It accepts only `afterRoomId` and `limit` and returns the team revision, room IDs, names, Bot counts, pinned and hidden flags, and a next cursor. The worker validates the complete page; missing providers return null. It does not expose room messages, settings, or mutations.
 
+The private `bot.room.send` and `bot.room.receipt` Session commands use only the installed Bot service under the existing remote Session control proof. The worker checks the exact room request and correlated receipt; a missing provider returns null. No generic plugin command is reachable through this lane.
+
 The private `bot/room-history` read uses the fixed `readLocalBotRoomHistory` plugin service for at most 20 retained messages in one room. The worker validates author identities, sequence order, the revision and retained-window boundary before returning the page. A missing provider returns null. This read has no group send, management or settings authority.
 
 The private Session bridge also exposes fixed Bot send and receipt commands through the opt-in Bot service. A send holds the expected Session's existing control claim; a receipt can be read without taking over that claim. Stable submission IDs survive transport requests and part rollover. Neither command falls back to a generic Session prompt when the Bot provider is missing. Replies are correlated and validated before leaving the worker; authentication, cancellation and plugin disposal retain their existing owners.

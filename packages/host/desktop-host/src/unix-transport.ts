@@ -31,6 +31,7 @@ import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOut
   type HostNativeRoomPreparationOutcome, type ProfileNativeRoomPreparationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomList, parseHostBotRoomListRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
@@ -507,6 +508,8 @@ export interface UnixHostServerOptions {
   ) => Promise<unknown>
   /** Advertise Bot admission and reconciliation only for the bundled Profile worker. */
   readonly remoteBotChatSupported?: boolean
+  /** Advertise fixed owner room submission only for a worker with that plugin service. */
+  readonly remoteBotRoomSupported?: boolean
   /** Advertise existing Bot chat reads only for the bundled Profile worker. */
   readonly remoteUiBotChatSupported?: boolean
   /** Advertise owner room summaries only for a worker with the fixed plugin reader. */
@@ -680,7 +683,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2051,10 +2054,13 @@ export class HostControlAuthority {
             const execute = this.options.remoteSession
             const command = frame.params.command
             const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
-            if (!execute || (botChat && !this.options.remoteBotChatSupported)) throw new HostAuthorityError('upgrade_required')
+            const botRoom = command.operation === 'bot.room.send' || command.operation === 'bot.room.receipt'
+            if (!execute || (botChat && !this.options.remoteBotChatSupported) ||
+              (botRoom && !this.options.remoteBotRoomSupported)) throw new HostAuthorityError('upgrade_required')
             value = await execute(profileId, command, context.signal)
             if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
               parseHostBotChatReceipt(value, command.request)
+            if (botRoom) parseHostBotRoomReceipt(value, command.request)
           } else {
             const execute = this.options.remoteUiRead
             if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
@@ -3127,6 +3133,7 @@ export class HostControlAuthority {
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotRoomSupported ? ['profile.remote_session.bot_room'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
@@ -3297,6 +3304,8 @@ function botGroupClientStop(input: { readonly computerId: string
 export class UnixHostClient {
   /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
   readonly remoteBotChatSupported = true
+  /** This SDK can encode fixed owner room submissions. */
+  readonly remoteBotRoomSupported = true
   /** This SDK can encode the existing Bot identity/current-chat read. */
   readonly remoteUiBotChatSupported = true
   /** This SDK can encode owner room summary reads. */
@@ -5761,6 +5770,9 @@ export class UnixHostClient {
     readonly command: HostRemoteSessionCommand
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
+    if ((input.command.operation === 'bot.room.send' || input.command.operation === 'bot.room.receipt')
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_room' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if ((input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
       && !this.inspection.capabilities.includes('profile.remote_session.bot_chat' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -5775,6 +5787,8 @@ export class UnixHostClient {
     const value = await this.remoteProfileValue(request, input.signal)
     if (input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
       parseHostBotChatReceipt(value, input.command.request)
+    if (input.command.operation === 'bot.room.send' || input.command.operation === 'bot.room.receipt')
+      parseHostBotRoomReceipt(value, input.command.request)
     return value
   }
 

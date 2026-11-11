@@ -15,6 +15,19 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips only fixed Bot room commands bound to the claimed room Session', () => {
+    const request = { roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' }
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const send = { operation: 'bot.room.send', command_id: randomUUID(), session_id: request.roomId, control, request }
+    const receipt = { operation: 'bot.room.receipt', command_id: randomUUID(), request }
+    for (const command of [send, receipt]) {
+      const input = frame(command)
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    }
+    expect(() => decode(frame({ ...send, session_id: 'other' }))).toThrow()
+    expect(() => decode(frame({ ...send, control: undefined }))).toThrow()
+    expect(() => decode(frame({ ...receipt, request: { ...request, profileId: 'other' } }))).toThrow()
+  })
   it('round trips fixed Bot commands and rejects proof omissions, mismatched Sessions and extra authority', () => {
     const request = { botId: 'bot_1', sessionId: 'own-2', submissionId: randomUUID(), text: 'Hello' }
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
