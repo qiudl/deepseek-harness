@@ -11,7 +11,7 @@ import { prepareBundledPluginUpgrade } from '../src/plugin-upgrade-plan.ts'
 import { pluginBundleEntries } from '../src/plugin-bundle-entries.ts'
 import { parseDocument } from 'yaml'
 
-const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries'>())
+const readFaults = vi.hoisted(() => new Map<string, 'short' | 'changed' | 'manyEntries' | 'replaced' | 'changed-directory'>())
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>()
   const open: typeof actual.open = async (...args) => {
@@ -26,10 +26,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         return stat
       })
     }
+    if (fault === 'replaced') {
+      const original = handle.stat.bind(handle)
+      vi.spyOn(handle, 'stat').mockImplementationOnce(async () => {
+        const stat = await original(); stat.ino += 1; return stat
+      })
+    }
     return handle
   }
   const readdir = async (...args: Parameters<typeof actual.readdir>) => {
     const entries = await actual.readdir(...args)
+    if (readFaults.get(String(args[0])) === 'changed-directory') {
+      readFaults.delete(String(args[0]))
+      await actual.writeFile(join(String(args[0]), '.raced'), 'raced')
+    }
     if (readFaults.get(String(args[0])) === 'manyEntries') {
       const file = entries.find(entry => entry.isFile())!
       return Array.from({ length: 8193 }, () => file)
@@ -71,6 +81,136 @@ function profile(): PersonProfileRecord {
     accountBindings: [], bindingGeneration: 3, createdAt: 1,
   }
 }
+
+async function declaredPluginFixture(external = false) {
+  const value = await fixture()
+  const installed = join(value.web, 'node_modules', 'fixture-plugin')
+  await unlink(installed)
+  const root = external ? join(value.hostRoot, 'developer-plugin') : installed
+  await mkdir(root, { recursive: true, mode: 0o700 })
+  await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dependencies: {} }), { mode: 0o600 })
+  await writeFile(join(root, 'index.js'), 'throw Error("preflight must never execute this plugin")\n', { mode: 0o600 })
+  if (external) await symlink(root, installed)
+  const spec = external ? `link:${root}` : '1.0.0'
+  await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': spec } }))
+  await writeFile(join(value.web, 'pnpm-lock.yaml'), JSON.stringify({ lockfileVersion: '9.0',
+    importers: { '.': { dependencies: { 'fixture-plugin': { specifier: spec, version: external ? spec : '1.0.0' } } } },
+    packages: { 'fixture-plugin@1.0.0': { resolution: { integrity: 'synthetic-fixture-integrity' } } } }))
+  return { ...value, installed, pluginRoot: root }
+}
+
+describe('declared existing plugin recovery (REQ-20261031-0005)', () => {
+  it.each([false, true])('accepts the existing declared plugin and binds its complete bytes, external=%s', async (external) => {
+    const value = await declaredPluginFixture(external)
+    const before = await readFile(join(value.pluginRoot, 'index.js'))
+    const first = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(first.state).toBe('recoverable')
+    await expect(value.inspector.prepareConfirmedProfile(profile(), first)).resolves.toBeUndefined()
+    expect(await readFile(join(value.pluginRoot, 'index.js'))).toEqual(before)
+    await writeFile(join(value.pluginRoot, 'index.js'), 'changed')
+    await expect(value.inspector.prepareConfirmedProfile(profile(), first)).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    const second = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(second.preflightDigest).not.toBe(first.preflightDigest)
+  })
+
+  it('rejects an external link whose manifest declares another target', async () => {
+    const value = await declaredPluginFixture(true)
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': 'link:/different-target' } }))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('binds a hoisted transitive dependency and rejects it when missing', async () => {
+    const value = await declaredPluginFixture()
+    await writeFile(join(value.pluginRoot, 'package.json'), JSON.stringify({ name: 'fixture-plugin', version: '1.0.0', dependencies: { nested: '2.0.0' } }))
+    const nested = join(value.web, 'node_modules', 'nested')
+    await mkdir(nested, { mode: 0o700 })
+    await writeFile(join(nested, 'package.json'), JSON.stringify({ name: 'nested', version: '2.0.0' }))
+    await writeFile(join(nested, 'index.js'), 'original')
+    const first = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    expect(first.state).toBe('recoverable')
+    await writeFile(join(nested, 'index.js'), 'changed')
+    await expect(value.inspector.prepareConfirmedProfile(profile(), first)).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await rm(nested, { recursive: true })
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it('rejects an internal link escaping the declared plugin closure', async () => {
+    const value = await declaredPluginFixture(true)
+    await symlink(join(value.web, 'package.json'), join(value.pluginRoot, 'escape'))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it.each(['version', 'identity', 'malformed', 'unsafe-mode', 'short-read', 'changed-read', 'replaced-read', 'directory-read'])('rejects %s in a declared external package', async (kind) => {
+    const value = await declaredPluginFixture(true)
+    const manifest = join(value.pluginRoot, 'package.json')
+    if (kind === 'version') await writeFile(manifest, '{"name":"fixture-plugin","version":42}')
+    if (kind === 'identity') await writeFile(manifest, '{"name":"other","version":"1.0.0"}')
+    if (kind === 'malformed') await writeFile(manifest, '{')
+    if (kind === 'unsafe-mode') await chmod(join(value.pluginRoot, 'index.js'), 0o666)
+    if (kind === 'short-read') readFaults.set(join(value.pluginRoot, 'index.js'), 'short')
+    if (kind === 'changed-read') readFaults.set(join(value.pluginRoot, 'index.js'), 'changed')
+    if (kind === 'replaced-read') readFaults.set(join(value.pluginRoot, 'index.js'), 'replaced')
+    if (kind === 'directory-read') readFaults.set(value.pluginRoot, 'changed-directory')
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .rejects.toMatchObject({ code: kind.endsWith('read') ? 'recovery_preflight_stale' : 'runtime_incompatible' })
+  })
+
+  it.each(['schema', 'missing-importer', 'specifier', 'range'])('keeps an unsupported %s declaration blocked', async (kind) => {
+    const value = await declaredPluginFixture()
+    const spec = kind === 'range' ? '^1.0.0' : '1.0.0'
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': spec } }))
+    await writeFile(join(value.web, 'pnpm-lock.yaml'), JSON.stringify({ lockfileVersion: kind === 'schema' ? '8.0' : '9.0',
+      importers: kind === 'missing-importer' ? {} : { '.': { dependencies: { 'fixture-plugin': { specifier: kind === 'specifier' ? '2.0.0' : spec, version: '1.0.0' } } } } }))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 }))
+      .resolves.toMatchObject({ state: 'compatibility_blocked' })
+  })
+
+  it.each(['manifest', 'lock', 'link'])('rejects changed %s evidence after confirmation', async (kind) => {
+    const value = await declaredPluginFixture(true)
+    const preflight = await value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })
+    if (kind === 'manifest') await writeFile(join(value.web, 'package.json'), '{"dependencies":{}}')
+    if (kind === 'lock') await writeFile(join(value.web, 'pnpm-lock.yaml'), 'lockfileVersion: 8\n')
+    if (kind === 'link') { await unlink(value.installed); await symlink(value.currentRuntime, value.installed) }
+    await expect(value.inspector.prepareConfirmedProfile(profile(), preflight)).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+  })
+
+  it('handles dependency cycles, absent optional peers, and packaged runtime dependencies', async () => {
+    const value = await declaredPluginFixture()
+    await writeFile(join(value.pluginRoot, 'package.json'), JSON.stringify({ name: 'fixture-plugin', version: '1.0.0',
+      dependencies: { nested: '1.0.0', 'fixture-plugin': '1.0.0' }, optionalDependencies: { absent: '1.0.0' },
+      peerDependencies: { 'absent-peer': '1.0.0' }, peerDependenciesMeta: { 'absent-peer': { optional: true } } }))
+    const nested = join(value.currentRuntime, 'node_modules', 'nested')
+    await mkdir(nested, { recursive: true, mode: 0o700 })
+    await writeFile(join(nested, 'package.json'), '{"name":"nested","version":"1.0.0"}')
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).resolves.toMatchObject({ state: 'recoverable' })
+  })
+
+  it('accepts a historical profile archive without requiring its presence in the current catalog', async () => {
+    const value = await bundledFixture()
+    const spec = `file:${join(value.web, '.bundled-plugins', `${value.digest}.tgz`)}`
+    await writeFile(join(value.web, 'package.json'), JSON.stringify({ dependencies: { 'fixture-plugin': spec } }))
+    await writeFile(join(value.web, 'pnpm-lock.yaml'), JSON.stringify({ lockfileVersion: '9.0', importers: {
+      '.': { dependencies: { 'fixture-plugin': { specifier: spec, version: spec } } },
+    } }))
+    const inspector = new OfflineProfileRecoveryInspector({ hostRoot: value.hostRoot, installationId, expectedUid: uid,
+      targetFor: () => value.target, ownerStateApplicator: value.ownerStateApplicator })
+    await expect(inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).resolves.toMatchObject({ state: 'recoverable' })
+    await writeFile(join(value.installed, 'index.js'), 'tampered')
+    await expect(inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+
+  it.each(['fixture-runtime', '@fixture/runtime'])('verifies the exact target identity of a pinned npm platform alias %s', async (identityName) => {
+    const value = await declaredPluginFixture()
+    await writeFile(join(value.pluginRoot, 'package.json'), JSON.stringify({ name: 'fixture-plugin', version: '1.0.0',
+      optionalDependencies: { 'fixture-platform': `npm:${identityName}@2.0.0-platform` } }))
+    const platform = join(value.web, 'node_modules', 'fixture-platform')
+    await mkdir(platform, { mode: 0o700 })
+    await writeFile(join(platform, 'package.json'), JSON.stringify({ name: identityName, version: '2.0.0-platform' }))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).resolves.toMatchObject({ state: 'recoverable' })
+    await writeFile(join(platform, 'package.json'), JSON.stringify({ name: identityName, version: '2.0.1-platform' }))
+    await expect(value.inspector.inspect(profile(), { runtimeGeneration: 5, schemaGeneration: 1 })).rejects.toMatchObject({ code: 'runtime_incompatible' })
+  })
+})
 
 async function fixture(externalRuntime = false) {
   // Keep the root short enough for macOS's 104-byte Unix-domain socket limit.

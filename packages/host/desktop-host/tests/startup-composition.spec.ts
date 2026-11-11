@@ -486,7 +486,17 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
   await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
     .resolves.toEqual(analysisCommand)
-  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, collaborationSignal)
+  // The supervisor owns each analysis request (REQ-20261031-0006 #190): the worker receives a
+  // composite signal that still follows the caller and can be aborted on worker disposal.
+  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, expect.any(AbortSignal))
+  const ownedAnalysisSignal = collaborationAnalysis.mock.calls[0]![1]
+  expect(ownedAnalysisSignal).not.toBe(collaborationSignal)
+  expect(ownedAnalysisSignal.aborted).toBe(false)
+  const analysisCaller = new AbortController()
+  await serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, analysisCaller.signal)
+  const followedAnalysisSignal = collaborationAnalysis.mock.calls[1]![1]
+  analysisCaller.abort()
+  expect(followedAnalysisSignal.aborted).toBe(true)
   const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
   if (!deliveryReceiver) throw new Error('missing original delivery receiver')
   expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()

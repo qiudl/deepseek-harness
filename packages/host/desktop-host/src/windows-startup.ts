@@ -1,12 +1,11 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostTaskCoordinationEnvironments, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
-import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import type { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
+import { projectOperationMemoryDatabases, projectOperationMemoryStoreLayout } from './project-operation-memory-stores.ts'
+import type { ProjectOperationMemoryStoreRole } from './project-operation-memory-stores.ts'
 import { parseHostProjectMemoryEnvironments, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { rootWorkerOperations } from './root-worker-operations.ts'
@@ -462,24 +461,16 @@ async function startWindowsDesktopHostApplicationWithTrust(
       const accountAccessVerifier = new DshAccountAccessTokenVerifier(trust.accountAccessKeyring, {
         now: () => clock.now(),
       })
-      const memoryFiles = (profileId: string, role: 'source' | 'recipient' | 'native') => {
+      const memoryFiles = (profileId: string, role: ProjectOperationMemoryStoreRole) => {
         if (!registry.resolveProfile(profileId as never)) throw new HostAuthorityError('stale')
         const profileRoot = win32.join(config.root, 'profiles', profileId)
         return ProjectOperationMemoryDatabaseFiles.windows({
-          root: win32.join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : role === 'recipient'
-            ? 'project-operation-memory-recipient-sqlite-v1' : 'project-operation-memory-native-source-sqlite-v1'),
-          ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const }
-            : role === 'native' ? { storePurpose: 'native_source_export' as const } : {}),
-          legacyRoots: role === 'source' ? [win32.join(profileRoot, 'project-operation-memory'), win32.join(profileRoot, 'project-operation-memory-source-exports')] : [],
+          ...projectOperationMemoryStoreLayout(role, profileRoot, (...parts) => win32.join(...parts)),
           profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
           userSid, pid: process.pid, processNonce: config.processNonce, bindings,
         })
       }
-      const databases = new ProjectOperationMemoryDatabases(
-        async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-        async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-        async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-      )
+      const databases = projectOperationMemoryDatabases(memoryFiles)
       memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
       const registryFiles = createWindowsProfileRegistryFileAuthority({

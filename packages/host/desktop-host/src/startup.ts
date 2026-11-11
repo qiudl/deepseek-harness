@@ -1,10 +1,9 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
-import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import type { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
+import { projectOperationMemoryDatabases, projectOperationMemoryStoreLayout } from './project-operation-memory-stores.ts'
+import type { ProjectOperationMemoryStoreRole } from './project-operation-memory-stores.ts'
 import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { rootWorkerOperations } from './root-worker-operations.ts'
@@ -515,25 +514,17 @@ export async function startDesktopHostApplication(
       pinnedOwnerFile(config.accountKeyringPath, uid, config.accountKeyringSha256).toString('utf8'),
       { now: () => clock.now() },
     )
-    const memoryFiles = (profileId: string, role: 'source' | 'recipient' | 'native') => {
+    const memoryFiles = (profileId: string, role: ProjectOperationMemoryStoreRole) => {
       requiredProfile(registry, profileId)
       const profileRoot = join(root, 'profiles', profileId)
       ownerDirectory(profileRoot, uid)
       return ProjectOperationMemoryDatabaseFiles.posix({
-        root: join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : role === 'recipient'
-          ? 'project-operation-memory-recipient-sqlite-v1' : 'project-operation-memory-native-source-sqlite-v1'),
-        ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const }
-          : role === 'native' ? { storePurpose: 'native_source_export' as const } : {}),
-        legacyRoots: role === 'source' ? [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')] : [],
+        ...projectOperationMemoryStoreLayout(role, profileRoot, join),
         profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
         uid, pid: process.pid, processNonce: config.processNonce,
       })
     }
-    const databases = new ProjectOperationMemoryDatabases(
-      async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-      async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-      async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-    )
+    const databases = projectOperationMemoryDatabases(memoryFiles)
     memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)
