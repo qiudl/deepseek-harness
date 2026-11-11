@@ -106,8 +106,8 @@ export class DesktopTaskCoordination {
               || d.scopeDigest !== floor.scopeDigest
             || s.authorityEnvironmentId !== floor.authorityEnvironmentId || s.environmentKey !== floor.environmentKey
             || s.ownerUserId !== floor.ownerUserId || s.accountIssuer !== floor.accountIssuer || s.accountSubject !== floor.accountSubject
-            || s.hostProfileId !== floor.hostProfileId || s.canonicalRef.kind !== 'dsh_root'
-            || hash(this.localCanonical(s.canonicalRef)) !== canonicalDigest || !policy || policy.keyring.issuer !== d.issuer || !key
+            || s.hostProfileId !== floor.hostProfileId
+            || this.canonicalDigest(s.canonicalRef) !== canonicalDigest || !policy || policy.keyring.issuer !== d.issuer || !key
             || d.issuedAt < key.validFrom || d.expiresAt > key.validUntil
             || !verify(null, Buffer.from(encodeHostTaskCoordinationDirective(d)), createPublicKey(key.publicKeyPem),
               Buffer.from(d.signature, 'base64url')))
@@ -184,7 +184,24 @@ export class DesktopTaskCoordination {
         record: ack ? { status: 'found', fenceAck: ack } : { status: 'missing' } })
     }
     if (command.operation === 'fence') {
-      if (d.scope.canonicalRef.kind !== 'dsh_root') return fail()
+      if (d.scope.canonicalRef.kind === 'slark_issue') {
+        if (accepted && accepted.payloadDigest !== command.payloadDigest) return fail('conflict')
+        const stop = accepted ?? { floorDigest: d.floorDigest, canonicalDigest: this.canonicalDigest(d.scope.canonicalRef),
+          scopeDigest: d.scopeDigest, transferRequestId: command.transferRequestId, payloadDigest: command.payloadDigest,
+          acceptedCoordinationEpoch: d.scope.acceptedCoordinationEpoch, closedAt: this.now(),
+          authorityEnvironmentId: d.scope.authorityEnvironmentId, environmentKey: d.scope.environmentKey,
+          ownerUserId: d.scope.ownerUserId, accountIssuer: d.scope.accountIssuer, accountSubject: d.scope.accountSubject,
+          hostProfileId: d.scope.hostProfileId, workerId: this.workerId, authorizationJson: JSON.stringify(input) }
+        if (!accepted) this.native.latchFloor(stop)
+        current()
+        if (!previous) await this.native.closeFloor(stop, signal)
+        current()
+        const cut = await this.cut({ ...input, command }, signal)
+        current()
+        const stored = this.journal.artifact('ack:' + command.transferRequestId)
+        return parseHostTaskCoordinationReply({ ok: true, peer: d.peer,
+          record: { status: 'closed', fenceAck: stored ? this.readAck(stored) : cut.ack } })
+      }
       const canonical = this.localCanonical(d.scope.canonicalRef)
       if (accepted && accepted.payloadDigest !== command.payloadDigest) return fail('conflict')
       const stop = accepted ?? { floorDigest: d.floorDigest, canonicalDigest: hash(canonical), scopeDigest: d.scopeDigest,
@@ -296,6 +313,9 @@ export class DesktopTaskCoordination {
       if (this.now() < d.issuedAt || this.now() >= d.expiresAt || this.now() >= key.validUntil) return fail('stale')
     }
   }
+  private canonicalDigest(value: HostTaskCoordinationInput['directive']['scope']['canonicalRef']): string {
+    return value.kind === 'dsh_root' ? hash(this.localCanonical(value)) : hash(['slark_issue', value.project_id, value.issue_id])
+  }
   private localCanonical(value: Extract<HostTaskCoordinationInput['directive']['scope']['canonicalRef'], { kind: 'dsh_root' }>) {
     return { namespace_id: value.namespace_id, root_task_id: brandString<CollaborationRootTaskId>(value.root_task_id),
       root_trace_id: brandString<CollaborationRootTraceId>(value.root_trace_id) }
@@ -326,7 +346,22 @@ export class DesktopTaskCoordination {
   }
   private async capture(input: HostTaskCoordinationInput, signal: AbortSignal): Promise<Cut> {
     const d = input.directive, command = input.command
-    if (command.operation === 'attach' || d.scope.canonicalRef.kind !== 'dsh_root') return fail()
+    if (command.operation === 'attach') return fail()
+    if (d.scope.canonicalRef.kind === 'slark_issue') {
+      signal.throwIfAborted()
+      const stopped = this.journal.request(command.transferRequestId)
+      if (!stopped) return fail('conflict')
+      // Paired projections and admissions have their own inventory; this legacy inventory has no DSH jobs for a Slark Issue.
+      const items: HostTaskCoordinationInventoryItem[] = []
+      const ack = parseHostTaskCoordinationFenceAck({ schemaVersion: 1, purpose: 'task_coordination_fence_ack',
+        issuer: d.scope.accountIssuer, keyId: d.peer.installationId, transferRequestId: command.transferRequestId,
+        payloadDigest: stopped.payloadDigest, scopeDigest: d.scopeDigest, floorDigest: d.floorDigest, receiptId: randomUUID(),
+        acceptedCoordinationEpoch: stopped.acceptedCoordinationEpoch, hostProfileId: this.profileId,
+        workerId: command.operation === 'fence' ? stopped.workerId : this.workerId, peer: d.peer, closedAt: stopped.closedAt,
+        inventoryId: randomUUID(), inventoryDigest: hostTaskCoordinationInventoryDigest(items), totalCount: items.length,
+        signature: placeholder })
+      return { input, ack, items, complete: false }
+    }
     const original = await this.sessions.inspectCollaborationTaskRoot(this.localCanonical(d.scope.canonicalRef), signal)
     const associations = this.journal.associations(d.floorDigest), items: HostTaskCoordinationInventoryItem[] = []
     const commandIds = associations.map(value => value.commandId), associatedCommands = new Set(commandIds)

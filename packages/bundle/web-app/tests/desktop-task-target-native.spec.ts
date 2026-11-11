@@ -208,3 +208,11 @@ it.each(['2', '3'])('denies a same or higher epoch floor without the original du
   expect(f.model.requests).toHaveLength(0)
   expect(f.journal.floor(floor.floorDigest)).toEqual(floor)
 }))
+
+it('seals expected-epoch preparation immediately but never attests an unproven floor as a closed projection', async () => fixture(async (f) => {
+  f.native.assertPairedPreparationOpen(f.proposal.scope)
+  f.native.latchFloor(f.floor(f.proposal.scope.acceptedCoordinationEpoch))
+  expect(() => { f.native.assertPairedPreparationOpen(f.proposal.scope) }).toThrow('paired_target_native_closed')
+  expect(f.native.readPairedClosedProjection(f.proposal.scope)).toBeUndefined()
+  expect(f.model.requests).toHaveLength(0)
+}))

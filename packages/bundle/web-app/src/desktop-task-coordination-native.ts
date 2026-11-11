@@ -11,7 +11,7 @@ import type { CollaborationTaskAssociation, CollaborationTaskClosedFloor, Collab
   CollaborationTaskNativeCall } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination-journal'
 import { encodeCollaborationJournalJson } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-source-journal'
 import { parseHostTaskReadyAdmissionDirective, parseHostTaskTargetStepBody, hostTaskStepPayloadDigest, parseHostTaskCoordinationInput,
-  type HostTaskReadyAdmissionDirective, type HostTaskTargetStepBody } from '@deepseek-ai/dsh-host-control-protocol'
+  type HostTaskReadyAdmissionDirective, type HostTaskTargetStepBody, hostTaskCoordinationFloorDigest, type HostTaskCoordinationScope } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { PairedTaskTargetFiles } from './desktop-task-target-files.ts'
 
@@ -274,6 +274,52 @@ export class DesktopTaskCoordinationNative {
     } catch { return true }
   }
 
+  /** Refuse old-epoch physical preparation after its actual floor has been latched.
+   * @param scope - Original authenticated preparation scope.
+   * @returns Nothing; this denial check grants no preparation or execution authority.
+   */
+  assertPairedPreparationOpen(scope: HostTaskCoordinationScope): void {
+    const key = hostTaskCoordinationFloorDigest(scope), floor = this.journal.latchedFloor(key)
+    if (this.journal.blocked(key) && !floor || floor && BigInt(floor.acceptedCoordinationEpoch) > BigInt(scope.expectedCoordinationEpoch))
+      throw Error('paired_target_native_closed')
+  }
+
+  /** Refuse a new admission or claim outside the original protected accepted-epoch exception.
+   * @param proposal - Original Source proposal already verified by the owning private factory.
+   * @returns Nothing; the Source receipt and one-use lease are still required independently.
+   */
+  assertPairedAdmissionCurrent(proposal: HostTaskReadyAdmissionDirective): void {
+    this.#assertPairedAdmissionCurrent(proposal)
+  }
+
+  #assertPairedAdmissionCurrent(proposal: HostTaskReadyAdmissionDirective): void {
+    const floor = this.journal.latchedFloor(proposal.floorDigest)
+    const candidates = floor ? this.journal.canonicalCandidates(floor.canonicalDigest, proposal.scope) : []
+    if (this.journal.blocked(proposal.floorDigest) && !floor || floor && (this.#pairedFloorBlocks(floor, proposal)
+      || candidates.some(candidate => candidate.floorDigest === proposal.floorDigest && this.#pairedFloorBlocks(candidate, proposal))))
+      throw Error('paired_target_native_closed')
+  }
+
+  /** Read the actual durable floor closing a projection's old preparation epoch.
+   * @param scope - Original retained projection scope, never a selected Session or new execution grant.
+   * @returns Its original durable stop metadata, or undefined when durability or provenance is unknown.
+   */
+  readPairedClosedProjection(scope: HostTaskCoordinationScope): CollaborationTaskClosedFloor | undefined {
+    try {
+      const key = hostTaskCoordinationFloorDigest(scope), floor = this.journal.latchedFloor(key)
+      if (!floor || BigInt(floor.acceptedCoordinationEpoch) <= BigInt(scope.expectedCoordinationEpoch)
+        || !isDeepStrictEqual(this.journal.request(floor.transferRequestId), floor)) return undefined
+      const original = parseHostTaskCoordinationInput(JSON.parse(floor.authorizationJson)), d = original.directive
+      if (original.command.operation !== 'fence' || original.command.transferRequestId !== floor.transferRequestId
+        || original.command.payloadDigest !== floor.payloadDigest || d.floorDigest !== key || d.scopeDigest !== floor.scopeDigest
+        || d.scope.acceptedCoordinationEpoch !== floor.acceptedCoordinationEpoch
+        || d.scope.authorityEnvironmentId !== floor.authorityEnvironmentId || d.scope.environmentKey !== floor.environmentKey
+        || d.scope.ownerUserId !== floor.ownerUserId || d.scope.accountIssuer !== floor.accountIssuer
+        || d.scope.accountSubject !== floor.accountSubject || d.scope.hostProfileId !== floor.hostProfileId) return undefined
+      return floor
+    } catch { return undefined }
+  }
+
   /** Restrict one actual paired consumer to its original file producer; this does not admit or sign a Source step.
    * The matching durable floor closes its expected epoch; the private factory's same-transfer admission can use its accepted epoch.
    * @param input - Private factory's original Agent/Session, Source body, actual producer and owned long lifetime.
@@ -313,11 +359,7 @@ export class DesktopTaskCoordinationNative {
       && files.close === FILES_CLOSE
     const current = () => {
       owned.throwIfAborted(); ownerCurrent()
-      const floor = this.journal.latchedFloor(proposal.floorDigest)
-      const candidates = floor ? this.journal.canonicalCandidates(floor.canonicalDigest, proposal.scope) : []
-      if (this.journal.blocked(proposal.floorDigest) && !floor || floor && (this.#pairedFloorBlocks(floor, proposal)
-        || candidates.some(candidate => candidate.floorDigest === proposal.floorDigest && this.#pairedFloorBlocks(candidate, proposal))))
-        throw Error('paired_target_native_closed')
+      this.#assertPairedAdmissionCurrent(proposal)
       if (!readCurrent()) throw Error('paired_target_native_changed')
       files.assertCurrent(agent, permissions)
       owned.throwIfAborted()

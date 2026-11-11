@@ -1,6 +1,6 @@
 /** Durable one-use admission metadata, independent of execution or Source authorization. */
 import { Context } from '@deepseek-ai/cordis'
-import Storage from '@deepseek-ai/dsh-storage'
+import Storage, { type KvUnit } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import { hostTaskTargetDescriptorDigest, hostTaskReadyAdmissionDirectiveDigest,
@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, onTestFinished } from 'vitest'
+import { expect, it, onTestFinished, vi } from 'vitest'
 import { openPairedTaskTargetJournal } from '../src/paired-task-target-journal.ts'
 const data: unknown = JSON.parse(await readFile(new URL('../../../host/control-protocol/tests/fixtures/task-target-v1.json', import.meta.url), 'utf8'))
 function field(key: string): unknown {
@@ -22,6 +22,11 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'paired-task-target-journal-')), ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root); ctx.storage.backend.register('json', backend)
+  const units = new Map<string, KvUnit>(), open = backend.kv.open.bind(backend.kv)
+  const spy = vi.spyOn(backend.kv, 'open').mockImplementation(async (descriptor) => {
+    const unit = await open(descriptor); units.set(descriptor.name, unit); return unit
+  })
+  onTestFinished(() => { spy.mockRestore() })
   const facility = new DomainFacility(ctx, { backend: 'json' }), journal = await openPairedTaskTargetJournal(facility)
   onTestFinished(async () => { await facility.closeAll(); await backend.close(); await ctx.fiber.dispose(); await rm(root,
     { recursive: true, force: true }) })
@@ -36,7 +41,7 @@ async function fixture() {
   const receipt = parseHostTaskTargetConsumeReceipt({ ...parseHostTaskTargetConsumeReceipt(field('consumeReceipt')),
     target: descriptor.target, descriptorDigest: descriptor.descriptorDigest,
     readyDirectiveDigest: hostTaskReadyAdmissionDirectiveDigest(ready), challengeDigest: hostTaskTargetConsumeChallengeDigest(challenge) })
-  return { root, facility, journal, descriptor, ready, challenge, receipt }
+  return { root, facility, journal, descriptor, ready, challenge, receipt, units }
 }
 it('retains one original projection and cannot rewrite it across restart or mint another command for the same original step', async () => {
   const f = await fixture()
@@ -124,4 +129,26 @@ it('commits installation signatures once without permitting a different projecti
   expect(await f.journal.commitChallenge(intent.itemId, f.challenge, signal)).toEqual(final)
   await expect(f.journal.commitChallenge(intent.itemId, { ...f.challenge, consumeIntentId: randomUUID() }, signal))
     .rejects.toThrow('conflict')
+})
+
+it('drains only already queued real metadata writes and refuses a cancelled observation', async () => {
+  const f = await fixture(), entered = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>()
+  const events: string[] = []
+  const unit = f.units.get('paired_task_targets_v1')
+  if (!unit) throw Error('missing actual journal unit')
+  const original = unit.putRecord.bind(unit)
+  const spy = vi.spyOn(unit, 'putRecord').mockImplementation(async (table, key, row) => {
+    if (table === 'projections') { entered.resolve(undefined); await release.promise }
+    await original(table, key, row); events.push('durable')
+  })
+  try {
+    const writing = f.journal.prepare(f.descriptor, new AbortController().signal)
+    await entered.promise
+    const draining = f.journal.drain(new AbortController().signal).then(() => { events.push('barrier') })
+    release.resolve(undefined)
+    await Promise.all([writing, draining])
+    expect(events).toEqual(['durable', 'barrier'])
+    const stopped = new AbortController(); stopped.abort(Error('original observation cancelled'))
+    await expect(f.journal.drain(stopped.signal)).rejects.toThrow('original observation cancelled')
+  } finally { release.resolve(undefined); spy.mockRestore() }
 })

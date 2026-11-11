@@ -1,12 +1,12 @@
 /** Actual Agent/JSONL/journal factory tests; Source keys, Bot metadata and installed-code bootstrap are controlled. */
-import { generateKeyPairSync, sign, verify, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, sign, verify, randomUUID, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import { Context, symbols } from '@deepseek-ai/cordis'
-import Storage from '@deepseek-ai/dsh-storage'
+import Storage, { type KvUnit } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -30,10 +30,12 @@ import { encodeHostTaskTargetPrepareDirective, encodeHostTaskTargetDescriptor, p
   encodeHostTaskTargetConsumeChallenge, parseHostTaskTargetConsumeReceipt, encodeHostTaskTargetConsumeReceipt,
   hostTaskReadyAdmissionDirectiveDigest, hostTaskTargetConsumeChallengeDigest,
   hostTaskStepPayloadDigest, parseHostTaskTargetStepBody,
-  hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest,
+  hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest, parseHostTaskCoordinationScope,
   parseHostTaskTargetObserveDirective, encodeHostTaskTargetObserveDirective,
   parseHostTaskCoordinationInput, hostTaskCoordinationCommandDigest, encodeHostTaskCoordinationDirective,
 } from '@deepseek-ai/dsh-host-control-protocol'
+import { collaborationJournalDigest as journalDigest } from '../../../api/session-controller/src/collaboration-source-journal.ts'
+import { DesktopTaskCoordination, parseTaskCoordinationActualPeer } from '../src/desktop-task-coordination.ts'
 import { DesktopTaskTargetHost } from '../src/desktop-task-target-host.ts'
 import { DesktopTaskCoordinationNative } from '../src/desktop-task-coordination-native.ts'
 import { handleDesktopCollaborationAnalysisRequest, type DesktopCollaborationAnalysis } from '../src/desktop-collaboration-analysis.ts'
@@ -46,6 +48,11 @@ async function fixture(pendingBootstrap = false, originalRead = false) {
   const root = await mkdtemp(join(tmpdir(), 'paired-host-')), ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root); ctx.storage.backend.register('json', backend)
+  const units = new Map<string, KvUnit>(), openUnit = backend.kv.open.bind(backend.kv)
+  const openSpy = vi.spyOn(backend.kv, 'open').mockImplementation(async (descriptor) => {
+    const unit = await openUnit(descriptor); units.set(descriptor.name, unit); return unit
+  })
+  onTestFinished(() => { openSpy.mockRestore() })
   const facility = new DomainFacility(ctx, { backend: 'json' }), journal = await openPairedTaskTargetJournal(facility)
   const controlJournal = await openCollaborationTaskCoordinationJournal(facility)
   onTestFinished(async () => {
@@ -101,7 +108,12 @@ async function fixture(pendingBootstrap = false, originalRead = false) {
     environmentKey: directive.scope.environmentKey, keyring: { version: 1, issuer: directive.issuer,
       environmentId: directive.scope.authorityEnvironmentId, keys: [{ kid: directive.keyId,
         publicKeyPem: source.publicKey.export({ type: 'spki', format: 'pem' }).toString(), validFrom: 1, validUntil: directive.expiresAt + 1 }] } }]
-  const native = new DesktopTaskCoordinationNative(ctx, controlJournal)
+  const inspectDsh = vi.fn(async () => { throw Error('Slark issue must not inspect a DSH Root') })
+  const control = new DesktopTaskCoordination(ctx, { inspectCollaborationTaskRoot: inspectDsh,
+    inspectCollaborationTaskExecution: inspectDsh, stopCollaborationTaskRoot: () => { throw Error('unexpected DSH stop') },
+    stopCollaborationTaskExecution: () => { throw Error('unexpected DSH execution stop') } },
+  controlJournal, environments, directive.scope.hostProfileId, 'actual-worker', lifetime.signal)
+  const native = control.native
   const createHost = (bootstrapCtx: Context, ownedProvider: RuntimeEntryConsumerHost) => new DesktopTaskTargetHost(
     bootstrapCtx, environments, directive.scope.hostProfileId, 'actual-worker', lifetime.signal, configuration, native, ownedProvider)
   let capturedHost: DesktopTaskTargetHost | undefined
@@ -123,13 +135,52 @@ async function fixture(pendingBootstrap = false, originalRead = false) {
   const account = { authorityEnvironmentId: directive.scope.authorityEnvironmentId, accountIssuer: directive.scope.accountIssuer,
     accountSubject: directive.scope.accountSubject, accountBindingId: directive.accountBindingId,
     accountBindingVersion: directive.accountBindingVersion, hostProfileId: directive.scope.hostProfileId }
-  const localPeer = { installationId: peer.installationId, publicKey: peer.publicKey,
-    hostInstanceId: peer.hostInstanceId, processNonce: peer.processNonce }
+  const localPeer = parseTaskCoordinationActualPeer({ installationId: peer.installationId, publicKey: peer.publicKey,
+    hostInstanceId: peer.hostInstanceId, processNonce: peer.processNonce })
   const request = { operation: 'prepare' as const, directive }
   const signal = new AbortController().signal
   return { ctx, host, journal, agent, request, account, localPeer, signal, installation, source, adapter,
-    native, controlJournal, canonicalBytes, opens: () => opens,
+    native, control, inspectDsh, units, createHost, provider, controlJournal, canonicalBytes, opens: () => opens,
     async close() { lifetime.abort(); await host.close(); await consumer.close(); now.mockRestore() } }
+}
+function signedSlarkFence(f: Awaited<ReturnType<typeof fixture>>, scopeValue: unknown = f.request.directive.scope) {
+  const scope = parseHostTaskCoordinationScope(scopeValue)
+  const d = f.request.directive, command = { operation: 'fence' as const, transferRequestId: scopeValue === d.scope
+    ? d.transfer.requestId : randomUUID(), payloadDigest: d.transfer.payloadDigest }
+  const draft = { schemaVersion: 1, purpose: 'task_coordination', issuer: d.issuer, keyId: d.keyId,
+    requestId: randomUUID(), nonce: randomBytes(32).toString('base64url'), issuedAt: Date.now(), expiresAt: d.expiresAt,
+    audience: 'urn:slark:task-coordination:v1', scope, scopeDigest: hostTaskCoordinationScopeDigest(scope),
+    floorDigest: hostTaskCoordinationFloorDigest(scope), accountBindingId: d.accountBindingId,
+    accountBindingVersion: d.accountBindingVersion, peer: d.peer, operation: 'fence',
+    commandDigest: hostTaskCoordinationCommandDigest(command), signature: 'A'.repeat(86) }
+  return parseHostTaskCoordinationInput({ command, directive: { ...draft,
+    signature: sign(null, Buffer.from(encodeHostTaskCoordinationDirective(draft)), f.source.privateKey).toString('base64url') } })
+}
+async function readTargetObservation(f: Awaited<ReturnType<typeof fixture>>, host = f.host,
+  scopeValue: unknown = f.request.directive.scope) {
+  const scope = parseHostTaskCoordinationScope(scopeValue)
+  const d = f.request.directive, template = parseHostTaskTargetObserveDirective(vector.observeRequest)
+  const draft = { ...template, issuer: d.issuer, keyId: d.keyId, requestId: randomUUID(),
+    nonce: randomBytes(32).toString('base64url'), issuedAt: Date.now(), expiresAt: d.expiresAt,
+    scope, scopeDigest: hostTaskCoordinationScopeDigest(scope), floorDigest: hostTaskCoordinationFloorDigest(scope),
+    transfer: d.transfer, peer: d.peer }
+  const directive = parseHostTaskTargetObserveDirective({ ...draft,
+    signature: sign(null, Buffer.from(encodeHostTaskTargetObserveDirective(draft)), f.source.privateKey).toString('base64url') })
+  const request = { operation: 'observe' as const, directive }
+  const value = await host.execute('task_target', request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('record' in value)) throw Error('missing physical observation')
+  const result = captureHostTaskTargetResult(value.record, request)
+  if (!result.ok || result.record.status !== 'observed') throw Error('missing original observation')
+  return result.record.observation
+}
+async function commitOriginalProjection(f: Awaited<ReturnType<typeof fixture>>) {
+  const value = await f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !('record' in value)) throw Error('missing projection')
+  const result = captureHostTaskTargetResult(value.record, f.request)
+  if (!result.ok || result.record.status !== 'prepared') throw Error('missing original descriptor')
+  await f.host.execute('task_target_commit', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal,
+    { kind: 'descriptor', value: { ...result.record.descriptor, signature: sign(null,
+      Buffer.from(encodeHostTaskTargetDescriptor(result.record.descriptor)), f.installation.privateKey).toString('base64url') } })
 }
 it('rejects absent original bootstrap facilities without providing a public capability factory', () => {
   const ctx = new Context()
@@ -243,9 +294,10 @@ it('keeps empty unanchored target inventory coverage and quiescence unknown', as
     expect(f.adapter.requests).toHaveLength(0)
   } finally { await f.close() }
 })
-it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'higher'] as const)('uses the original signed proposal and one-use private input through the actual Agent/Native persistence path, floor=%s', async (mode) => {
+it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'higher', 'receipt-race'] as const)('uses the original signed proposal and one-use private input through the actual Agent/Native persistence path, floor=%s', async (mode) => {
   const f = await fixture(false, mode === 'matching'), releaseModel = Promise.withResolvers<undefined>(), enteredModel = Promise.withResolvers<undefined>()
-  let restoreStream = () => {}
+  let restoreStream = () => {}, restoreReceipt = () => {}
+  const receiptEntered = Promise.withResolvers<undefined>(), releaseReceipt = Promise.withResolvers<undefined>()
   try {
     const binding = 'd'.repeat(64)
     const prepared = await f.host.execute('task_target', f.request, f.account, f.localPeer, binding, f.signal)
@@ -270,13 +322,16 @@ it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'h
         signature: sign(null, Buffer.from(encodeHostTaskCoordinationDirective(original)), f.source.privateKey).toString('base64url') } })
       expect(verify(null, Buffer.from(encodeHostTaskCoordinationDirective(input.directive)), f.source.publicKey,
         Buffer.from(input.directive.signature, 'base64url'))).toBe(true)
-      const floor = { floorDigest: d.floorDigest, canonicalDigest: 'f'.repeat(64), scopeDigest: original.scopeDigest,
+      if (scope.canonicalRef.kind !== 'slark_issue') throw Error('fixture requires original Slark Issue')
+      const floor = { floorDigest: d.floorDigest, canonicalDigest: journalDigest(['slark_issue', scope.canonicalRef.project_id, scope.canonicalRef.issue_id]),
+        scopeDigest: original.scopeDigest,
         transferRequestId: command.transferRequestId, payloadDigest: command.payloadDigest,
         acceptedCoordinationEpoch: scope.acceptedCoordinationEpoch, closedAt: Date.now(),
         authorityEnvironmentId: d.scope.authorityEnvironmentId, environmentKey: d.scope.environmentKey,
         ownerUserId: d.scope.ownerUserId, accountIssuer: d.scope.accountIssuer, accountSubject: d.scope.accountSubject,
         hostProfileId: d.scope.hostProfileId, workerId: 'actual-worker', authorizationJson: JSON.stringify(input) }
-      await f.native.closeFloor(floor, f.signal)
+      const fenced = await f.control.operate(input, f.account, f.localPeer, f.signal)
+      expect(fenced).toMatchObject({ ok: true, record: { status: 'closed' } })
       expect(f.controlJournal.request(floor.transferRequestId)).toEqual(floor)
       originalFloor = floor
     }
@@ -286,7 +341,14 @@ it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'h
     const proposal = parseHostTaskReadyAdmissionDirective({ ...draft,
       signature: sign(null, Buffer.from(encodeHostTaskReadyAdmissionDirective(draft)), f.source.privateKey).toString('base64url') })
     const ready = { operation: 'ready_prepare' as const, directive: proposal }
-    const value = await f.host.execute('task_target', ready, f.account, f.localPeer, binding, f.signal)
+    const intentRequest = f.host.execute('task_target', ready, f.account, f.localPeer, binding, f.signal)
+    if (mode !== 'none' && mode !== 'matching' && mode !== 'receipt-race') {
+      await expect(intentRequest).rejects.toThrow('paired_target_native_closed')
+      expect(f.journal.inventory(proposal.scope).filter(entry => entry.kind === 'admission')).toEqual([])
+      expect(f.adapter.requests).toHaveLength(0)
+      return
+    }
+    const value = await intentRequest
     if (!value || typeof value !== 'object' || Array.isArray(value) || !('record' in value)) throw Error('missing intent')
     const intent = captureHostTaskTargetResult(value.record, ready)
     if (!intent.ok || intent.record.status !== 'consume_intent') throw Error('wrong ready result')
@@ -315,13 +377,41 @@ it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'h
       })
       restoreStream = () => { streamSpy.mockRestore() }
     }
+    if (mode === 'receipt-race') {
+      const unit = f.units.get('paired_task_targets_v1')
+      if (!unit) throw Error('missing actual admission writer')
+      const originalPut = unit.putRecord.bind(unit)
+      const spy = vi.spyOn(unit, 'putRecord').mockImplementation(async (table, key, row) => {
+        if (table === 'admissions') { receiptEntered.resolve(undefined); await releaseReceipt.promise }
+        await originalPut(table, key, row)
+      })
+      restoreReceipt = () => { spy.mockRestore() }
+    }
     const long = f.host.execute('task_target_run', start, f.account, f.localPeer, binding, f.signal)
     const joined = Promise.all([long, f.host.execute('task_target_wait_claim', start, f.account, f.localPeer, binding, f.signal)])
     void joined.catch(() => {})
-    if (mode !== 'none' && mode !== 'matching') {
+    if (mode !== 'none' && mode !== 'matching' && mode !== 'receipt-race') {
       await expect(joined).rejects.toThrow('paired_target_native_closed')
       expect(f.adapter.requests).toHaveLength(0)
       expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.state).toBe('consume_intent')
+      return
+    }
+    if (mode === 'receipt-race') {
+      await Promise.race([receiptEntered.promise, joined.then(() => { throw Error('missing held original receipt writer') })])
+      const nextScope = { ...proposal.scope, expectedCoordinationEpoch: '2', acceptedCoordinationEpoch: '3' }
+      await f.control.operate(signedSlarkFence(f, nextScope), f.account, f.localPeer, f.signal)
+      releaseReceipt.resolve(undefined)
+      await expect(joined).rejects.toThrow('paired_target_native_closed')
+      expect(f.adapter.requests).toHaveLength(0)
+      expect(f.agent.inbox.nextStep).toHaveLength(0)
+      expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.state).toBe('source_consumed')
+      expect((await readTargetObservation(f)).quiescence).toBe('unknown')
+      await expect(f.host.execute('task_target', ready, f.account, f.localPeer, binding, f.signal))
+        .rejects.toThrow('paired_target_native_closed')
+      expect(await f.host.execute('task_target', start, f.account, f.localPeer, binding, f.signal))
+        .toMatchObject({ kind: 'task_target_original', proposal, challenge })
+      await expect(f.host.execute('task_target_run', start, f.account, f.localPeer, binding, f.signal)).rejects.toThrow()
+      expect(f.adapter.requests).toHaveLength(0)
       return
     }
     if (mode === 'matching') {
@@ -337,12 +427,18 @@ it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'h
     await long
     expect(f.adapter.requests).toHaveLength(mode === 'matching' ? 2 : 1)
     expect(JSON.stringify(f.adapter.requests[0]?.messages)).toContain('处理原计划中的下一步')
-    if (mode === 'matching') expect(JSON.stringify(f.adapter.requests[1]?.messages)).toContain('actual original file bytes')
+    if (mode === 'matching') {
+      expect(JSON.stringify(f.adapter.requests[1]?.messages)).toContain('actual original file bytes')
+      const observed = await readTargetObservation(f)
+      expect(observed.totalCount).toBe(2)
+      expect(observed.items.map(item => [item.kind, item.coordinationEpoch]).sort()).toEqual([['admission', '2'], ['projection', '1']])
+      expect(observed.quiescence).toBe('unknown')
+    }
     expect(f.agent.status).toBe('idle')
     const replay = f.host.execute('task_target_run', start, f.account, f.localPeer, binding, f.signal)
     await expect(replay).rejects.toThrow()
     expect(f.adapter.requests).toHaveLength(mode === 'matching' ? 2 : 1)
-  } finally { releaseModel.resolve(undefined); restoreStream(); await f.close() }
+  } finally { releaseModel.resolve(undefined); releaseReceipt.resolve(undefined); restoreStream(); restoreReceipt(); await f.close() }
 })
 it('routes exact authenticated private HTTP phases and refuses extra authority or another worker before admission', async () => {
   const f = await fixture(), token = 'B'.repeat(43)
@@ -378,4 +474,89 @@ it('routes exact authenticated private HTTP phases and refuses extra authority o
     expect(f.journal.inventory(f.request.directive.scope)).toHaveLength(1)
     expect(f.adapter.requests).toHaveLength(0)
   } finally { await f.close() }
+})
+
+it('persists an authenticated SlarkIssue floor without inspecting or inventing a DSH Root', async () => {
+  const f = await fixture()
+  try {
+    const d = f.request.directive, command = { operation: 'fence' as const,
+      transferRequestId: d.transfer.requestId, payloadDigest: d.transfer.payloadDigest }
+    const draft = { schemaVersion: 1, purpose: 'task_coordination', issuer: d.issuer, keyId: d.keyId,
+      requestId: d.requestId, nonce: d.nonce, issuedAt: d.issuedAt, expiresAt: d.expiresAt,
+      audience: 'urn:slark:task-coordination:v1', scope: d.scope, scopeDigest: d.scopeDigest, floorDigest: d.floorDigest,
+      accountBindingId: d.accountBindingId, accountBindingVersion: d.accountBindingVersion, peer: d.peer,
+      operation: 'fence', commandDigest: hostTaskCoordinationCommandDigest(command), signature: 'A'.repeat(86) }
+    const input = parseHostTaskCoordinationInput({ command, directive: { ...draft,
+      signature: sign(null, Buffer.from(encodeHostTaskCoordinationDirective(draft)), f.source.privateKey).toString('base64url') } })
+    const reply = await f.control.operate(input, f.account, f.localPeer, f.signal)
+    expect(reply).toMatchObject({ ok: true, record: { status: 'closed', fenceAck: { totalCount: 0,
+      acceptedCoordinationEpoch: d.scope.acceptedCoordinationEpoch } } })
+    expect(f.inspectDsh).not.toHaveBeenCalled()
+    expect(f.controlJournal.request(command.transferRequestId)?.authorizationJson).toBe(JSON.stringify(input))
+    expect(f.control.inspectOriginalCut(input).input).toEqual(input)
+    expect(f.adapter.requests).toHaveLength(0)
+  } finally { await f.close() }
+})
+
+it('observes only the actual sealed nonexecuted projection and retains it across later epoch scopes', async () => {
+  const f = await fixture()
+  try {
+    await commitOriginalProjection(f)
+    expect((await readTargetObservation(f)).quiescence).toBe('unknown')
+    const input = signedSlarkFence(f)
+    await f.control.operate(input, f.account, f.localPeer, f.signal)
+    const observed = await readTargetObservation(f)
+    expect(observed).toMatchObject({ totalCount: 1, coverage: 'complete', quiescence: 'quiescent',
+      items: [{ kind: 'projection', coordinationEpoch: '1', state: 'closed_before_start', disposition: 'closed_before_start' }] })
+    await expect(f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal))
+      .rejects.toThrow('paired_target_native_closed')
+    const later = await readTargetObservation(f, f.host, { ...f.request.directive.scope,
+      expectedCoordinationEpoch: '2', acceptedCoordinationEpoch: '3' })
+    expect(later.items).toEqual(observed.items)
+    expect(f.inspectDsh).not.toHaveBeenCalled(); expect(f.adapter.requests).toHaveLength(0)
+  } finally { await f.close() }
+})
+it('does not turn cold projection metadata or an empty Slark floor into zero-work evidence', async () => {
+  const f = await fixture()
+  let cold: DesktopTaskTargetHost | undefined
+  try {
+    await f.control.operate(signedSlarkFence(f), f.account, f.localPeer, f.signal)
+    expect(await readTargetObservation(f)).toMatchObject({ items: [], coverage: 'unknown', quiescence: 'unknown' })
+  } finally { await cold?.close(); await f.close() }
+  const warm = await fixture()
+  try {
+    await commitOriginalProjection(warm)
+    await warm.control.operate(signedSlarkFence(warm), warm.account, warm.localPeer, warm.signal)
+    cold = warm.createHost(warm.ctx, warm.provider)
+    warm.ctx.set('pairedTaskTargetConsumerHost', cold.service)
+    expect(await readTargetObservation(warm, cold)).toMatchObject({ totalCount: 1, coverage: 'unknown', quiescence: 'unknown' })
+  } finally { await cold?.close(); await warm.close() }
+})
+it('waits for the actual queued projection writer and retains its raced old-scope row as unknown', async () => {
+  const f = await fixture(), entered = Promise.withResolvers<undefined>(), release = Promise.withResolvers<undefined>(),
+    barrierEntered = Promise.withResolvers<undefined>(), events: string[] = []
+  const unit = f.units.get('paired_task_targets_v1')
+  if (!unit) throw Error('missing original storage unit')
+  const originalPut = unit.putRecord.bind(unit), originalDrain = f.journal.drain.bind(f.journal)
+  const putSpy = vi.spyOn(unit, 'putRecord').mockImplementation(async (table, key, value) => {
+    if (table === 'projections') { entered.resolve(undefined); await release.promise }
+    await originalPut(table, key, value); events.push('writer-durable')
+  })
+  const drainSpy = vi.spyOn(f.journal, 'drain').mockImplementation((signal) => {
+    const pending = originalDrain(signal); barrierEntered.resolve(undefined); return pending
+  })
+  try {
+    const preparing = f.host.execute('task_target', f.request, f.account, f.localPeer, 'd'.repeat(64), f.signal)
+    void preparing.catch(() => {})
+    await entered.promise
+    await f.control.operate(signedSlarkFence(f), f.account, f.localPeer, f.signal)
+    const observing = readTargetObservation(f).then((value) => { events.push('observed'); return value })
+    await barrierEntered.promise
+    release.resolve(undefined)
+    await expect(preparing).rejects.toThrow('paired_target_native_closed')
+    expect(await observing).toMatchObject({ totalCount: 1, quiescence: 'unknown' })
+    expect(events.indexOf('writer-durable')).toBeLessThan(events.indexOf('observed'))
+    expect(f.journal.inventory(f.request.directive.scope).filter(entry => entry.kind === 'admission')).toEqual([])
+    expect(f.adapter.requests).toHaveLength(0)
+  } finally { release.resolve(undefined); putSpy.mockRestore(); drainSpy.mockRestore(); await f.close() }
 })

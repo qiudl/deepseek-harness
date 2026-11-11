@@ -101,6 +101,11 @@ export interface PairedTaskTargetJournal {
   inventory(scope: HostTaskCoordinationScope): readonly (
     Readonly<{ kind: 'projection'; value: PairedTaskTargetProjection }> |
     Readonly<{ kind: 'admission'; value: PairedTaskTargetAdmission }>)[]
+  /** Wait only for metadata writes already accepted by this journal's owning queue.
+   * @param signal - Original observation cancellation.
+   * @returns Completion after the queued writer barrier; it says nothing about models, IO or child execution.
+   */
+  drain(signal: AbortSignal): Promise<void>
   /** @returns Completion after accepted writes and domain shutdown. */
   close(): Promise<void>
 }
@@ -329,6 +334,10 @@ export async function openPairedTaskTargetJournal(facility: Pick<DomainFacility,
         if (reservedBytes + bytes > maxBytes) throw Error('paired_target_capacity')
         await put(() => admissions.put(itemId, record)); reservedBytes += bytes; return record
       })
+    },
+    async drain(signal) {
+      await queue(signal, async () => {})
+      healthy(); signal.throwIfAborted()
     },
     inventory(scope) {
       healthy(); const floor = hostTaskCoordinationFloorDigest(scope)

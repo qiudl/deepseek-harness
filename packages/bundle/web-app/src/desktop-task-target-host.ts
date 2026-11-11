@@ -47,6 +47,7 @@ interface CapturedCall {
   readonly account: TaskCoordinationActualAccount
   readonly peer: TaskCoordinationActualPeer
   readonly binding: string
+  readonly signal: AbortSignal
   current(): void
 }
 function installationSignature(preimage: string, signature: string, key: string): boolean {
@@ -72,7 +73,8 @@ export class DesktopTaskTargetHost {
     expiresAt: number
     items: readonly HostTaskTargetObservationItem[]
     digest: string
-    coverage: 'complete' | 'unknown' }>()
+    coverage: 'complete' | 'unknown'
+    assertCurrent(): void }>()
   private readonly cursors = new Map<string, { inventoryId: string; offset: number }>()
 
   /** @param ctx - Actual injected worker, with the original Controller and verified Native bootstrap.
@@ -128,9 +130,10 @@ export class DesktopTaskTargetHost {
       signal.throwIfAborted(); this.lifetime.throwIfAborted()
       if (this.closed || this.ctx.fiber.state !== FiberState.ACTIVE || this.ctx.get('pairedTaskTargetConsumerHost') !== this.service
         || Date.now() < header.issuedAt || Date.now() >= header.expiresAt) unavailable()
+      if (input.operation === 'prepare') this.native.assertPairedPreparationOpen(input.directive.scope)
     }
     current()
-    return { input, account, peer, binding: hash([bindingKey, account, peer, this.workerId, input]), current }
+    return { input, account, peer, signal, binding: hash([bindingKey, account, peer, this.workerId, input]), current }
   }
   private targetCurrent(target: LoadedTarget): void {
     try {
@@ -207,7 +210,9 @@ export class DesktopTaskTargetHost {
   }
   private async intent(call: CapturedCall, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     if (call.input.operation !== 'ready_prepare') return unavailable()
-    const proposal = call.input.directive, journal = await this.journal(); call.current()
+    const proposal = call.input.directive, current = () => { call.current(); this.native.assertPairedAdmissionCurrent(proposal) }
+    current()
+    const journal = await this.journal(); current()
     const inventory = journal.inventory(proposal.scope), projection = inventory.find(entry => entry.kind === 'projection'
       && entry.value.descriptorDigest === proposal.descriptorDigest)
     if (!projection || projection.kind !== 'projection') return unavailable()
@@ -230,7 +235,7 @@ export class DesktopTaskTargetHost {
         issuedAt: Date.now(), expiresAt: proposal.expiresAt, peer: proposal.peer, signature: 'A'.repeat(86) }, proposal)
       admission = await journal.consumeIntent(projection.value.itemId, proposal, challenge, signal)
     }
-    call.current()
+    current()
     const challenge = parseHostTaskTargetConsumeChallengeForProposal(JSON.parse(admission.challengeJson), proposal)
     return this.result({ ok: true, peer: proposal.peer, record: { status: 'consume_intent', challenge } }, call.input)
   }
@@ -254,6 +259,7 @@ export class DesktopTaskTargetHost {
   private async observe(call: CapturedCall): Promise<HostRemoteSessionJson> {
     if (call.input.operation !== 'observe') return unavailable()
     const d = call.input.directive, journal = await this.journal(); call.current()
+    await journal.drain(call.signal); call.current()
     for (const [id, snapshot] of this.inventories) if (snapshot.expiresAt <= Date.now()) {
       this.inventories.delete(id)
       for (const [cursor, value] of this.cursors) if (value.inventoryId === id) this.cursors.delete(cursor)
@@ -266,25 +272,57 @@ export class DesktopTaskTargetHost {
       const records = journal.inventory(d.scope)
       const descriptors = new Map(records.filter(entry => entry.kind === 'projection')
         .map(entry => [entry.value.itemId, parseHostTaskTargetDescriptor(JSON.parse(entry.value.descriptorJson))]))
+      const recordSetDigest = hash(records), checks: (() => void)[] = []
+      const admittedProjections = new Set(records.flatMap(entry => entry.kind === 'admission' ? [entry.value.projectionId] : []))
       const items = records.map((entry) => {
         const admission = entry.kind === 'admission' ? entry.value : undefined
         const descriptor = descriptors.get(admission ? admission.projectionId : entry.value.itemId)
         if (!descriptor) return unavailable()
         const evidence = admission ? this.native.pairedEvidence(admission.admissionId) : null
-        const disposition = evidence?.isCurrent() ? evidence.state : 'unknown'
+        let closedProjection = false
+        const loaded = !admission && this.loaded.get(entry.value.itemId)
+        const floor = !admission && !admittedProjections.has(entry.value.itemId)
+          ? this.native.readPairedClosedProjection(descriptor.scope) : undefined
+        if (loaded && floor && loaded.snapshot.isCurrent() && loaded.agent.status === 'idle'
+          && !loaded.agent.inbox.nextStep.length && !loaded.agent.inbox.nextTurn.length
+          && installationSignature(encodeHostTaskTargetDescriptor(descriptor), descriptor.signature, call.peer.publicKey)) {
+          try { this.targetCurrent(loaded); closedProjection = true } catch { /* The retained projection remains unknown. */ }
+          if (closedProjection) checks.push(() => {
+            this.targetCurrent(loaded)
+            if (!loaded.snapshot.isCurrent() || loaded.agent.status !== 'idle' || loaded.agent.inbox.nextStep.length
+              || loaded.agent.inbox.nextTurn.length || !isDeepStrictEqual(this.native.readPairedClosedProjection(descriptor.scope), floor))
+              unavailable()
+          })
+        }
+        const disposition = closedProjection ? 'closed_before_start' : evidence?.isCurrent() ? evidence.state : 'unknown'
+        if (admission) {
+          const original = evidence && { state: evidence.state, recordDigest: evidence.recordDigest, current: evidence.isCurrent() }
+          checks.push(() => {
+            const next = this.native.pairedEvidence(admission.admissionId)
+            if (!isDeepStrictEqual(next && { state: next.state, recordDigest: next.recordDigest, current: next.isCurrent() }, original))
+              unavailable()
+          })
+        }
+        const epoch = admission ? parseHostTaskReadyAdmissionDirective(JSON.parse(admission.readyJson)).newSourceGrant.epoch
+          : descriptor.scope.expectedCoordinationEpoch
         return parseHostTaskTargetObservationItem({ itemId: entry.value.itemId, kind: entry.kind,
           commandId: descriptor.target.commandId, transferRequestId: descriptor.transfer.requestId,
-          coordinationEpoch: descriptor.scope.acceptedCoordinationEpoch, originalStepHash: descriptor.originalStepHash,
-          descriptorDigest: descriptor.descriptorDigest, target: descriptor.target, state: admission?.state ?? 'prepared',
+          coordinationEpoch: epoch, originalStepHash: descriptor.originalStepHash,
+          descriptorDigest: descriptor.descriptorDigest, target: descriptor.target, state: admission?.state ?? (closedProjection ? 'closed_before_start' : 'prepared'),
           admissionId: admission?.admissionId ?? null, consumeIntentId: admission?.consumeIntentId ?? null,
           sourceConsumeReceiptDigest: admission?.sourceConsumeReceiptDigest ?? null,
           messageId: admission?.messageId ?? null, turn: admission?.turn ?? null, step: admission?.step ?? null,
-          recordDigest: hash([entry.value, evidence?.recordDigest ?? null]), disposition })
+          recordDigest: hash([entry.value, closedProjection ? floor : evidence?.recordDigest ?? null]), disposition })
       }).sort((a, b) => Buffer.compare(Buffer.from(a.itemId), Buffer.from(b.itemId)))
       const coverage = records.length > 0 && records.every(entry => entry.kind === 'admission'
         || this.loaded.has(entry.value.itemId)) ? 'complete' : 'unknown'
+      const assertCurrent = () => {
+        if (hash(journal.inventory(d.scope)) !== recordSetDigest) unavailable()
+        for (const check of checks) check()
+      }
+      assertCurrent()
       this.inventories.set(inventoryId, { binding, expiresAt: d.expiresAt, items,
-        digest: hostTaskTargetInventoryDigest(items), coverage })
+        digest: hostTaskTargetInventoryDigest(items), coverage, assertCurrent })
     } else {
       inventoryId = d.inventoryId
       const cursor = d.cursor && this.cursors.get(d.cursor)
@@ -293,6 +331,7 @@ export class DesktopTaskTargetHost {
     }
     const snapshot = this.inventories.get(inventoryId)
     if (!snapshot || snapshot.binding !== binding || Date.now() >= snapshot.expiresAt) return unavailable()
+    snapshot.assertCurrent()
     const page: HostTaskTargetObservationItem[] = []
     for (const item of snapshot.items.slice(offset, offset + 50)) {
       if (Buffer.byteLength(JSON.stringify([...page, item]), 'utf8') > 16384) break
@@ -305,13 +344,15 @@ export class DesktopTaskTargetHost {
       this.cursors.set(nextCursor, { inventoryId, offset: offset + page.length })
     }
     call.current()
-    // Prepared metadata and an empty list never establish that every producer has stopped.
+    // Only an owned, durable-floor-sealed projection with no admission or actual input can establish this no-body inventory.
     const observation = parseHostTaskTargetObservation({ schemaVersion: 1, purpose: 'task_coordination_target_observation_v1',
       issuer: d.issuer, keyId: d.peer.installationId, requestId: d.requestId,
       directiveDigest: hostTaskTargetObserveDirectiveDigest(d), issuedAt: d.issuedAt, expiresAt: d.expiresAt,
       scopeDigest: d.scopeDigest, floorDigest: d.floorDigest, transfer: d.transfer, journalEpoch: journal.epoch,
       inventoryId, inventoryDigest: snapshot.digest, totalCount: snapshot.items.length, items: page, nextCursor, eof,
-      coverage: snapshot.coverage, quiescence: snapshot.items.some(item => item.disposition === 'in_flight') ? 'in_flight' : 'unknown',
+      coverage: snapshot.coverage, quiescence: snapshot.items.some(item => item.disposition === 'in_flight') ? 'in_flight'
+        : snapshot.coverage === 'complete' && snapshot.items.length > 0 && snapshot.items.every(item => item.kind === 'projection'
+          && item.state === 'closed_before_start' && item.disposition === 'closed_before_start') ? 'quiescent' : 'unknown',
       observedAt: Date.now(), workerId: this.workerId, peer: d.peer, signature: 'A'.repeat(86) })
     return this.result({ ok: true, peer: d.peer, record: { status: 'observed', observation } }, call.input)
   }
@@ -333,6 +374,7 @@ export class DesktopTaskTargetHost {
     if (action === 'task_target' && call.input.operation === 'ready_prepare') return this.intent(call, signal)
     if (action === 'task_target' && call.input.operation === 'observe') return this.observe(call)
     if (action === 'task_target_commit') {
+      if (call.input.operation === 'ready_prepare') this.native.assertPairedAdmissionCurrent(call.input.directive)
       const journal = await this.journal(); call.current()
       if (!signed || typeof signed !== 'object' || !('kind' in signed) || !('value' in signed)) return unavailable()
       if (call.input.operation === 'prepare' && signed.kind === 'descriptor') {
@@ -348,6 +390,7 @@ export class DesktopTaskTargetHost {
         if (!admission || !installationSignature(encodeHostTaskTargetConsumeChallenge(challenge), challenge.signature, call.peer.publicKey))
           return unavailable()
         const retained = await journal.commitChallenge(admission.itemId, challenge, signal); call.current()
+        this.native.assertPairedAdmissionCurrent(proposal)
         const committed = parseHostTaskTargetConsumeChallengeForProposal(JSON.parse(retained.challengeJson), proposal)
         return this.result({ ok: true, peer: proposal.peer, record: { status: 'consume_intent', challenge: committed } }, call.input)
       }
@@ -369,7 +412,7 @@ export class DesktopTaskTargetHost {
       const body = parseHostTaskTargetStepBody(input.stepBody)
       const owned = AbortSignal.any([signal, this.lifetime, this.provider.lifetime])
       const current = () => {
-        owned.throwIfAborted(); this.targetCurrent(loaded)
+        owned.throwIfAborted(); this.targetCurrent(loaded); this.native.assertPairedAdmissionCurrent(proposal)
         if (this.ctx.get('pairedTaskTargetConsumerHost') !== this.service) unavailable()
       }
       current(); short.throwIfAborted()
