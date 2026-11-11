@@ -26,6 +26,8 @@ describe('native Bot profile edit', () => {
       change: { kind: 'effort', value: null } }).change.value).toBeNull()
     expect(parseHostBotSettingsUpdateRequest({ ...request,
       change: { kind: 'main', value: true } }).change.value).toBe(true)
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'primary', value: 'other' } }).change.value).toBe('other')
   })
   it('rejects forged selectors, unsupported fields and mismatched receipts', () => {
     for (const patch of [{ sessionId: '../other' }, { account: 'other' },
@@ -34,6 +36,7 @@ describe('native Bot profile edit', () => {
       { change: { kind: 'model', value: 'unknown' } },
       { change: { kind: 'effort', value: '' } },
       { change: { kind: 'main', value: 'yes' } },
+      { change: { kind: 'primary', value: '../other' } },
       { change: { kind: 'role', value: 'x'.repeat(25) } }])
       expect(() => parseHostBotSettingsUpdateRequest({ ...request, ...patch })).toThrow()
     const parsed = parseHostBotSettingsUpdateRequest(request)
