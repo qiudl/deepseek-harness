@@ -15,6 +15,18 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips only fixed owner room edits under the claimed room control', () => {
+    const request = { roomId: 'room-1', expectedRevision: 7, change: { kind: 'notice', value: 'Review' } }
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const command = { operation: 'bot.room.update', command_id: randomUUID(),
+      session_id: 'room-1', control, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
+      { ...command, request: { ...request, profileId: 'other' } },
+      { ...command, request: { ...request, change: { kind: 'notice', value: 'ok', workDir: '/private' } } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed Bot room commands bound to the claimed room Session', () => {
     const request = { roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' }
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }

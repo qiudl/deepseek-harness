@@ -356,6 +356,26 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('negotiates fixed Bot room edits separately and rejects a hidden result field', async () => {
+    const request = { roomId: 'room-1', expectedRevision: 7,
+      change: { kind: 'notice', value: 'Review' } } as never
+    const command = { operation: 'bot.room.update' as const, command_id: randomUUID() as never,
+      session_id: 'room-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
+      replyMode: 'admin', relayLimit: null, permissionPreset: null, adminBotId: 'main',
+      members: [{ botId: 'main', displayName: 'Main' }] }
+    const result = { roomId: 'room-1', revision: 8, state: 'applied', details }
+    const execute = vi.fn(async (): Promise<unknown> => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotRoomUpdateSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_room_update')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, details: { ...details, workDir: '/private' } })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot chat through signed inspection and local SDK support before execution', async () => {
     const input = { ...opened, endpoint: 'bot/chat' as const, payload: { args: { botId: null } } }
     const execute = vi.fn(async (): Promise<unknown> => ({ revision: 4, defaultBotId: null, bot: null }))
