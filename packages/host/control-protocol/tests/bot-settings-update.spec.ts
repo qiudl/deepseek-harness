@@ -16,10 +16,13 @@ describe('native Bot profile edit', () => {
       revision: 9, settings: null }, parsed)?.state).toBe('stale')
     expect(parseHostBotSettingsUpdateRequest({ ...request,
       change: { kind: 'role', value: '研'.repeat(24) } }).change.value).toBe('研'.repeat(24))
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'name', value: '研'.repeat(40) } }).change.value).toBe('研'.repeat(40))
   })
   it('rejects forged selectors, unsupported fields and mismatched receipts', () => {
     for (const patch of [{ sessionId: '../other' }, { account: 'other' },
-      { change: { kind: 'name', value: 'Changed' } },
+      { change: { kind: 'name', value: '' } },
+      { change: { kind: 'name', value: 'x'.repeat(41) } },
       { change: { kind: 'role', value: 'x'.repeat(25) } }])
       expect(() => parseHostBotSettingsUpdateRequest({ ...request, ...patch })).toThrow()
     const parsed = parseHostBotSettingsUpdateRequest(request)
