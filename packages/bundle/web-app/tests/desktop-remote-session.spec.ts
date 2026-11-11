@@ -28,7 +28,7 @@ describe('Desktop remote Session bridge', () => {
     const request = parseHostBotRoomUpdateRequest({ roomId: 'room-1', expectedRevision: 7,
       change: { kind: 'notice', value: 'Review' } })
     const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
-      replyMode: 'admin', relayLimit: null, permissionPreset: null, adminBotId: 'main',
+      replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
       members: [{ botId: 'main', displayName: 'Main' }] }
     const result = { roomId: 'room-1', revision: 8, state: 'applied', details }
     const control = new DesktopSessionControl()

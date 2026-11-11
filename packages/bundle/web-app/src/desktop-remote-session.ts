@@ -131,7 +131,11 @@ export class DesktopRemoteSessionExecutor {
             roomId: receipt.details.roomId, revision: receipt.details.revision,
             displayName: receipt.details.displayName, notice: receipt.details.notice,
             replyMode: receipt.details.replyMode, relayLimit: receipt.details.relayLimit,
-            permissionPreset: receipt.details.permissionPreset, adminBotId: receipt.details.adminBotId,
+            permissionPreset: receipt.details.permissionPreset,
+            permissionChoices: receipt.details.permissionChoices === null ? null : {
+              options: receipt.details.permissionChoices.options.map(option => ({ value: option.value, name: option.name })),
+              defaultPreset: receipt.details.permissionChoices.defaultPreset,
+            }, adminBotId: receipt.details.adminBotId,
             members: receipt.details.members.map(member => ({ botId: member.botId, displayName: member.displayName })),
           } }
       }

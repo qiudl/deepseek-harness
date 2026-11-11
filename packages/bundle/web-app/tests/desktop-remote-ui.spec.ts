@@ -70,7 +70,7 @@ describe('Desktop remote UI read-only bridge', () => {
   it('reads exact owner room settings and rejects injected plugin state', async () => {
     const invoke = vi.fn()
     const details = { roomId: 'room-1', revision: 7, displayName: 'Planning', notice: 'Review',
-      replyMode: 'admin', relayLimit: 5, permissionPreset: null, adminBotId: 'main',
+      replyMode: 'admin', relayLimit: 5, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
       members: [{ botId: 'main', displayName: 'Main' }] }
     const read = vi.fn(async (): Promise<unknown> => details)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined,

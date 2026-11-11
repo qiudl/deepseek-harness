@@ -362,7 +362,7 @@ describe('Unix transport authority failures', () => {
     const command = { operation: 'bot.room.update' as const, command_id: randomUUID() as never,
       session_id: 'room-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
     const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
-      replyMode: 'admin', relayLimit: null, permissionPreset: null, adminBotId: 'main',
+      replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
       members: [{ botId: 'main', displayName: 'Main' }] }
     const result = { roomId: 'room-1', revision: 8, state: 'applied', details }
     const execute = vi.fn(async () => result)
@@ -439,7 +439,7 @@ describe('Unix transport authority failures', () => {
     const input = { ...opened, endpoint: 'bot/room-details' as const,
       payload: { args: { roomId: 'room-1' } } }
     const details = { roomId: 'room-1', revision: 7, displayName: 'Planning', notice: '',
-      replyMode: 'everyone', relayLimit: null, permissionPreset: null, adminBotId: 'main',
+      replyMode: 'everyone', relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
       members: [{ botId: 'main', displayName: 'Main' }] }
     const execute = vi.fn(async (): Promise<unknown> => details)
     const old = await authorityClient({ remoteUiRead: execute })

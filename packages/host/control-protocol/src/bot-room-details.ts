@@ -13,6 +13,8 @@ export interface HostBotRoomDetails {
   readonly replyMode: 'admin' | 'everyone'
   readonly relayLimit: number | null
   readonly permissionPreset: string | null
+  readonly permissionChoices: { readonly options: readonly { readonly value: string; readonly name: string }[]
+    readonly defaultPreset: string | null } | null
   readonly adminBotId: string | null
   readonly members: readonly { readonly botId: string; readonly displayName: string }[]
 }
@@ -35,7 +37,7 @@ export function parseHostBotRoomDetailsRequest(value: unknown): HostBotRoomDetai
 export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDetailsRequest): HostBotRoomDetails | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['roomId', 'revision', 'displayName', 'notice', 'replyMode',
-    'relayLimit', 'permissionPreset', 'adminBotId', 'members']) || value.roomId !== request.roomId ||
+    'relayLimit', 'permissionPreset', 'permissionChoices', 'adminBotId', 'members']) || value.roomId !== request.roomId ||
     typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
     typeof value.displayName !== 'string' || !value.displayName.trim() || Buffer.byteLength(value.displayName, 'utf8') > 512 ||
     typeof value.notice !== 'string' || Buffer.byteLength(value.notice, 'utf8') > 8192 ||
@@ -59,7 +61,28 @@ export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDeta
     members.push({ botId: member.botId, displayName: member.displayName })
   }
   if (value.adminBotId !== null && !seen.has(value.adminBotId)) throw Error('invalid_bot_room_details_result')
+  let permissionChoices: HostBotRoomDetails['permissionChoices'] = null
+  if (value.permissionChoices !== null) {
+    const catalog = value.permissionChoices
+    if (!record(catalog) || !exact(catalog, ['options', 'defaultPreset']) ||
+      !Array.isArray(catalog.options) || catalog.options.length > 64 ||
+      (catalog.defaultPreset !== null && (typeof catalog.defaultPreset !== 'string' ||
+        Buffer.byteLength(catalog.defaultPreset, 'utf8') > 200))) throw Error('invalid_bot_room_details_result')
+    const options: { value: string; name: string }[] = []
+    const values = new Set<string>()
+    for (const option of catalog.options) {
+      if (!record(option) || !exact(option, ['value', 'name']) ||
+        typeof option.value !== 'string' || !option.value.trim() || Buffer.byteLength(option.value, 'utf8') > 200 ||
+        typeof option.name !== 'string' || !option.name.trim() || Buffer.byteLength(option.name, 'utf8') > 512 ||
+        values.has(option.value)) throw Error('invalid_bot_room_details_result')
+      values.add(option.value)
+      options.push({ value: option.value, name: option.name })
+    }
+    if (catalog.defaultPreset !== null && !values.has(catalog.defaultPreset))
+      throw Error('invalid_bot_room_details_result')
+    permissionChoices = { options, defaultPreset: catalog.defaultPreset }
+  }
   return { roomId: request.roomId, revision: value.revision, displayName: value.displayName,
     notice: value.notice, replyMode: value.replyMode, relayLimit: value.relayLimit,
-    permissionPreset: value.permissionPreset, adminBotId: value.adminBotId, members }
+    permissionPreset: value.permissionPreset, permissionChoices, adminBotId: value.adminBotId, members }
 }

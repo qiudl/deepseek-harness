@@ -3,7 +3,7 @@ import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt } from '..
 
 const request = { roomId: 'room-1', expectedRevision: 7, change: { kind: 'notice', value: 'Review' } }
 const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
-  replyMode: 'admin', relayLimit: null, permissionPreset: null, adminBotId: 'main',
+  replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
   members: [{ botId: 'main', displayName: 'Main' }] }
 
 describe('fixed owner Bot room update contract', () => {

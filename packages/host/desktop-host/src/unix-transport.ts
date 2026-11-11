@@ -3319,6 +3319,7 @@ export class UnixHostClient {
   readonly remoteBotChatSupported = true
   /** This SDK can encode fixed owner room submissions. */
   readonly remoteBotRoomSupported = true
+  /** This SDK can encode fixed owner room settings edits. */
   readonly remoteBotRoomUpdateSupported = true
   /** This SDK can encode the existing Bot identity/current-chat read. */
   readonly remoteUiBotChatSupported = true
@@ -3326,6 +3327,7 @@ export class UnixHostClient {
   readonly remoteUiBotRoomsSupported = true
   /** This SDK can encode retained owner room messages. */
   readonly remoteUiBotRoomHistorySupported = true
+  /** This SDK can encode owner room management details. */
   readonly remoteUiBotRoomDetailsSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
