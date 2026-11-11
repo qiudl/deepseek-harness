@@ -67,7 +67,7 @@ import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from 
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
-  HostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotSettingsRequest, HostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -811,6 +811,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotSettings) return null
           const value = await service.readLocalBotSettings(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFoldersRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFolders?: (input: HostBotFoldersRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFolders) return null
+          const value = await service.readLocalBotFolders(request, signal)
           signal.throwIfAborted()
           return value
         })

@@ -24,7 +24,7 @@ describe('Profile remote Session wire commands', () => {
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
     for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
       { ...command, request: { ...request, profileId: 'other' } },
-      { ...command, request: { ...request, change: { kind: 'name', value: 'Changed' } } }])
+      { ...command, request: { ...request, change: { kind: 'unsupported', value: 'Changed' } } }])
       expect(() => decode(frame(bad))).toThrow()
   })
   it('round trips only fixed group create/delete commands under claimed Sessions', () => {
@@ -274,6 +274,13 @@ describe('Profile remote UI read wire commands', () => {
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
     for (const args of [{ botId: '../other' }, { botId: 'main', account: 'other' }, {}])
       expect(() => decode(readFrame('bot/settings', { args }))).toThrow()
+  })
+  it('round-trips only an exact native Bot folder selector', () => {
+    const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ botId: '../other', path: null }, { botId: 'main', path: '/team\nsecret' },
+      { botId: 'main', path: null, account: 'other' }])
+      expect(() => decode(readFrame('bot/folders', { args }))).toThrow()
   })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {

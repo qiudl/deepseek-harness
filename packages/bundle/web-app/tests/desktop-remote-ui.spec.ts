@@ -103,6 +103,23 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/settings', { args: { botId: 'main' } }, signal))
       .rejects.toThrow('invalid_bot_settings_result')
   })
+  it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
+    const invoke = vi.fn()
+    const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,
+      folders: [{ path: '/project', title: 'Project' }], truncated: false }
+    const read = vi.fn(async (): Promise<unknown> => places)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null } }, signal))
+      .resolves.toEqual(places)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null,
+      account: 'other' } }, signal)).rejects.toThrow('invalid_bot_folders_request')
+    read.mockResolvedValueOnce({ ...places, secret: 'hidden' })
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null } }, signal))
+      .rejects.toThrow('invalid_bot_folders_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)

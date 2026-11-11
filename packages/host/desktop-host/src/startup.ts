@@ -946,6 +946,7 @@ export async function startDesktopHostApplication(
       remoteUiBotRoomHistorySupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotRoomDetailsSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotSettingsSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotFoldersSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiAssetGzipSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
       remoteUiItemChunksSupported: dependencies.profileWorkerFactory === undefined,
