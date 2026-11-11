@@ -15,6 +15,18 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips fixed Bot profile edits under the claimed Bot Session', () => {
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+      change: { kind: 'pinned', value: true } }
+    const command = { operation: 'bot.settings.update', command_id: randomUUID(),
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
+      { ...command, request: { ...request, profileId: 'other' } },
+      { ...command, request: { ...request, change: { kind: 'name', value: 'Changed' } } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed group create/delete commands under claimed Sessions', () => {
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     const create = { operation: 'bot.room.create', command_id: randomUUID(),

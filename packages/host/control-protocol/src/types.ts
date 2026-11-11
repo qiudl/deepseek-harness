@@ -4,6 +4,7 @@ import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './tas
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
+import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -2048,6 +2049,11 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.settings.update'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotSettingsUpdateRequest }
   | { readonly operation: 'bot.room.create'
     readonly command_id: HostControlRequestId
     readonly session_id: string

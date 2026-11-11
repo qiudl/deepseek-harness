@@ -738,6 +738,23 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.deleteLocalBotRoom) return null
           return service.deleteLocalBotRoom(request, signal)
+        }, async (request, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            updateLocalBotSettings?: (input: Omit<typeof request, 'sessionId'>,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.updateLocalBotSettings) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
+            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
+            Reflect.get(owner, 'botId') !== request.botId ||
+            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          return service.updateLocalBotSettings({ botId: request.botId,
+            expectedRevision: request.expectedRevision, change: request.change }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

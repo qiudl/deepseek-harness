@@ -377,6 +377,26 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('negotiates fixed Bot profile edits separately and rejects a hidden result field', async () => {
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+      change: { kind: 'pinned', value: true } } as never
+    const command = { operation: 'bot.settings.update' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const settings = { botId: 'main', revision: 8, name: 'Main', role: '', instructions: '',
+      color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false }
+    const result = { botId: 'main', state: 'applied', revision: 8, settings }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotSettingsUpdateSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_settings_update')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } } as never)
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot room lifecycle separately and rejects a substituted result', async () => {
     const request = { roomId: 'room-1', expectedRevision: 8 } as never
     const command = { operation: 'bot.room.delete' as const, command_id: randomUUID() as never,

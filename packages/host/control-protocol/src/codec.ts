@@ -17,6 +17,7 @@ import { parseHostBotRoomListRequest } from './bot-room-list.ts'
 import { parseHostBotRoomHistoryRequest } from './bot-room-history.ts'
 import { parseHostBotRoomDetailsRequest } from './bot-room-details.ts'
 import { parseHostBotSettingsRequest } from './bot-settings.ts'
+import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
 import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
@@ -688,6 +689,14 @@ function remoteSessionControlProof(value: unknown): HostRemoteSessionControlProo
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'bot.settings.update') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotSettingsUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
   if (command.operation === 'bot.room.create') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotRoomCreateRequest(command.request)

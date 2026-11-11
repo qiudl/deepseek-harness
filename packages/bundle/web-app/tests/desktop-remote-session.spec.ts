@@ -6,7 +6,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
 import { parseHostBotChatSubmission, parseHostBotRoomSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomUpdateRequest, parseHostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
 import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
@@ -24,6 +24,28 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('controls a Bot profile edit through its Session and validates the saved result', async () => {
+    const request = parseHostBotSettingsUpdateRequest({ botId: 'main', sessionId: 'chat-1',
+      expectedRevision: 7, change: { kind: 'pinned', value: true } })
+    const settings = { botId: 'main', revision: 8, name: 'Main', role: '', instructions: '',
+      color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false }
+    const result = { botId: 'main', state: 'applied', revision: 8, settings }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const update = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn(() => { throw Error('no generic Bot edit') })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control,
+      undefined, undefined, undefined, undefined, undefined, undefined, update)
+    const command = { operation: 'bot.settings.update' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(update).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    update.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_settings_update_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')
