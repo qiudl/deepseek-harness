@@ -1,7 +1,7 @@
 /** Actual Agent/JSONL/journal factory tests; Source keys, Bot metadata and installed-code bootstrap are controlled. */
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { generateKeyPairSync, sign, verify, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
@@ -20,7 +20,7 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
 import WorkingDirectoryService from '@deepseek-ai/dsh-working-directory'
 import { PairedTaskTargetConsumer } from '../../../api/session-controller/src/paired-task-target-consumer.ts'
-import { MockAdapter, textResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
+import { MockAdapter, textResponse, toolCallResponse } from '../../../core/agent-loop/tests/mock-adapter.ts'
 import { openPairedTaskTargetJournal } from '../../../api/session-controller/src/paired-task-target-journal.ts'
 import { openCollaborationTaskCoordinationJournal } from '../../../api/session-controller/src/collaboration-task-coordination-journal.ts'
 import { expect, it, vi, onTestFinished } from 'vitest'
@@ -29,9 +29,10 @@ import { encodeHostTaskTargetPrepareDirective, encodeHostTaskTargetDescriptor, p
   parseHostTaskReadyAdmissionDirective, encodeHostTaskReadyAdmissionDirective, parseHostTaskTargetConsumeChallengeForProposal,
   encodeHostTaskTargetConsumeChallenge, parseHostTaskTargetConsumeReceipt, encodeHostTaskTargetConsumeReceipt,
   hostTaskReadyAdmissionDirectiveDigest, hostTaskTargetConsumeChallengeDigest,
-  hostTaskStepPayloadDigest,
+  hostTaskStepPayloadDigest, parseHostTaskTargetStepBody,
   hostTaskCoordinationScopeDigest, hostTaskCoordinationFloorDigest,
   parseHostTaskTargetObserveDirective, encodeHostTaskTargetObserveDirective,
+  parseHostTaskCoordinationInput, hostTaskCoordinationCommandDigest, encodeHostTaskCoordinationDirective,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopTaskTargetHost } from '../src/desktop-task-target-host.ts'
 import { DesktopTaskCoordinationNative } from '../src/desktop-task-coordination-native.ts'
@@ -41,7 +42,7 @@ const fixtureValue: unknown = JSON.parse(readFileSync(
   new URL('../../../host/control-protocol/tests/fixtures/task-target-v1.json', import.meta.url), 'utf8'))
 if (!fixtureValue || typeof fixtureValue !== 'object' || Array.isArray(fixtureValue)) throw Error('invalid fixture')
 const vector = fixtureValue as Record<string, unknown>
-async function fixture(pendingBootstrap = false) {
+async function fixture(pendingBootstrap = false, originalRead = false) {
   const root = await mkdtemp(join(tmpdir(), 'paired-host-')), ctx = new Context()
   await ctx.plugin(Storage)
   const backend = new JsonStorageBackend(root); ctx.storage.backend.register('json', backend)
@@ -57,7 +58,9 @@ async function fixture(pendingBootstrap = false) {
   await ctx.plugin(LocalFileSystem, { cwd: root })
   await ctx.plugin(SandboxPolicyService, { mode: 'read-only', workspaceRoot: root })
   await ctx.plugin(WorkingDirectoryService, { defaultDirectory: root })
-  const adapter = new MockAdapter([textResponse('controlled paired completion')])
+  if (originalRead) await writeFile(join(root, 'original.txt'), 'actual original file bytes')
+  const adapter = new MockAdapter(originalRead ? [toolCallResponse('owned-read', 'read', { file_path: 'original.txt' }),
+    textResponse('controlled paired completion')] : [textResponse('controlled paired completion')])
   ctx.llm.registerAdapter(['controlled'], adapter)
   const agent = await ctx.agentLoop.create(SessionId('paired-host-session'), { provider: 'controlled', model: 'controlled' })
   const source = generateKeyPairSync('ed25519'), installation = generateKeyPairSync('ed25519')
@@ -65,9 +68,12 @@ async function fixture(pendingBootstrap = false) {
   const canonical = vector.canonicalStepBody
   if (!canonical || typeof canonical !== 'object' || !('bytes' in canonical) || typeof canonical.bytes !== 'string')
     throw Error('missing original fixture body')
+  const originalBody = parseHostTaskTargetStepBody(canonical.bytes)
+  const canonicalBytes = originalRead ? JSON.stringify({ ...originalBody, permissions: {
+    ...originalBody.permissions, toolAllowlist: ['read'] } }) : canonical.bytes
   const peer = { ...template.peer, publicKey: installation.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64url') }
   const draft = { ...template, peer, originalStep: { ...template.originalStep,
-    stepPayloadDigest: hostTaskStepPayloadDigest(canonical.bytes) } }
+    stepPayloadDigest: hostTaskStepPayloadDigest(canonicalBytes) } }
   const directive = parseHostTaskTargetPrepareDirective({ ...draft,
     signature: sign(null, Buffer.from(encodeHostTaskTargetPrepareDirective(draft)), source.privateKey).toString('base64url') })
   const now = vi.spyOn(Date, 'now').mockReturnValue(directive.issuedAt + 1)
@@ -121,7 +127,8 @@ async function fixture(pendingBootstrap = false) {
     hostInstanceId: peer.hostInstanceId, processNonce: peer.processNonce }
   const request = { operation: 'prepare' as const, directive }
   const signal = new AbortController().signal
-  return { ctx, host, journal, agent, request, account, localPeer, signal, installation, source, adapter, opens: () => opens,
+  return { ctx, host, journal, agent, request, account, localPeer, signal, installation, source, adapter,
+    native, controlJournal, canonicalBytes, opens: () => opens,
     async close() { lifetime.abort(); await host.close(); await consumer.close(); now.mockRestore() } }
 }
 it('rejects absent original bootstrap facilities without providing a public capability factory', () => {
@@ -236,8 +243,9 @@ it('keeps empty unanchored target inventory coverage and quiescence unknown', as
     expect(f.adapter.requests).toHaveLength(0)
   } finally { await f.close() }
 })
-it('uses the original signed proposal and one-use private input through the actual Agent/Native persistence path', async () => {
-  const f = await fixture()
+it.each(['none', 'matching', 'other-request', 'other-payload', 'other-scope', 'higher'] as const)('uses the original signed proposal and one-use private input through the actual Agent/Native persistence path, floor=%s', async (mode) => {
+  const f = await fixture(false, mode === 'matching'), releaseModel = Promise.withResolvers<undefined>(), enteredModel = Promise.withResolvers<undefined>()
+  let restoreStream = () => {}
   try {
     const binding = 'd'.repeat(64)
     const prepared = await f.host.execute('task_target', f.request, f.account, f.localPeer, binding, f.signal)
@@ -248,6 +256,30 @@ it('uses the original signed proposal and one-use private input through the actu
     await f.host.execute('task_target_commit', f.request, f.account, f.localPeer, binding, f.signal,
       { kind: 'descriptor', value: { ...descriptor, signature: sign(null, Buffer.from(encodeHostTaskTargetDescriptor(descriptor)),
         f.installation.privateKey).toString('base64url') } })
+    let originalFloor: Parameters<DesktopTaskCoordinationNative['closeFloor']>[0] | undefined
+    if (mode !== 'none') {
+      const d = f.request.directive, scope = mode === 'higher' ? { ...d.scope, expectedCoordinationEpoch: '2', acceptedCoordinationEpoch: '3' } : mode === 'other-scope' ? { ...d.scope, fromCoordinatorRef: { side: 'dsh' as const, host_profile_id: d.scope.hostProfileId, bot_root_id: d.scope.botId } } : d.scope
+      const command = { operation: 'fence' as const, transferRequestId: mode === 'other-request' || mode === 'higher' ? randomUUID() : d.transfer.requestId,
+        payloadDigest: mode === 'other-payload' ? 'e'.repeat(64) : d.transfer.payloadDigest }
+      const original = { schemaVersion: 1, purpose: 'task_coordination', issuer: d.issuer, keyId: d.keyId,
+        requestId: d.requestId, nonce: d.nonce, issuedAt: d.issuedAt, expiresAt: d.expiresAt,
+        audience: 'urn:slark:task-coordination:v1', scope, scopeDigest: hostTaskCoordinationScopeDigest(scope),
+        floorDigest: d.floorDigest, accountBindingId: d.accountBindingId, accountBindingVersion: d.accountBindingVersion,
+        peer: d.peer, operation: 'fence', commandDigest: hostTaskCoordinationCommandDigest(command), signature: 'A'.repeat(86) }
+      const input = parseHostTaskCoordinationInput({ command, directive: { ...original,
+        signature: sign(null, Buffer.from(encodeHostTaskCoordinationDirective(original)), f.source.privateKey).toString('base64url') } })
+      expect(verify(null, Buffer.from(encodeHostTaskCoordinationDirective(input.directive)), f.source.publicKey,
+        Buffer.from(input.directive.signature, 'base64url'))).toBe(true)
+      const floor = { floorDigest: d.floorDigest, canonicalDigest: 'f'.repeat(64), scopeDigest: original.scopeDigest,
+        transferRequestId: command.transferRequestId, payloadDigest: command.payloadDigest,
+        acceptedCoordinationEpoch: scope.acceptedCoordinationEpoch, closedAt: Date.now(),
+        authorityEnvironmentId: d.scope.authorityEnvironmentId, environmentKey: d.scope.environmentKey,
+        ownerUserId: d.scope.ownerUserId, accountIssuer: d.scope.accountIssuer, accountSubject: d.scope.accountSubject,
+        hostProfileId: d.scope.hostProfileId, workerId: 'actual-worker', authorizationJson: JSON.stringify(input) }
+      await f.native.closeFloor(floor, f.signal)
+      expect(f.controlJournal.request(floor.transferRequestId)).toEqual(floor)
+      originalFloor = floor
+    }
     const template = parseHostTaskReadyAdmissionDirective(vector.ready)
     const draft = { ...template, peer: f.request.directive.peer, target: descriptor.target, descriptorDigest: descriptor.descriptorDigest,
       originalStep: f.request.directive.originalStep, stepPayloadDigest: f.request.directive.originalStep.stepPayloadDigest }
@@ -270,24 +302,47 @@ it('uses the original signed proposal and one-use private input through the actu
       stepPayloadDigest: proposal.stepPayloadDigest }
     const receipt = parseHostTaskTargetConsumeReceipt({ ...receiptDraft,
       signature: sign(null, Buffer.from(encodeHostTaskTargetConsumeReceipt(receiptDraft)), f.source.privateKey).toString('base64url') })
-    const canonical = vector.canonicalStepBody
-    if (!canonical || typeof canonical !== 'object' || !('bytes' in canonical) || typeof canonical.bytes !== 'string') throw Error('missing body')
-    const start = { operation: 'ready_start' as const, receipt, stepBody: canonical.bytes }
+    const start = { operation: 'ready_start' as const, receipt, stepBody: f.canonicalBytes }
     const before = await f.host.execute('task_target', start, f.account, f.localPeer, binding, f.signal)
     expect(before).toMatchObject({ kind: 'task_target_original', proposal, challenge })
     expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.state).toBe('consume_intent')
     expect(f.adapter.requests).toHaveLength(0)
+    if (mode === 'matching') {
+      const originalStream = f.adapter.stream.bind(f.adapter)
+      const streamSpy = vi.spyOn(f.adapter, 'stream').mockImplementation(async function* (options) {
+        enteredModel.resolve(undefined); await releaseModel.promise
+        yield* originalStream(options)
+      })
+      restoreStream = () => { streamSpy.mockRestore() }
+    }
     const long = f.host.execute('task_target_run', start, f.account, f.localPeer, binding, f.signal)
-    const claimed = await f.host.execute('task_target_wait_claim', start, f.account, f.localPeer, binding, f.signal)
+    const joined = Promise.all([long, f.host.execute('task_target_wait_claim', start, f.account, f.localPeer, binding, f.signal)])
+    void joined.catch(() => {})
+    if (mode !== 'none' && mode !== 'matching') {
+      await expect(joined).rejects.toThrow('paired_target_native_closed')
+      expect(f.adapter.requests).toHaveLength(0)
+      expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.state).toBe('consume_intent')
+      return
+    }
+    if (mode === 'matching') {
+      await Promise.race([enteredModel.promise, joined.then(() => { throw Error('missing held actual model interval') })])
+      if (!originalFloor) throw Error('missing original durable floor')
+      expect(f.journal.admissionByIntent(challenge.consumeIntentId)?.state).toBe('claimed')
+      await f.native.closeFloor(originalFloor, f.signal)
+      expect(f.controlJournal.request(originalFloor.transferRequestId)).toEqual(originalFloor)
+      releaseModel.resolve(undefined)
+    }
+    const [, claimed] = await joined
     expect(claimed).toMatchObject({ kind: 'task_target', record: { ok: true, record: { state: 'claimed', messageId: 'paired-step:' + proposal.newSourceGrant.admissionId } } })
     await long
-    expect(f.adapter.requests).toHaveLength(1)
+    expect(f.adapter.requests).toHaveLength(mode === 'matching' ? 2 : 1)
     expect(JSON.stringify(f.adapter.requests[0]?.messages)).toContain('处理原计划中的下一步')
+    if (mode === 'matching') expect(JSON.stringify(f.adapter.requests[1]?.messages)).toContain('actual original file bytes')
     expect(f.agent.status).toBe('idle')
     const replay = f.host.execute('task_target_run', start, f.account, f.localPeer, binding, f.signal)
     await expect(replay).rejects.toThrow()
-    expect(f.adapter.requests).toHaveLength(1)
-  } finally { await f.close() }
+    expect(f.adapter.requests).toHaveLength(mode === 'matching' ? 2 : 1)
+  } finally { releaseModel.resolve(undefined); restoreStream(); await f.close() }
 })
 it('routes exact authenticated private HTTP phases and refuses extra authority or another worker before admission', async () => {
   const f = await fixture(), token = 'B'.repeat(43)

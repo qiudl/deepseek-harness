@@ -4,12 +4,13 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { FiberState, type Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import { createHash, randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import type { ToolExecutor, ToolDefinition, ToolBatchInput, ToolBatchResult } from '@deepseek-ai/dsh-tools'
 import type { CollaborationTaskAssociation, CollaborationTaskClosedFloor, CollaborationTaskCoordinationJournal,
   CollaborationTaskNativeCall } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination-journal'
 import { encodeCollaborationJournalJson } from '@deepseek-ai/dsh-api-session-controller/host/collaboration-source-journal'
-import { parseHostTaskReadyAdmissionDirective, parseHostTaskTargetStepBody, hostTaskStepPayloadDigest,
+import { parseHostTaskReadyAdmissionDirective, parseHostTaskTargetStepBody, hostTaskStepPayloadDigest, parseHostTaskCoordinationInput,
   type HostTaskReadyAdmissionDirective, type HostTaskTargetStepBody } from '@deepseek-ai/dsh-host-control-protocol'
 import type { Session } from '@deepseek-ai/dsh-session'
 import { PairedTaskTargetFiles } from './desktop-task-target-files.ts'
@@ -247,11 +248,34 @@ export class DesktopTaskCoordinationNative {
     for (const controller of this.active.get(value.floorDigest) ?? []) controller.abort(Error('task_coordination_closed'))
     for (const binding of this.pairedLive)
       if (binding.proposal.floorDigest === value.floorDigest &&
-        BigInt(value.acceptedCoordinationEpoch) >= BigInt(binding.proposal.newCoordinationEpoch))
+        this.#pairedFloorBlocks(value, binding.proposal))
         binding.stop.abort(Error('paired_target_native_closed'))
   }
 
+  #pairedFloorBlocks(floor: CollaborationTaskClosedFloor, proposal: HostTaskReadyAdmissionDirective): boolean {
+    const closed = BigInt(floor.acceptedCoordinationEpoch), admitted = BigInt(proposal.newCoordinationEpoch)
+    if (closed !== admitted) return closed > admitted
+    try {
+      const retained = this.journal.request(floor.transferRequestId)
+      if (!retained || !isDeepStrictEqual(retained, floor)) return true
+      const original = parseHostTaskCoordinationInput(JSON.parse(retained.authorizationJson)), d = original.directive, scope = d.scope
+      return original.command.operation !== 'fence' || original.command.transferRequestId !== proposal.transfer.requestId
+        || original.command.payloadDigest !== proposal.transfer.payloadDigest || floor.transferRequestId !== proposal.transfer.requestId
+        || floor.payloadDigest !== proposal.transfer.payloadDigest || floor.floorDigest !== proposal.floorDigest
+        || floor.scopeDigest !== proposal.scopeDigest || d.floorDigest !== floor.floorDigest || d.scopeDigest !== floor.scopeDigest
+        || d.issuer !== proposal.issuer || !isDeepStrictEqual(scope, proposal.scope) || !isDeepStrictEqual(d.peer, proposal.peer)
+        || d.accountBindingId !== proposal.accountBindingId || d.accountBindingVersion !== proposal.accountBindingVersion
+        || scope.acceptedCoordinationEpoch !== proposal.newCoordinationEpoch
+        || floor.acceptedCoordinationEpoch !== scope.acceptedCoordinationEpoch
+        || floor.authorityEnvironmentId !== scope.authorityEnvironmentId || floor.environmentKey !== scope.environmentKey
+        || floor.ownerUserId !== scope.ownerUserId || floor.accountIssuer !== scope.accountIssuer
+        || floor.accountSubject !== scope.accountSubject || floor.hostProfileId !== scope.hostProfileId
+        || floor.workerId !== proposal.target.workerId
+    } catch { return true }
+  }
+
   /** Restrict one actual paired consumer to its original file producer; this does not admit or sign a Source step.
+   * The matching durable floor closes its expected epoch; the private factory's same-transfer admission can use its accepted epoch.
    * @param input - Private factory's original Agent/Session, Source body, actual producer and owned long lifetime.
    * @returns Consumer lifecycle hooks; completion requires actual persisted input, calls, results and turn end.
    */
@@ -290,8 +314,10 @@ export class DesktopTaskCoordinationNative {
     const current = () => {
       owned.throwIfAborted(); ownerCurrent()
       const floor = this.journal.latchedFloor(proposal.floorDigest)
-      if (this.journal.blocked(proposal.floorDigest) && !floor || floor &&
-        BigInt(floor.acceptedCoordinationEpoch) >= BigInt(proposal.newCoordinationEpoch)) throw Error('paired_target_native_closed')
+      const candidates = floor ? this.journal.canonicalCandidates(floor.canonicalDigest, proposal.scope) : []
+      if (this.journal.blocked(proposal.floorDigest) && !floor || floor && (this.#pairedFloorBlocks(floor, proposal)
+        || candidates.some(candidate => candidate.floorDigest === proposal.floorDigest && this.#pairedFloorBlocks(candidate, proposal))))
+        throw Error('paired_target_native_closed')
       if (!readCurrent()) throw Error('paired_target_native_changed')
       files.assertCurrent(agent, permissions)
       owned.throwIfAborted()

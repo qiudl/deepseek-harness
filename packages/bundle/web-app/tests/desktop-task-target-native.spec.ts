@@ -103,7 +103,7 @@ it.each(['floor', 'owner', 'cancel', 'provider'] as const)('rechecks %s after an
   }, { prepend: true })
   try {
     f.send(); await entering
-    if (scenario === 'floor') f.native.latchFloor(f.floor(f.proposal.newCoordinationEpoch))
+    if (scenario === 'floor') f.native.latchFloor(f.floor(String(BigInt(f.proposal.newCoordinationEpoch) + 1n)))
     if (scenario === 'owner') f.authority.live = false
     if (scenario === 'cancel') f.lifetime.abort(Error('actual_long_cancel'))
     if (scenario === 'provider') await f.ctx.workingDirectory.set(f.agent, join(f.root, 'sessions'))
@@ -200,3 +200,11 @@ it('rejects oversized model call metadata without retaining it or entering an ac
   expect(JSON.stringify(f.model.requests)).not.toContain('original read bytes')
   expect(f.native.pairedEvidence(f.proposal.newSourceGrant.admissionId)?.state).toBe('unknown')
 }, '界'.repeat(100)))
+
+it.each(['2', '3'])('denies a same or higher epoch floor without the original durable signed transfer association: %s', async epoch => fixture(async (f) => {
+  const floor = f.floor(epoch)
+  await f.native.closeFloor(floor, f.lifetime.signal)
+  expect(() => f.bind()).toThrow('paired_target_native_closed')
+  expect(f.model.requests).toHaveLength(0)
+  expect(f.journal.floor(floor.floorDigest)).toEqual(floor)
+}))
