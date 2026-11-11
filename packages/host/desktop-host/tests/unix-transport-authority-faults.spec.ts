@@ -345,7 +345,7 @@ describe('Unix transport authority failures', () => {
     const command = { operation: 'bot.room.receipt' as const, command_id: randomUUID() as never, request }
     const result = { roomId: 'room-1', submissionId: (request as { submissionId: string }).submissionId,
       state: 'accepted' }
-    const execute = vi.fn(async (): Promise<unknown> => result)
+    const execute = vi.fn(async () => result)
     const old = await authorityClient({ remoteSession: execute })
     await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
     old.client.close()
