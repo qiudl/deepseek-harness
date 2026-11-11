@@ -6,6 +6,7 @@ import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
 import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import type { HostBotDeleteRequest } from './bot-delete.ts'
+import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
 import type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -2060,6 +2061,11 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly request: HostBotDeleteRequest }
+  | { readonly operation: 'bot.duplicate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotDuplicateRequest }
   | { readonly operation: 'bot.room.create'
     readonly command_id: HostControlRequestId
     readonly session_id: string

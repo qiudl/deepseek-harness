@@ -406,3 +406,5 @@ export type { HostRuntimeEntryOriginsConfiguration } from './runtime-entry-boots
 
 export { parseHostBotDeleteRequest, parseHostBotDeleteReceipt } from './bot-delete.ts'
 export type { HostBotDeleteRequest, HostBotDeleteReceipt } from './bot-delete.ts'
+export { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt } from './bot-duplicate.ts'
+export type { HostBotDuplicateRequest, HostBotDuplicateReceipt } from './bot-duplicate.ts'

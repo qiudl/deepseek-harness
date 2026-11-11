@@ -65,6 +65,27 @@ describe('Desktop remote Session bridge', () => {
     deleteBot.mockResolvedValueOnce({ ...result, botId: 'other' })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_delete_receipt')
   })
+  it('checks an uncertain Bot copy using the same durable request ID', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { sourceBotId: 'main', sessionId: 'chat-1', copyRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'status' as const }
+    const result = { sourceBotId: 'main', copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'copy', revision: 8 }
+    const duplicateBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, duplicateBot)
+    const command = { operation: 'bot.duplicate' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(duplicateBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    duplicateBot.mockResolvedValueOnce({ ...result, copyRequestId: randomUUID() })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_duplicate_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')

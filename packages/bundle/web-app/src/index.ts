@@ -67,7 +67,8 @@ import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from 
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
-  HostBotSettingsRequest, HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotSettingsRequest, HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
+  HostBotDuplicateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -772,6 +773,30 @@ export function apply(ctx: Context, config: Config): void {
             Reflect.get(owner, 'sessionId') !== request.sessionId) return null
           return service.deleteLocalBot({ botId: request.botId,
             expectedRevision: request.expectedRevision }, signal)
+        }, async (request: HostBotDuplicateRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            duplicateLocalBot?: (input: {
+              sourceBotId: string
+              copyRequestId: string
+              expectedRevision: number
+            }, signal: AbortSignal) => Promise<unknown>
+            readLocalBotDuplicate?: (input: { sourceBotId: string; copyRequestId: string }, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.duplicateLocalBot || !service.readLocalBotDuplicate) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.sourceBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
+            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
+            Reflect.get(owner, 'botId') !== request.sourceBotId ||
+            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          return request.mode === 'create'
+            ? service.duplicateLocalBot({ sourceBotId: request.sourceBotId,
+              copyRequestId: request.copyRequestId, expectedRevision: request.expectedRevision }, signal)
+            : service.readLocalBotDuplicate({ sourceBotId: request.sourceBotId,
+              copyRequestId: request.copyRequestId }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

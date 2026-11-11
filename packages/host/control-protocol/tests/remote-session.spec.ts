@@ -37,6 +37,17 @@ describe('Profile remote Session wire commands', () => {
       { ...command, request: { ...request, force: true } }])
       expect(() => decode(frame(bad))).toThrow()
   })
+  it('round trips Bot copy status only under the claimed source Session', () => {
+    const request = { sourceBotId: 'main', sessionId: 'chat-1',
+      copyRequestId: randomUUID(), expectedRevision: 7, mode: 'status' }
+    const command = { operation: 'bot.duplicate', command_id: randomUUID(),
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' },
+      { ...command, request: { ...request, accountId: 'other' } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed group create/delete commands under claimed Sessions', () => {
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     const create = { operation: 'bot.room.create', command_id: randomUUID(),

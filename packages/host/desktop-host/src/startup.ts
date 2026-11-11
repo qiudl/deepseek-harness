@@ -941,6 +941,7 @@ export async function startDesktopHostApplication(
       remoteBotRoomUpdateSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotSettingsUpdateSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotDeleteSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotDuplicateSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotRoomLifecycleSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotChatSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotRoomsSupported: dependencies.profileWorkerFactory === undefined,

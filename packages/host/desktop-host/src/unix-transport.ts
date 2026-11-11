@@ -42,6 +42,7 @@ import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/ds
 import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDeleteReceipt } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotDuplicateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomTarget, parseHostNativeRoomAssertion,
@@ -523,6 +524,7 @@ export interface UnixHostServerOptions {
   /** Whether the selected Profile worker can apply fixed native Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported?: boolean
   readonly remoteBotDeleteSupported?: boolean
+  readonly remoteBotDuplicateSupported?: boolean
   readonly remoteBotRoomLifecycleSupported?: boolean
   /** Advertise existing Bot chat reads only for the bundled Profile worker. */
   readonly remoteUiBotChatSupported?: boolean
@@ -701,7 +703,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2076,12 +2078,14 @@ export class HostControlAuthority {
             const botRoomUpdate = command.operation === 'bot.room.update'
             const botSettingsUpdate = command.operation === 'bot.settings.update'
             const botDelete = command.operation === 'bot.delete'
+            const botDuplicate = command.operation === 'bot.duplicate'
             const botRoomLifecycle = command.operation === 'bot.room.create' || command.operation === 'bot.room.delete'
             if (!execute || (botChat && !this.options.remoteBotChatSupported) ||
               (botRoom && !this.options.remoteBotRoomSupported) ||
               (botRoomUpdate && !this.options.remoteBotRoomUpdateSupported) ||
               (botSettingsUpdate && !this.options.remoteBotSettingsUpdateSupported) ||
               (botDelete && !this.options.remoteBotDeleteSupported) ||
+              (botDuplicate && !this.options.remoteBotDuplicateSupported) ||
               (botRoomLifecycle && !this.options.remoteBotRoomLifecycleSupported)) throw new HostAuthorityError('upgrade_required')
             value = await execute(profileId, command, context.signal)
             if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
@@ -2090,6 +2094,7 @@ export class HostControlAuthority {
             if (botRoomUpdate) parseHostBotRoomUpdateReceipt(value, command.request)
             if (botSettingsUpdate) parseHostBotSettingsUpdateReceipt(value, command.request)
             if (botDelete) parseHostBotDeleteReceipt(value, command.request)
+            if (botDuplicate) parseHostBotDuplicateReceipt(value, command.request)
             if (command.operation === 'bot.room.create') parseHostBotRoomCreateReceipt(value, command.request)
             if (command.operation === 'bot.room.delete') parseHostBotRoomDeleteReceipt(value, command.request)
           } else {
@@ -3180,6 +3185,7 @@ export class HostControlAuthority {
           ...(this.options.remoteSession && this.options.remoteBotRoomUpdateSupported ? ['profile.remote_session.bot_room_update'] : []),
           ...(this.options.remoteSession && this.options.remoteBotSettingsUpdateSupported ? ['profile.remote_session.bot_settings_update'] : []),
           ...(this.options.remoteSession && this.options.remoteBotDeleteSupported ? ['profile.remote_session.bot_delete'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotDuplicateSupported ? ['profile.remote_session.bot_duplicate'] : []),
           ...(this.options.remoteSession && this.options.remoteBotRoomLifecycleSupported ? ['profile.remote_session.bot_room_lifecycle'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
@@ -3362,6 +3368,7 @@ export class UnixHostClient {
   /** This Desktop supports revision-checked Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported = true
   readonly remoteBotDeleteSupported = true
+  readonly remoteBotDuplicateSupported = true
   /** This SDK can encode fixed owner group creation and deletion. */
   readonly remoteBotRoomLifecycleSupported = true
   /** This SDK can encode the existing Bot identity/current-chat read. */
@@ -5840,6 +5847,9 @@ export class UnixHostClient {
     if (input.command.operation === 'bot.delete'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_delete' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
+    if (input.command.operation === 'bot.duplicate'
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_duplicate' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (input.command.operation === 'bot.room.update'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_room_update' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -5871,6 +5881,8 @@ export class UnixHostClient {
       parseHostBotSettingsUpdateReceipt(value, input.command.request)
     if (input.command.operation === 'bot.delete')
       parseHostBotDeleteReceipt(value, input.command.request)
+    if (input.command.operation === 'bot.duplicate')
+      parseHostBotDuplicateReceipt(value, input.command.request)
     if (input.command.operation === 'bot.room.create')
       parseHostBotRoomCreateReceipt(value, input.command.request)
     if (input.command.operation === 'bot.room.delete')
