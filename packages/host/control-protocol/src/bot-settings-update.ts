@@ -5,7 +5,7 @@ import type { HostBotChatId } from './bot-chat.js'
 
 /** One fixed profile field changes per command. */
 export type HostBotSettingsUpdateChange =
-  | { readonly kind: 'name' | 'role' | 'instructions'; readonly value: string }
+  | { readonly kind: 'name' | 'role' | 'instructions' | 'model'; readonly value: string }
   | { readonly kind: 'color' | 'avatar-shape'; readonly value: string | null }
   | { readonly kind: 'pinned' | 'hidden'; readonly value: boolean }
 /** The Bot Session is verified separately by the Profile worker. */
@@ -45,6 +45,9 @@ export function parseHostBotSettingsUpdateRequest(value: unknown): HostBotSettin
   if (kind === 'name' && bounded(setting, 512) && setting.length <= 40 && setting.trim() !== '' && setting === setting.trim())
     change = { kind, value: setting }
   else if (kind === 'role' && bounded(setting, 72) && setting.length <= 24 && setting === setting.trim())
+    change = { kind, value: setting }
+  else if (kind === 'model' && bounded(setting, 512) && setting === setting.trim() &&
+    setting.includes('/') && [...setting].every(char => char.charCodeAt(0) > 31 && char.charCodeAt(0) !== 127))
     change = { kind, value: setting }
   else if (kind === 'instructions' && bounded(setting, 32768) && setting === setting.trim())
     change = { kind, value: setting }
