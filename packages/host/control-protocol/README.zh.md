@@ -48,6 +48,10 @@ kind: "package-reference"
 
 `profile.remote_session.bot_chat` 单独发布 `bot.chat.send` 和 `bot.chat.receipt`。二者将已有 Bot、预期私聊分段、稳定 submission UUID 与至多 16 KiB 的规范化文本绑定。发送持有既有 Session 控制权并调用显式启用的 Bot 提供者，保留能力准备与 prompt 语义。回执与原 Session 日志对应；unobserved 不代表可安全重试。提供者缺失仍返回 null。消费方同时要求已签名 capability 和 SDK 的 remoteBotChatSupported 标志；旧或自定义 worker 不隐式继承支持。
 
+`profile.remote_ui_read.bot_rooms` 单独发布 `bot/rooms`。请求仅包含已有群游标和 1–100 的页大小；响应包含修订号、按序排列的群 ID、显示名称、Bot 数量、置顶与隐藏标记，以及下一页游标。Host 拒绝多余字段、插件私有数据、无效 ID 和游标不匹配。已签名的能力声明与本地 SDK 标志必须同时存在。
+
+`profile.remote_ui_read.bot_room_history` 单独发布 `bot/room-history`。请求仅包含群 ID、序号游标和 1–20 的页大小。响应包含修订号、已保留序号窗口、裁剪标记以及带真实作者身份的展示用消息字段。严格解析拒绝多余字段、被替换的群、无效作者和乱序消息。已签名的能力声明与本地 SDK 标志必须同时存在。
+
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。
@@ -192,7 +196,7 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 ## 已知限制与延后工作
 
 - 远程 Session 创建可携带不透明的工作区和会话 ID，由选定 Profile 验证工作区，并按原生 cwd 和 writer 检查幂等复用会话。会话身份复用要求 `profile.remote_session.session_reuse` 能力。传输命令不接受调用方指定的路径。
-- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、十五种远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
+- **操作集合有明确上限**——版本 1 解析 `host.inspect`、账号与本地专用 Profile provisioning/restore/open、Profile status/lease-close、迁移导出 begin/read、扩展命令、远程 Session 命令、有界远程 UI 读取、三种原生流（`session/follow`、`workspace/follow` 与 `$events`）与通用错误。远程方法在 Host 执行器发布 capability 前仍不可用；environment、attachment 和 upgrade 操作需要显式扩展协议。
 - **传输上限由外部执行**——Unix domain socket carrier 必须在字节上限停止读取，并在首次 codec 失败时关闭连接。
 - **密码学策略由外部执行**——密钥持久化、代码签名检查、挑战签名与验证、重放存储和密钥轮换属于 Host identity 与 Desktop broker 包。
 

@@ -78,6 +78,10 @@ export { parseHostTwinBindingInput, parseHostTwinBindingDirective, parseHostTwin
 export type { HostTwinBindingInput, HostTwinBindingCommand, HostTwinBindingDirective,
   HostTwinBindingAck, HostTwinBindingPeer, HostTwinBindingResult } from './twin-binding.ts'
 export { parseHostBotChatRequest, parseHostBotChat } from './bot-chat.ts'
+export { parseHostBotRoomListRequest, parseHostBotRoomList } from './bot-room-list.ts'
+export type { HostBotRoomListRequest, HostBotRoomList, HostBotRoomId } from './bot-room-list.ts'
+export { parseHostBotRoomHistoryRequest, parseHostBotRoomHistory } from './bot-room-history.ts'
+export type { HostBotRoomHistoryRequest, HostBotRoomHistory } from './bot-room-history.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'

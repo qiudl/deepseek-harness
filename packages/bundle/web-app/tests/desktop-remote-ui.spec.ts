@@ -36,6 +36,37 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
       .execute('bot/chat', { args: { botId: null } }, signal)).rejects.toThrow()
   })
+  it('reads only bounded Bot room summaries from the installed plugin service', async () => {
+    const invoke = vi.fn(), read = vi.fn(async (): Promise<unknown> => ({ revision: 4, rooms: [
+      { roomId: 'room-1', displayName: 'Planning', botCount: 2, pinned: false, hidden: false }], nextCursor: null }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined, read)
+    const signal = new AbortController().signal
+    expect(await executor.execute('bot/rooms', { args: { afterRoomId: '', limit: 1 } }, signal)).toEqual(await read())
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/rooms', { args: { afterRoomId: '', limit: 1, profileId: 'other' } }, signal))
+      .rejects.toThrow()
+    read.mockResolvedValueOnce({ revision: 4, rooms: [{ roomId: 'room-1', displayName: 'Planning',
+      botCount: 2, pinned: false, hidden: false, private: 'data' }], nextCursor: null })
+    await expect(executor.execute('bot/rooms', { args: { afterRoomId: '', limit: 1 } }, signal))
+      .rejects.toThrow('invalid_bot_room_list_result')
+  })
+  it('reads only bounded room history and rejects substituted plugin content', async () => {
+    const invoke = vi.fn()
+    const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
+      truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
+        authorRef: 'design', kind: null, text: 'plan', time: null }], nextCursor: null }
+    const read = vi.fn(async (): Promise<unknown> => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined, undefined, read)
+    const signal = new AbortController().signal
+    expect(await executor.execute('bot/room-history', { args: { roomId: 'room-1', afterSeq: 0, limit: 1 } }, signal))
+      .toEqual(page)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/room-history', { args: { roomId: 'room-1', afterSeq: 0,
+      limit: 1, accountSubject: 'other' } }, signal)).rejects.toThrow()
+    read.mockResolvedValueOnce({ ...page, messages: [{ ...page.messages[0], private: 'data' }] })
+    await expect(executor.execute('bot/room-history', { args: { roomId: 'room-1', afterSeq: 0, limit: 1 } }, signal))
+      .rejects.toThrow('invalid_bot_room_history_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)

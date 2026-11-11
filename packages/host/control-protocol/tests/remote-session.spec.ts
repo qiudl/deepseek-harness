@@ -195,6 +195,21 @@ describe('Profile remote UI read wire commands', () => {
       expect(() => decode(readFrame('bot/chat', { args }))).toThrow()
     expect(() => decode(readFrame('bot', { args: { endpoint: 'state' } }))).toThrow()
   })
+  it('round-trips only bounded Bot room paging arguments', () => {
+    const input = readFrame('bot/rooms', { args: { afterRoomId: '', limit: 50 } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ afterRoomId: '', limit: 0 }, { afterRoomId: '../other', limit: 1 },
+      { afterRoomId: '', limit: 1, accountSubject: 'other' }])
+      expect(() => decode(readFrame('bot/rooms', { args }))).toThrow()
+  })
+  it('round-trips only bounded Bot room history arguments', () => {
+    const input = readFrame('bot/room-history', { args: { roomId: 'room-1', afterSeq: 0, limit: 20 } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ roomId: 'room-1', afterSeq: 0, limit: 21 },
+      { roomId: '../other', afterSeq: 0, limit: 1 },
+      { roomId: 'room-1', afterSeq: 0, limit: 1, accountSubject: 'other' }])
+      expect(() => decode(readFrame('bot/room-history', { args }))).toThrow()
+  })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
     for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {

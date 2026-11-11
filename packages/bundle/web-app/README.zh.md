@@ -126,6 +126,10 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 私有 `bot/chat` 读取通过所选 Profile 显式启用的 Bot 服务，解析已有的默认或指定 Bot 及其当前私聊 Session。它不返回 Bot 配置、密钥或历史，也不执行 bootstrap 或发送。缺少提供者时返回 null；格式错误或目标被替换的响应会被拒绝。[Host 控制协议](../../host/control-protocol/README.zh.md)定义请求上限与 capability 协商。
 
+私有 `bot/rooms` 读取通过同一显式启用的服务获取用户可见的群摘要页。请求只接受 `afterRoomId` 和 `limit`，返回团队修订号、群 ID、名称、Bot 数量、置顶与隐藏标记，以及下一页游标。worker 校验整页数据；缺少提供者时返回 null。该接口不暴露群消息、设置或修改操作。
+
+私有 `bot/room-history` 读取通过固定的 `readLocalBotRoomHistory` 插件服务取得单个群最多 20 条已保留消息。worker 在返回前验证作者身份、序号顺序、修订号及保留窗口边界。缺少提供者时返回 null。该读取不授予群发送、管理或设置权限。
+
 私有 Session 桥还通过显式启用的 Bot 服务提供固定的发送与回执命令。发送持有预期 Session 的既有控制权；核对回执无需接管控制权。稳定 submission ID 跨网络请求与会话换段保留。Bot 提供者缺失时，两种命令均不退化为通用 Session prompt。响应离开 worker 前核对目标并验证；认证、取消和插件释放继续由既有层负责。
 
 远程 `session/collaborationSources` 精确读取使用 `snapshotDigest` 替代 `cursor`，要求恰好一条匹配的原消息且无后续游标。摘要不符、定位与分页混用，以及单条消息超出预算时均拒绝；定位保留现有 Gateway 鉴权。

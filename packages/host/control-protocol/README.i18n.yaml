@@ -15,8 +15,8 @@
   en: 431c79e8f1d3425d
   zh: e36641bb99e01953
 /dsh-host-control-protocol/wire-contract:
-  en: e32ef6c8a07b17aa
-  zh: a8ee6daf6b403af4
+  en: 2d10aedf6d2d0813
+  zh: 1daea442b3a5c116
 /dsh-host-control-protocol/challenge-authentication:
   en: 9b10cf431432a415
   zh: 4edca561e1e0021e
@@ -39,5 +39,5 @@
   en: 7e27c6b2c939d049
   zh: 9781e6ac564ea433
 /dsh-host-control-protocol/known-limitations-and-deferred-work:
-  en: c72aea4a855883c3
-  zh: 2deed730b671ca26
+  en: b6513433dc8a06a9
+  zh: 35f595fb017aacf4
