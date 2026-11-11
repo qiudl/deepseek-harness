@@ -403,3 +403,6 @@ export type { RuntimeEntryAnalysisCommand, RuntimeEntryOriginCommand, RuntimeEnt
 
 export { parseHostRuntimeEntryOriginsConfiguration, parseHostRuntimeEntryOriginsJson } from './runtime-entry-bootstrap.ts'
 export type { HostRuntimeEntryOriginsConfiguration } from './runtime-entry-bootstrap.ts'
+
+export { parseHostBotDeleteRequest, parseHostBotDeleteReceipt } from './bot-delete.ts'
+export type { HostBotDeleteRequest, HostBotDeleteReceipt } from './bot-delete.ts'

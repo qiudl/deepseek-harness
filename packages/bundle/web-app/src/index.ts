@@ -67,7 +67,7 @@ import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from 
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
-  HostBotSettingsRequest, HostBotFoldersRequest, HostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotSettingsRequest, HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -755,6 +755,23 @@ export function apply(ctx: Context, config: Config): void {
             Reflect.get(owner, 'sessionId') !== request.sessionId) return null
           return service.updateLocalBotSettings({ botId: request.botId,
             expectedRevision: request.expectedRevision, change: request.change }, signal)
+        }, async (request: HostBotDeleteRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            deleteLocalBot?: (input: Omit<HostBotDeleteRequest, 'sessionId'>,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.deleteLocalBot) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
+            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
+            Reflect.get(owner, 'botId') !== request.botId ||
+            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          return service.deleteLocalBot({ botId: request.botId,
+            expectedRevision: request.expectedRevision }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

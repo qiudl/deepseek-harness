@@ -734,6 +734,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         remoteBotRoomSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotRoomUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotSettingsUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotDeleteSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotRoomLifecycleSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiAssetGzipSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomsSupported: dependencies.createProfileWorkerFactory === undefined,

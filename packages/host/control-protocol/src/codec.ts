@@ -20,6 +20,7 @@ import { parseHostBotSettingsRequest } from './bot-settings.ts'
 import { parseHostBotFoldersRequest } from './bot-folders.ts'
 import { parseHostBotAvatarRequest } from './bot-avatar.ts'
 import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
+import { parseHostBotDeleteRequest } from './bot-delete.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
 import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
@@ -694,6 +695,14 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.settings.update') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotSettingsUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.delete') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotDeleteRequest(command.request)
     const session_id = remoteIdentifier(command.session_id)
     if (session_id !== request.sessionId) reject()
     return { operation: command.operation, command_id, session_id,

@@ -13,6 +13,7 @@ import { parseHostBotRoomSubmission, parseHostBotRoomReceipt,
   type HostBotRoomSubmission } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
   type HostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotDeleteRequest, parseHostBotDeleteReceipt, type HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
   type HostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
@@ -115,7 +116,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly updateBotRoom?: (request: HostBotRoomUpdateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly createBotRoom?: (request: HostBotRoomCreateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly deleteBotRoom?: (request: HostBotRoomDeleteRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly updateBotSettings?: (request: HostBotSettingsUpdateRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly updateBotSettings?: (request: HostBotSettingsUpdateRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly deleteBot?: (request: HostBotDeleteRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -125,7 +127,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -150,6 +152,16 @@ export class DesktopRemoteSessionExecutor {
         const receipt = parseHostBotSettingsUpdateReceipt(value, request)
         return receipt === null ? null : { botId: receipt.botId, state: receipt.state,
           revision: receipt.revision, settings: receipt.settings === null ? null : { ...receipt.settings } }
+      }
+      case 'bot.delete': {
+        signal.throwIfAborted()
+        const request = parseHostBotDeleteRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot delete: Session mismatch')
+        if (!this.deleteBot) return null
+        const value = await this.deleteBot(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotDeleteReceipt(value, request)
+        return receipt === null ? null : { botId: receipt.botId, state: receipt.state, revision: receipt.revision }
       }
       case 'bot.room.create': {
         signal.throwIfAborted()

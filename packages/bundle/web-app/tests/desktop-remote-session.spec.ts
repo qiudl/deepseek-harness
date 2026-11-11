@@ -46,6 +46,25 @@ describe('Desktop remote Session bridge', () => {
     update.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_settings_update_receipt')
   })
+  it('deletes a Bot only through the fixed controlled service', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7 }
+    const result = { botId: 'main', state: 'deleted', revision: 8 }
+    const deleteBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, deleteBot)
+    const command = { operation: 'bot.delete' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(deleteBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    deleteBot.mockResolvedValueOnce({ ...result, botId: 'other' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_delete_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')
