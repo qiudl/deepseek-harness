@@ -1,6 +1,7 @@
 import { DesktopRuntimeEntryHost, runtimeEntryConfiguration, createDesktopRuntimeEntryLocator } from './desktop-runtime-entry-host.ts'
 import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopTaskCoordination } from './desktop-task-coordination.ts'
+import { DesktopTaskTargetHost } from './desktop-task-target-host.ts'
 import { DesktopProjectOperationMemory } from './desktop-project-operation-memory.ts'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopOperationOrigin, parseOperationOriginKeyrings } from './desktop-operation-origin.ts'
@@ -277,6 +278,10 @@ export function apply(ctx: Context, config: Config): void {
       const taskCoordination = taskCoordinationEnvironments.length ? new DesktopTaskCoordination(sessionCtx, sessionCtx.sessionController,
         await sessionCtx.sessionController.openCollaborationTaskCoordinationJournal(), taskCoordinationEnvironments,
         process.env.DSH_PROFILE_ID ?? '', process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal) : undefined
+      const paired = native && nativeConfiguration?.schemaVersion === 3 && taskCoordination
+        ? new DesktopTaskTargetHost(sessionCtx, taskCoordinationEnvironments, process.env.DSH_PROFILE_ID ?? '',
+          process.env.DSH_PROFILE_WORKER_ID ?? '', lifetime.signal, nativeConfiguration, taskCoordination.native, native.service) : undefined
+      if (paired) sessionCtx.provide('pairedTaskTargetConsumerHost', paired.service)
       const owner = new DesktopCollaborationAnalysis(
         (input, signal) => sessionCtx.sessionController.captureCollaborationSource(input, signal),
         async () => {
@@ -302,10 +307,10 @@ export function apply(ctx: Context, config: Config): void {
         operationMemory,
         taskCoordination,
       )
-      sessionCtx.effect(() => () => { lifetime.abort(); return owner.close() }, 'web-app: private analysis lifetime')
+      sessionCtx.effect(() => async () => { lifetime.abort(); await paired?.close(); await owner.close() }, 'web-app: private analysis lifetime')
       sessionCtx.effect(() => sessionCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-collaboration-analysis',
-        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner, native, coldLocator),
+        handler: (req, res) => handleDesktopCollaborationAnalysisRequest(req, res, analysisToken, owner, native, coldLocator, paired),
       }))
     })
   }

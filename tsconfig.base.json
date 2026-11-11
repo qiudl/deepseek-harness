@@ -142,6 +142,8 @@
       "@deepseek-ai/dsh-api-session-controller/types": ["./packages/api/session-controller/src/types.ts"],
       "@deepseek-ai/dsh-api-session-controller/remote-events": ["./packages/api/session-controller/src/remote-events.ts"],
       "@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer-host": ["./packages/api/session-controller/src/runtime-entry-consumer-host.ts"],
+      "@deepseek-ai/dsh-api-session-controller/host/paired-task-target-consumer-host": ["./packages/api/session-controller/src/paired-task-target-consumer-host.ts"],
+      "@deepseek-ai/dsh-api-session-controller/host/paired-task-target-journal": ["./packages/api/session-controller/src/paired-task-target-journal.ts"],
       "@deepseek-ai/dsh-api-session-controller/host/runtime-entry-consumer": ["./packages/api/session-controller/src/runtime-entry-consumer.ts"],
       "@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination": ["./packages/api/session-controller/src/collaboration-task-coordination.ts"],
       "@deepseek-ai/dsh-api-session-controller/host/collaboration-task-coordination-journal": ["./packages/api/session-controller/src/collaboration-task-coordination-journal.ts"],

@@ -241,6 +241,10 @@ An original Main request retains the complete owner verification and nanosecond 
 
 ### Dev Note
 
+Paired original-step control verifies the current Account, Source signature and captured worker before installation signing or execution admission. A durable input claim returns through a short request; the existing Account registration remains active until the separate original worker execution and cleanup complete. Revoking that Account or replacing its worker still cancels the owned execution after the short response. The installation signer commits only the exact original descriptor or challenge. These primitives require the embedding to supply the actual private worker receiver before they can be mounted.
+
+The authenticated analysis carrier carries the four paired-target operations through `operateTaskTarget`. Main uses the original signed receipt ID for start replay protection and retains the captured receiver through both signature persistence and execution cleanup. Only the private long-run phase follows the actual Account/worker lifetime without the ordinary 35-second metadata timeout; its separate claim request remains bounded. Main advertises `profile.task_target_v1` only with inner3 configuration, nonempty Source task policies, a task receiver and an analysis handler.
+
 Protocol authority tests use instance-local JSON registry hooks on every platform. POSIX and Windows storage suites own filesystem permission checks. Bundled archive storage tests require POSIX UID and mode bits; Windows private-file, named-pipe, ACL, and native PowerShell suites remain required.
 
 <details>

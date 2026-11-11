@@ -54,6 +54,7 @@ export const SERVICE_PAGE: Record<string, string> = {
   collaborationTaskExecutions: 'session.md',
   collaborationTaskFloors: 'session.md',
   runtimeEntryConsumerHost: 'session.md',
+  pairedTaskTargetConsumerHost: 'session.md',
   headlessStartup: 'boot.md',
   translator: 'translation.md',
   cotTranslation: 'translation.md',
@@ -318,6 +319,10 @@ export const LINK_MAP: Readonly<Record<string, string>> = {
   RuntimeEntryConsumerOriginal: 'session.md',
   RuntimeEntryLoadedSession: 'session.md',
   RuntimeEntryPreparation: 'session.md',
+  PairedTaskStepCapability: 'session.md',
+  PairedTaskStepLease: 'session.md',
+  PairedTaskTargetJournal: 'session.md',
+  PairedTaskTargetRun: 'session.md',
 
   CollaborationExecutionCommandId: 'session.md',
   CollaborationTaskDurableCut: 'session.md',

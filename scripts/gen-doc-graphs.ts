@@ -366,6 +366,15 @@ const SERVICE_ROLES: ServiceRole[] = [
     note: 'Checks retained signed floors against original local Root coordinates and current parent Account facts; a missing floor grants no execution permission.',
   },
   {
+    key: 'pairedTaskTargetConsumerHost',
+    pkg: 'api-session-controller',
+    title: 'Private paired-step capability reader',
+    mode: 'seam',
+    implementations: ['web-app'],
+    consumers: ['api-session-controller'],
+    note: 'Consumes the original one-use object retained by the authenticated worker factory and supplies the current Agent, Session and Native restriction lifecycle; caller metadata grants no execution authority.',
+  },
+  {
     key: 'runtimeEntryConsumerHost',
     pkg: 'api-session-controller',
     title: 'Private original-entry preparation reader',

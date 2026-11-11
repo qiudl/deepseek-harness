@@ -726,7 +726,9 @@ export class DshWebProfileWorkerFactory {
     signal: AbortSignal,
     stopped: () => boolean,
   ): Promise<HostRemoteSessionJson> {
-    const active = AbortSignal.any([signal, AbortSignal.timeout(35000)])
+    const pairedRun = command && typeof command === 'object' && !Array.isArray(command)
+      && 'action' in command && command.action === 'task_target_run'
+    const active = pairedRun ? signal : AbortSignal.any([signal, AbortSignal.timeout(35000)])
     active.throwIfAborted()
     if (stopped()) throw new HostAuthorityError('unavailable')
     const memory = command && typeof command === 'object' && !Array.isArray(command) && 'action' in command &&

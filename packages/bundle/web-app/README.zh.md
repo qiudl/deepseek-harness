@@ -207,6 +207,20 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 
 ## 模型体验
 
+### 配对的原始任务步骤
+
+#### 模型看到什么
+
+通过认证的配对步骤将原 Source 文本作为一条已记录的用户消息加入会话。临时 Agent 作用域文件工具提供 `read` 和 `list_directory`；执行仅接纳实际所属的定义，并同时受原 Source 工具上限与现有本地文件策略约束。签名、Account 绑定和私有能力对象不进入模型上下文。
+
+#### Token 影响
+
+原步骤文本和接纳的文件工具 schema 增加请求 token。单次读取最多返回 16 KiB UTF-8 文本；目录列表最多包含 128 项，每份完整结果的 JSON 不超过 32 KiB。Native 管线在后续模型请求前记录调用参数与结果。
+
+#### KV Cache 影响
+
+配对用户消息、临时工具 schema 和实际工具结果改变对应的请求后缀。其他 Agent 不会获得这些作用域定义。
+
 ### Web 运行时变量
 
 #### 模型看到什么
@@ -222,6 +236,8 @@ URL 行与浏览器交接都是就绪信号：监督方一观察到该行就发�
 无；该插件不贡献系统提示词文本。
 
 ## 已知限制与延期工作
+
+配对执行当前仅通过已核实的 Local 或 Sandboxed 文件提供者支持有界本地文本读取与目录列表，不提供 Shell、写入、网络或 MCP 效果。Source 权限原值保持不变；不支持的提供者或已退役的非空 Skill 选择拒绝执行。持久输入认领不能证明全部 producer 已静止。目标观察在不支持的恢复场景中保留未知覆盖状态，不宣称整台设备已完成；配对能力公告在端到端验收前保持关闭。
 
 私有 task stop coordination 限制实际原 native consumer，不提供 open/ready 操作。消耗原 grant 前会检查实际选中的 Native executor，并在同一实例上安装所属生命周期的限制，保留其管线、接收者、描述与并发配置。不支持的 executor 保持 grant 为 prepared。销毁时先排空所属 Agent，再仅恢复自己的包装；选中实例变化后观察保持 unknown。工具 prepare 不代表效果已发生：最终工具体检查保留原 Account/请求取消，即使 awaited wrapper 替换执行 signal。已进入的工具体仍视为在途，直到返回且实际 Session flush 完成。device permit 库存尚不支持，空 native 页不能证明设备静止。缺少对应原本地 journal 时，`slark_run` 关联不可用。[Session Controller](../../api/session-controller/README.zh.md#collaboration-analysis-journal) 定义持久下限及重启后未知工作。
 

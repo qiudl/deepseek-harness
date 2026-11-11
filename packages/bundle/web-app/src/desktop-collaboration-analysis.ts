@@ -1,4 +1,5 @@
 import type { DesktopRuntimeEntryHost } from './desktop-runtime-entry-host.ts'
+import type { DesktopTaskTargetHost } from './desktop-task-target-host.ts'
 import { parseTaskCoordinationActualAccount, parseTaskCoordinationActualPeer, type TaskCoordinationActualAccount,
   type DesktopTaskCoordination } from './desktop-task-coordination.ts'
 import { parseHostTaskCoordinationInput } from '@deepseek-ai/dsh-host-control-protocol'
@@ -733,6 +734,7 @@ export class DesktopCollaborationAnalysis {
  * @param owner - Profile-local two-stage coordinator.
  * @param native - Actual optional metadata entry owner from the same worker boot.
  * @param coldLocator - Fixed-bootstrap read-only original-attempt locator; never a request field.
+ * @param paired - Actual private paired factory; absence refuses paired actions without starting input.
  */
 export async function handleDesktopCollaborationAnalysisRequest(
   req: IncomingMessage,
@@ -741,6 +743,7 @@ export async function handleDesktopCollaborationAnalysisRequest(
   owner: DesktopCollaborationAnalysis,
   native?: DesktopRuntimeEntryHost,
   coldLocator?: (operation: unknown, signal: AbortSignal) => Promise<{ entryId: string | null }>,
+  paired?: DesktopTaskTargetHost,
 ): Promise<void> {
   const actual = Buffer.from(
       req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '',
@@ -793,22 +796,26 @@ export async function handleDesktopCollaborationAnalysisRequest(
         : row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish' || row.action === 'runtime_entry_installed_origin'
           ? ['action', ...(row.action === 'runtime_entry_installed_origin' ? [] : ['operation']), 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId',
             ...(row.action === 'runtime_entry_publish' ? ['actualPublication'] : [])]
-          : row.action === 'task_coordination' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer']
-            : row.action === 'task_coordination_commit_ack' ? ['action', 'request', 'fenceAck', 'binding_key', 'actualAccount', 'actualPeer']
-              : row.action === 'project_operation_memory' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation', 'anchor', 'plan', 'currentCommittedCheckpoint',
-                ...(Object.hasOwn(row, 'nativeActivationCut') ? ['nativeActivationCut'] : [])]
-                : row.action === 'project_operation_memory_anchor' ? ['action', 'input', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation']
-                  : row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key', ...(Object.hasOwn(row, 'actualAccount') ? ['actualAccount'] : [])] :
-                    (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
-                      : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
-                        : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
-                          : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
-                            ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
+          : row.action === 'task_target' || row.action === 'task_target_run' || row.action === 'task_target_wait_claim'
+            ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId']
+            : row.action === 'task_target_commit'
+              ? ['action', 'request', 'signed', 'binding_key', 'actualAccount', 'actualPeer', 'actualWorkerId']
+              : row.action === 'task_coordination' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer']
+                : row.action === 'task_coordination_commit_ack' ? ['action', 'request', 'fenceAck', 'binding_key', 'actualAccount', 'actualPeer']
+                  : row.action === 'project_operation_memory' ? ['action', 'request', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation', 'anchor', 'plan', 'currentCommittedCheckpoint',
+                    ...(Object.hasOwn(row, 'nativeActivationCut') ? ['nativeActivationCut'] : [])]
+                    : row.action === 'project_operation_memory_anchor' ? ['action', 'input', 'binding_key', 'actualAccount', 'actualPeer', 'confirmation']
+                      : row.action === 'root_operation_origin' ? ['action', 'operation', 'binding_key', 'actualAccount', 'actualPeer'] : (row.action === 'root_execution_journal' || row.action === 'root_feedback') ? ['action', 'operation', 'binding_key', ...(Object.hasOwn(row, 'actualAccount') ? ['actualAccount'] : [])] :
+                        (row.action === 'prepare_root_attempt' || row.action === 'read_root_attempt') ? ['action', 'target', 'binding_key']
+                          : row.action === 'inspect_root_attempt' ? ['action', 'target', 'attempt_request_id', 'binding_key']
+                            : row.action === 'dispatch_root_attempt' ? ['action', 'attempt_request_id', 'grant', 'binding_key']
+                              : (row.action === 'capture_root' || row.action === 'capture_group_root' || row.action === 'start_captured_root' || row.action === 'release_captured_root' || row.action === 'prepare' || row.action === 'resume_source' || row.action === 'capture_reply' || row.action === 'prepare_clarification' || row.action === 'prepare_root' || row.action === 'recover_root' || row.action === 'reconcile_root' || row.action === 'resume_root')
+                                ? ['action', 'binding_key', 'input', ...((row.action === 'resume_source' || row.action === 'resume_root' ||
                   ((row.action === 'prepare' || row.action === 'prepare_root') && Object.hasOwn(row,'resume_binding_key'))) ? ['resume_binding_key'] : [])]
-                            : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
-                              : row.action === 'dispatch'
-                                ? ['action', 'attempt_request_id', 'binding_key', 'grant']
-                                : []
+                                : (row.action === 'read_root_diagnostic' || row.action === 'read_root_output' || row.action === 'read_source_output') ? ['action','binding_key','target']
+                                  : row.action === 'dispatch'
+                                    ? ['action', 'attempt_request_id', 'binding_key', 'grant']
+                                    : []
       if (
         !keys.length ||
         Object.keys(row).length !== keys.length ||
@@ -830,6 +837,17 @@ export async function handleDesktopCollaborationAnalysisRequest(
         return owner.rootPlanning
       }
       const nativePurpose = row.purpose === 'runtime_entry' && (row.action === 'root_feedback' || row.action === 'root_execution_journal')
+      if (row.action === 'task_target' || row.action === 'task_target_commit'
+        || row.action === 'task_target_run' || row.action === 'task_target_wait_claim') {
+        if (!paired || row.actualWorkerId !== process.env.DSH_PROFILE_WORKER_ID || typeof row.binding_key !== 'string')
+          throw Error('paired_target_unavailable')
+        const operation = paired.execute(row.action, row.request, parseTaskCoordinationActualAccount(row.actualAccount),
+          parseTaskCoordinationActualPeer(row.actualPeer), row.binding_key, controller.signal, row.signed)
+        // Only the independently authenticated long phase retains the real parent Account/worker lease.
+        if (row.action === 'task_target_run') clearTimeout(timer)
+        send(200, { value: await operation })
+        return
+      }
       if ((nativePurpose || row.action === 'runtime_entry_installed_origin' || row.action === 'runtime_entry_locate' || row.action === 'runtime_entry_publish')
         && row.actualWorkerId !== process.env.DSH_PROFILE_WORKER_ID) throw Error('runtime_entry_unavailable')
       if (!native && nativePurpose && row.action === 'root_execution_journal') {

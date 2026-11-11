@@ -158,6 +158,10 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 ## 开发备注
 
+配对 target codec 保留原逻辑步骤、物理目标、Source ready proposal 及一次性 challenge/receipt 坐标。签名 tuple 由字面向量固定，精确 parser 拒绝关联不符及未知字段。步骤正文是包含权限上界的规范 UTF-8 JSON，最多16KiB，完整控制信封最多32KiB。解析和摘要不验证签名或当前权限。观察分页保留原 projection/admission 锚点，unknown 尝试不能被解释为已完成工作。
+
+现有 analysis command 接受封闭的 `task_target` 调用。其元数据响应为有界 JSON；Account owner 与客户端均在返回业务结果前，针对原保留调用解码并核对精确关联。公开命令不接受私有执行能力或调用方校验标记。
+
 <details>
 <summary>维护者的工作上下文——点击展开</summary>
 

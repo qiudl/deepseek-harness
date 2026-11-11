@@ -218,6 +218,20 @@ The remote directory chooser runs on the Host display. A selected directory rece
 
 ## Model Experience
 
+### Paired original task steps
+
+#### What the model sees
+
+An authenticated paired step adds its original Source text as one logged user message. Its temporary Agent-scoped file tools expose `read` and `list_directory`; execution admits only the actual owned definitions within the original Source tool ceiling and the standing local file policy. Signatures, Account bindings and private capability objects stay outside model context.
+
+#### Token effect
+
+The original step text and admitted file schemas add request tokens. A read returns at most 16 KiB of UTF-8 text; directory listings contain at most 128 entries, and each complete result is bounded to 32 KiB of JSON. The Native pipeline records call arguments and results before subsequent model requests.
+
+#### KV Cache effect
+
+The paired user message, temporary tool schemas and actual tool results change the corresponding request suffix. Other Agents do not receive these scoped definitions.
+
 ### Web runtime variable
 
 #### What the model sees
@@ -234,6 +248,8 @@ None; the plugin contributes no system-prompt text.
 
 
 ## Known Limitations and Deferred Work
+
+Paired execution currently supports bounded local text reads and directory listing through the verified Local or Sandboxed file provider. It does not provide Shell, writes, network or MCP effects. Source permission values remain unchanged; unsupported providers or retired nonempty Skill selections refuse execution. A durable input claim does not establish full producer quiescence. Target observation retains unknown coverage after unsupported recovery and does not advertise whole-device completion; paired capability advertisement remains disabled pending end-to-end acceptance.
 
 Private task stop coordination restricts the actual original native consumer; it supplies no open/ready operation. Before consuming the original grant, it checks the actual selected Native executor and installs an owned restriction on that same instance, preserving its pipeline, receiver, descriptions and concurrency configuration. Unsupported executors leave the grant prepared. Disposal drains the owned Agent before restoring only its own wrapper; replacement selections leave observation unknown. Tool preparation is not an effect: the final body check retains the original Account/request cancellation despite an awaited wrapper replacing its execution signal. An already-entered body remains in flight until it returns and its actual Session flush completes. Device-permit inventory is unsupported, so an empty native page never establishes device quiescence. `slark_run` attachment is unavailable without a corresponding original local journal. The [Session Controller](../../api/session-controller/README.md#collaboration-analysis-journal) defines persistent floors and unknown restart work.
 

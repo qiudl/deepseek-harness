@@ -878,6 +878,23 @@ read(canonicalDigest: string, account: CollaborationTaskCurrentAccount): 'closed
 
 Source: [`packages/api/session-controller/src/collaboration-task-coordination.ts`](../../packages/api/session-controller/src/collaboration-task-coordination.ts)
 
+<a id="ctxpairedtasktargetconsumerhost--pairedtasktargetconsumerhost"></a>
+
+### `ctx.pairedTaskTargetConsumerHost` — `PairedTaskTargetConsumerHost`
+
+Service implemented only by the original authenticated Profile bootstrap.
+
+```ts cordis-catalog
+/** Consume only an exact private object retained by this factory, with no caller-provided validation callback.
+ * @param capability - The original one-use object created after actual Source consumption and local persistence.
+ * @param signal - Original current admission request cancellation; retained execution uses the actual lease lifetime.
+ * @returns Its exact current Agent, Session and original signed-step data.
+ */
+take(capability: PairedTaskStepCapability, signal: AbortSignal): PairedTaskStepLease
+```
+
+Source: [`packages/api/session-controller/src/paired-task-target-consumer-host.ts`](../../packages/api/session-controller/src/paired-task-target-consumer-host.ts)
+
 <a id="ctxprojectoperationmemoryauthorizations--projectoperationmemoryauthorizations"></a>
 
 ### `ctx.projectOperationMemoryAuthorizations` — `ProjectOperationMemoryAuthorizations`
@@ -1126,6 +1143,18 @@ async captureCollaborationOperationOrigin(value: unknown, signal: AbortSignal): 
  * @returns The Profile-owned journal, closed only after live original consumers drain.
  */
 async openCollaborationTaskCoordinationJournal(): Promise<CollaborationTaskCoordinationJournal>
+
+/** Open the Profile-owned paired-step metadata writer without granting execution or clearing permanent floors.
+ * @returns The original journal, retained until the controller's lifecycle has drained.
+ */
+async openPairedTaskTargetJournal(): Promise<PairedTaskTargetJournal>
+
+/** Execute the original step only through the current worker's private one-use capability.
+ * @param capability - Original object captured by the authenticated paired target factory.
+ * @param signal - Current authenticated request cancellation.
+ * @returns Actual input acceptance and interval completion; neither asserts descendant-process quiescence.
+ */
+async consumePairedTaskTarget(capability: PairedTaskStepCapability, signal: AbortSignal): Promise<PairedTaskTargetRun>
 
 /** Cancel only the live original consumer of an already-associated local command.
  * @param commandId - Original command selected by the authenticated stop control.
