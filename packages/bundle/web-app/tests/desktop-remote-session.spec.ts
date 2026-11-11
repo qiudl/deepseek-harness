@@ -6,6 +6,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
 import { parseHostBotChatSubmission, parseHostBotRoomSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
 import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
@@ -23,6 +24,28 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('uses the fixed room update service under live room control and verifies the saved projection', async () => {
+    const request = parseHostBotRoomUpdateRequest({ roomId: 'room-1', expectedRevision: 7,
+      change: { kind: 'notice', value: 'Review' } })
+    const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
+      replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: 'main',
+      members: [{ botId: 'main', displayName: 'Main' }] }
+    const result = { roomId: 'room-1', revision: 8, state: 'applied', details }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'room-1')
+    const invoke = vi.fn(() => { throw Error('no generic room update') })
+    const update = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control,
+      undefined, undefined, undefined, update)
+    const command = { operation: 'bot.room.update' as const, command_id: randomUUID() as never,
+      session_id: 'room-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(update).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    update.mockResolvedValueOnce({ ...result, details: { ...details, workDir: '/private' } })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_room_update_receipt')
+  })
   it('uses the fixed room provider under original room control and rejects substituted receipts', async () => {
     const request = parseHostBotRoomSubmission({ roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' })
     const result = { roomId: 'room-1', submissionId: request.submissionId, state: 'accepted' }

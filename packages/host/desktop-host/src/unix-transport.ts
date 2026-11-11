@@ -32,6 +32,7 @@ import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOut
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomReceipt } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomList, parseHostBotRoomListRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -511,6 +512,8 @@ export interface UnixHostServerOptions {
   readonly remoteBotChatSupported?: boolean
   /** Advertise fixed owner room submission only for a worker with that plugin service. */
   readonly remoteBotRoomSupported?: boolean
+  /** Advertise fixed owner group setting edits only for a worker with that plugin service. */
+  readonly remoteBotRoomUpdateSupported?: boolean
   /** Advertise existing Bot chat reads only for the bundled Profile worker. */
   readonly remoteUiBotChatSupported?: boolean
   /** Advertise owner room summaries only for a worker with the fixed plugin reader. */
@@ -685,7 +688,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2057,12 +2060,15 @@ export class HostControlAuthority {
             const command = frame.params.command
             const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
             const botRoom = command.operation === 'bot.room.send' || command.operation === 'bot.room.receipt'
+            const botRoomUpdate = command.operation === 'bot.room.update'
             if (!execute || (botChat && !this.options.remoteBotChatSupported) ||
-              (botRoom && !this.options.remoteBotRoomSupported)) throw new HostAuthorityError('upgrade_required')
+              (botRoom && !this.options.remoteBotRoomSupported) ||
+              (botRoomUpdate && !this.options.remoteBotRoomUpdateSupported)) throw new HostAuthorityError('upgrade_required')
             value = await execute(profileId, command, context.signal)
             if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
               parseHostBotChatReceipt(value, command.request)
             if (botRoom) parseHostBotRoomReceipt(value, command.request)
+            if (botRoomUpdate) parseHostBotRoomUpdateReceipt(value, command.request)
           } else {
             const execute = this.options.remoteUiRead
             if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
@@ -3139,6 +3145,7 @@ export class HostControlAuthority {
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
           ...(this.options.remoteSession && this.options.remoteBotRoomSupported ? ['profile.remote_session.bot_room'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotRoomUpdateSupported ? ['profile.remote_session.bot_room_update'] : []),
           ...(this.options.remoteSession ? ['profile.remote_session',
             'profile.remote_session.workspace_create', 'profile.remote_session.directory_picker', 'profile.remote_session.session_reuse', 'profile.remote_session.event_result',
             'profile.remote_session.control_lease'] : []),
@@ -3312,12 +3319,15 @@ export class UnixHostClient {
   readonly remoteBotChatSupported = true
   /** This SDK can encode fixed owner room submissions. */
   readonly remoteBotRoomSupported = true
+  /** This SDK can encode fixed owner room settings edits. */
+  readonly remoteBotRoomUpdateSupported = true
   /** This SDK can encode the existing Bot identity/current-chat read. */
   readonly remoteUiBotChatSupported = true
   /** This SDK can encode owner room summary reads. */
   readonly remoteUiBotRoomsSupported = true
   /** This SDK can encode retained owner room messages. */
   readonly remoteUiBotRoomHistorySupported = true
+  /** This SDK can encode owner room management details. */
   readonly remoteUiBotRoomDetailsSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
@@ -5777,6 +5787,9 @@ export class UnixHostClient {
     readonly command: HostRemoteSessionCommand
     readonly signal?: AbortSignal
   }): Promise<HostRemoteSessionJson> {
+    if (input.command.operation === 'bot.room.update'
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_room_update' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if ((input.command.operation === 'bot.room.send' || input.command.operation === 'bot.room.receipt')
       && !this.inspection.capabilities.includes('profile.remote_session.bot_room' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -5796,6 +5809,8 @@ export class UnixHostClient {
       parseHostBotChatReceipt(value, input.command.request)
     if (input.command.operation === 'bot.room.send' || input.command.operation === 'bot.room.receipt')
       parseHostBotRoomReceipt(value, input.command.request)
+    if (input.command.operation === 'bot.room.update')
+      parseHostBotRoomUpdateReceipt(value, input.command.request)
     return value
   }
 
