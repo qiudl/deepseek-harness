@@ -42,7 +42,8 @@ export function parseHostBotSettingsUpdateRequest(value: unknown): HostBotSettin
     throw Error('invalid_bot_settings_update')
   const { kind } = value.change, setting = value.change.value
   let change: HostBotSettingsUpdateChange
-  if (kind === 'role' && bounded(setting, 24) && setting === setting.trim()) change = { kind, value: setting }
+  if (kind === 'role' && bounded(setting, 72) && setting.length <= 24 && setting === setting.trim())
+    change = { kind, value: setting }
   else if (kind === 'instructions' && bounded(setting, 32768) && setting === setting.trim())
     change = { kind, value: setting }
   else if (kind === 'color' && (setting === null || (bounded(setting, 64) && colorValid(setting))))

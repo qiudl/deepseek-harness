@@ -14,6 +14,8 @@ describe('native Bot profile edit', () => {
       revision: 8, settings }, parsed)?.settings).toEqual(settings)
     expect(parseHostBotSettingsUpdateReceipt({ botId: 'main', state: 'stale',
       revision: 9, settings: null }, parsed)?.state).toBe('stale')
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'role', value: '研'.repeat(24) } }).change.value).toBe('研'.repeat(24))
   })
   it('rejects forged selectors, unsupported fields and mismatched receipts', () => {
     for (const patch of [{ sessionId: '../other' }, { account: 'other' },
