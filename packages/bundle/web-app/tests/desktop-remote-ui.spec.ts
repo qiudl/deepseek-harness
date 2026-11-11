@@ -85,6 +85,24 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/room-details', { args: { roomId: 'room-1' } }, signal))
       .rejects.toThrow('invalid_bot_room_details_result')
   })
+  it('reads bounded owner Bot settings without invoking the generic Profile gateway', async () => {
+    const invoke = vi.fn()
+    const settings = { botId: 'main', revision: 7, name: 'Main', role: 'Coordinator',
+      instructions: 'Coordinate', color: 'deepseek', avatarShape: 'whale', hasAvatarImage: false,
+      model: 'provider/model', appliedModel: null, effort: null, workDir: '/team',
+      isMain: true, isPrimary: true, pinned: true, hidden: false }
+    const read = vi.fn(async (): Promise<unknown> => settings)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/settings', { args: { botId: 'main' } }, signal)).resolves.toEqual(settings)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/settings', { args: { botId: 'main', account: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_settings_request')
+    read.mockResolvedValueOnce({ ...settings, secret: 'hidden' })
+    await expect(executor.execute('bot/settings', { args: { botId: 'main' } }, signal))
+      .rejects.toThrow('invalid_bot_settings_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)
