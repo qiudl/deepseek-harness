@@ -109,6 +109,29 @@ describe('Desktop remote Session bridge', () => {
     createBot.mockResolvedValueOnce({ ...result, botId: 'main' })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_create_receipt')
   })
+  it('runs a schedule mutation only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', requestId: randomUUID(),
+      mode: 'create' as const, targetKind: 'bot' as const, targetId: 'main',
+      title: 'Briefing', prompt: 'Report progress',
+      when: { kind: 'daily' as const, time: '09:00', timeZone: 'UTC' } }
+    const result = { requestId: request.requestId, operation: 'create', state: 'pending',
+      taskId: null, sessionId: null }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.schedule.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    mutate.mockResolvedValueOnce({ ...result, requestId: randomUUID() })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_schedule_mutation_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')

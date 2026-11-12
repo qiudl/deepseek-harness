@@ -69,7 +69,8 @@ import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
-  HostBotDuplicateRequest, HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotDuplicateRequest, HostBotCreateRequest,
+  HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -808,6 +809,28 @@ export function apply(ctx: Context, config: Config): void {
               bot: request.bot }, signal)
             : service.readLocalBotCreate({ ownerBotId: request.ownerBotId,
               createRequestId: request.createRequestId }, signal)
+        }, async (request: HostBotScheduleMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            createLocalBotSchedule?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            deleteLocalBotSchedule?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotScheduleResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.createLocalBotSchedule ||
+            !service.deleteLocalBotSchedule || !service.readLocalBotScheduleResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          if (request.mode === 'status') return service.readLocalBotScheduleResult({
+            ownerBotId: request.ownerBotId, requestId: request.requestId }, signal)
+          if (request.mode === 'delete') return service.deleteLocalBotSchedule({
+            ownerBotId: request.ownerBotId, requestId: request.requestId,
+            sessionId: request.taskSessionId, id: request.taskId }, signal)
+          return service.createLocalBotSchedule({ ownerBotId: request.ownerBotId,
+            requestId: request.requestId, targetKind: request.targetKind, targetId: request.targetId,
+            title: request.title, prompt: request.prompt, when: request.when }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

@@ -92,6 +92,8 @@ export type { HostBotRoomMemoryRequest, HostBotRoomMemory, HostBotRoomMemoryEntr
 export type { HostBotMemoryRequest, HostBotMemory, HostBotMemoryEntry } from './bot-memory.ts'
 export { parseHostBotSchedulesRequest, parseHostBotSchedules } from './bot-schedules.ts'
 export type { HostBotSchedulesRequest, HostBotSchedules, HostBotSchedule } from './bot-schedules.ts'
+export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
+export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.ts'
 export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
 export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'

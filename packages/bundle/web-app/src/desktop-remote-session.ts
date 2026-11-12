@@ -16,6 +16,8 @@ import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
 import { parseHostBotDeleteRequest, parseHostBotDeleteReceipt, type HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt, type HostBotDuplicateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotCreateRequest, parseHostBotCreateReceipt, type HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt,
+  type HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
   type HostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
@@ -121,7 +123,9 @@ export class DesktopRemoteSessionExecutor {
     private readonly updateBotSettings?: (request: HostBotSettingsUpdateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly deleteBot?: (request: HostBotDeleteRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly duplicateBot?: (request: HostBotDuplicateRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly createBot?: (request: HostBotCreateRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly createBot?: (request: HostBotCreateRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotSchedule?: (request: HostBotScheduleMutationRequest,
+      signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -131,7 +135,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -190,6 +194,17 @@ export class DesktopRemoteSessionExecutor {
         return receipt === null ? null : { ownerBotId: receipt.ownerBotId,
           createRequestId: receipt.createRequestId, state: receipt.state,
           botId: receipt.botId, revision: receipt.revision }
+      }
+      case 'bot.schedule.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotScheduleMutationRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot schedule: Session mismatch')
+        if (!this.mutateBotSchedule) return null
+        const value = await this.mutateBotSchedule(request, signal)
+        const receipt = parseHostBotScheduleMutationReceipt(value, request)
+        return receipt === null ? null : { requestId: receipt.requestId,
+          operation: receipt.operation, state: receipt.state, taskId: receipt.taskId,
+          sessionId: receipt.sessionId }
       }
       case 'bot.room.create': {
         signal.throwIfAborted()
