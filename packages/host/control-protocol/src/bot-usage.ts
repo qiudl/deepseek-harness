@@ -91,7 +91,7 @@ export function parseHostBotUsage(value: unknown, request: HostBotUsageRequest):
     typeof value.scanning !== 'boolean' || !cursor(value.nextCursor) ||
     !record(value.totals) || !exact(value.totals, COUNTS) ||
     !Array.isArray(value.rows) || value.rows.length > request.limit) throw Error('invalid_bot_usage_result')
-  const totals = value.totals as Record<string, unknown>
+  const totals = value.totals
   if (!COUNTS.every(key => count(totals[key]))) throw Error('invalid_bot_usage_result')
   const rows: HostBotUsageRow[] = []
   for (const item of value.rows) {
@@ -120,9 +120,9 @@ export function parseHostBotUsage(value: unknown, request: HostBotUsageRequest):
       !text(item.kind, 80) || !COUNTS.every(key => count(item[key]))) {
       throw Error('invalid_bot_usage_result')
     }
-    const owner = item.owner as Record<string, unknown>
-    const model = item.model as Record<string, unknown>
-    rows.push({ hour: item.hour as string,
+    const owner = item.owner
+    const model = item.model
+    rows.push({ hour: item.hour,
       owner: { key: owner.key as string, kind: owner.kind as HostBotUsageRow['owner']['kind'],
         ...(owner.id === undefined ? {} : { id: owner.id as string }),
         ...(owner.name === undefined ? {} : { name: owner.name as string }),
@@ -130,7 +130,7 @@ export function parseHostBotUsage(value: unknown, request: HostBotUsageRequest):
       model: { key: model.key as string, provider: model.provider as string,
         model: model.model as string, name: model.name as string,
         ...(model.providerName === undefined ? {} : { providerName: model.providerName as string }) },
-      kind: item.kind as string, input: item.input as number,
+      kind: item.kind, input: item.input as number,
       cacheRead: item.cacheRead as number, cacheWrite: item.cacheWrite as number,
       output: item.output as number, calls: item.calls as number })
   }
