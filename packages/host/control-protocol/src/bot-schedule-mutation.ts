@@ -122,7 +122,7 @@ export function parseHostBotScheduleMutationReceipt(value: unknown,
     requestId: request.requestId,
     operation: value.operation === 'create' ? 'create' : value.operation === 'delete' ? 'delete' : null,
     state: receiptState(value.state),
-    taskId: value.taskId === null ? null : String(value.taskId),
-    sessionId: value.sessionId === null ? null : String(value.sessionId),
+    taskId: value.taskId,
+    sessionId: value.sessionId,
   }
 }
