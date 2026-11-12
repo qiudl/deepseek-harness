@@ -204,6 +204,20 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/usage', { args: { ...args, profileId: 'other' } }, signal))
       .rejects.toThrow('invalid_bot_usage_request')
   })
+  it('reads shared general preferences only through the verified Bot service', async () => {
+    const invoke = vi.fn()
+    const page = { revision: 4, theme: 'paper', accent: null, motion: 'quiet', width: 92 }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/general', { args: {} }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/general', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_general_request')
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

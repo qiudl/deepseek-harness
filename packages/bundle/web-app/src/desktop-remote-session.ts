@@ -26,6 +26,8 @@ import { parseHostBotUpdateMutationRequest, parseHostBotUpdateMutationReceipt,
   type HostBotUpdateMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
   type HostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGeneralSettingsUpdateRequest, parseHostBotGeneralSettingsUpdateResult,
+  type HostBotGeneralSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
   parseHostBotRoomCreateReceipt, parseHostBotRoomDeleteReceipt,
   type HostBotRoomCreateRequest, type HostBotRoomDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -138,6 +140,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly mutateBotMemory?: (request: HostBotMemoryMutationRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotChannelMirror?: (request: HostBotChannelMirrorMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly updateBotGeneralSettings?: (request: HostBotGeneralSettingsUpdateRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -148,7 +152,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -163,6 +167,16 @@ export class DesktopRemoteSessionExecutor {
   private async dispatch(command: HostRemoteSessionCommand,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
+      case 'bot.general.update': {
+        signal.throwIfAborted()
+        const request = parseHostBotGeneralSettingsUpdateRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot general: Session mismatch')
+        if (!this.updateBotGeneralSettings) return null
+        const value = await this.updateBotGeneralSettings(request, signal)
+        signal.throwIfAborted()
+        const result = parseHostBotGeneralSettingsUpdateResult(value)
+        return result === null ? null : { state: result.state, settings: { ...result.settings } }
+      }
       case 'bot.settings.update': {
         signal.throwIfAborted()
         const request = parseHostBotSettingsUpdateRequest(command.request)

@@ -398,6 +398,25 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('requires a separate signed capability for shared Bot appearance edits', async () => {
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+      change: { kind: 'motion', value: 'quiet' } } as never
+    const command = { operation: 'bot.general.update' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const settings = { revision: 8, theme: 'paper', accent: null, motion: 'quiet', width: 80 }
+    const result = { state: 'applied', settings }
+    const execute = vi.fn(async (): Promise<unknown> => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute,
+      remoteBotGeneralSettingsUpdateSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_general_update')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot room lifecycle separately and rejects a substituted result', async () => {
     const request = { roomId: 'room-1', expectedRevision: 8 } as never
     const command = { operation: 'bot.room.delete' as const, command_id: randomUUID() as never,
@@ -598,6 +617,21 @@ describe('Unix transport authority failures', () => {
       remoteUiBotUsageSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_usage')
     await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    enabled.client.close()
+  })
+  it('requires a distinct signed general settings read capability', async () => {
+    const input = { ...opened, endpoint: 'bot/general' as const, payload: { args: {} } }
+    const page = { revision: 7, theme: 'paper', accent: null, motion: 'normal', width: 80 }
+    const read = vi.fn(async (): Promise<unknown> => page)
+    const without = await authorityClient({ remoteUiRead: read })
+    await expect(without.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    without.client.close()
+    const enabled = await authorityClient({ remoteUiRead: read,
+      remoteUiBotGeneralSettingsSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_general')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    read.mockResolvedValueOnce({ ...page, accessToken: 'leak' })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
     enabled.client.close()
   })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {

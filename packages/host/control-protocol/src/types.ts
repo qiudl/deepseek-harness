@@ -6,6 +6,7 @@ import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
 import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
 import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
+import type { HostBotGeneralSettingsUpdateRequest } from './bot-general-settings.ts'
 import type { HostBotDeleteRequest } from './bot-delete.ts'
 import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
 import type { HostBotCreateRequest } from './bot-create.ts'
@@ -2056,6 +2057,11 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.general.update'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotGeneralSettingsUpdateRequest }
   | { readonly operation: 'bot.settings.update'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -2267,7 +2273,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/folders' | 'bot/avatar' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/folders' | 'bot/avatar' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'

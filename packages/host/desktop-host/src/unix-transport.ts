@@ -45,6 +45,8 @@ import { parseHostBotSchedules, parseHostBotSchedulesRequest } from '@deepseek-a
 import { parseHostBotScheduleHistory, parseHostBotScheduleHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAbout } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotUsage, parseHostBotUsageRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGeneralSettings, parseHostBotGeneralSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGeneralSettingsUpdateResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -535,6 +537,7 @@ export interface UnixHostServerOptions {
   readonly remoteBotChannelMirrorMutationSupported?: boolean
   /** Whether the selected Profile worker can apply fixed native Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported?: boolean
+  readonly remoteBotGeneralSettingsUpdateSupported?: boolean
   readonly remoteBotDeleteSupported?: boolean
   readonly remoteBotDuplicateSupported?: boolean
   readonly remoteBotCreateSupported?: boolean
@@ -556,6 +559,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiBotScheduleHistorySupported?: boolean
   readonly remoteUiBotAboutSupported?: boolean
   readonly remoteUiBotUsageSupported?: boolean
+  readonly remoteUiBotGeneralSettingsSupported?: boolean
   readonly remoteUiBotFoldersSupported?: boolean
   readonly remoteUiBotAvatarSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
@@ -725,7 +729,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2100,6 +2104,7 @@ export class HostControlAuthority {
             const botRoomUpdate = command.operation === 'bot.room.update'
             const botChannelMirrorMutation = command.operation === 'bot.channel-mirror.mutate'
             const botSettingsUpdate = command.operation === 'bot.settings.update'
+            const botGeneralSettingsUpdate = command.operation === 'bot.general.update'
             const botDelete = command.operation === 'bot.delete'
             const botDuplicate = command.operation === 'bot.duplicate'
             const botCreate = command.operation === 'bot.create'
@@ -2112,6 +2117,7 @@ export class HostControlAuthority {
               (botRoomUpdate && !this.options.remoteBotRoomUpdateSupported) ||
               (botChannelMirrorMutation && !this.options.remoteBotChannelMirrorMutationSupported) ||
               (botSettingsUpdate && !this.options.remoteBotSettingsUpdateSupported) ||
+              (botGeneralSettingsUpdate && !this.options.remoteBotGeneralSettingsUpdateSupported) ||
               (botDelete && !this.options.remoteBotDeleteSupported) ||
               (botDuplicate && !this.options.remoteBotDuplicateSupported) ||
               (botCreate && !this.options.remoteBotCreateSupported) ||
@@ -2126,6 +2132,7 @@ export class HostControlAuthority {
             if (botRoomUpdate) parseHostBotRoomUpdateReceipt(value, command.request)
             if (botChannelMirrorMutation) parseHostBotChannelMirrorMutationReceipt(value, command.request)
             if (botSettingsUpdate) parseHostBotSettingsUpdateReceipt(value, command.request)
+            if (botGeneralSettingsUpdate) parseHostBotGeneralSettingsUpdateResult(value)
             if (botDelete) parseHostBotDeleteReceipt(value, command.request)
             if (botDuplicate) parseHostBotDuplicateReceipt(value, command.request)
             if (botCreate) parseHostBotCreateReceipt(value, command.request)
@@ -2147,6 +2154,7 @@ export class HostControlAuthority {
               || (frame.params.endpoint === 'bot/schedule-history' && !this.options.remoteUiBotScheduleHistorySupported)
               || (frame.params.endpoint === 'bot/about' && !this.options.remoteUiBotAboutSupported)
               || (frame.params.endpoint === 'bot/usage' && !this.options.remoteUiBotUsageSupported)
+              || (frame.params.endpoint === 'bot/general' && !this.options.remoteUiBotGeneralSettingsSupported)
               || (frame.params.endpoint === 'bot/folders' && !this.options.remoteUiBotFoldersSupported)
               || (frame.params.endpoint === 'bot/avatar' && !this.options.remoteUiBotAvatarSupported)
               || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
@@ -2175,6 +2183,10 @@ export class HostControlAuthority {
               parseHostBotAbout(value)
             if (frame.params.endpoint === 'bot/usage')
               parseHostBotUsage(value, parseHostBotUsageRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/general') {
+              parseHostBotGeneralSettingsRequest(frame.params.payload.args)
+              parseHostBotGeneralSettings(value)
+            }
             if (frame.params.endpoint === 'bot/folders')
               parseHostBotFolders(value, parseHostBotFoldersRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/avatar')
@@ -3241,6 +3253,7 @@ export class HostControlAuthority {
           ...(this.options.remoteSession && this.options.remoteBotChannelMirrorMutationSupported
             ? ['profile.remote_session.bot_channel_mirror_mutation'] : []),
           ...(this.options.remoteSession && this.options.remoteBotSettingsUpdateSupported ? ['profile.remote_session.bot_settings_update'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotGeneralSettingsUpdateSupported ? ['profile.remote_session.bot_general_update'] : []),
           ...(this.options.remoteSession && this.options.remoteBotDeleteSupported ? ['profile.remote_session.bot_delete'] : []),
           ...(this.options.remoteSession && this.options.remoteBotDuplicateSupported ? ['profile.remote_session.bot_duplicate'] : []),
           ...(this.options.remoteSession && this.options.remoteBotCreateSupported ? ['profile.remote_session.bot_create'] : []),
@@ -3263,6 +3276,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead && this.options.remoteUiBotScheduleHistorySupported ? ['profile.remote_ui_read.bot_schedule_history'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAboutSupported ? ['profile.remote_ui_read.bot_about'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotUsageSupported ? ['profile.remote_ui_read.bot_usage'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotGeneralSettingsSupported ? ['profile.remote_ui_read.bot_general'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotFoldersSupported ? ['profile.remote_ui_read.bot_folders'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAvatarSupported ? ['profile.remote_ui_read.bot_avatar'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
@@ -3436,6 +3450,8 @@ export class UnixHostClient {
   readonly remoteBotChannelMirrorMutationSupported = true
   /** This Desktop supports revision-checked Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported = true
+  /** This SDK accepts versioned shared appearance edits under a Bot Session. */
+  readonly remoteBotGeneralSettingsUpdateSupported = true
   /** This SDK accepts fixed owner Bot deletion commands. */
   readonly remoteBotDeleteSupported = true
   /** This SDK accepts idempotent owner Bot copy commands. */
@@ -3472,6 +3488,8 @@ export class UnixHostClient {
   readonly remoteUiBotAboutSupported = true
   /** This SDK validates bounded native Bot usage pages. */
   readonly remoteUiBotUsageSupported = true
+  /** This SDK validates versioned native DS Bot general settings. */
+  readonly remoteUiBotGeneralSettingsSupported = true
   /** This SDK validates bounded owner Host directory reads. */
   readonly remoteUiBotFoldersSupported = true
   /** This SDK validates bounded owner Bot avatar chunks. */
@@ -5937,6 +5955,9 @@ export class UnixHostClient {
     if (input.command.operation === 'bot.settings.update'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_settings_update' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
+    if (input.command.operation === 'bot.general.update'
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_general_update' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (input.command.operation === 'bot.delete'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_delete' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -5989,6 +6010,8 @@ export class UnixHostClient {
       parseHostBotChannelMirrorMutationReceipt(value, input.command.request)
     if (input.command.operation === 'bot.settings.update')
       parseHostBotSettingsUpdateReceipt(value, input.command.request)
+    if (input.command.operation === 'bot.general.update')
+      parseHostBotGeneralSettingsUpdateResult(value)
     if (input.command.operation === 'bot.delete')
       parseHostBotDeleteReceipt(value, input.command.request)
     if (input.command.operation === 'bot.duplicate')
@@ -6044,6 +6067,8 @@ export class UnixHostClient {
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_about' as HostControlCapability))
       || (input.endpoint === 'bot/usage'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_usage' as HostControlCapability))
+      || (input.endpoint === 'bot/general'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_general' as HostControlCapability))
       || (input.endpoint === 'bot/folders'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_folders' as HostControlCapability))
       || (input.endpoint === 'bot/avatar'

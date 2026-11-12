@@ -24,6 +24,27 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('updates shared Bot preferences only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 4,
+      change: { kind: 'width' as const, value: 50 } }
+    const result = { state: 'applied', settings: {
+      revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50 } }
+    const update = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, update)
+    const command = { operation: 'bot.general.update' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(update).toHaveBeenCalledWith(request, signal)
+    update.mockResolvedValueOnce({ ...result, settings: { ...result.settings, secret: 'private' } })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_general_result')
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
   it('runs a native Channel mirror mutation under room control and rejects substituted receipts', async () => {
     const roomId = 'session-11111111-1111-4111-8111-111111111111'
     const request = { kind: 'start' as const, roomId, requestId: randomUUID(),

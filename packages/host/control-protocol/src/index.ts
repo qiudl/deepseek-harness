@@ -101,6 +101,10 @@ export type { HostBotScheduleHistoryRequest, HostBotScheduleHistory } from './bo
 export { parseHostBotAboutRequest, parseHostBotAbout } from './bot-about.ts'
 export { parseHostBotUsageRequest, parseHostBotUsage } from './bot-usage.ts'
 export type { HostBotUsageRequest, HostBotUsage, HostBotUsageRow } from './bot-usage.ts'
+export { parseHostBotGeneralSettingsRequest, parseHostBotGeneralSettings,
+  parseHostBotGeneralSettingsUpdateRequest, parseHostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
+export type { HostBotGeneralSettingsRequest, HostBotGeneralSettings,
+  HostBotGeneralSettingsUpdateRequest, HostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
 export type { HostBotAboutRequest, HostBotAbout } from './bot-about.ts'
 export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
