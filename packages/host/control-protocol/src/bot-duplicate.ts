@@ -1,6 +1,7 @@
 /** Idempotent Bot copy and status lookup under an authenticated Bot Session. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** Idempotent copy request tied to an owner Bot Session. */
 export interface HostBotDuplicateRequest {
   readonly sourceBotId: string
   readonly sessionId: string
@@ -8,6 +9,7 @@ export interface HostBotDuplicateRequest {
   readonly expectedRevision: number
   readonly mode: 'create' | 'status'
 }
+/** Correlated copy result, including a recoverable missing state. */
 export interface HostBotDuplicateReceipt {
   readonly sourceBotId: string
   readonly copyRequestId: string
@@ -24,6 +26,10 @@ const uuid = (value: unknown): value is string => typeof value === 'string' &&
 const revision = (value: unknown): value is number => typeof value === 'number' &&
   Number.isSafeInteger(value) && value >= 0
 
+/** Validate the source Bot, revision, and durable copy identity.
+ * @param value - Untrusted request arguments.
+ * @returns Bounded copy request.
+ */
 export function parseHostBotDuplicateRequest(value: unknown): HostBotDuplicateRequest {
   if (!record(value) || !exact(value, ['sourceBotId', 'sessionId', 'copyRequestId', 'expectedRevision', 'mode']) ||
     !botId(value.sourceBotId) || !sessionId(value.sessionId) || !uuid(value.copyRequestId) ||
@@ -33,6 +39,11 @@ export function parseHostBotDuplicateRequest(value: unknown): HostBotDuplicateRe
     copyRequestId: value.copyRequestId, expectedRevision: value.expectedRevision, mode: value.mode }
 }
 
+/** Validate a copy result against its source and request identity.
+ * @param value - Untrusted Host reply.
+ * @param request - Captured copy request.
+ * @returns Correlated receipt or null when unavailable.
+ */
 export function parseHostBotDuplicateReceipt(value: unknown,
   request: HostBotDuplicateRequest): HostBotDuplicateReceipt | null {
   if (value === null) return null

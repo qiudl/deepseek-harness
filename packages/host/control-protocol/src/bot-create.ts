@@ -1,6 +1,7 @@
 /** Fixed native Bot creation and durable status under a verified owner Session. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** Durable creation request tied to a verified owner Bot Session. */
 export interface HostBotCreateRequest {
   readonly ownerBotId: string
   readonly sessionId: string
@@ -17,6 +18,7 @@ export interface HostBotCreateRequest {
     brief: string
   }>
 }
+/** Definite or recoverable result of one creation request. */
 export interface HostBotCreateReceipt {
   readonly ownerBotId: string
   readonly createRequestId: string
@@ -35,6 +37,10 @@ const revision = (value: unknown): value is number => typeof value === 'number' 
 const bounded = (value: unknown, max: number): value is string => typeof value === 'string' &&
   Buffer.byteLength(value, 'utf8') <= max
 
+/** Validate the complete native Bot creation form and request identity.
+ * @param value - Untrusted request arguments.
+ * @returns Bounded creation request.
+ */
 export function parseHostBotCreateRequest(value: unknown): HostBotCreateRequest {
   if (!record(value) || !exact(value, ['ownerBotId', 'sessionId', 'createRequestId', 'expectedRevision', 'mode', 'bot']) ||
     !botId(value.ownerBotId) || !sessionId(value.sessionId) || !uuid(value.createRequestId) ||
@@ -55,6 +61,11 @@ export function parseHostBotCreateRequest(value: unknown): HostBotCreateRequest 
     mode: value.mode, bot: value.bot as HostBotCreateRequest['bot'] }
 }
 
+/** Validate a creation result against the original request.
+ * @param value - Untrusted Host reply.
+ * @param request - Captured creation request.
+ * @returns Correlated receipt or null when unavailable.
+ */
 export function parseHostBotCreateReceipt(value: unknown,
   request: HostBotCreateRequest): HostBotCreateReceipt | null {
   if (value === null) return null

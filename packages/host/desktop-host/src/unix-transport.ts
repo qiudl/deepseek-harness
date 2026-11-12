@@ -3373,8 +3373,11 @@ export class UnixHostClient {
   readonly remoteBotRoomUpdateSupported = true
   /** This Desktop supports revision-checked Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported = true
+  /** This SDK accepts fixed owner Bot deletion commands. */
   readonly remoteBotDeleteSupported = true
+  /** This SDK accepts idempotent owner Bot copy commands. */
   readonly remoteBotDuplicateSupported = true
+  /** This SDK accepts idempotent owner Bot creation commands. */
   readonly remoteBotCreateSupported = true
   /** This SDK can encode fixed owner group creation and deletion. */
   readonly remoteBotRoomLifecycleSupported = true
@@ -3388,7 +3391,9 @@ export class UnixHostClient {
   readonly remoteUiBotRoomDetailsSupported = true
   /** This client can decode the separate signed Bot settings read capability. */
   readonly remoteUiBotSettingsSupported = true
+  /** This SDK validates bounded owner Host directory reads. */
   readonly remoteUiBotFoldersSupported = true
+  /** This SDK validates bounded owner Bot avatar chunks. */
   readonly remoteUiBotAvatarSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true

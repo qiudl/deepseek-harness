@@ -1,11 +1,13 @@
 /** Fixed owner Bot deletion under an authenticated, controlled Bot Session. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** Revision-bound deletion of one owner Bot. */
 export interface HostBotDeleteRequest {
   readonly botId: string
   readonly sessionId: string
   readonly expectedRevision: number
 }
+/** Correlated deletion, stale, or missing result. */
 export interface HostBotDeleteReceipt {
   readonly botId: string
   readonly state: 'deleted' | 'stale' | 'missing'
@@ -18,6 +20,10 @@ const sessionId = (value: unknown): value is string => typeof value === 'string'
 const revision = (value: unknown): value is number => typeof value === 'number' &&
   Number.isSafeInteger(value) && value >= 0
 
+/** Validate a deletion request and its owner Session.
+ * @param value - Untrusted request arguments.
+ * @returns Bounded deletion request.
+ */
 export function parseHostBotDeleteRequest(value: unknown): HostBotDeleteRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'expectedRevision']) ||
     !botId(value.botId) || !sessionId(value.sessionId) || !revision(value.expectedRevision))
@@ -25,6 +31,11 @@ export function parseHostBotDeleteRequest(value: unknown): HostBotDeleteRequest 
   return { botId: value.botId, sessionId: value.sessionId, expectedRevision: value.expectedRevision }
 }
 
+/** Validate the deletion result against the requested revision.
+ * @param value - Untrusted Host reply.
+ * @param request - Captured deletion request.
+ * @returns Correlated receipt or null when unavailable.
+ */
 export function parseHostBotDeleteReceipt(value: unknown,
   request: HostBotDeleteRequest): HostBotDeleteReceipt | null {
   if (value === null) return null
