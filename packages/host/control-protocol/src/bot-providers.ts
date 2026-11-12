@@ -10,9 +10,15 @@ export type HostBotProvidersRequest = Readonly<Record<string, never>>
 export type HostBotProvidersMutationRequest = Readonly<{
   botId: string
   sessionId: string
-  kind: 'key-set' | 'key-clear' | 'add-known' | 'remove'
+  kind: 'key-set' | 'key-clear' | 'add-known' | 'add-custom' | 'remove'
   provider: string
-  value: string | null
+  value: string | null | Readonly<{
+    name: string
+    baseURL: string
+    api: string
+    key: string | null
+    models: readonly string[]
+  }>
 }>
 /** Configured and addable model providers without credential values. */
 export type HostBotProviders = Readonly<{
@@ -53,6 +59,7 @@ export function parseHostBotProvidersMutationRequest(value: unknown): HostBotPro
     !providerID(value.provider)) throw Error('invalid_bot_providers_mutation')
   if (value.kind === 'key-set' && credential(value.value) ||
     value.kind === 'add-known' && (value.value === null || credential(value.value)) ||
+    value.kind === 'add-custom' && customProvider(value.value) ||
     (value.kind === 'key-clear' || value.kind === 'remove') && value.value === null)
     return { botId: value.botId, sessionId: value.sessionId, kind: value.kind,
       provider: value.provider, value: value.value }
@@ -61,6 +68,18 @@ export function parseHostBotProvidersMutationRequest(value: unknown): HostBotPro
 
 const credential = (value: unknown): value is string => bounded(value, 8192) &&
   /^[!-~]+$/u.test(value)
+
+function customProvider(value: unknown): value is Exclude<HostBotProvidersMutationRequest['value'], string | null> {
+  if (!record(value) || !exact(value, ['name', 'baseURL', 'api', 'key', 'models']) ||
+    typeof value.name !== 'string' || Buffer.byteLength(value.name, 'utf8') > 80 ||
+    typeof value.baseURL !== 'string' || value.baseURL.length > 4096 ||
+    !protocolIDs.has(value.api as string) || !(value.key === null || credential(value.key)) ||
+    !Array.isArray(value.models) || value.models.length < 1 || value.models.length > 100 ||
+    value.models.some((id: unknown) => !bounded(id, 200)) ||
+    new Set(value.models).size !== value.models.length) return false
+  try { const url = new URL(value.baseURL); return url.protocol === 'http:' || url.protocol === 'https:' }
+  catch { return false }
+}
 
 /**
  * Validate the bot providers at the native Host boundary.

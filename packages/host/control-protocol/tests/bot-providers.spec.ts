@@ -32,5 +32,13 @@ describe('native provider directory boundary', () => {
     expect(() => parseHostBotProvidersMutationRequest({ ...request, profileId: 'other' })).toThrow()
     expect(() => parseHostBotProvidersMutationRequest({ ...request, value: 'x'.repeat(8193) })).toThrow()
     expect(() => parseHostBotProvidersMutationRequest({ ...request, kind: 'remove' })).toThrow()
+    const custom = { ...request, kind: 'add-custom', provider: 'my-gateway',
+      value: { name: 'Gateway', baseURL: 'https://gateway.example/v1',
+        api: 'openai-completions', key: null, models: ['m1'] } }
+    expect(parseHostBotProvidersMutationRequest(custom)).toEqual(custom)
+    expect(() => parseHostBotProvidersMutationRequest({ ...custom,
+      value: { ...custom.value, baseURL: 'file:///etc/passwd' } })).toThrow()
+    expect(() => parseHostBotProvidersMutationRequest({ ...custom,
+      value: { ...custom.value, models: ['m1', 'm1'] } })).toThrow()
   })
 })
