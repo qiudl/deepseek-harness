@@ -3,6 +3,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
 import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { latestOwnerRevision, readStableOwnerFile } from './private-file-io.ts'
+import { validRecordIdentity } from './profile-import-record-identity.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
@@ -40,10 +42,7 @@ function validate(value: unknown): ProfileImportOperation {
     'sourceProfileId', 'sourceSnapshotDigest', 'stagedGeneration', 'targetGeneration',
     'targetProfileId', 'targetSnapshotDigest', 'version',
   ].join(',') || row.version !== 1 || !Number.isSafeInteger(row.revision) || (row.revision as number) < 1
-    || typeof row.operationId !== 'string' || !UUID.test(row.operationId)
-    || typeof row.sourceProfileId !== 'string' || !UUID.test(row.sourceProfileId)
-    || typeof row.targetProfileId !== 'string' || !UUID.test(row.targetProfileId)
-    || row.sourceProfileId === row.targetProfileId
+    || !validRecordIdentity(row)
     || typeof row.sourceSnapshotDigest !== 'string' || !SHA256.test(row.sourceSnapshotDigest)
     || typeof row.targetSnapshotDigest !== 'string' || !SHA256.test(row.targetSnapshotDigest)
     || typeof row.previewDigest !== 'string' || row.previewDigest !== digest([
@@ -93,17 +92,8 @@ export class FileProfileImportOperationJournal {
     if (!UUID.test(operationId)) throw new Error('profile_import_journal_invalid')
     await this.checkedParent()
     if (!await this.existingRoot()) return null
-    const prefix = `${operationId}.`
-    const versions = (await readdir(this.root)).flatMap((name) => {
-      if (!name.startsWith(prefix) || !name.endsWith('.json')) return []
-      const suffix = name.slice(prefix.length, -5)
-      const number = Number(suffix)
-      if (!Number.isSafeInteger(number) || number < 1 || String(number) !== suffix) {
-        throw new Error('profile_import_journal_invalid')
-      }
-      return [number]
-    }).sort((left, right) => right - left)
-    const revision = versions[0]
+    const revision = await latestOwnerRevision(this.root, operationId,
+      () => new Error('profile_import_journal_invalid'))
     if (revision === undefined) return null
     const file = join(this.root, `${operationId}.${revision}.json`)
     const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -113,12 +103,7 @@ export class FileProfileImportOperationJournal {
         || (before.mode & 0o077n) !== 0n || before.size < 1n || before.size > BigInt(MAX_BYTES)) {
         throw new Error('profile_import_journal_unsafe')
       }
-      const bytes = await handle.readFile()
-      const after = await handle.stat({ bigint: true })
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
-        throw new Error('profile_import_journal_changed')
-      }
+      const bytes = await readStableOwnerFile(handle, before, () => new Error('profile_import_journal_changed'))
       let decoded: unknown
       try { decoded = JSON.parse(bytes.toString('utf8')) } catch { throw new Error('profile_import_journal_invalid') }
       const row = validate(decoded)
