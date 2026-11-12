@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseHostBotProviders, parseHostBotProvidersRequest } from '../src/bot-providers.js'
+import { parseHostBotProviders, parseHostBotProvidersRequest,
+  parseHostBotProvidersMutationRequest } from '../src/bot-providers.js'
 
 const view = { available: true,
   providers: [{ id: 'deepseek', name: 'DeepSeek',
@@ -23,5 +24,13 @@ describe('native provider directory boundary', () => {
     expect(() => parseHostBotProviders({ ...view, secret: 'value' })).toThrow()
     expect(() => parseHostBotProviders({ ...view, providers: [{ ...view.providers[0],
       models: [{ ref: 'x'.repeat(513), name: 'Too long' }] }] })).toThrow()
+  })
+  it('accepts only a bounded credential edit under a Bot Session', () => {
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'key-set',
+      provider: 'deepseek-official', value: 'sk-secret123' }
+    expect(parseHostBotProvidersMutationRequest(request)).toEqual(request)
+    expect(() => parseHostBotProvidersMutationRequest({ ...request, profileId: 'other' })).toThrow()
+    expect(() => parseHostBotProvidersMutationRequest({ ...request, value: 'x'.repeat(8193) })).toThrow()
+    expect(() => parseHostBotProvidersMutationRequest({ ...request, kind: 'remove' })).toThrow()
   })
 })

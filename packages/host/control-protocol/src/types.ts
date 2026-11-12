@@ -7,6 +7,7 @@ import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
 import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
 import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import type { HostBotGeneralSettingsUpdateRequest } from './bot-general-settings.ts'
+import type { HostBotProvidersMutationRequest } from './bot-providers.ts'
 import type { HostBotDeleteRequest } from './bot-delete.ts'
 import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
 import type { HostBotCreateRequest } from './bot-create.ts'
@@ -2057,6 +2058,11 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.providers.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotProvidersMutationRequest }
   | { readonly operation: 'bot.general.update'
     readonly command_id: HostControlRequestId
     readonly session_id: string

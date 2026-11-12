@@ -69,7 +69,7 @@ import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
   HostBotScheduleHistoryRequest, HostBotAboutRequest, HostBotUsageRequest, HostBotGeneralSettingsRequest,
-  HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest,
+  HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest, HostBotProvidersMutationRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
@@ -895,6 +895,20 @@ export function apply(ctx: Context, config: Config): void {
           if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.updateLocalBotGeneralSettings({ expectedRevision: request.expectedRevision,
             change: request.change }, signal)
+        }, async (request: HostBotProvidersMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotProviders?: (input: Pick<HostBotProvidersMutationRequest,
+              'kind' | 'provider' | 'value'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotProviders) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotProviders({ kind: request.kind, provider: request.provider,
+            value: request.value }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

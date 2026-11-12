@@ -736,6 +736,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         remoteBotChannelMirrorMutationSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotSettingsUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotGeneralSettingsUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotProvidersMutationSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotDeleteSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotDuplicateSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotCreateSupported: dependencies.createProfileWorkerFactory === undefined,

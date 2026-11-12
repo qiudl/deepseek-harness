@@ -539,6 +539,7 @@ export interface UnixHostServerOptions {
   /** Whether the selected Profile worker can apply fixed native Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported?: boolean
   readonly remoteBotGeneralSettingsUpdateSupported?: boolean
+  readonly remoteBotProvidersMutationSupported?: boolean
   readonly remoteBotDeleteSupported?: boolean
   readonly remoteBotDuplicateSupported?: boolean
   readonly remoteBotCreateSupported?: boolean
@@ -731,7 +732,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2107,6 +2108,7 @@ export class HostControlAuthority {
             const botChannelMirrorMutation = command.operation === 'bot.channel-mirror.mutate'
             const botSettingsUpdate = command.operation === 'bot.settings.update'
             const botGeneralSettingsUpdate = command.operation === 'bot.general.update'
+            const botProvidersMutation = command.operation === 'bot.providers.mutate'
             const botDelete = command.operation === 'bot.delete'
             const botDuplicate = command.operation === 'bot.duplicate'
             const botCreate = command.operation === 'bot.create'
@@ -2120,6 +2122,7 @@ export class HostControlAuthority {
               (botChannelMirrorMutation && !this.options.remoteBotChannelMirrorMutationSupported) ||
               (botSettingsUpdate && !this.options.remoteBotSettingsUpdateSupported) ||
               (botGeneralSettingsUpdate && !this.options.remoteBotGeneralSettingsUpdateSupported) ||
+              (botProvidersMutation && !this.options.remoteBotProvidersMutationSupported) ||
               (botDelete && !this.options.remoteBotDeleteSupported) ||
               (botDuplicate && !this.options.remoteBotDuplicateSupported) ||
               (botCreate && !this.options.remoteBotCreateSupported) ||
@@ -2135,6 +2138,7 @@ export class HostControlAuthority {
             if (botChannelMirrorMutation) parseHostBotChannelMirrorMutationReceipt(value, command.request)
             if (botSettingsUpdate) parseHostBotSettingsUpdateReceipt(value, command.request)
             if (botGeneralSettingsUpdate) parseHostBotGeneralSettingsUpdateResult(value)
+            if (botProvidersMutation) parseHostBotProviders(value)
             if (botDelete) parseHostBotDeleteReceipt(value, command.request)
             if (botDuplicate) parseHostBotDuplicateReceipt(value, command.request)
             if (botCreate) parseHostBotCreateReceipt(value, command.request)
@@ -3261,6 +3265,7 @@ export class HostControlAuthority {
             ? ['profile.remote_session.bot_channel_mirror_mutation'] : []),
           ...(this.options.remoteSession && this.options.remoteBotSettingsUpdateSupported ? ['profile.remote_session.bot_settings_update'] : []),
           ...(this.options.remoteSession && this.options.remoteBotGeneralSettingsUpdateSupported ? ['profile.remote_session.bot_general_update'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotProvidersMutationSupported ? ['profile.remote_session.bot_providers_mutation'] : []),
           ...(this.options.remoteSession && this.options.remoteBotDeleteSupported ? ['profile.remote_session.bot_delete'] : []),
           ...(this.options.remoteSession && this.options.remoteBotDuplicateSupported ? ['profile.remote_session.bot_duplicate'] : []),
           ...(this.options.remoteSession && this.options.remoteBotCreateSupported ? ['profile.remote_session.bot_create'] : []),
@@ -3460,6 +3465,7 @@ export class UnixHostClient {
   readonly remoteBotSettingsUpdateSupported = true
   /** This SDK accepts versioned shared appearance edits under a Bot Session. */
   readonly remoteBotGeneralSettingsUpdateSupported = true
+  readonly remoteBotProvidersMutationSupported = true
   /** This SDK accepts fixed owner Bot deletion commands. */
   readonly remoteBotDeleteSupported = true
   /** This SDK accepts idempotent owner Bot copy commands. */
@@ -5967,6 +5973,9 @@ export class UnixHostClient {
     if (input.command.operation === 'bot.general.update'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_general_update' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
+    if (input.command.operation === 'bot.providers.mutate'
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_providers_mutation' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (input.command.operation === 'bot.delete'
       && !this.inspection.capabilities.includes('profile.remote_session.bot_delete' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
@@ -6021,6 +6030,8 @@ export class UnixHostClient {
       parseHostBotSettingsUpdateReceipt(value, input.command.request)
     if (input.command.operation === 'bot.general.update')
       parseHostBotGeneralSettingsUpdateResult(value)
+    if (input.command.operation === 'bot.providers.mutate')
+      parseHostBotProviders(value)
     if (input.command.operation === 'bot.delete')
       parseHostBotDeleteReceipt(value, input.command.request)
     if (input.command.operation === 'bot.duplicate')

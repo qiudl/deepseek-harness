@@ -1,14 +1,26 @@
 /** Fixed native projection of configured model providers; credential values never appear. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
-const bounded = (value: unknown, max: number): value is string => typeof value === 'string' &&
-  value.length > 0 && Buffer.byteLength(value, 'utf8') <= max &&
-  [...value].every((char) => { const code = char.codePointAt(0); return code !== undefined && code > 31 && code !== 127 })
+const bounded = (value: unknown, max: number): value is string => {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > max) return false
+  for (const char of value) {
+    const code = char.codePointAt(0)
+    if (code === undefined || code <= 31 || code === 127) return false
+  }
+  return true
+}
 const providerID = (value: unknown): value is string => bounded(value, 100) &&
   /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value)
 const protocolIDs = new Set(['openai-completions', 'openai-responses', 'anthropic-messages'])
 
 export type HostBotProvidersRequest = Readonly<Record<string, never>>
+export type HostBotProvidersMutationRequest = Readonly<{
+  botId: string
+  sessionId: string
+  kind: 'key-set' | 'key-clear' | 'add-known' | 'remove'
+  provider: string
+  value: string | null
+}>
 export type HostBotProviders = Readonly<{
   available: boolean
   providers: readonly Readonly<{
@@ -30,6 +42,24 @@ export function parseHostBotProvidersRequest(value: unknown): HostBotProvidersRe
   return {}
 }
 
+/** @param value Untrusted encrypted control request. @returns Exact provider edit. */
+export function parseHostBotProvidersMutationRequest(value: unknown): HostBotProvidersMutationRequest {
+  if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'provider', 'value']) ||
+    !bounded(value.botId, 200) || !/^[A-Za-z0-9_-]+$/u.test(value.botId) ||
+    !bounded(value.sessionId, 256) || !/^[!-~]+$/u.test(value.sessionId) ||
+    /[/\\]/u.test(value.sessionId) || value.sessionId === '.' || value.sessionId === '..' ||
+    !providerID(value.provider)) throw Error('invalid_bot_providers_mutation')
+  if (value.kind === 'key-set' && credential(value.value) ||
+    value.kind === 'add-known' && (value.value === null || credential(value.value)) ||
+    (value.kind === 'key-clear' || value.kind === 'remove') && value.value === null)
+    return { botId: value.botId, sessionId: value.sessionId, kind: value.kind,
+      provider: value.provider, value: value.value }
+  throw Error('invalid_bot_providers_mutation')
+}
+
+const credential = (value: unknown): value is string => bounded(value, 8192) &&
+  /^[!-~]+$/u.test(value)
+
 /** @param value Untrusted plugin result. @returns Exact credential-free directory. */
 export function parseHostBotProviders(value: unknown): HostBotProviders | null {
   if (value === null) return null
@@ -43,7 +73,7 @@ export function parseHostBotProviders(value: unknown): HostBotProviders | null {
   const providers = value.providers.map((entry: unknown) => {
     if (!record(entry) || !exact(entry, ['id', 'name', 'models', 'key', 'removable', 'custom', 'hasError']) ||
       !providerID(entry.id) || seen.has(entry.id) || !bounded(entry.name, 256) ||
-      !Array.isArray(entry.models) || entry.models.length > 100 ||
+      !Array.isArray(entry.models) || entry.models.length > 500 ||
       typeof entry.removable !== 'boolean' || typeof entry.custom !== 'boolean' ||
       typeof entry.hasError !== 'boolean') throw Error('invalid_bot_providers_result')
     seen.add(entry.id)
@@ -55,7 +85,7 @@ export function parseHostBotProviders(value: unknown): HostBotProviders | null {
       key = { configured: entry.key.configured, writable: entry.key.writable }
     }
     modelCount += entry.models.length
-    if (modelCount > 300) throw Error('invalid_bot_providers_result')
+    if (modelCount > 2000) throw Error('invalid_bot_providers_result')
     const models = entry.models.map((model: unknown) => {
       if (!record(model) || !exact(model, ['ref', 'name']) ||
         !bounded(model.ref, 512) || !bounded(model.name, 256)) throw Error('invalid_bot_providers_result')
@@ -74,5 +104,5 @@ export function parseHostBotProviders(value: unknown): HostBotProviders | null {
     new Set(value.protocols).size !== value.protocols.length ||
     (!value.available && (providers.length > 0 || addable.length > 0 || value.protocols.length > 0)))
     throw Error('invalid_bot_providers_result')
-  return { available: value.available, providers, addable, protocols: [...value.protocols] }
+  return { available: value.available, providers, addable, protocols: (value.protocols as string[]).slice() }
 }

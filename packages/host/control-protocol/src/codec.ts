@@ -24,7 +24,7 @@ import { parseHostBotScheduleHistoryRequest } from './bot-schedule-history.ts'
 import { parseHostBotAboutRequest } from './bot-about.ts'
 import { parseHostBotUsageRequest } from './bot-usage.ts'
 import { parseHostBotGeneralSettingsRequest, parseHostBotGeneralSettingsUpdateRequest } from './bot-general-settings.ts'
-import { parseHostBotProvidersRequest } from './bot-providers.ts'
+import { parseHostBotProvidersRequest, parseHostBotProvidersMutationRequest } from './bot-providers.ts'
 import { parseHostBotFoldersRequest } from './bot-folders.ts'
 import { parseHostBotAvatarRequest } from './bot-avatar.ts'
 import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
@@ -706,6 +706,14 @@ function remoteSessionControlProof(value: unknown): HostRemoteSessionControlProo
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'bot.providers.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotProvidersMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
   if (command.operation === 'bot.general.update') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotGeneralSettingsUpdateRequest(command.request)

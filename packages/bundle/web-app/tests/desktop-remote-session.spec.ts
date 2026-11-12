@@ -24,6 +24,26 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('edits model provider credentials only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'key-set' as const,
+      provider: 'deepseek-official', value: 'sk-secret123' }
+    const result = { available: true, providers: [], addable: [], protocols: [] }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.providers.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
   it('updates shared Bot preferences only under the controlled Bot Session', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')
