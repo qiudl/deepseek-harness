@@ -39,6 +39,7 @@ import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest } from '@deepse
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettings, parseHostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotMemory, parseHostBotMemoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomMemory, parseHostBotRoomMemoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -538,6 +539,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiBotRoomDetailsSupported?: boolean
   readonly remoteUiBotSettingsSupported?: boolean
   readonly remoteUiBotMemorySupported?: boolean
+  readonly remoteUiBotRoomMemorySupported?: boolean
   readonly remoteUiBotFoldersSupported?: boolean
   readonly remoteUiBotAvatarSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
@@ -707,7 +709,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2112,6 +2114,7 @@ export class HostControlAuthority {
               || (frame.params.endpoint === 'bot/room-details' && !this.options.remoteUiBotRoomDetailsSupported)
               || (frame.params.endpoint === 'bot/settings' && !this.options.remoteUiBotSettingsSupported)
               || (frame.params.endpoint === 'bot/memory' && !this.options.remoteUiBotMemorySupported)
+              || (frame.params.endpoint === 'bot/room-memory' && !this.options.remoteUiBotRoomMemorySupported)
               || (frame.params.endpoint === 'bot/folders' && !this.options.remoteUiBotFoldersSupported)
               || (frame.params.endpoint === 'bot/avatar' && !this.options.remoteUiBotAvatarSupported)
               || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
@@ -2130,6 +2133,8 @@ export class HostControlAuthority {
               parseHostBotSettings(value, parseHostBotSettingsRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/memory')
               parseHostBotMemory(value, parseHostBotMemoryRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/room-memory')
+              parseHostBotRoomMemory(value, parseHostBotRoomMemoryRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/folders')
               parseHostBotFolders(value, parseHostBotFoldersRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/avatar')
@@ -3208,6 +3213,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead && this.options.remoteUiBotRoomDetailsSupported ? ['profile.remote_ui_read.bot_room_details'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotSettingsSupported ? ['profile.remote_ui_read.bot_settings'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotMemorySupported ? ['profile.remote_ui_read.bot_memory'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotRoomMemorySupported ? ['profile.remote_ui_read.bot_room_memory'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotFoldersSupported ? ['profile.remote_ui_read.bot_folders'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAvatarSupported ? ['profile.remote_ui_read.bot_avatar'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
@@ -3399,6 +3405,8 @@ export class UnixHostClient {
   readonly remoteUiBotSettingsSupported = true
   /** This worker accepts bounded native Bot memory pages from the Profile plugin. */
   readonly remoteUiBotMemorySupported = true
+  /** This worker validates bounded native group memory pages. */
+  readonly remoteUiBotRoomMemorySupported = true
   /** This SDK validates bounded owner Host directory reads. */
   readonly remoteUiBotFoldersSupported = true
   /** This SDK validates bounded owner Bot avatar chunks. */
@@ -5941,6 +5949,8 @@ export class UnixHostClient {
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_settings' as HostControlCapability))
       || (input.endpoint === 'bot/memory'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_memory' as HostControlCapability))
+      || (input.endpoint === 'bot/room-memory'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_room_memory' as HostControlCapability))
       || (input.endpoint === 'bot/folders'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_folders' as HostControlCapability))
       || (input.endpoint === 'bot/avatar'

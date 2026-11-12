@@ -124,6 +124,21 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/memory', { args }, signal))
       .rejects.toThrow('invalid_bot_memory_result')
   })
+  it('routes group memory only to its dedicated plugin reader', async () => {
+    const invoke = vi.fn()
+    const args = { roomId: 'room-1', cursor: null, limit: 12, summarize: true }
+    const page = { roomId: 'room-1', available: false }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/room-memory', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/room-memory', { args: { ...args, profile: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_room_memory_request')
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

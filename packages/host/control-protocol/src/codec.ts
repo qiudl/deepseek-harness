@@ -18,6 +18,7 @@ import { parseHostBotRoomHistoryRequest } from './bot-room-history.ts'
 import { parseHostBotRoomDetailsRequest } from './bot-room-details.ts'
 import { parseHostBotSettingsRequest } from './bot-settings.ts'
 import { parseHostBotMemoryRequest } from './bot-memory.ts'
+import { parseHostBotRoomMemoryRequest } from './bot-room-memory.ts'
 import { parseHostBotFoldersRequest } from './bot-folders.ts'
 import { parseHostBotAvatarRequest } from './bot-avatar.ts'
 import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
@@ -2082,7 +2083,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'bot/memory' && params.endpoint !== 'bot/folders' && params.endpoint !== 'bot/avatar' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
+    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'bot/memory' && params.endpoint !== 'bot/room-memory' && params.endpoint !== 'bot/folders' && params.endpoint !== 'bot/avatar' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
@@ -2102,6 +2103,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if (params.endpoint === 'bot/room-details') parseHostBotRoomDetailsRequest(args)
     if (params.endpoint === 'bot/settings') parseHostBotSettingsRequest(args)
     if (params.endpoint === 'bot/memory') parseHostBotMemoryRequest(args)
+    if (params.endpoint === 'bot/room-memory') parseHostBotRoomMemoryRequest(args)
     if (params.endpoint === 'bot/folders') parseHostBotFoldersRequest(args)
     if (params.endpoint === 'bot/avatar') parseHostBotAvatarRequest(args)
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()

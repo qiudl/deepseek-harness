@@ -87,6 +87,8 @@ export type { HostBotRoomDetailsRequest, HostBotRoomDetails } from './bot-room-d
 export { parseHostBotSettingsRequest, parseHostBotSettings } from './bot-settings.ts'
 export type { HostBotSettingsRequest, HostBotSettings } from './bot-settings.ts'
 export { parseHostBotMemoryRequest, parseHostBotMemory } from './bot-memory.ts'
+export { parseHostBotRoomMemoryRequest, parseHostBotRoomMemory } from './bot-room-memory.ts'
+export type { HostBotRoomMemoryRequest, HostBotRoomMemory, HostBotRoomMemoryEntry } from './bot-room-memory.ts'
 export type { HostBotMemoryRequest, HostBotMemory, HostBotMemoryEntry } from './bot-memory.ts'
 export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.ts'
 export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
