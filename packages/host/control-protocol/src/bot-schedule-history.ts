@@ -1,18 +1,21 @@
 /** One bounded page of durable ScheduleService inbox acknowledgments. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** Exact selector for one Bot team schedule task's retained inbox deliveries. */
 export interface HostBotScheduleHistoryRequest {
   readonly sessionId: string
   readonly id: string
   readonly limit: number
   readonly before: string | null
 }
+/** One reminder acknowledged as written to the target Session inbox. */
 export interface HostBotScheduleHistoryRecord {
   readonly scheduledAt: string
   readonly deliveredAt: string
   readonly messageId: string
   readonly prompt: string | null
 }
+/** Bounded delivery page; an acknowledgment does not prove Bot execution. */
 export interface HostBotScheduleHistory {
   readonly available: boolean
   readonly sessionId: string
@@ -30,7 +33,11 @@ const id = (value: unknown, max: number): value is string => bytes(value, max) &
 const message = (value: unknown): value is string => id(value, 256) && /^[!-~]+$/u.test(value)
 const instant = (value: unknown): value is string => bytes(value, 40) && !Number.isNaN(Date.parse(value))
 
-/** Validate an exact task selector before crossing the Profile boundary. */
+/**
+ * Validate an exact task selector before crossing the Profile boundary.
+ * @param value - Untrusted selector from the remote UI request.
+ * @returns The bounded task selector.
+ */
 export function parseHostBotScheduleHistoryRequest(value: unknown): HostBotScheduleHistoryRequest {
   if (!record(value) || !exact(value, ['sessionId', 'id', 'limit', 'before']) ||
     !id(value.sessionId, 256) || !id(value.id, 200) ||
@@ -40,7 +47,12 @@ export function parseHostBotScheduleHistoryRequest(value: unknown): HostBotSched
   return { sessionId: value.sessionId, id: value.id, limit: value.limit, before: value.before }
 }
 
-/** Correlate a Profile response to its exact task and project allowed fields. */
+/**
+ * Correlate a Profile response to its exact task and project allowed fields.
+ * @param value - Untrusted reply from the Bot service.
+ * @param request - Selector used for the corresponding read.
+ * @returns A validated delivery page, or null when the service is unavailable.
+ */
 export function parseHostBotScheduleHistory(value: unknown,
   request: HostBotScheduleHistoryRequest): HostBotScheduleHistory | null {
   if (value === null) return null
