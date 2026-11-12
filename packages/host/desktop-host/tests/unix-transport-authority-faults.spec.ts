@@ -538,6 +538,20 @@ describe('Unix transport authority failures', () => {
     await expect(withCapability.client.remoteUiRead(input)).resolves.toEqual({ roomId: 'room-1', available: false })
     withCapability.client.close()
   })
+  it('requires an independent signed Bot schedules capability', async () => {
+    const input = { ...opened, endpoint: 'bot/schedules' as const,
+      payload: { args: { cursor: null, limit: 20 } } }
+    const page = { available: false, total: 0, tasks: [], nextCursor: null }
+    const read = vi.fn(async () => page)
+    const without = await authorityClient({ remoteUiRead: read })
+    await expect(without.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    without.client.close()
+    const enabled = await authorityClient({ remoteUiRead: read,
+      remoteUiBotSchedulesSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_schedules')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    enabled.client.close()
+  })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
     const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
       payload: { args: { url: '/plugins/a.js', offset: 0 } } }

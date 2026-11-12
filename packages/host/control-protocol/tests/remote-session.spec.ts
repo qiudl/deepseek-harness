@@ -323,6 +323,13 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('bot/room-memory', { args: { ...args, roomId: '../other' } }))).toThrow()
     expect(() => decode(readFrame('bot/room-memory', { args: { ...args, profile: 'other' } }))).toThrow()
   })
+  it('keeps the schedule page selector inside the signed read frame', () => {
+    const args = { cursor: null, limit: 20 }
+    const frame = readFrame('bot/schedules', { args })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/schedules', { args: { ...args, profile: 'other' } }))).toThrow()
+    expect(() => decode(readFrame('bot/schedules', { args: { ...args, limit: 21 } }))).toThrow()
+  })
   it('round-trips only an exact native Bot folder selector', () => {
     const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)

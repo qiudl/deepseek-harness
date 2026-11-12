@@ -745,6 +745,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
         remoteUiBotSettingsSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotMemorySupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomMemorySupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotSchedulesSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotFoldersSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotAvatarSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
