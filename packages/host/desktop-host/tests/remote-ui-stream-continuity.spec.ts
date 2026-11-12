@@ -25,7 +25,7 @@ const identity = {
   runtimeGeneration: 5,
   schemaGeneration: 1,
 }
-const follow = { args: { request: { address: { kind: 'session', sessionId: 'session-1' } } } }
+const follow = { args: { request: { address: { kind: 'session' as const, sessionId: 'session-1' } } } }
 const owners = {
   first: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3001',
   second: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3002',
@@ -53,7 +53,7 @@ function workerStream(signal: AbortSignal, stopped: () => void) {
   return {
     /** Queue one native event for the next worker read. */
     push(value: unknown): void { pending.push(value); resume() },
-    async *[Symbol.asyncIterator](): AsyncGenerator<unknown> {
+    async *[Symbol.asyncIterator](): AsyncGenerator {
       try {
         for (;;) {
           const next = pending.shift()
@@ -76,16 +76,23 @@ function leaseHost(held: Map<string, ProfileOpenResult>) {
     supportsOfflineAccountRecovery: () => true,
     bootstrapLocalProfile: vi.fn(async () => ready),
     openLocalProfile: vi.fn(async () => firstLease),
-    authorizeExtensionView: vi.fn((input: { viewLeaseId: string; leaseGeneration: number
-      runtimeGeneration: number; ownerId: string }) => {
+    authorizeExtensionView: vi.fn((input: {
+      viewLeaseId: string
+      leaseGeneration: number
+      runtimeGeneration: number
+      ownerId: string
+    }) => {
       const granted = held.get(input.ownerId)
       if (!granted || granted.viewLeaseId !== input.viewLeaseId
         || granted.leaseGeneration !== input.leaseGeneration
         || granted.runtimeGeneration !== input.runtimeGeneration) throw new HostAuthorityError('stale')
       return profileId
     }),
-    authorizeViewContinuation: vi.fn((input: { profileId: string; runtimeGeneration: number
-      ownerId: string }) => {
+    authorizeViewContinuation: vi.fn((input: {
+      profileId: string
+      runtimeGeneration: number
+      ownerId: string
+    }) => {
       const granted = held.get(input.ownerId)
       if (!granted || granted.profileId !== input.profileId
         || granted.runtimeGeneration !== input.runtimeGeneration) throw new HostAuthorityError('stale')
@@ -120,7 +127,7 @@ async function connect(authority: HostControlAuthority, ownerId: string): Promis
   const lifetime = new AbortController()
   const session = authority.openSession(ownerId, lifetime.signal)
   const transport: HostClientFrameTransport = {
-    call: async (frame) => await session.handleRequest(frame),
+    call: async frame => await session.handleRequest(frame),
     isConnected: () => !lifetime.signal.aborted,
     close: () => { lifetime.abort(); session.close() },
   }

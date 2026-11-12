@@ -221,7 +221,7 @@ describe('Windows Desktop Host startup', () => {
     const observed = vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(
       function (this: unknown, options: ConstructorParameters<typeof Original>[0]) {
         captured = options
-        return Reflect.construct<typeof Original, [typeof options]>(Original, [options])
+        return Reflect.construct(Original, [options])
       },
     )
     onTestFinished(() => { observed.mockRestore() })
