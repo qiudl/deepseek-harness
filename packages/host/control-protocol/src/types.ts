@@ -11,6 +11,7 @@ import type { HostBotProvidersMutationRequest } from './bot-providers.ts'
 import type { HostBotConnectorsMutationRequest } from './bot-connectors.ts'
 import type { HostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
 import type { HostBotSecretsMutationRequest } from './bot-secrets.ts'
+import type { HostBotCapabilitiesMutationRequest } from './bot-capabilities.ts'
 import type { HostBotDeleteRequest } from './bot-delete.ts'
 import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
 import type { HostBotCreateRequest } from './bot-create.ts'
@@ -2061,6 +2062,11 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.capability-library.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotCapabilitiesMutationRequest }
   | { readonly operation: 'bot.secrets.mutate'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -2297,7 +2303,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/providers' | 'bot/connectors' | 'bot/secrets' | 'bot/feedback' | 'bot/feedback-log' | 'bot/folders' | 'bot/avatar' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/providers' | 'bot/connectors' | 'bot/secrets' | 'bot/capability-library' | 'bot/feedback' | 'bot/feedback-log' | 'bot/folders' | 'bot/avatar' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'

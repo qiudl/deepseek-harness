@@ -20,12 +20,13 @@ import { parseHostBotConnectors, parseHostBotConnectorsRequest, type HostBotConn
 import { parseHostBotFeedback, parseHostBotFeedbackRequest, type HostBotFeedbackRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFeedbackLogChunk, parseHostBotFeedbackLogRequest, type HostBotFeedbackLogRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSecrets, parseHostBotSecretsRequest, type HostBotSecretsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotCapabilities, parseHostBotCapabilitiesRequest, type HostBotCapabilitiesRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest, type HostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest, type HostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/usage', 'bot/general', 'bot/providers', 'bot/connectors', 'bot/secrets', 'bot/feedback', 'bot/feedback-log', 'bot/folders', 'bot/avatar', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/usage', 'bot/general', 'bot/providers', 'bot/connectors', 'bot/secrets', 'bot/capability-library', 'bot/feedback', 'bot/feedback-log', 'bot/folders', 'bot/avatar', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -58,7 +59,8 @@ export class DesktopRemoteUiExecutor {
     private readonly readBotConnectors?: (request: HostBotConnectorsRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotFeedback?: (request: HostBotFeedbackRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotFeedbackLog?: (request: HostBotFeedbackLogRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly readBotSecrets?: (request: HostBotSecretsRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly readBotSecrets?: (request: HostBotSecretsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotCapabilityLibrary?: (request: HostBotCapabilitiesRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -209,6 +211,14 @@ export class DesktopRemoteUiExecutor {
       const value = await this.readBotSecrets(request, signal)
       signal.throwIfAborted()
       return parseHostBotSecrets(value)
+    }
+    if (endpoint === 'bot/capability-library') {
+      const request = parseHostBotCapabilitiesRequest(payload.args)
+      if (!this.readBotCapabilityLibrary) throw Error('desktop remote UI: Bot capability library reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotCapabilityLibrary(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotCapabilities(value)
     }
     if (endpoint === 'bot/folders') {
       const request = parseHostBotFoldersRequest(payload.args)

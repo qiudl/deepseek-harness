@@ -36,6 +36,8 @@ import { parseHostBotFeedbackClearRequest, parseHostBotFeedback,
   type HostBotFeedbackClearRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSecrets, parseHostBotSecretsMutationRequest,
   type HostBotSecretsMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotCapabilities, parseHostBotCapabilitiesMutationRequest,
+  type HostBotCapabilitiesMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
   parseHostBotRoomCreateReceipt, parseHostBotRoomDeleteReceipt,
   type HostBotRoomCreateRequest, type HostBotRoomDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -158,6 +160,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly clearBotFeedback?: (request: HostBotFeedbackClearRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotSecrets?: (request: HostBotSecretsMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotCapabilityLibrary?: (request: HostBotCapabilitiesMutationRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -168,7 +172,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.secrets.mutate' || command.operation === 'bot.feedback.clear' || command.operation === 'bot.connectors.mutate' || command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.capability-library.mutate' || command.operation === 'bot.secrets.mutate' || command.operation === 'bot.feedback.clear' || command.operation === 'bot.connectors.mutate' || command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -183,6 +187,15 @@ export class DesktopRemoteSessionExecutor {
   private async dispatch(command: HostRemoteSessionCommand,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     switch (command.operation) {
+      case 'bot.capability-library.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotCapabilitiesMutationRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot capabilities: Session mismatch')
+        if (!this.mutateBotCapabilityLibrary) return null
+        const value = await this.mutateBotCapabilityLibrary(request, signal)
+        signal.throwIfAborted()
+        return parseHostBotCapabilities(value) as HostRemoteSessionJson
+      }
       case 'bot.secrets.mutate': {
         signal.throwIfAborted()
         const request = parseHostBotSecretsMutationRequest(command.request)
