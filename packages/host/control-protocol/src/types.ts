@@ -9,6 +9,7 @@ import type { HostBotDeleteRequest } from './bot-delete.ts'
 import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
 import type { HostBotCreateRequest } from './bot-create.ts'
 import type { HostBotScheduleMutationRequest } from './bot-schedule-mutation.ts'
+import type { HostBotUpdateMutationRequest } from './bot-update-mutation.ts'
 import type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -2078,6 +2079,11 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly request: HostBotScheduleMutationRequest }
+  | { readonly operation: 'bot.update.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotUpdateMutationRequest }
   | { readonly operation: 'bot.room.create'
     readonly command_id: HostControlRequestId
     readonly session_id: string

@@ -24,6 +24,24 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('starts a controlled native About update and rejects an unrelated receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { mode: 'start' as const, ownerBotId: 'main', sessionId: 'chat-1',
+      requestId: randomUUID(), target: 'bot' as const, version: '0.2.25' }
+    const result = { requestId: request.requestId, target: 'bot', version: '0.2.25', state: 'pending' }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.update.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledTimes(1)
+    mutate.mockResolvedValueOnce({ ...result, target: 'dsh' })
+    await expect(executor.execute(command, new AbortController().signal))
+      .rejects.toThrow('invalid_bot_update_mutation_receipt')
+  })
   it('controls a Bot profile edit through its Session and validates the saved result', async () => {
     const request = parseHostBotSettingsUpdateRequest({ botId: 'main', sessionId: 'chat-1',
       expectedRevision: 7, change: { kind: 'pinned', value: true } })

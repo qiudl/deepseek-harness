@@ -18,6 +18,8 @@ import { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt, type HostBo
 import { parseHostBotCreateRequest, parseHostBotCreateReceipt, type HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt,
   type HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotUpdateMutationRequest, parseHostBotUpdateMutationReceipt,
+  type HostBotUpdateMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
   type HostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
@@ -125,6 +127,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly duplicateBot?: (request: HostBotDuplicateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly createBot?: (request: HostBotCreateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotSchedule?: (request: HostBotScheduleMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotUpdate?: (request: HostBotUpdateMutationRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -135,7 +139,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -205,6 +209,16 @@ export class DesktopRemoteSessionExecutor {
         return receipt === null ? null : { requestId: receipt.requestId,
           operation: receipt.operation, state: receipt.state, taskId: receipt.taskId,
           sessionId: receipt.sessionId }
+      }
+      case 'bot.update.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotUpdateMutationRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot update: Session mismatch')
+        if (!this.mutateBotUpdate) return null
+        const value = await this.mutateBotUpdate(request, signal)
+        const receipt = parseHostBotUpdateMutationReceipt(value, request)
+        return receipt === null ? null : { requestId: receipt.requestId, target: receipt.target,
+          version: receipt.version, state: receipt.state }
       }
       case 'bot.room.create': {
         signal.throwIfAborted()

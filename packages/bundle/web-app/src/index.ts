@@ -71,7 +71,7 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotScheduleHistoryRequest, HostBotAboutRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
-  HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotScheduleMutationRequest, HostBotUpdateMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -832,6 +832,24 @@ export function apply(ctx: Context, config: Config): void {
           return service.createLocalBotSchedule({ ownerBotId: request.ownerBotId,
             requestId: request.requestId, targetKind: request.targetKind, targetId: request.targetId,
             title: request.title, prompt: request.prompt, when: request.when }, signal)
+        }, async (request: HostBotUpdateMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            startLocalBotUpdate?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotUpdateResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.startLocalBotUpdate ||
+            !service.readLocalBotUpdateResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          return request.mode === 'status'
+            ? service.readLocalBotUpdateResult({ requestId: request.requestId,
+              target: request.target }, signal)
+            : service.startLocalBotUpdate({ requestId: request.requestId,
+              target: request.target, version: request.version }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
