@@ -71,7 +71,8 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotScheduleHistoryRequest, HostBotAboutRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
-  HostBotScheduleMutationRequest, HostBotUpdateMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
+  HostBotMemoryMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -850,6 +851,27 @@ export function apply(ctx: Context, config: Config): void {
               target: request.target }, signal)
             : service.startLocalBotUpdate({ requestId: request.requestId,
               target: request.target, version: request.version }, signal)
+        }, async (request: HostBotMemoryMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            askLocalBotMemory?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            forgetLocalBotMemory?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotMemoryMutationResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.askLocalBotMemory ||
+            !service.forgetLocalBotMemory || !service.readLocalBotMemoryMutationResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          const { ownerBotId, requestId, targetKind, targetId } = request
+          if (request.mode === 'status') return service.readLocalBotMemoryMutationResult({
+            ownerBotId, requestId, targetKind, targetId }, signal)
+          if (request.mode === 'ask') return service.askLocalBotMemory({
+            ownerBotId, requestId, targetKind, targetId, text: request.text }, signal)
+          return service.forgetLocalBotMemory({ ownerBotId, requestId, targetKind,
+            targetId, scope: request.scope, topic: request.topic, text: request.text }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

@@ -29,6 +29,7 @@ import { parseHostBotDeleteRequest } from './bot-delete.ts'
 import { parseHostBotDuplicateRequest } from './bot-duplicate.ts'
 import { parseHostBotCreateRequest } from './bot-create.ts'
 import { parseHostBotScheduleMutationRequest } from './bot-schedule-mutation.ts'
+import { parseHostBotMemoryMutationRequest } from './bot-memory-mutation.ts'
 import { parseHostBotUpdateMutationRequest } from './bot-update-mutation.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
 import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
@@ -736,6 +737,14 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.schedule.mutate') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotScheduleMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.memory.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotMemoryMutationRequest(command.request)
     const session_id = remoteIdentifier(command.session_id)
     if (session_id !== request.sessionId) reject()
     return { operation: command.operation, command_id, session_id,

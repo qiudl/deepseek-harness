@@ -18,6 +18,8 @@ import { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt, type HostBo
 import { parseHostBotCreateRequest, parseHostBotCreateReceipt, type HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt,
   type HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotMemoryMutationRequest, parseHostBotMemoryMutationReceipt,
+  type HostBotMemoryMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotUpdateMutationRequest, parseHostBotUpdateMutationReceipt,
   type HostBotUpdateMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
@@ -129,6 +131,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly mutateBotSchedule?: (request: HostBotScheduleMutationRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotUpdate?: (request: HostBotUpdateMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotMemory?: (request: HostBotMemoryMutationRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -139,7 +143,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -209,6 +213,22 @@ export class DesktopRemoteSessionExecutor {
         return receipt === null ? null : { requestId: receipt.requestId,
           operation: receipt.operation, state: receipt.state, taskId: receipt.taskId,
           sessionId: receipt.sessionId }
+      }
+      case 'bot.memory.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotMemoryMutationRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot memory: Session mismatch')
+        if (!this.mutateBotMemory) return null
+        const value = await this.mutateBotMemory(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotMemoryMutationReceipt(value, request)
+        return receipt === null ? null : {
+          requestId: receipt.requestId, operation: receipt.operation,
+          targetKind: receipt.targetKind, targetId: receipt.targetId,
+          state: receipt.state, reply: receipt.reply, truncated: receipt.truncated,
+          changes: receipt.changes.map(change => ({ op: change.op, scope: change.scope,
+            text: change.text, before: change.before, ok: change.ok, error: change.error })),
+        }
       }
       case 'bot.update.mutate': {
         signal.throwIfAborted()

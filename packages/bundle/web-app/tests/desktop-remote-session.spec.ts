@@ -24,6 +24,25 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('runs a memory question under the controlled Bot Session and validates its receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { mode: 'ask' as const, ownerBotId: 'main', sessionId: 'chat-1',
+      requestId: randomUUID(), targetKind: 'bot' as const, targetId: 'main', text: 'Remember tea' }
+    const result = { requestId: request.requestId, operation: 'ask', targetKind: 'bot',
+      targetId: 'main', state: 'applied', reply: 'Done', changes: [], truncated: false }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.memory.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledTimes(1)
+    mutate.mockResolvedValueOnce({ ...result, targetId: 'other' })
+    await expect(executor.execute(command, new AbortController().signal))
+      .rejects.toThrow('invalid_bot_memory_mutation_receipt')
+  })
   it('starts a controlled native About update and rejects an unrelated receipt', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')

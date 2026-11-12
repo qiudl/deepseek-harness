@@ -100,6 +100,8 @@ export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceip
 export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export { parseHostBotUpdateMutationRequest, parseHostBotUpdateMutationReceipt } from './bot-update-mutation.ts'
 export type { HostBotUpdateMutationRequest, HostBotUpdateMutationReceipt } from './bot-update-mutation.ts'
+export { parseHostBotMemoryMutationRequest, parseHostBotMemoryMutationReceipt } from './bot-memory-mutation.ts'
+export type { HostBotMemoryMutationRequest, HostBotMemoryMutationReceipt } from './bot-memory-mutation.ts'
 export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.ts'
 export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
 export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'
