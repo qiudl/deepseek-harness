@@ -15,6 +15,7 @@ import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
   type HostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDeleteRequest, parseHostBotDeleteReceipt, type HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt, type HostBotDuplicateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotCreateRequest, parseHostBotCreateReceipt, type HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt,
   type HostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
@@ -119,7 +120,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly deleteBotRoom?: (request: HostBotRoomDeleteRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly updateBotSettings?: (request: HostBotSettingsUpdateRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly deleteBot?: (request: HostBotDeleteRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly duplicateBot?: (request: HostBotDuplicateRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly duplicateBot?: (request: HostBotDuplicateRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly createBot?: (request: HostBotCreateRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -129,7 +131,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -175,6 +177,18 @@ export class DesktopRemoteSessionExecutor {
         const receipt = parseHostBotDuplicateReceipt(value, request)
         return receipt === null ? null : { sourceBotId: receipt.sourceBotId,
           copyRequestId: receipt.copyRequestId, state: receipt.state,
+          botId: receipt.botId, revision: receipt.revision }
+      }
+      case 'bot.create': {
+        signal.throwIfAborted()
+        const request = parseHostBotCreateRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot create: Session mismatch')
+        if (!this.createBot) return null
+        const value = await this.createBot(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotCreateReceipt(value, request)
+        return receipt === null ? null : { ownerBotId: receipt.ownerBotId,
+          createRequestId: receipt.createRequestId, state: receipt.state,
           botId: receipt.botId, revision: receipt.revision }
       }
       case 'bot.room.create': {

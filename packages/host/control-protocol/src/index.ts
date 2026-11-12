@@ -408,3 +408,5 @@ export { parseHostBotDeleteRequest, parseHostBotDeleteReceipt } from './bot-dele
 export type { HostBotDeleteRequest, HostBotDeleteReceipt } from './bot-delete.ts'
 export { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt } from './bot-duplicate.ts'
 export type { HostBotDuplicateRequest, HostBotDuplicateReceipt } from './bot-duplicate.ts'
+export { parseHostBotCreateRequest, parseHostBotCreateReceipt } from './bot-create.ts'
+export type { HostBotCreateRequest, HostBotCreateReceipt } from './bot-create.ts'

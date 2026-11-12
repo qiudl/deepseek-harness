@@ -48,6 +48,18 @@ describe('Profile remote Session wire commands', () => {
       { ...command, request: { ...request, accountId: 'other' } }])
       expect(() => decode(frame(bad))).toThrow()
   })
+  it('round trips fixed Bot creation only under the claimed owner Session', () => {
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', createRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'create', bot: { name: 'Research', color: null,
+        avatarShape: null, avatarImage: null, model: null, effort: null, brief: '' } }
+    const command = { operation: 'bot.create', command_id: randomUUID(), session_id: 'chat-1',
+      control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' },
+      { ...command, request: { ...request, bot: { ...request.bot, workDir: '/private' } } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed group create/delete commands under claimed Sessions', () => {
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     const create = { operation: 'bot.room.create', command_id: randomUUID(),

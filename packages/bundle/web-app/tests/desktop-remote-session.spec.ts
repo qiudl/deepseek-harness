@@ -86,6 +86,28 @@ describe('Desktop remote Session bridge', () => {
     duplicateBot.mockResolvedValueOnce({ ...result, copyRequestId: randomUUID() })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_duplicate_receipt')
   })
+  it('creates a Bot only through the fixed owner service and validates its receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', createRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'create' as const, bot: { name: 'Research', color: null,
+        avatarShape: null, avatarImage: null, model: null, effort: null, brief: '' } }
+    const result = { ownerBotId: 'main', createRequestId: request.createRequestId,
+      state: 'created', botId: 'new', revision: 8 }
+    const createBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, createBot)
+    const command = { operation: 'bot.create' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(createBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    createBot.mockResolvedValueOnce({ ...result, botId: 'main' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_create_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')
