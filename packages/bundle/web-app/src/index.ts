@@ -69,7 +69,7 @@ import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
   HostBotScheduleHistoryRequest, HostBotAboutRequest, HostBotUsageRequest, HostBotGeneralSettingsRequest,
-  HostBotGeneralSettingsUpdateRequest,
+  HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
@@ -1032,6 +1032,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotGeneralSettings) return null
           const value = await service.readLocalBotGeneralSettings(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotProvidersRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotProviders?: (input: HostBotProvidersRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotProviders) return null
+          const value = await service.readLocalBotProviders(request)
           signal.throwIfAborted()
           return value
         })
