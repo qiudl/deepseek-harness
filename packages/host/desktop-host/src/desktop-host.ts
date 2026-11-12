@@ -685,6 +685,31 @@ export class DesktopHost {
   }
 
   /**
+   * Resolve a Profile cursor an earlier connection opened, for the connection that now holds it.
+   * The cursor supplies the Profile and the coordinates its client keeps sending; this connection
+   * must supply a live view lease for that same Profile, so a revoked view still ends the stream.
+   * @param input - cursor Profile, cursor runtime generation, and the resuming connection.
+   * @returns the Profile the resuming connection may continue; throws when it holds no live lease.
+   */
+  authorizeViewContinuation(input: {
+    readonly profileId: PersonProfileId
+    readonly runtimeGeneration: number
+    readonly ownerId: string
+  }): PersonProfileId {
+    if (input.runtimeGeneration !== this.options.runtimeGeneration) throw new HostAuthorityError('stale')
+    const profile = this.options.registry.resolveProfile(input.profileId)
+    if (!profile || (!this.hasGrant(input.ownerId, input.profileId, 'connected')
+      && !this.hasGrant(input.ownerId, input.profileId, 'local_profile'))) throw new HostAuthorityError('unauthorized')
+    const now = this.options.clock.now()
+    for (const lease of this.leases.values()) {
+      if (lease.ownerId === input.ownerId && lease.profileId === input.profileId && lease.expiresAt > now) {
+        return input.profileId
+      }
+    }
+    throw new HostAuthorityError('stale')
+  }
+
+  /**
    * Resolve a legacy model claim target from a live Main lease and a token-verified Account grant.
    * A vault-only restore, offline recovery, or local Profile cannot claim OS-user credentials.
    * @param input - Main-held lease and runtime generation, bound to the authenticated broker.

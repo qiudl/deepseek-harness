@@ -56,11 +56,14 @@ async function evidence(input: Input) {
   return inspectProfileImportPluginPublishRecovery(input)
 }
 
-async function publishLocked(input: Input): Promise<ProfileImportPluginPublishRecord> {
+function webPaths(input: Input): Readonly<{ web: string; staged: string; backup: string }> {
   const parent = join(input.profileRoot, 'profiles')
-  const web = join(parent, 'web')
-  const staged = join(parent, `.web-import-${input.operationId}`)
-  const backup = join(parent, `.web-import-backup-${input.operationId}`)
+  return { web: join(parent, 'web'), staged: join(parent, `.web-import-${input.operationId}`),
+    backup: join(parent, `.web-import-backup-${input.operationId}`) }
+}
+
+async function publishLocked(input: Input): Promise<ProfileImportPluginPublishRecord> {
+  const { web, staged, backup } = webPaths(input)
   let current = await evidence(input)
   if (current.action === 'published') return current.record
   await input.assertSessionPointerOld()
@@ -103,10 +106,7 @@ export async function publishProfileImportPluginLayerAndCommitSession<T>(input: 
 }
 
 async function rollbackLocked(input: Input): Promise<ProfileImportPluginPublishRecord> {
-  const parent = join(input.profileRoot, 'profiles')
-  const web = join(parent, 'web')
-  const staged = join(parent, `.web-import-${input.operationId}`)
-  const backup = join(parent, `.web-import-backup-${input.operationId}`)
+  const { web, staged, backup } = webPaths(input)
   let current = await evidence(input)
   if (current.action === 'rolled_back') return current.record
   await input.assertSessionPointerOld()

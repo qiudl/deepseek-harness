@@ -1,14 +1,13 @@
 /** REQ-20261022-0022: validate a complete plugin layer under the import fence without publishing it. */
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { lstat, mkdir, open, readlink, symlink } from 'node:fs/promises'
+import { lstat, mkdir, readlink, symlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { verifyCopiedBundledPlugin } from './bundled-plugin-recovery.ts'
 import { runPnpm } from './profile-import-plugin-isolated-install.ts'
 import { inspectResolvedProfileImportTargetPluginsInIsolation,
   type ProfileImportTargetResolutionEvidence } from './profile-import-plugin-target-resolution.ts'
 import { readExtensionStateFile } from './posix-extension-files.ts'
-import { readOwnerPrivateFile } from './private-file-io.ts'
+import { readOwnerPrivateFile, syncOwnerPrivateDirectory, writeOwnerPrivateFile } from './private-file-io.ts'
 
 type Evidence = ProfileImportTargetResolutionEvidence
 
@@ -17,16 +16,6 @@ function receiptBytes(input: Evidence, lockfileDigest: string): Buffer {
     planDigest: createHash('sha256').update(JSON.stringify(input.plan)).digest('hex'),
     nextManifestDigest: input.manifestPlan.nextManifestDigest, lockfileDigest,
     names: input.plan.plugins.map(plugin => plugin.name) })}\n`)
-}
-
-async function writePrivate(path: string, bytes: Buffer): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 async function verifyLayer(input: Evidence, root: string): Promise<void> {
@@ -59,14 +48,14 @@ async function prepareBaseline(input: Evidence, root: string): Promise<void> {
   const manifest = readExtensionStateFile(join(targetWeb, 'package.json'), input.uid, 1_048_576,
     'profile_import_plugin_target_install_invalid')
   if (manifest === null) throw Error('profile_import_plugin_target_install_invalid')
-  await writePrivate(join(baselineRoot, 'package.json'), Buffer.from(manifest))
+  await writeOwnerPrivateFile(join(baselineRoot, 'package.json'), Buffer.from(manifest))
   for (const name of ['cordis.patch.yml', 'compatibility.json']) {
     const content = readExtensionStateFile(join(targetWeb, name), input.uid, 1_048_576,
       'profile_import_plugin_target_install_invalid')
-    if (content !== null) await writePrivate(join(baselineRoot, name), Buffer.from(content))
+    if (content !== null) await writeOwnerPrivateFile(join(baselineRoot, name), Buffer.from(content))
   }
   await symlink(join(root, 'node_modules'), join(baselineRoot, 'node_modules'))
-  await syncDirectory(baselineRoot)
+  await syncOwnerPrivateDirectory(baselineRoot)
 }
 
 async function verifyBaseline(input: Evidence, root: string): Promise<void> {
@@ -114,8 +103,8 @@ export async function installResolvedProfileImportTargetPlugins(input: Evidence 
   }
   await verifyLayer(input, installationRoot)
   await prepareBaseline(input, installationRoot)
-  await writePrivate(join(installationRoot, 'layer-receipt.json'), receiptBytes(input, resolved.lockfileDigest))
-  await syncDirectory(installationRoot)
+  await writeOwnerPrivateFile(join(installationRoot, 'layer-receipt.json'), receiptBytes(input, resolved.lockfileDigest))
+  await syncOwnerPrivateDirectory(installationRoot)
   const completed = await inspectResolvedProfileImportTargetPluginLayer(input)
   if (!completed) throw Error('profile_import_plugin_target_install_incomplete')
   return completed

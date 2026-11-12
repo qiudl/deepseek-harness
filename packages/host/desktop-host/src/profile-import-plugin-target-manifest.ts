@@ -59,9 +59,10 @@ export async function planProfileImportPluginTargetManifest(input: Readonly<{
   const dependencies = record(manifest.dependencies)
   const dsh = record(manifest.dsh)
   const profile = record(dsh.profile)
-  const bundles = profile.bundles
-  if (!Array.isArray(bundles) || bundles.some(name => typeof name !== 'string')
-    || new Set(bundles).size !== bundles.length) throw Error('profile_import_plugin_target_manifest_invalid')
+  const entries = profile.bundles
+  if (!Array.isArray(entries) || entries.some(name => typeof name !== 'string')
+    || new Set(entries).size !== entries.length) throw Error('profile_import_plugin_target_manifest_invalid')
+  const bundles = entries as readonly string[]
   const names = plan.plugins.map(plugin => plugin.name)
   if (names.some(name => Object.hasOwn(dependencies, name) || bundles.includes(name))) {
     throw Error('profile_import_plugin_target_conflict')

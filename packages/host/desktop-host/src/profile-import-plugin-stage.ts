@@ -5,10 +5,11 @@ import { lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 import { type BundledPluginCatalog } from './bundled-plugins.ts'
-import { FileProfileImportOperationJournal } from './profile-import-operation-journal.ts'
+import { FileProfileImportOperationJournal,
+  type ProfileImportOperation } from './profile-import-operation-journal.ts'
 import { planSelectedProfileImportPlugins, type ProfileImportPluginPlan } from './profile-import-plugin-plan.ts'
 import { ProfileImportWorkerFence } from './profile-import-worker-fence.ts'
-import { readOwnerPrivateFile } from './private-file-io.ts'
+import { readOwnerPrivateFile, syncOwnerPrivateDirectory, writeOwnerPrivateFile } from './private-file-io.ts'
 
 type Profile = Readonly<{ profileId: string; profileRoot: string; target: FileOwnerJsonlMigrationGenerationTarget }>
 const HEX = /^[a-f0-9]{64}$/u
@@ -31,16 +32,6 @@ async function checkedDirectory(path: string, uid: number): Promise<void> {
   }
 }
 
-async function syncDirectory(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try { await handle.sync() } finally { await handle.close() }
-}
-
-async function createPrivateFile(path: string, bytes: Buffer): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-}
-
 async function verifyPrivateArchive(path: string, uid: number, digest: string): Promise<void> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
@@ -59,6 +50,26 @@ async function verifyPrivateArchive(path: string, uid: number, digest: string): 
   } finally { await handle.close() }
 }
 
+/** Require the durable intent to name one pair and the exact plan this stage was computed from. */
+async function loadStageIntent(journal: FileProfileImportOperationJournal, input: Readonly<{
+  sourceProfileId: string
+  targetProfileId: string
+  operationId: string
+}>, plan: ProfileImportPluginPlan, phases: readonly ProfileImportOperation['phase'][],
+): Promise<ProfileImportOperation> {
+  const intent = await journal.load(input.operationId)
+  if (!intent || !phases.includes(intent.phase)
+    || intent.sourceProfileId !== input.sourceProfileId
+    || intent.targetProfileId !== input.targetProfileId
+    || intent.previewDigest !== plan.previewDigest
+    || intent.sourceSnapshotDigest !== plan.sourceSnapshotDigest
+    || intent.targetSnapshotDigest !== plan.targetSnapshotDigest
+    || JSON.stringify(intent.selectedPluginNames) !== JSON.stringify(plan.plugins.map(plugin => plugin.name))) {
+    throw Error('profile_import_plugin_stage_intent_invalid')
+  }
+  return intent
+}
+
 /** The result is an immutable input to a future isolated install, never an install receipt. */
 export async function stageSelectedProfileImportPluginArchives(input: Readonly<{
   source: Profile
@@ -75,15 +86,8 @@ export async function stageSelectedProfileImportPluginArchives(input: Readonly<{
 }>): Promise<{ stageRoot: string; plan: ProfileImportPluginPlan }> {
   const { source, target, uid, operationId, fence, plan, signal } = input
   signal?.throwIfAborted()
-  const intent = await input.journal.load(operationId)
-  if (!intent || intent.phase !== 'fenced' || intent.sourceProfileId !== source.profileId
-    || intent.targetProfileId !== target.profileId
-    || intent.previewDigest !== plan.previewDigest
-    || intent.sourceSnapshotDigest !== plan.sourceSnapshotDigest
-    || intent.targetSnapshotDigest !== plan.targetSnapshotDigest
-    || JSON.stringify(intent.selectedPluginNames) !== JSON.stringify(plan.plugins.map(plugin => plugin.name))) {
-    throw Error('profile_import_plugin_stage_intent_invalid')
-  }
+  const intent = await loadStageIntent(input.journal, { sourceProfileId: source.profileId,
+    targetProfileId: target.profileId, operationId }, plan, ['fenced'])
   fence.assertOwnedPair(source.profileId, target.profileId, operationId)
   const replan = () => planSelectedProfileImportPlugins({ source, target, uid, operationId, fence,
     catalog: input.catalog, expectedPreviewDigest: plan.previewDigest,
@@ -111,10 +115,10 @@ export async function stageSelectedProfileImportPluginArchives(input: Readonly<{
       throw Error('profile_import_plugin_stage_archive_changed')
     }
     const file = `${plugin.archiveDigest}.tgz`
-    await createPrivateFile(join(stageRoot, file), bytes)
+    await writeOwnerPrivateFile(join(stageRoot, file), bytes)
     archives.push({ name: plugin.name, digest: plugin.archiveDigest, file })
   }
-  await syncDirectory(stageRoot)
+  await syncOwnerPrivateDirectory(stageRoot)
   if (JSON.stringify(await replan()) !== JSON.stringify(plan)) throw Error('profile_import_plugin_stage_plan_changed')
   const currentIntent = await input.journal.load(operationId)
   if (JSON.stringify(currentIntent) !== JSON.stringify(intent)) throw Error('profile_import_plugin_stage_intent_invalid')
@@ -122,9 +126,9 @@ export async function stageSelectedProfileImportPluginArchives(input: Readonly<{
     await verifyPrivateArchive(join(stageRoot, item.file), uid, item.digest)
   }
   const receipt = receiptBytes(operationId, plan)
-  await createPrivateFile(join(stageRoot, 'receipt.json'), receipt)
-  await syncDirectory(stageRoot)
-  await syncDirectory(stagingParent)
+  await writeOwnerPrivateFile(join(stageRoot, 'receipt.json'), receipt)
+  await syncOwnerPrivateDirectory(stageRoot)
+  await syncOwnerPrivateDirectory(stagingParent)
   fence.assertOwnedPair(source.profileId, target.profileId, operationId)
   if (JSON.stringify(await input.journal.load(operationId)) !== JSON.stringify(intent)) {
     throw Error('profile_import_plugin_stage_intent_invalid')
@@ -144,16 +148,8 @@ export async function inspectStagedProfileImportPluginArchives(input: Readonly<{
   plan: ProfileImportPluginPlan
 }>): Promise<{ stageRoot: string; plan: ProfileImportPluginPlan } | null> {
   const { target, sourceProfileId, uid, operationId, fence, plan } = input
-  const intent = await input.journal.load(operationId)
-  if (!intent || !['fenced', 'staged', 'committing'].includes(intent.phase)
-    || intent.sourceProfileId !== sourceProfileId
-    || intent.targetProfileId !== target.profileId
-    || intent.previewDigest !== plan.previewDigest
-    || intent.sourceSnapshotDigest !== plan.sourceSnapshotDigest
-    || intent.targetSnapshotDigest !== plan.targetSnapshotDigest
-    || JSON.stringify(intent.selectedPluginNames) !== JSON.stringify(plan.plugins.map(plugin => plugin.name))) {
-    throw Error('profile_import_plugin_stage_intent_invalid')
-  }
+  const intent = await loadStageIntent(input.journal, { sourceProfileId,
+    targetProfileId: target.profileId, operationId }, plan, ['fenced', 'staged', 'committing'])
   fence.assertOwnedPair(sourceProfileId, target.profileId, operationId)
   const parent = join(target.profileRoot, 'profile-import-plugin-staging')
   try { await checkedDirectory(parent, uid) } catch (error) {

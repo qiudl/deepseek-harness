@@ -676,7 +676,10 @@ async function startWindowsDesktopHostApplicationWithTrust(
       return state.authority.openSession(ownerId, signal)
     },
     quiesceOwnedResources: async () => {
-      try { await state?.extensionOperations?.dispose() } finally { await workers.disposeAll() }
+      try {
+        await state?.authority.close()
+        await state?.extensionOperations?.dispose()
+      } finally { await workers.disposeAll() }
     },
   }, { loadCancellation, loadCurrentUserSid, loadRegistrationFileBindings })
   if (state === undefined) {
