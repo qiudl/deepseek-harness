@@ -405,7 +405,7 @@ describe('Unix transport authority failures', () => {
       session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
     const settings = { revision: 8, theme: 'paper', accent: null, motion: 'quiet', width: 80 }
     const result = { state: 'applied', settings }
-    const execute = vi.fn(async (): Promise<unknown> => result)
+    const execute = vi.fn(async () => result)
     const old = await authorityClient({ remoteSession: execute })
     await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
     old.client.close()
@@ -413,7 +413,8 @@ describe('Unix transport authority failures', () => {
       remoteBotGeneralSettingsUpdateSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_general_update')
     await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
-    execute.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
+    const hidden = { ...settings, secret: 'leak' }
+    execute.mockResolvedValueOnce({ ...result, settings: hidden })
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
