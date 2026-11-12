@@ -54,6 +54,8 @@ kind: "package-reference"
 
 `profile.remote_ui_read.bot_room_history` 单独发布 `bot/room-history`。请求仅包含群 ID、序号游标和 1–20 的页大小。响应包含修订号、已保留序号窗口、裁剪标记以及带真实作者身份的展示用消息字段。严格解析拒绝多余字段、被替换的群、无效作者和乱序消息。已签名的能力声明与本地 SDK 标志必须同时存在。
 
+`profile.remote_ui_read.bot_memory` 单独发布已有 Bot 的 `bot/memory` 读取。精确参数包含 Bot 身份、稳定页游标、1–20 的页大小，以及是否启动摘要。插件仅返回有界的条目字段、摘要状态和范围用量；每页小于 60 KiB，以适配 64 KiB Host 控制帧。记忆摘要指纹变化会使游标过期。提供者缺失、记忆关闭与 Bot 不存在保持不同语义。此读取不授予记忆写入；消费方同时要求已签名的能力声明和本地 SDK 标志。
+
 `profile.remote_ui_asset_gzip` 单独声明 `asset/read-gzip-chunk` 能力。请求接受精确插件 URL 和压缩字节偏移，返回 `{ bytes, total, uncompressedBytes, encoding: 'gzip' }`。worker 对当前缓存项中的完整已授权资源执行一次 gzip 压缩；并发缓存读取共享该压缩操作。每个响应最多携带 24 KiB 压缩字节，以 base64url 编码。原始资源仍限制为 8 MiB，压缩资源限制为 8 MiB 加 64 KiB，完整控制帧仍限制为 64 KiB。每次读取重新检查当前注入表和有效租约；取消或 worker 关闭后不得返回迟到响应。消费方先组装，再有界解压，并根据 `asset/describe` 核验原始字节。不声明该能力的 Host 保留原始读取路径。
 
 `session/collaborationSources` 的远程 UI 请求还支持使用精确的 `snapshotDigest` 替代 `cursor`。摘要必须为 64 位小写十六进制字符串，同时携带两个字段时拒绝。所属 Session 的读取在现有控制帧预算内返回完整原消息。

@@ -103,6 +103,27 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/settings', { args: { botId: 'main' } }, signal))
       .rejects.toThrow('invalid_bot_settings_result')
   })
+  it('reads a bounded Bot memory page without invoking the generic Profile gateway', async () => {
+    const invoke = vi.fn()
+    const page = { botId: 'main', available: true, total: 1,
+      entries: [{ scope: 'own', topic: null, text: 'Remember this', added: null,
+        by: null, source: null }], nextCursor: null,
+      sizes: { own: 20, team: 0 }, limits: { main: 4000 },
+      summary: null, fresh: false, summarizing: true, error: null }
+    const read = vi.fn(async (): Promise<unknown> => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    const args = { botId: 'main', cursor: null, limit: 20, summarize: true }
+    await expect(executor.execute('bot/memory', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/memory', { args: { ...args, profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_memory_request')
+    read.mockResolvedValueOnce({ ...page, entries: [{ ...page.entries[0], secret: 'private' }] })
+    await expect(executor.execute('bot/memory', { args }, signal))
+      .rejects.toThrow('invalid_bot_memory_result')
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

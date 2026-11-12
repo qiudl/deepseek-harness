@@ -308,6 +308,14 @@ describe('Profile remote UI read wire commands', () => {
     for (const args of [{ botId: '../other' }, { botId: 'main', account: 'other' }, {}])
       expect(() => decode(readFrame('bot/settings', { args }))).toThrow()
   })
+  it('round-trips only bounded Bot memory selectors', () => {
+    const args = { botId: 'main', cursor: null, limit: 20, summarize: true }
+    const input = readFrame('bot/memory', { args })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...args, botId: '../other' }, { ...args, limit: 21 },
+      { ...args, cursor: 'bad' }, { ...args, account: 'other' }])
+      expect(() => decode(readFrame('bot/memory', { args: bad }))).toThrow()
+  })
   it('round-trips only an exact native Bot folder selector', () => {
     const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)

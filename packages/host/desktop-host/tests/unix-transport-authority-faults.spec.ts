@@ -506,6 +506,25 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
     enabled.client.close()
   })
+  it('negotiates Bot memory pages under their own signed read capability', async () => {
+    const input = { ...opened, endpoint: 'bot/memory' as const,
+      payload: { args: { botId: 'main', cursor: null, limit: 20, summarize: true } } }
+    const page = { botId: 'main', available: true, total: 1,
+      entries: [{ scope: 'own', topic: null, text: 'Remember this', added: null,
+        by: null, source: null }], nextCursor: null,
+      sizes: { own: 20, team: 0 }, limits: { main: 4000 },
+      summary: null, fresh: false, summarizing: true, error: null }
+    const execute = vi.fn(async (): Promise<unknown> => page)
+    const old = await authorityClient({ remoteUiRead: execute })
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotMemorySupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_memory')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
+    execute.mockResolvedValueOnce({ ...page, entries: [{ ...page.entries[0], secret: 'hidden' }] })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates gzip through signed inspection and rejects unsupported chunks without execution', async () => {
     const input = { ...opened, endpoint: 'asset/read-gzip-chunk' as const,
       payload: { args: { url: '/plugins/a.js', offset: 0 } } }
