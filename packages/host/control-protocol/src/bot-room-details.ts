@@ -16,7 +16,7 @@ export interface HostBotRoomDetails {
   readonly permissionChoices: { readonly options: readonly { readonly value: string; readonly name: string }[]
     readonly defaultPreset: string | null } | null
   readonly adminBotId: string | null
-  readonly members: readonly { readonly botId: string; readonly displayName: string }[]
+  readonly members: readonly { readonly botId: string; readonly displayName: string; readonly workingHere?: boolean }[]
   readonly channelMirror?: { readonly state: string
     readonly target: { readonly projectId: string; readonly channelId: string; readonly defaultAgentId: string } | null
     readonly groupGap: number | null
@@ -61,12 +61,16 @@ export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDeta
   const members: HostBotRoomDetails['members'][number][] = []
   const seen = new Set<string>()
   for (const member of value.members) {
-    if (!record(member) || !exact(member, ['botId', 'displayName']) ||
+    if (!record(member) || !(exact(member, ['botId', 'displayName']) ||
+      exact(member, ['botId', 'displayName', 'workingHere'])) ||
       typeof member.botId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(member.botId) || seen.has(member.botId) ||
       typeof member.displayName !== 'string' || !member.displayName.trim() ||
-      Buffer.byteLength(member.displayName, 'utf8') > 512) throw Error('invalid_bot_room_details_result')
+      Buffer.byteLength(member.displayName, 'utf8') > 512 ||
+      (Object.hasOwn(member, 'workingHere') && typeof member.workingHere !== 'boolean'))
+      throw Error('invalid_bot_room_details_result')
     seen.add(member.botId)
-    members.push({ botId: member.botId, displayName: member.displayName })
+    members.push({ botId: member.botId, displayName: member.displayName,
+      ...(Object.hasOwn(member, 'workingHere') ? { workingHere: member.workingHere as boolean } : {}) })
   }
   if (value.adminBotId !== null && !seen.has(value.adminBotId)) throw Error('invalid_bot_room_details_result')
   let channelMirror: HostBotRoomDetails['channelMirror']
