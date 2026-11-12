@@ -3423,6 +3423,7 @@ export class UnixHostClient {
   readonly remoteBotCreateSupported = true
   /** This SDK accepts durable native Bot schedule mutations and result queries. */
   readonly remoteBotScheduleMutationSupported = true
+  /** This SDK accepts durable native Bot update installs and result queries. */
   readonly remoteBotUpdateMutationSupported = true
   /** This SDK can encode fixed owner group creation and deletion. */
   readonly remoteBotRoomLifecycleSupported = true
