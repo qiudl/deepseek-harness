@@ -330,6 +330,12 @@ describe('Profile remote UI read wire commands', () => {
     expect(() => decode(readFrame('bot/schedules', { args: { ...args, profile: 'other' } }))).toThrow()
     expect(() => decode(readFrame('bot/schedules', { args: { ...args, limit: 21 } }))).toThrow()
   })
+  it('keeps the task delivery selector inside the signed read frame', () => {
+    const args = { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }
+    const frame = readFrame('bot/schedule-history', { args })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/schedule-history', { args: { ...args, profile: 'other' } }))).toThrow()
+  })
   it('round-trips only an exact native Bot folder selector', () => {
     const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)

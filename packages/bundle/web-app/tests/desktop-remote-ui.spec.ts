@@ -154,6 +154,23 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/schedules', { args: { ...args, account: 'other' } }, signal))
       .rejects.toThrow('invalid_bot_schedules_request')
   })
+  it('routes one task delivery page through its dedicated bounded reader', async () => {
+    const invoke = vi.fn()
+    const args = { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }
+    const page = { available: false, sessionId: args.sessionId, id: args.id, code: null,
+      records: [], nextBefore: null, earlierRecordsUnavailable: false,
+      earlierRecordsPruned: false, retention: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/schedule-history', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/schedule-history', { args: { ...args, account: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_schedule_history_request')
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,
