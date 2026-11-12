@@ -109,6 +109,10 @@ export { parseHostBotProvidersRequest, parseHostBotProviders,
   parseHostBotProvidersMutationRequest } from './bot-providers.ts'
 export type { HostBotProvidersRequest, HostBotProviders,
   HostBotProvidersMutationRequest } from './bot-providers.ts'
+export { parseHostBotConnectorsRequest, parseHostBotConnectors,
+  parseHostBotConnectorsMutationRequest } from './bot-connectors.ts'
+export type { HostBotConnectorsRequest, HostBotConnectors,
+  HostBotConnectorsMutationRequest } from './bot-connectors.ts'
 export type { HostBotAboutRequest, HostBotAbout } from './bot-about.ts'
 export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'

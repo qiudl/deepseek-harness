@@ -238,6 +238,23 @@ describe('Desktop remote UI read-only bridge', () => {
     read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
     await expect(executor.execute('bot/providers', { args: {} }, signal)).rejects.toThrow()
   })
+  it('reads GitHub connector only through the verified credential-free Bot service', async () => {
+    const invoke = vi.fn()
+    const directory = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready',
+      account: 'alice', hasError: false }] }
+    const read = vi.fn(async () => directory)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/connectors', { args: {} }, signal)).resolves.toEqual(directory)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/connectors', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_connectors_request')
+    read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
+    await expect(executor.execute('bot/connectors', { args: {} }, signal)).rejects.toThrow()
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

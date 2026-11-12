@@ -30,6 +30,8 @@ import { parseHostBotGeneralSettingsUpdateRequest, parseHostBotGeneralSettingsUp
   type HostBotGeneralSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotProvidersMutationRequest, parseHostBotProviders,
   type HostBotProvidersMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotConnectorsMutationRequest, parseHostBotConnectors,
+  type HostBotConnectorsMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
   parseHostBotRoomCreateReceipt, parseHostBotRoomDeleteReceipt,
   type HostBotRoomCreateRequest, type HostBotRoomDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -146,6 +148,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly updateBotGeneralSettings?: (request: HostBotGeneralSettingsUpdateRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotProviders?: (request: HostBotProvidersMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotConnectors?: (request: HostBotConnectorsMutationRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -156,7 +160,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.connectors.mutate' || command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -179,6 +183,15 @@ export class DesktopRemoteSessionExecutor {
         const value = await this.mutateBotProviders(request, signal)
         signal.throwIfAborted()
         return parseHostBotProviders(value)
+      }
+      case 'bot.connectors.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotConnectorsMutationRequest(command.request)
+        if (command.session_id !== request.sessionId) throw Error('desktop Bot connectors: Session mismatch')
+        if (!this.mutateBotConnectors) return null
+        const value = await this.mutateBotConnectors(request, signal)
+        signal.throwIfAborted()
+        return parseHostBotConnectors(value)
       }
       case 'bot.general.update': {
         signal.throwIfAborted()

@@ -44,6 +44,26 @@ describe('Desktop remote Session bridge', () => {
     await expect(executor.execute(command, signal)).rejects.toThrow()
     await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
   })
+  it('edits GitHub connector only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'connect' as const,
+      id: 'github' as const, token: 'ghp_secret123' }
+    const result = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.connectors.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
   it('updates shared Bot preferences only under the controlled Bot Session', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')

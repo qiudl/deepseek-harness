@@ -433,7 +433,25 @@ describe('Unix transport authority failures', () => {
       remoteBotProvidersMutationSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_providers_mutation')
     await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
-    execute.mockResolvedValueOnce({ ...result, apiKey: 'private' })
+    execute.mockResolvedValueOnce({ ...result, apiKey: 'private' } as never)
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
+  it('requires a separate signed capability for GitHub connector edits', async () => {
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'connect',
+      id: 'github', token: 'ghp_secret123' } as never
+    const command = { operation: 'bot.connectors.mutate' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const result = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute,
+      remoteBotConnectorsMutationSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_connectors_mutation')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, apiKey: 'private' } as never)
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
@@ -664,6 +682,20 @@ describe('Unix transport authority failures', () => {
     without.client.close()
     const enabled = await authorityClient({ remoteUiRead: read, remoteUiBotProvidersSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_providers')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(directory)
+    read.mockResolvedValueOnce({ ...directory, apiKey: 'private' })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
+  it('requires a distinct signed GitHub connector read capability', async () => {
+    const input = { ...opened, endpoint: 'bot/connectors' as const, payload: { args: {} } }
+    const directory = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }
+    const read = vi.fn(async (): Promise<unknown> => directory)
+    const without = await authorityClient({ remoteUiRead: read })
+    await expect(without.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    without.client.close()
+    const enabled = await authorityClient({ remoteUiRead: read, remoteUiBotConnectorsSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_connectors')
     await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(directory)
     read.mockResolvedValueOnce({ ...directory, apiKey: 'private' })
     await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
