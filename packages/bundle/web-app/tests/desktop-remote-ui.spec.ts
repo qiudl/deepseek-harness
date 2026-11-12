@@ -255,6 +255,22 @@ describe('Desktop remote UI read-only bridge', () => {
     read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
     await expect(executor.execute('bot/connectors', { args: {} }, signal)).rejects.toThrow()
   })
+  it('reads redacted Feedback report only through the verified credential-free Bot service', async () => {
+    const invoke = vi.fn()
+    const directory = { total: 1, entries: [{ time: 1700000000000, level: 'error', source: 'host', text: 'Connection failed', code: null }], markdown: 'Redacted report', markdownTruncated: false, issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }
+    const read = vi.fn(async () => directory)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/feedback', { args: {} }, signal)).resolves.toEqual(directory)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/feedback', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_feedback_request')
+    read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
+    await expect(executor.execute('bot/feedback', { args: {} }, signal)).rejects.toThrow()
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

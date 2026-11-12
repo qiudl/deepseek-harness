@@ -113,6 +113,12 @@ export { parseHostBotConnectorsRequest, parseHostBotConnectors,
   parseHostBotConnectorsMutationRequest } from './bot-connectors.ts'
 export type { HostBotConnectorsRequest, HostBotConnectors,
   HostBotConnectorsMutationRequest } from './bot-connectors.ts'
+export { parseHostBotFeedbackRequest, parseHostBotFeedback } from './bot-feedback.ts'
+export type { HostBotFeedbackRequest, HostBotFeedback } from './bot-feedback.ts'
+export { parseHostBotFeedbackLogRequest, parseHostBotFeedbackLogChunk } from './bot-feedback-log.ts'
+export type { HostBotFeedbackLogRequest, HostBotFeedbackLogChunk } from './bot-feedback-log.ts'
+export { parseHostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+export type { HostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
 export type { HostBotAboutRequest, HostBotAbout } from './bot-about.ts'
 export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'

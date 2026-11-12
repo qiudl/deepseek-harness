@@ -455,6 +455,23 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('requires a separate signed capability for Feedback log clear', async () => {
+    const request = { botId: 'main', sessionId: 'chat-1' } as never
+    const command = { operation: 'bot.feedback.clear' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const result = { total: 0, entries: [], markdown: 'No errors', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotFeedbackClearSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_feedback_clear')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    execute.mockResolvedValueOnce({ ...result, token: 'private' } as never)
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates Bot room lifecycle separately and rejects a substituted result', async () => {
     const request = { roomId: 'room-1', expectedRevision: 8 } as never
     const command = { operation: 'bot.room.delete' as const, command_id: randomUUID() as never,
@@ -696,6 +713,20 @@ describe('Unix transport authority failures', () => {
     without.client.close()
     const enabled = await authorityClient({ remoteUiRead: read, remoteUiBotConnectorsSupported: true })
     expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_connectors')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(directory)
+    read.mockResolvedValueOnce({ ...directory, apiKey: 'private' })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
+  it('requires a distinct signed redacted Feedback report read capability', async () => {
+    const input = { ...opened, endpoint: 'bot/feedback' as const, payload: { args: {} } }
+    const directory = { total: 1, entries: [{ time: 1700000000000, level: 'error', source: 'host', text: 'Connection failed', code: null }], markdown: 'Redacted report', markdownTruncated: false, issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }
+    const read = vi.fn(async (): Promise<unknown> => directory)
+    const without = await authorityClient({ remoteUiRead: read })
+    await expect(without.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    without.client.close()
+    const enabled = await authorityClient({ remoteUiRead: read, remoteUiBotFeedbackSupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_feedback')
     await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(directory)
     read.mockResolvedValueOnce({ ...directory, apiKey: 'private' })
     await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()

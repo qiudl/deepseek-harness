@@ -70,7 +70,8 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
   HostBotScheduleHistoryRequest, HostBotAboutRequest, HostBotUsageRequest, HostBotGeneralSettingsRequest,
   HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest, HostBotProvidersMutationRequest,
-  HostBotConnectorsRequest, HostBotConnectorsMutationRequest,
+  HostBotConnectorsRequest, HostBotConnectorsMutationRequest, HostBotFeedbackRequest,
+  HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
@@ -923,6 +924,18 @@ export function apply(ctx: Context, config: Config): void {
           signal.throwIfAborted()
           if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.mutateLocalBotConnectors({ kind: request.kind, id: request.id, token: request.token }, signal)
+        }, async (request: HostBotFeedbackClearRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            clearLocalBotFeedback?: (input: Record<string, never>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.clearLocalBotFeedback) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.clearLocalBotFeedback({}, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
@@ -1078,6 +1091,24 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotConnectors) return null
           const value = await service.readLocalBotConnectors(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFeedbackRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFeedback?: (input: HostBotFeedbackRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFeedback) return null
+          const value = await service.readLocalBotFeedback(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFeedbackLogRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFeedbackLog?: (input: HostBotFeedbackLogRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFeedbackLog) return null
+          const value = await service.readLocalBotFeedbackLog(request)
           signal.throwIfAborted()
           return value
         })
