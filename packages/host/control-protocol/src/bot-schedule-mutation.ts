@@ -45,6 +45,14 @@ export interface HostBotScheduleMutationReceipt {
   readonly sessionId: string | null
 }
 
+function receiptState(value: unknown): HostBotScheduleMutationReceipt['state'] {
+  switch (value) {
+    case 'pending': case 'created': case 'deleted': case 'missing':
+    case 'failed': case 'unavailable': case 'unknown': return value
+    default: throw Error('invalid_bot_schedule_mutation_receipt')
+  }
+}
+
 function parseWhen(value: unknown): ScheduleWhen {
   if (!record(value)) throw Error('invalid_bot_schedule_mutation')
   if (value.kind === 'at' && exact(value, ['kind', 'at']) && bounded(value.at, 40) &&
@@ -110,5 +118,11 @@ export function parseHostBotScheduleMutationReceipt(value: unknown,
     (value.state === 'deleted' && value.operation !== 'delete') ||
     (request.mode === 'delete' && (value.taskId !== request.taskId ||
       value.sessionId !== request.taskSessionId))) throw Error('invalid_bot_schedule_mutation_receipt')
-  return value as unknown as HostBotScheduleMutationReceipt
+  return {
+    requestId: request.requestId,
+    operation: value.operation === 'create' ? 'create' : value.operation === 'delete' ? 'delete' : null,
+    state: receiptState(value.state),
+    taskId: value.taskId === null ? null : String(value.taskId),
+    sessionId: value.sessionId === null ? null : String(value.sessionId),
+  }
 }
