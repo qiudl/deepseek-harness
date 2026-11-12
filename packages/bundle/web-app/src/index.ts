@@ -687,6 +687,10 @@ export function apply(ctx: Context, config: Config): void {
         localControlStatus: sessionId => control.browserStatus(sessionId),
         localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
+      const isBotSessionOwner = (owner: unknown, botId: string, sessionId: string): boolean =>
+        owner !== null && typeof owner === 'object' && !Array.isArray(owner) &&
+        Object.keys(owner).sort().join(',') === 'botId,sessionId' &&
+        Reflect.get(owner, 'botId') === botId && Reflect.get(owner, 'sessionId') === sessionId
       const executor = new DesktopRemoteSessionExecutor(
         bindDesktopRemoteGateway(remoteCtx.typertGateway, desktopPeer), remoteApprovalEvents, control, terminalStreams,
         async (operation, request, signal) => {
@@ -725,10 +729,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.ownerBotId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
           return service.createLocalBotRoom({ expectedRevision: request.expectedRevision,
             members: [...request.members], name: request.name, notice: request.notice,
             replyMode: request.replyMode, adminBotId: request.adminBotId }, signal)
@@ -750,10 +751,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.botId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.botId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.updateLocalBotSettings({ botId: request.botId,
             expectedRevision: request.expectedRevision, change: request.change }, signal)
         }, async (request: HostBotDeleteRequest, signal) => {
@@ -767,10 +765,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.botId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.botId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.deleteLocalBot({ botId: request.botId,
             expectedRevision: request.expectedRevision }, signal)
         }, async (request: HostBotDuplicateRequest, signal) => {
@@ -788,10 +783,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.sourceBotId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.sourceBotId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.sourceBotId, request.sessionId)) return null
           return request.mode === 'create'
             ? service.duplicateLocalBot({ sourceBotId: request.sourceBotId,
               copyRequestId: request.copyRequestId, expectedRevision: request.expectedRevision }, signal)
@@ -808,10 +800,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.ownerBotId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
           return request.mode === 'create'
             ? service.createLocalBot({ ownerBotId: request.ownerBotId,
               createRequestId: request.createRequestId, expectedRevision: request.expectedRevision,

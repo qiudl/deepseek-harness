@@ -14,3 +14,14 @@ export function botRecord(value: unknown): value is Record<string, unknown> {
 export function botExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
+
+/** Shared bounded identifiers for native Bot mutation requests. */
+export const botMutationId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[A-Za-z0-9_-]{1,200}$/u.test(value)
+export const botMutationSessionId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[!-~]{1,256}$/u.test(value) && !value.includes('/') && !value.includes('\\') &&
+  value !== '.' && value !== '..'
+export const botMutationRequestId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(value)
+export const botMutationRevision = (value: unknown): value is number => typeof value === 'number' &&
+  Number.isSafeInteger(value) && value >= 0

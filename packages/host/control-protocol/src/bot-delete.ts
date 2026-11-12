@@ -1,5 +1,6 @@
 /** Fixed owner Bot deletion under an authenticated, controlled Bot Session. */
-import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
+import { botExactKeys as exact, botRecord as record,
+  botMutationId as botId, botMutationSessionId as sessionId, botMutationRevision as revision } from './bot-value-shape.js'
 
 /** Revision-bound deletion of one owner Bot. */
 export interface HostBotDeleteRequest {
@@ -13,13 +14,6 @@ export interface HostBotDeleteReceipt {
   readonly state: 'deleted' | 'stale' | 'missing'
   readonly revision: number
 }
-const botId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[A-Za-z0-9_-]{1,200}$/u.test(value)
-const sessionId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
-const revision = (value: unknown): value is number => typeof value === 'number' &&
-  Number.isSafeInteger(value) && value >= 0
-
 /** Validate a deletion request and its owner Session.
  * @param value - Untrusted request arguments.
  * @returns Bounded deletion request.

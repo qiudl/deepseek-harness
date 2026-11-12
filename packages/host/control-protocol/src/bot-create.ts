@@ -1,5 +1,6 @@
 /** Fixed native Bot creation and durable status under a verified owner Session. */
-import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
+import { botExactKeys as exact, botRecord as record,
+  botMutationId as botId, botMutationSessionId as sessionId, botMutationRequestId as uuid, botMutationRevision as revision } from './bot-value-shape.js'
 
 /** Durable creation request tied to a verified owner Bot Session. */
 export interface HostBotCreateRequest {
@@ -26,14 +27,6 @@ export interface HostBotCreateReceipt {
   readonly botId: string | null
   readonly revision: number
 }
-const botId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[A-Za-z0-9_-]{1,200}$/u.test(value)
-const sessionId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
-const uuid = (value: unknown): value is string => typeof value === 'string' &&
-  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(value)
-const revision = (value: unknown): value is number => typeof value === 'number' &&
-  Number.isSafeInteger(value) && value >= 0
 const bounded = (value: unknown, max: number): value is string => typeof value === 'string' &&
   Buffer.byteLength(value, 'utf8') <= max
 

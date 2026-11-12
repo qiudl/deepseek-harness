@@ -1,5 +1,6 @@
 /** Idempotent Bot copy and status lookup under an authenticated Bot Session. */
-import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
+import { botExactKeys as exact, botRecord as record,
+  botMutationId as botId, botMutationSessionId as sessionId, botMutationRequestId as uuid, botMutationRevision as revision } from './bot-value-shape.js'
 
 /** Idempotent copy request tied to an owner Bot Session. */
 export interface HostBotDuplicateRequest {
@@ -17,15 +18,6 @@ export interface HostBotDuplicateReceipt {
   readonly botId: string | null
   readonly revision: number
 }
-const botId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[A-Za-z0-9_-]{1,200}$/u.test(value)
-const sessionId = (value: unknown): value is string => typeof value === 'string' &&
-  /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
-const uuid = (value: unknown): value is string => typeof value === 'string' &&
-  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(value)
-const revision = (value: unknown): value is number => typeof value === 'number' &&
-  Number.isSafeInteger(value) && value >= 0
-
 /** Validate the source Bot, revision, and durable copy identity.
  * @param value - Untrusted request arguments.
  * @returns Bounded copy request.
