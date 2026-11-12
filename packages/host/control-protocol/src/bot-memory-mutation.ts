@@ -87,6 +87,7 @@ export function parseHostBotMemoryMutationReceipt(value: unknown,
     (value.operation === 'forget' && (value.reply !== null || value.changes.length !== 0)) ||
     (value.state !== 'applied' && (value.reply !== null || value.changes.length !== 0)))
     throw Error('invalid_bot_memory_mutation_receipt')
+  const changes: HostBotMemoryMutationReceipt['changes'][number][] = []
   for (const change of value.changes) {
     if (!record(change) || !exact(change, ['op', 'scope', 'text', 'before', 'ok', 'error']) ||
       !['add', 'edit', 'remove'].includes(String(change.op)) ||
@@ -95,6 +96,24 @@ export function parseHostBotMemoryMutationReceipt(value: unknown,
       typeof change.ok !== 'boolean' ||
       (change.error !== null && !bounded(change.error, 256)))
       throw Error('invalid_bot_memory_mutation_receipt')
+    changes.push({
+      op: change.op === 'add' || change.op === 'edit' ? change.op : 'remove',
+      scope: change.scope === 'own' || change.scope === 'team' ? change.scope : 'group',
+      text: change.text,
+      before: typeof change.before === 'string' ? change.before : null,
+      ok: change.ok,
+      error: typeof change.error === 'string' ? change.error : null,
+    })
   }
-  return value as unknown as HostBotMemoryMutationReceipt
+  return {
+    requestId: request.requestId,
+    operation: value.operation === 'ask' || value.operation === 'forget' ? value.operation : null,
+    targetKind: value.targetKind === 'bot' || value.targetKind === 'room' ? value.targetKind : null,
+    targetId: typeof value.targetId === 'string' ? value.targetId : null,
+    state: value.state === 'pending' || value.state === 'applied' || value.state === 'missing' ||
+      value.state === 'unavailable' ? value.state : 'unknown',
+    reply: typeof value.reply === 'string' ? value.reply : null,
+    changes,
+    truncated: value.truncated,
+  }
 }
