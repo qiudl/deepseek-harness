@@ -10,6 +10,7 @@ describe('controlled Bot creation', () => {
   it('requires an exact form and correlates created and rejected receipts', () => {
     expect(parseHostBotCreateRequest(request)).toEqual(request)
     for (const forged of [{ ...request, ownerBotId: '../main' },
+      { ...request, sessionId: `chat${String.fromCharCode(92)}other` },
       { ...request, bot: { ...request.bot, name: ' Research' } },
       { ...request, bot: { ...request.bot, avatarImage: '/private/file.png' } },
       { ...request, profileId: 'other' }])
