@@ -217,9 +217,13 @@ describe('Windows Desktop Host startup', () => {
   it('composes twin receipt storage only for a registry-resolved Profile and a fixed native private path', async () => {
     const Original = hostControl.HostControlAuthority
     let captured: ConstructorParameters<typeof Original>[0] | undefined
-    const observed = vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(class extends Original {
-      constructor(options: ConstructorParameters<typeof Original>[0]) { super(options); captured = options }
-    })
+    // Keep the real prototype: owned cleanup now runs the authority's own release step.
+    const observed = vi.spyOn(hostControl, 'HostControlAuthority').mockImplementation(
+      function (this: unknown, options: ConstructorParameters<typeof Original>[0]) {
+        captured = options
+        return Reflect.construct<typeof Original, [typeof options]>(Original, [options])
+      },
+    )
     onTestFinished(() => { observed.mockRestore() })
     const state = fixture()
     const app = await startWindowsDesktopHostApplication(state.options, undefined, state.dependencies)

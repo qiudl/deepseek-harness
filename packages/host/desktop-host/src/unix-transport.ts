@@ -207,6 +207,7 @@ import { SkillHubPackageSnapshotReads, SkillHubPackageTransferSnapshot } from '.
 import { SkillHubClockWitnesses, SkillHubClockWitnessTickets } from './skillhub-clock-witness.ts'
 import type { createSkillHubPackageInstallationStore, SkillHubPackageSnapshot } from './skillhub-package-install.ts'
 import { RemoteUiStreamCursor } from './remote-ui-stream-cursor.ts'
+import { RemoteUiStreamCursors, type RemoteUiStreamCoordinates, type RemoteUiStreamCursorEntry } from './remote-ui-stream-cursors.ts'
 import type { SingleHostLock } from './single-instance.ts'
 
 function collaborationReadAuthorizer(
@@ -350,6 +351,8 @@ export interface UnixHostServerOptions {
   readonly createTwinBindingReceiptStore?: (profileId: string) => TwinBindingReceipts
   /** Redacted failure sink for control-session rejections; omission keeps the Host silent. */
   readonly diagnostics?: HostDiagnostics
+  /** Time a closed control connection's Profile cursors stay resumable; defaults to the view lease lifetime. */
+  readonly remoteUiStreamOrphanGraceMs?: number
   /** Read both existing Profile inventories without starting workers or writing state. */
   readonly inspectProfileImport?: (
     sourceProfileId: string, targetProfileId: string, signal: AbortSignal,
@@ -665,6 +668,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'prepareNativeRoom' | 'operateNativeRoom'
     | 'createTwinBindingReceiptStore'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteUiBotChatSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStreamOrphanGraceMs'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -1123,7 +1127,15 @@ export class HostControlAuthority {
   private readonly packageSnapshotReads = new SkillHubPackageSnapshotReads()
   private readonly clockWitnesses = new SkillHubClockWitnesses()
   private readonly clockWitnessTickets = new SkillHubClockWitnessTickets()
-  constructor(private readonly options: HostControlAuthorityOptions) {}
+  private readonly remoteUiStreams: RemoteUiStreamCursors
+
+  constructor(private readonly options: HostControlAuthorityOptions) {
+    this.remoteUiStreams = new RemoteUiStreamCursors({
+      now: options.now ?? Date.now,
+      ...(options.remoteUiStreamOrphanGraceMs === undefined
+        ? {} : { orphanGraceMs: options.remoteUiStreamOrphanGraceMs }),
+    })
+  }
 
   private skillHubPackageGrant(profileSelector: string, ownerId: string, signal: AbortSignal) {
     const selector = verifyProfileSelector(this.options.identity, profileSelector)
@@ -1153,6 +1165,14 @@ export class HostControlAuthority {
     return { scope: JSON.stringify([profileId, generation, hostKeyId]), authorize }
   }
 
+  /**
+   * Release every Profile cursor and its worker stream when the Host stops.
+   * @returns nothing; each cursor settles its own worker read before the Host exits.
+   */
+  async close(): Promise<void> {
+    await this.remoteUiStreams.closeAll()
+  }
+
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
@@ -1174,17 +1194,9 @@ export class HostControlAuthority {
       readonly operationId: string
       readonly expiresAt: number
     }>()
-    const remoteUiStreams = new Map<string, {
-      readonly cursor: RemoteUiStreamCursor
-      readonly profileId: string
-      readonly viewLeaseId: string
-      readonly leaseGeneration: number
-      readonly runtimeGeneration: number
-    }>()
     signal.addEventListener('abort', () => {
       packageTransferSnapshot.clear()
-      for (const entry of remoteUiStreams.values()) void entry.cursor.close()
-      remoteUiStreams.clear()
+      this.remoteUiStreams.detachOwner(ownerId)
     }, { once: true })
     const migrationExportEnabled = this.options.createMigrationExport !== undefined
     const migrationExportFor = async (
@@ -2091,67 +2103,101 @@ export class HostControlAuthority {
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.remote_ui_stream') {
           const command = frame.params.command
-          const revokeCursor = async () => {
-            const entry = remoteUiStreams.get(command.stream_id)
-            if (entry && entry.viewLeaseId === frame.params.view_lease_id
-              && entry.leaseGeneration === frame.params.lease_generation
-              && entry.runtimeGeneration === frame.params.runtime_generation) {
-              remoteUiStreams.delete(command.stream_id)
-              await entry.cursor.close()
-            }
+          const coordinates: RemoteUiStreamCoordinates = {
+            viewLeaseId: frame.params.view_lease_id,
+            leaseGeneration: frame.params.lease_generation,
+            runtimeGeneration: frame.params.runtime_generation,
           }
-          const authority = () => {
+          const frameProfile = () => {
             context.signal.throwIfAborted()
-            try {
-              return this.options.host.authorizeExtensionView({
-                viewLeaseId: frame.params.view_lease_id as never,
-                leaseGeneration: frame.params.lease_generation,
-                runtimeGeneration: frame.params.runtime_generation, ownerId,
-              })
-            } catch (error) { void revokeCursor(); throw error }
+            return this.options.host.authorizeExtensionView({
+              viewLeaseId: coordinates.viewLeaseId as never,
+              leaseGeneration: coordinates.leaseGeneration,
+              runtimeGeneration: coordinates.runtimeGeneration,
+              ownerId,
+            })
           }
-          const profileId = authority()
+          /**
+           * Resolve the Profile of one poll or close. The frame's own lease authorizes the request
+           * exactly as it did at open; a connection that re-established the same Profile view
+           * continues the cursor after the opening connection closed.
+           */
+          const cursorProfile = (entry: RemoteUiStreamCursorEntry): string => {
+            context.signal.throwIfAborted()
+            let authorized: string | undefined
+            try {
+              authorized = frameProfile()
+            } catch (error) {
+              if (!(error instanceof HostAuthorityError) || error.code !== 'stale') throw error
+            }
+            if (authorized !== undefined) {
+              if (authorized !== entry.profileId) throw new HostAuthorityError('profile_mismatch')
+              return authorized
+            }
+            const resumed = this.options.host.authorizeViewContinuation({
+              profileId: entry.profileId as never,
+              runtimeGeneration: coordinates.runtimeGeneration,
+              ownerId,
+            })
+            if (resumed !== entry.profileId) throw new HostAuthorityError('profile_mismatch')
+            this.remoteUiStreams.adopt(entry, ownerId)
+            return resumed
+          }
+          const releaseCursor = async (streamId: string): Promise<void> => {
+            const released = this.remoteUiStreams.take(streamId)
+            if (released) await released.cursor.close()
+          }
           let result: ProfileRemoteUiStreamResult['result']
           if (command.action === 'open') {
+            const profileId = frameProfile()
             if ((command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks && !this.options.remoteUiItemChunksSupported)
               throw new HostAuthorityError('upgrade_required')
             const execute = this.options.remoteUiStream
             if (!execute) throw new HostAuthorityError('upgrade_required')
-            if (remoteUiStreams.has(command.stream_id) || remoteUiStreams.size >= 8) {
-              throw new HostAuthorityError('conflict')
-            }
+            await this.remoteUiStreams.assertAvailable(command.stream_id, profileId)
             const cursor = await RemoteUiStreamCursor.open(
               cursorSignal => (command.endpoint === 'session/follow' || command.endpoint === 'terminal/stream') && command.item_chunks === true
                 ? execute(profileId, command.endpoint, command.payload, cursorSignal, true)
-                : execute(profileId, command.endpoint, command.payload, cursorSignal), signal)
+                : execute(profileId, command.endpoint, command.payload, cursorSignal), this.remoteUiStreams.signal)
             try {
-              if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
-              remoteUiStreams.set(command.stream_id, { cursor, profileId,
-                viewLeaseId: frame.params.view_lease_id,
-                leaseGeneration: frame.params.lease_generation,
-                runtimeGeneration: frame.params.runtime_generation })
+              if (frameProfile() !== profileId) throw new HostAuthorityError('profile_mismatch')
+              await this.remoteUiStreams.register({
+                streamId: command.stream_id, cursor, profileId, coordinates, ownerId,
+              })
               result = { type: 'opened' }
             } catch (error) { await cursor.close(); throw error }
           } else {
-            const entry = remoteUiStreams.get(command.stream_id)
-            if (!entry || entry.profileId !== profileId || entry.viewLeaseId !== frame.params.view_lease_id
-              || entry.leaseGeneration !== frame.params.lease_generation
-              || entry.runtimeGeneration !== frame.params.runtime_generation) throw new HostAuthorityError('stale')
+            const entry = this.remoteUiStreams.get(command.stream_id)
+            if (!entry) throw new HostAuthorityError('stale', 'cursor_absent')
+            if (entry.coordinates.viewLeaseId !== coordinates.viewLeaseId
+              || entry.coordinates.leaseGeneration !== coordinates.leaseGeneration
+              || entry.coordinates.runtimeGeneration !== coordinates.runtimeGeneration) {
+              await releaseCursor(command.stream_id)
+              throw new HostAuthorityError('stale', 'cursor_replaced')
+            }
+            let profileId: string
+            try {
+              profileId = cursorProfile(entry)
+            } catch (error) {
+              await releaseCursor(command.stream_id)
+              throw error instanceof HostAuthorityError && error.code === 'stale'
+                ? new HostAuthorityError('stale', 'cursor_lease') : error
+            }
             if (command.action === 'close') {
-              remoteUiStreams.delete(command.stream_id)
-              await entry.cursor.close()
+              await releaseCursor(command.stream_id)
               result = { type: 'closed' }
             } else {
               result = entry.cursor.poll()
-              if (result.type === 'end' || result.type === 'error') {
-                remoteUiStreams.delete(command.stream_id)
-                await entry.cursor.close()
+              if (result.type === 'end' || result.type === 'error') await releaseCursor(command.stream_id)
+              else {
+                try {
+                  if (cursorProfile(entry) !== profileId) throw new HostAuthorityError('profile_mismatch')
+                } catch (error) {
+                  await releaseCursor(command.stream_id)
+                  throw error
+                }
               }
             }
-          }
-          if (authority() !== profileId) {
-            await revokeCursor()
-            throw new HostAuthorityError('profile_mismatch')
           }
           channel.send({ version: 1, type: 'result', request_id: frame.request_id,
             method: frame.method, result })
@@ -3109,6 +3155,7 @@ export class UnixHostServer {
     this.server = undefined
     for (const socket of this.connections) socket.destroy()
     await this.options.extensions?.operations.dispose()
+    await this.authority.close()
     if (server) {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

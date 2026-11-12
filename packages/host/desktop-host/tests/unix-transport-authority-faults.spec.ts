@@ -76,6 +76,7 @@ function fakeHost(): DesktopHost {
     getOfflineAccountRecoveryStatus: vi.fn(() => ({ state: 'recovering' })),
     authorizeMigrationProfileSelector: vi.fn((input: { profileId: string }) => input.profileId),
     authorizeExtensionView: vi.fn(() => profileId),
+    authorizeViewContinuation: vi.fn(() => { throw new HostAuthorityError('stale') }),
     activateView: vi.fn(async () => ({ origin: 'http://127.0.0.1:43125', activationGeneration: 1,
       expiresAt: 20_000, bootstrapCookie: { name: 'fixture', value: 'private' } })),
     closeOwnedViewLease: vi.fn(),
