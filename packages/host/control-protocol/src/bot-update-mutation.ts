@@ -67,5 +67,5 @@ export function parseHostBotUpdateMutationReceipt(value: unknown,
     throw Error('invalid_bot_update_mutation_receipt')
   const state = value.state as HostBotUpdateMutationReceipt['state']
   return { requestId: request.requestId, target: value.target as HostBotUpdateMutationReceipt['target'],
-    version: value.version as string | null, state }
+    version: value.version, state }
 }
