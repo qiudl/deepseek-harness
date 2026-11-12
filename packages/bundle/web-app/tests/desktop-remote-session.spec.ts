@@ -29,7 +29,8 @@ describe('Desktop remote Session bridge', () => {
       expectedRevision: 7, change: { kind: 'pinned', value: true } })
     const settings = { botId: 'main', revision: 8, name: 'Main', role: '', instructions: '',
       color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
-      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false }
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false,
+      capabilityChoices: [] }
     const result = { botId: 'main', state: 'applied', revision: 8, settings }
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')

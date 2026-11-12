@@ -4,6 +4,12 @@ import type { HostBotChatId } from './bot-chat.js'
 
 /** One Bot selected under an already authenticated Profile. */
 export interface HostBotSettingsRequest { readonly botId: HostBotChatId }
+type HostBotCapabilityChoice = {
+  readonly name: string
+  readonly kind: 'mcp' | 'skill' | 'pack'
+  readonly description: string
+  readonly attached: boolean
+}
 /** Current saved settings without raw state, secrets or avatar image bytes. */
 export interface HostBotSettings {
   readonly botId: HostBotChatId
@@ -22,6 +28,7 @@ export interface HostBotSettings {
   readonly isPrimary: boolean
   readonly pinned: boolean
   readonly hidden: boolean
+  readonly capabilityChoices: HostBotCapabilityChoice[]
 }
 const botIdValid = (value: unknown): value is string => typeof value === 'string' &&
   /^[A-Za-z0-9_-]{1,200}$/u.test(value)
@@ -48,7 +55,7 @@ export function parseHostBotSettings(value: unknown, request: HostBotSettingsReq
   if (value === null) return null
   if (!record(value) || !exact(value, ['botId', 'revision', 'name', 'role', 'instructions', 'color',
     'avatarShape', 'hasAvatarImage', 'model', 'appliedModel', 'effort', 'workDir',
-    'isMain', 'isPrimary', 'pinned', 'hidden']) || value.botId !== request.botId ||
+    'isMain', 'isPrimary', 'pinned', 'hidden', 'capabilityChoices']) || value.botId !== request.botId ||
     typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
     !bounded(value.name, 512) || !value.name.trim() || !bounded(value.role, 256) ||
     !bounded(value.instructions, 32768) || !optional(value.color, 64) ||
@@ -57,10 +64,20 @@ export function parseHostBotSettings(value: unknown, request: HostBotSettingsReq
     !optional(value.effort, 128) || !optional(value.workDir, 4096) ||
     typeof value.isMain !== 'boolean' || typeof value.isPrimary !== 'boolean' ||
     (value.isPrimary && !value.isMain) || typeof value.pinned !== 'boolean' ||
-    typeof value.hidden !== 'boolean') throw Error('invalid_bot_settings_result')
+    typeof value.hidden !== 'boolean' || !Array.isArray(value.capabilityChoices) ||
+    value.capabilityChoices.length > 1000 || !value.capabilityChoices.every(item => record(item) &&
+      exact(item, ['name', 'kind', 'description', 'attached']) &&
+      typeof item.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(item.name) &&
+      item.name.length <= 32 && item.name !== 'github' &&
+      (item.kind === 'mcp' || item.kind === 'skill' || item.kind === 'pack') &&
+      bounded(item.description, 8000) && typeof item.attached === 'boolean') ||
+    new Set(value.capabilityChoices.map(item => item.name)).size !== value.capabilityChoices.length)
+    throw Error('invalid_bot_settings_result')
   return { botId: request.botId, revision: value.revision, name: value.name,
     role: value.role, instructions: value.instructions, color: value.color,
     avatarShape: value.avatarShape, hasAvatarImage: value.hasAvatarImage,
     model: value.model, appliedModel: value.appliedModel, effort: value.effort, workDir: value.workDir,
-    isMain: value.isMain, isPrimary: value.isPrimary, pinned: value.pinned, hidden: value.hidden }
+    isMain: value.isMain, isPrimary: value.isPrimary, pinned: value.pinned, hidden: value.hidden,
+    capabilityChoices: value.capabilityChoices.map(item => ({ name: item.name, kind: item.kind,
+      description: item.description, attached: item.attached })) }
 }

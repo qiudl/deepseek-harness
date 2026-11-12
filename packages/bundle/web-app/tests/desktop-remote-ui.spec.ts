@@ -90,7 +90,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const settings = { botId: 'main', revision: 7, name: 'Main', role: 'Coordinator',
       instructions: 'Coordinate', color: 'deepseek', avatarShape: 'whale', hasAvatarImage: false,
       model: 'provider/model', appliedModel: null, effort: null, workDir: '/team',
-      isMain: true, isPrimary: true, pinned: true, hidden: false }
+      isMain: true, isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] }
     const read = vi.fn(async (): Promise<unknown> => settings)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
       undefined, undefined, undefined, undefined, read)

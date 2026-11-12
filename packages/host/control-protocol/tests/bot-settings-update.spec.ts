@@ -9,7 +9,7 @@ describe('native Bot profile edit', () => {
     const settings = { botId: 'main', revision: 8, name: 'Main', role: 'Coordinator',
       instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
       model: null, appliedModel: null, effort: null, workDir: null,
-      isMain: true, isPrimary: true, pinned: false, hidden: false }
+      isMain: true, isPrimary: true, pinned: false, hidden: false, capabilityChoices: [] }
     expect(parseHostBotSettingsUpdateReceipt({ botId: 'main', state: 'applied',
       revision: 8, settings }, parsed)?.settings).toEqual(settings)
     expect(parseHostBotSettingsUpdateReceipt({ botId: 'main', state: 'stale',
@@ -35,6 +35,9 @@ describe('native Bot profile edit', () => {
     expect(parseHostBotSettingsUpdateRequest({ ...request,
       change: { kind: 'avatar-image', value: 'data:image/png;base64,YQ==' } }).change.value)
       .toBe('data:image/png;base64,YQ==')
+    expect(parseHostBotSettingsUpdateRequest({ ...request,
+      change: { kind: 'capability', value: { name: 'helper', attached: true } } }).change.value)
+      .toEqual({ name: 'helper', attached: true })
   })
   it('rejects forged selectors, unsupported fields and mismatched receipts', () => {
     for (const patch of [{ sessionId: '../other' }, { account: 'other' },
@@ -46,6 +49,7 @@ describe('native Bot profile edit', () => {
       { change: { kind: 'primary', value: '../other' } },
       { change: { kind: 'work-dir', value: '/team\nsecret' } },
       { change: { kind: 'avatar-image', value: 'data:text/html;base64,YQ==' } },
+      { change: { kind: 'capability', value: { name: '../escape', attached: true } } },
       { change: { kind: 'avatar-image', value: `data:image/png;base64,${'A'.repeat(30_000)}` } },
       { change: { kind: 'role', value: 'x'.repeat(25) } }])
       expect(() => parseHostBotSettingsUpdateRequest({ ...request, ...patch })).toThrow()

@@ -8,6 +8,7 @@ export type HostBotSettingsUpdateChange =
   | { readonly kind: 'name' | 'role' | 'instructions' | 'model' | 'primary' | 'work-dir' | 'avatar-image'; readonly value: string }
   | { readonly kind: 'color' | 'avatar-shape' | 'effort'; readonly value: string | null }
   | { readonly kind: 'pinned' | 'hidden' | 'main'; readonly value: boolean }
+  | { readonly kind: 'capability'; readonly value: Readonly<{ name: string; attached: boolean }> }
 /** The Bot Session is verified separately by the Profile worker. */
 export interface HostBotSettingsUpdateRequest {
   readonly botId: HostBotChatId
@@ -76,6 +77,10 @@ export function parseHostBotSettingsUpdateRequest(value: unknown): HostBotSettin
     change = { kind, value: setting }
   else if ((kind === 'pinned' || kind === 'hidden' || kind === 'main') && typeof setting === 'boolean')
     change = { kind, value: setting }
+  else if (kind === 'capability' && record(setting) && exact(setting, ['name', 'attached']) &&
+    typeof setting.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(setting.name) &&
+    setting.name.length <= 32 && setting.name !== 'github' && typeof setting.attached === 'boolean')
+    change = { kind, value: { name: setting.name, attached: setting.attached } }
   else throw Error('invalid_bot_settings_update')
   return { botId: value.botId as HostBotChatId, sessionId: value.sessionId,
     expectedRevision: value.expectedRevision, change }

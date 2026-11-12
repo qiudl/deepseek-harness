@@ -384,7 +384,8 @@ describe('Unix transport authority failures', () => {
       session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
     const settings = { botId: 'main', revision: 8, name: 'Main', role: '', instructions: '',
       color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
-      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false }
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false,
+      capabilityChoices: [] }
     const result = { botId: 'main', state: 'applied', revision: 8, settings }
     const execute = vi.fn(async () => result)
     const old = await authorityClient({ remoteSession: execute })
@@ -492,7 +493,8 @@ describe('Unix transport authority failures', () => {
     const input = { ...opened, endpoint: 'bot/settings' as const, payload: { args: { botId: 'main' } } }
     const settings = { botId: 'main', revision: 7, name: 'Main', role: '', instructions: '',
       color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
-      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: false, hidden: false }
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: false, hidden: false,
+      capabilityChoices: [] }
     const execute = vi.fn(async (): Promise<unknown> => settings)
     const old = await authorityClient({ remoteUiRead: execute })
     await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
