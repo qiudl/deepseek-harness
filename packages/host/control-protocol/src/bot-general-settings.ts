@@ -1,4 +1,4 @@
-/** Versioned native access to the team's existing appearance preferences. */
+/** Versioned native access to the team's existing general preferences. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
 const bounded = (value: unknown, max: number): value is string => typeof value === 'string' &&
@@ -10,6 +10,8 @@ const motion = (value: unknown): value is 'quiet' | 'normal' | 'lively' =>
   value === 'quiet' || value === 'normal' || value === 'lively'
 const width = (value: unknown): value is number => typeof value === 'number' &&
   Number.isSafeInteger(value) && value >= 50 && value <= 100
+const teamWorkspace = (value: unknown): value is string => bounded(value, 4096) && value.length > 0 &&
+  value === value.trim() && !/[\x00-\x1f\x7f]/u.test(value)
 const revision = (value: unknown): value is number => typeof value === 'number' &&
   Number.isSafeInteger(value) && value >= 0
 const botId = (value: unknown): value is string => typeof value === 'string' &&
@@ -26,6 +28,7 @@ export interface HostBotGeneralSettings {
   readonly accent: string | null
   readonly motion: 'quiet' | 'normal' | 'lively'
   readonly width: number
+  readonly teamWorkspace: string
 }
 /** One optimistic change to a shared preference. */
 export type HostBotGeneralSettingsUpdateRequest = Readonly<{
@@ -37,6 +40,7 @@ export type HostBotGeneralSettingsUpdateRequest = Readonly<{
     | { kind: 'accent'; value: string | null }
     | { kind: 'motion'; value: 'quiet' | 'normal' | 'lively' }
     | { kind: 'width'; value: number }
+    | { kind: 'team-workspace'; value: string }
   >
 }>
 /** Applied or stale reply includes the latest saved preference snapshot. */
@@ -60,11 +64,12 @@ export function parseHostBotGeneralSettingsRequest(value: unknown): HostBotGener
  */
 export function parseHostBotGeneralSettings(value: unknown): HostBotGeneralSettings | null {
   if (value === null) return null
-  if (!record(value) || !exact(value, ['revision', 'theme', 'accent', 'motion', 'width']) ||
+  if (!record(value) || !exact(value, ['revision', 'theme', 'accent', 'motion', 'width', 'teamWorkspace']) ||
     !revision(value.revision) || !theme(value.theme) || !accent(value.accent) ||
-    !motion(value.motion) || !width(value.width)) throw Error('invalid_bot_general_result')
+    !motion(value.motion) || !width(value.width) || !teamWorkspace(value.teamWorkspace))
+    throw Error('invalid_bot_general_result')
   return { revision: value.revision, theme: value.theme, accent: value.accent,
-    motion: value.motion, width: value.width }
+    motion: value.motion, width: value.width, teamWorkspace: value.teamWorkspace }
 }
 
 /** Parse one versioned preference edit.
@@ -89,6 +94,9 @@ export function parseHostBotGeneralSettingsUpdateRequest(value: unknown): HostBo
   if (change.kind === 'width' && width(change.value))
     return { botId: value.botId, sessionId: value.sessionId,
       expectedRevision: value.expectedRevision, change: { kind: 'width', value: change.value } }
+  if (change.kind === 'team-workspace' && teamWorkspace(change.value))
+    return { botId: value.botId, sessionId: value.sessionId,
+      expectedRevision: value.expectedRevision, change: { kind: 'team-workspace', value: change.value } }
   throw Error('invalid_bot_general_update')
 }
 

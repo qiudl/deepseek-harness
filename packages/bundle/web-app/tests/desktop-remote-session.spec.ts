@@ -30,7 +30,8 @@ describe('Desktop remote Session bridge', () => {
     const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 4,
       change: { kind: 'width' as const, value: 50 } }
     const result = { state: 'applied', settings: {
-      revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50 } }
+      revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50,
+      teamWorkspace: '/team' } }
     const update = vi.fn(async (): Promise<unknown> => result)
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
       undefined, control, undefined, undefined, undefined, undefined, undefined,

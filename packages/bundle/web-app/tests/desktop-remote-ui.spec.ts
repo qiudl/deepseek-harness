@@ -206,7 +206,8 @@ describe('Desktop remote UI read-only bridge', () => {
   })
   it('reads shared general preferences only through the verified Bot service', async () => {
     const invoke = vi.fn()
-    const page = { revision: 4, theme: 'paper', accent: null, motion: 'quiet', width: 92 }
+    const page = { revision: 4, theme: 'paper', accent: null, motion: 'quiet', width: 92,
+      teamWorkspace: '/team' }
     const read = vi.fn(async () => page)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
       undefined, undefined, undefined, undefined, undefined, undefined, undefined,

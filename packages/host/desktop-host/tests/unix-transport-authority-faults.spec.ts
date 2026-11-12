@@ -403,7 +403,8 @@ describe('Unix transport authority failures', () => {
       change: { kind: 'motion', value: 'quiet' } } as never
     const command = { operation: 'bot.general.update' as const, command_id: randomUUID() as never,
       session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
-    const settings = { revision: 8, theme: 'paper', accent: null, motion: 'quiet', width: 80 }
+    const settings = { revision: 8, theme: 'paper', accent: null, motion: 'quiet', width: 80,
+      teamWorkspace: '/team' }
     const result = { state: 'applied', settings }
     const execute = vi.fn(async () => result)
     const old = await authorityClient({ remoteSession: execute })
@@ -622,7 +623,8 @@ describe('Unix transport authority failures', () => {
   })
   it('requires a distinct signed general settings read capability', async () => {
     const input = { ...opened, endpoint: 'bot/general' as const, payload: { args: {} } }
-    const page = { revision: 7, theme: 'paper', accent: null, motion: 'normal', width: 80 }
+    const page = { revision: 7, theme: 'paper', accent: null, motion: 'normal', width: 80,
+      teamWorkspace: '/team' }
     const read = vi.fn(async (): Promise<unknown> => page)
     const without = await authorityClient({ remoteUiRead: read })
     await expect(without.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
