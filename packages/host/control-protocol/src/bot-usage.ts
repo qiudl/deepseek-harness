@@ -67,13 +67,14 @@ export interface HostBotUsage {
  */
 export function parseHostBotUsageRequest(value: unknown): HostBotUsageRequest {
   if (!record(value) || !exact(value, ['rangeDays', 'timeZone', 'cursor', 'limit']) ||
-    ![7, 30, 90].includes(value.rangeDays as number) ||
+    value.rangeDays !== 7 && value.rangeDays !== 30 && value.rangeDays !== 90 ||
     !text(value.timeZone, 64) || !ZONE.test(value.timeZone) ||
     !cursor(value.cursor) || !count(value.limit) ||
     value.limit < 1 || value.limit > 40) throw Error('invalid_bot_usage_request')
   try { new Intl.DateTimeFormat('en-CA', { timeZone: value.timeZone }) }
   catch { throw Error('invalid_bot_usage_request') }
-  return value as unknown as HostBotUsageRequest
+  return { rangeDays: value.rangeDays, timeZone: value.timeZone,
+    cursor: value.cursor, limit: value.limit }
 }
 
 /** Validate a DS Bot usage page against its selected range.
@@ -92,6 +93,7 @@ export function parseHostBotUsage(value: unknown, request: HostBotUsageRequest):
     !Array.isArray(value.rows) || value.rows.length > request.limit) throw Error('invalid_bot_usage_result')
   const totals = value.totals as Record<string, unknown>
   if (!COUNTS.every(key => count(totals[key]))) throw Error('invalid_bot_usage_result')
+  const rows: HostBotUsageRow[] = []
   for (const item of value.rows) {
     if (!record(item) || !exact(item,
       ['hour', 'owner', 'model', 'kind', ...COUNTS]) ||
@@ -118,8 +120,27 @@ export function parseHostBotUsage(value: unknown, request: HostBotUsageRequest):
       !text(item.kind, 80) || !COUNTS.every(key => count(item[key]))) {
       throw Error('invalid_bot_usage_result')
     }
+    const owner = item.owner as Record<string, unknown>
+    const model = item.model as Record<string, unknown>
+    rows.push({ hour: item.hour as string,
+      owner: { key: owner.key as string, kind: owner.kind as HostBotUsageRow['owner']['kind'],
+        ...(owner.id === undefined ? {} : { id: owner.id as string }),
+        ...(owner.name === undefined ? {} : { name: owner.name as string }),
+        ...(owner.deleted === undefined ? {} : { deleted: owner.deleted as boolean }) },
+      model: { key: model.key as string, provider: model.provider as string,
+        model: model.model as string, name: model.name as string,
+        ...(model.providerName === undefined ? {} : { providerName: model.providerName as string }) },
+      kind: item.kind as string, input: item.input as number,
+      cacheRead: item.cacheRead as number, cacheWrite: item.cacheWrite as number,
+      output: item.output as number, calls: item.calls as number })
   }
-  if (Buffer.byteLength(JSON.stringify(value), 'utf8') > 32_768)
+  const result: HostBotUsage = { rangeDays: request.rangeDays, timeZone: request.timeZone,
+    now: value.now, scanning: value.scanning,
+    totals: { input: totals.input as number, cacheRead: totals.cacheRead as number,
+      cacheWrite: totals.cacheWrite as number, output: totals.output as number,
+      calls: totals.calls as number },
+    rows, nextCursor: value.nextCursor }
+  if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 32_768)
     throw Error('invalid_bot_usage_result')
-  return value as unknown as HostBotUsage
+  return result
 }
