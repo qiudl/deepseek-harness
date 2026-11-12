@@ -13,7 +13,9 @@ const providerID = (value: unknown): value is string => bounded(value, 100) &&
   /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value)
 const protocolIDs = new Set(['openai-completions', 'openai-responses', 'anthropic-messages'])
 
+/** An empty request for the selected Profile provider directory. */
 export type HostBotProvidersRequest = Readonly<Record<string, never>>
+/** An owner command for a model provider or its credential. */
 export type HostBotProvidersMutationRequest = Readonly<{
   botId: string
   sessionId: string
@@ -21,6 +23,7 @@ export type HostBotProvidersMutationRequest = Readonly<{
   provider: string
   value: string | null
 }>
+/** Configured and addable model providers without credential values. */
 export type HostBotProviders = Readonly<{
   available: boolean
   providers: readonly Readonly<{
@@ -36,13 +39,21 @@ export type HostBotProviders = Readonly<{
   protocols: readonly string[]
 }>
 
-/** @param value Untrusted args. @returns Empty Profile-selected request. */
+/**
+ * Validate the bot providers request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers request.
+ */
 export function parseHostBotProvidersRequest(value: unknown): HostBotProvidersRequest {
   if (!record(value) || !exact(value, [])) throw Error('invalid_bot_providers_request')
   return {}
 }
 
-/** @param value Untrusted encrypted control request. @returns Exact provider edit. */
+/**
+ * Validate the bot providers mutation request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers mutation request.
+ */
 export function parseHostBotProvidersMutationRequest(value: unknown): HostBotProvidersMutationRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'provider', 'value']) ||
     !bounded(value.botId, 200) || !/^[A-Za-z0-9_-]+$/u.test(value.botId) ||
@@ -60,7 +71,11 @@ export function parseHostBotProvidersMutationRequest(value: unknown): HostBotPro
 const credential = (value: unknown): value is string => bounded(value, 8192) &&
   /^[!-~]+$/u.test(value)
 
-/** @param value Untrusted plugin result. @returns Exact credential-free directory. */
+/**
+ * Validate the bot providers at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers.
+ */
 export function parseHostBotProviders(value: unknown): HostBotProviders | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['available', 'providers', 'addable', 'protocols']) ||

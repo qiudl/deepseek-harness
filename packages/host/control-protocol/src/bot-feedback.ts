@@ -5,7 +5,9 @@ const ISSUE_URL = 'https://github.com/Fei2411/DeepSeek-Bot/issues/new'
 const bounded = (value: unknown, max: number): value is string =>
   typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max
 
+/** An empty request for the selected Bot diagnostic preview. */
 export type HostBotFeedbackRequest = Readonly<Record<string, never>>
+/** A bounded, redacted diagnostic preview and issue URL. */
 export type HostBotFeedback = Readonly<{
   total: number
   entries: readonly Readonly<{
@@ -25,11 +27,21 @@ const validLevel = (value: unknown): value is HostBotFeedback['entries'][number]
 const validSource = (value: unknown): value is HostBotFeedback['entries'][number]['source'] =>
   value === 'turn' || value === 'host' || value === 'api' || value === 'browser'
 
+/**
+ * Validate the bot feedback request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot feedback request.
+ */
 export function parseHostBotFeedbackRequest(value: unknown): HostBotFeedbackRequest {
   if (!record(value) || !exact(value, [])) throw Error('invalid_bot_feedback_request')
   return {}
 }
 
+/**
+ * Validate the bot feedback at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot feedback.
+ */
 export function parseHostBotFeedback(value: unknown): HostBotFeedback | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['total', 'entries', 'markdown', 'markdownTruncated', 'issuesUrl']) ||

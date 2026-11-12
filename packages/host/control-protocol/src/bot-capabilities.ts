@@ -6,7 +6,7 @@ const name = (value: unknown): value is string => typeof value === 'string' &&
   value.length <= 32 && NAME.test(value) && value !== 'github'
 const clean = (value: unknown, max: number): value is string =>
   typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max &&
-  [...value].every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
+  Array.from(value).every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
 const stamp = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const stringList = (value: unknown, max: number, size: number): value is string[] =>
   Array.isArray(value) && value.length <= size && value.every(item => clean(item, max))
@@ -16,11 +16,15 @@ const stringMap = (value: unknown, max: number, size: number): value is Record<s
 const session = (value: unknown): value is string => typeof value === 'string' &&
   /^[!-~]{1,256}$/u.test(value) && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
 
+/** A cursor and page limit for the native Bot capability library. */
 export type HostBotCapabilitiesRequest = Readonly<{ after: string; limit: number }>
+/** A validated MCP server, skill, or pack entry in the Bot library. */
 export type HostBotCapability = Readonly<Record<string, unknown> & { name: string; kind: 'mcp' | 'skill' | 'pack' }>
+/** A revisioned page of native Bot capability entries. */
 export type HostBotCapabilities = Readonly<{ revision: number
   entries: readonly HostBotCapability[]
   nextCursor: string | null }>
+/** A revision-checked owner edit of the Bot capability library. */
 export type HostBotCapabilitiesMutationRequest = Readonly<{
   botId: string
   sessionId: string
@@ -56,6 +60,11 @@ function item(value: unknown, saved: boolean): HostBotCapability {
   throw Error('invalid_bot_capabilities_result')
 }
 
+/**
+ * Validate the bot capabilities request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot capabilities request.
+ */
 export function parseHostBotCapabilitiesRequest(value: unknown): HostBotCapabilitiesRequest {
   if (!record(value) || !exact(value, ['after', 'limit']) ||
     !(value.after === '' || name(value.after)) || !Number.isSafeInteger(value.limit) ||
@@ -64,6 +73,11 @@ export function parseHostBotCapabilitiesRequest(value: unknown): HostBotCapabili
   return value as HostBotCapabilitiesRequest
 }
 
+/**
+ * Validate the bot capabilities at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot capabilities.
+ */
 export function parseHostBotCapabilities(value: unknown): HostBotCapabilities | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['revision', 'entries', 'nextCursor']) ||
@@ -80,9 +94,14 @@ export function parseHostBotCapabilities(value: unknown): HostBotCapabilities | 
   })
   if (value.nextCursor !== null && (entries.length === 0 || value.nextCursor !== entries.at(-1)?.name))
     throw Error('invalid_bot_capabilities_result')
-  return { revision: value.revision as number, entries, nextCursor: value.nextCursor as string | null }
+  return { revision: value.revision, entries, nextCursor: value.nextCursor }
 }
 
+/**
+ * Validate the bot capabilities mutation request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot capabilities mutation request.
+ */
 export function parseHostBotCapabilitiesMutationRequest(value: unknown): HostBotCapabilitiesMutationRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'expectedRevision', 'name', 'item']) ||
     typeof value.botId !== 'string' || !BOT_ID.test(value.botId) || !session(value.sessionId) ||

@@ -10,7 +10,9 @@ const bounded = (value: unknown, max: number): value is string => {
   return true
 }
 
+/** An empty request for the selected Profile connector status. */
 export type HostBotConnectorsRequest = Readonly<Record<string, never>>
+/** An owner command to connect, disconnect, or retry GitHub. */
 export type HostBotConnectorsMutationRequest = Readonly<{
   botId: string
   sessionId: string
@@ -18,6 +20,7 @@ export type HostBotConnectorsMutationRequest = Readonly<{
   id: 'github'
   token: string | null
 }>
+/** The selected Profile connector status without credential values. */
 export type HostBotConnectors = Readonly<{
   connectors: readonly Readonly<{
     id: 'github'
@@ -31,11 +34,21 @@ export type HostBotConnectors = Readonly<{
 const validState = (value: unknown): value is HostBotConnectors['connectors'][number]['state'] =>
   value === 'off' || value === 'connecting' || value === 'ready' || value === 'error'
 
+/**
+ * Validate the bot connectors request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot connectors request.
+ */
 export function parseHostBotConnectorsRequest(value: unknown): HostBotConnectorsRequest {
   if (!record(value) || !exact(value, [])) throw Error('invalid_bot_connectors_request')
   return {}
 }
 
+/**
+ * Validate the bot connectors mutation request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot connectors mutation request.
+ */
 export function parseHostBotConnectorsMutationRequest(value: unknown): HostBotConnectorsMutationRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'id', 'token']) ||
     !bounded(value.botId, 200) || !/^[A-Za-z0-9_-]+$/u.test(value.botId) ||
@@ -48,6 +61,11 @@ export function parseHostBotConnectorsMutationRequest(value: unknown): HostBotCo
     kind: value.kind, id: 'github', token: value.token }
 }
 
+/**
+ * Validate the bot connectors at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot connectors.
+ */
 export function parseHostBotConnectors(value: unknown): HostBotConnectors | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['connectors']) || !Array.isArray(value.connectors) ||

@@ -3522,10 +3522,15 @@ export class UnixHostClient {
   readonly remoteBotSettingsUpdateSupported = true
   /** This SDK accepts versioned shared appearance edits under a Bot Session. */
   readonly remoteBotGeneralSettingsUpdateSupported = true
+  /** This SDK validates native Bot owner mutation frames for this capability. */
   readonly remoteBotProvidersMutationSupported = true
+  /** This SDK validates native Bot owner mutation frames for this capability. */
   readonly remoteBotConnectorsMutationSupported = true
+  /** This SDK validates native Bot owner mutation frames for this capability. */
   readonly remoteBotFeedbackClearSupported = true
+  /** This SDK validates native Bot owner mutation frames for this capability. */
   readonly remoteBotSecretsMutationSupported = true
+  /** This SDK validates native Bot owner mutation frames for this capability. */
   readonly remoteBotCapabilityLibraryMutationSupported = true
   /** This SDK accepts fixed owner Bot deletion commands. */
   readonly remoteBotDeleteSupported = true
@@ -3565,10 +3570,15 @@ export class UnixHostClient {
   readonly remoteUiBotUsageSupported = true
   /** This SDK validates versioned native DS Bot general settings. */
   readonly remoteUiBotGeneralSettingsSupported = true
+  /** This SDK validates native Bot Profile read frames for this capability. */
   readonly remoteUiBotProvidersSupported = true
+  /** This SDK validates native Bot Profile read frames for this capability. */
   readonly remoteUiBotConnectorsSupported = true
+  /** This SDK validates native Bot Profile read frames for this capability. */
   readonly remoteUiBotFeedbackSupported = true
+  /** This SDK validates native Bot Profile read frames for this capability. */
   readonly remoteUiBotSecretsSupported = true
+  /** This SDK validates native Bot Profile read frames for this capability. */
   readonly remoteUiBotCapabilityLibrarySupported = true
   /** This SDK validates bounded owner Host directory reads. */
   readonly remoteUiBotFoldersSupported = true

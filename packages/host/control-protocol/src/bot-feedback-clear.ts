@@ -1,7 +1,13 @@
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** An owner command to clear the selected Bot feedback log. */
 export type HostBotFeedbackClearRequest = Readonly<{ botId: string; sessionId: string }>
 
+/**
+ * Validate the bot feedback clear request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot feedback clear request.
+ */
 export function parseHostBotFeedbackClearRequest(value: unknown): HostBotFeedbackClearRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId']) ||
     typeof value.botId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(value.botId) ||

@@ -4,13 +4,15 @@ const NAME = /^[A-Z][A-Z0-9_]{0,63}$/u
 const BOT_ID = /^[A-Za-z0-9_-]{1,200}$/u
 const clean = (value: unknown, max: number): value is string =>
   typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max &&
-  [...value].every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
+  Array.from(value).every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
 const validScope = (value: unknown): value is 'all' | string[] =>
   value === 'all' || Array.isArray(value) && value.length <= 200 &&
   value.every(id => typeof id === 'string' && BOT_ID.test(id)) && new Set(value).size === value.length
 
+/** A cursor and page limit for the Bot secret directory. */
 export type HostBotSecretsRequest = Readonly<{ after: string
   limit: number }>
+/** Metadata for one write-only Bot secret. */
 export type HostBotSecret = Readonly<{
   name: string
   purpose: string
@@ -20,8 +22,10 @@ export type HostBotSecret = Readonly<{
   updatedAt: number
   lastUsedAt: number | null
 }>
+/** A page of Bot secret metadata and its next cursor. */
 export type HostBotSecrets = Readonly<{ entries: readonly HostBotSecret[]
   nextCursor: string | null }>
+/** An owner command to set, update, or delete a Bot secret. */
 export type HostBotSecretsMutationRequest = Readonly<{
   botId: string
   sessionId: string
@@ -32,14 +36,24 @@ export type HostBotSecretsMutationRequest = Readonly<{
   scope: 'all' | readonly string[] | null
 }>
 
+/**
+ * Validate the bot secrets request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot secrets request.
+ */
 export function parseHostBotSecretsRequest(value: unknown): HostBotSecretsRequest {
   if (!record(value) || !exact(value, ['after', 'limit']) ||
     !(value.after === '' || typeof value.after === 'string' && NAME.test(value.after)) ||
     !Number.isSafeInteger(value.limit) || (value.limit as number) < 1 || (value.limit as number) > 50)
     throw Error('invalid_bot_secrets_request')
-  return { after: value.after as string, limit: value.limit as number }
+  return { after: value.after, limit: value.limit as number }
 }
 
+/**
+ * Validate the bot secrets at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot secrets.
+ */
 export function parseHostBotSecrets(value: unknown): HostBotSecrets | null {
   if (value === null) return null
   if (!record(value) || !exact(value, ['entries', 'nextCursor']) ||
@@ -68,6 +82,11 @@ export function parseHostBotSecrets(value: unknown): HostBotSecrets | null {
   return { entries, nextCursor: value.nextCursor }
 }
 
+/**
+ * Validate the bot secrets mutation request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot secrets mutation request.
+ */
 export function parseHostBotSecretsMutationRequest(value: unknown): HostBotSecretsMutationRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'name',
     'value', 'purpose', 'scope']) ||
