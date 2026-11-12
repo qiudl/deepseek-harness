@@ -1,10 +1,12 @@
 /** REQ-20261022-0022: durable intent for a fenced plugin-directory switch. */
 import { randomBytes } from 'node:crypto'
 import { constants } from 'node:fs'
-import { link, lstat, mkdir, open, readdir, unlink } from 'node:fs/promises'
+import { link, lstat, mkdir, open, unlink } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { latestOwnerRevision, readStableOwnerFile } from './private-file-io.ts'
 import { inspectProfileImportPluginDirectoryState,
   type ProfileImportPluginPublishPlan } from './profile-import-plugin-publish-plan.ts'
+import { validRecordIdentity } from './profile-import-record-identity.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 const SHA256 = /^[a-f0-9]{64}$/u
@@ -32,10 +34,7 @@ function validate(value: unknown): ProfileImportPluginPublishRecord {
     'operationId', 'phase', 'plan', 'revision', 'selectedPluginNames', 'sourceProfileId',
     'targetProfileId', 'version',
   ].join(',') || row.version !== 1 || !Number.isSafeInteger(row.revision)
-    || (row.revision as number) < 1 || typeof row.operationId !== 'string' || !UUID.test(row.operationId)
-    || typeof row.sourceProfileId !== 'string' || !UUID.test(row.sourceProfileId)
-    || typeof row.targetProfileId !== 'string' || !UUID.test(row.targetProfileId)
-    || row.sourceProfileId === row.targetProfileId
+    || (row.revision as number) < 1 || !validRecordIdentity(row)
     || !Array.isArray(row.selectedPluginNames) || row.selectedPluginNames.length < 1
     || row.selectedPluginNames.length > 128
     || new Set(row.selectedPluginNames).size !== row.selectedPluginNames.length
@@ -77,17 +76,8 @@ export class FileProfileImportPluginPublishJournal {
     if (!UUID.test(operationId)) throw Error('profile_import_plugin_publish_journal_invalid')
     await this.checkedParent()
     if (!await this.existingRoot()) return null
-    const prefix = `${operationId}.`
-    const versions = (await readdir(this.root)).flatMap((name) => {
-      if (!name.startsWith(prefix) || !name.endsWith('.json')) return []
-      const suffix = name.slice(prefix.length, -5)
-      const number = Number(suffix)
-      if (!Number.isSafeInteger(number) || number < 1 || String(number) !== suffix) {
-        throw Error('profile_import_plugin_publish_journal_invalid')
-      }
-      return [number]
-    }).sort((left, right) => right - left)
-    const revision = versions[0]
+    const revision = await latestOwnerRevision(this.root, operationId,
+      () => Error('profile_import_plugin_publish_journal_invalid'))
     if (revision === undefined) return null
     const handle = await open(join(this.root, `${operationId}.${revision}.json`),
       constants.O_RDONLY | constants.O_NOFOLLOW)
@@ -97,12 +87,8 @@ export class FileProfileImportPluginPublishJournal {
         || (before.mode & 0o077n) !== 0n || before.size < 1n || before.size > 4096n) {
         throw Error('profile_import_plugin_publish_journal_unsafe')
       }
-      const bytes = await handle.readFile()
-      const after = await handle.stat({ bigint: true })
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
-        throw Error('profile_import_plugin_publish_journal_changed')
-      }
+      const bytes = await readStableOwnerFile(handle, before,
+        () => Error('profile_import_plugin_publish_journal_changed'))
       let decoded: unknown
       try { decoded = JSON.parse(bytes.toString('utf8')) } catch {
         throw Error('profile_import_plugin_publish_journal_invalid')

@@ -1,8 +1,7 @@
 /** REQ-20261022-0022: offline feasibility check inside a private staging directory. */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants } from 'node:fs'
-import { lstat, mkdir, open } from 'node:fs/promises'
+import { lstat, mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { parseDocument } from 'yaml'
@@ -14,7 +13,7 @@ import { inspectStagedProfileImportPluginArchives } from './profile-import-plugi
 import { lockfileResolutionMatches } from './profile-import-plugin-trust.ts'
 import { ProfileImportWorkerFence } from './profile-import-worker-fence.ts'
 import { readExtensionStateFile } from './posix-extension-files.ts'
-import { readOwnerPrivateFile } from './private-file-io.ts'
+import { readOwnerPrivateFile, syncOwnerPrivateDirectory, writeOwnerPrivateFile } from './private-file-io.ts'
 import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
 
 type Profile = Readonly<{ profileId: string; profileRoot: string; target: FileOwnerJsonlMigrationGenerationTarget }>
@@ -42,14 +41,13 @@ function installReceipt(operationId: string, plan: ProfileImportPluginPlan, lock
   })}\n`)
 }
 
-async function writePrivate(path: string, bytes: Buffer): Promise<void> {
-  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-  try { await file.writeFile(bytes); await file.sync() } finally { await file.close() }
-}
-
-async function syncDirectory(path: string): Promise<void> {
-  const directory = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try { await directory.sync() } finally { await directory.close() }
+async function verifyPlanPlugins(catalog: BundledPluginCatalog, plan: ProfileImportPluginPlan,
+  sandboxRoot: string, uid: number): Promise<void> {
+  for (const plugin of plan.plugins) {
+    const entry = catalog.get(plugin.name, plugin.version)
+    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
+    await verifyCopiedBundledPlugin(catalog, entry, sandboxRoot, uid, 'copied')
+  }
 }
 
 async function checkedPrivateDirectory(path: string, uid: number): Promise<void> {
@@ -125,9 +123,9 @@ export async function runPnpm(input: { nodeExecutablePath: string
         }, 2_000)
       }
     }
-    const abort = () => stop('profile_import_plugin_isolated_cancelled')
+    const abort = () => { stop('profile_import_plugin_isolated_cancelled') }
     signal?.addEventListener('abort', abort, { once: true })
-    const deadline = setTimeout(() => stop('profile_import_plugin_isolated_timeout'), 120_000)
+    const deadline = setTimeout(() => { stop('profile_import_plugin_isolated_timeout') }, 120_000)
     child.once('error', () => { reason = 'profile_import_plugin_isolated_launch_failed' })
     child.once('close', (code) => {
       clearTimeout(deadline)
@@ -170,14 +168,14 @@ export async function installStagedProfileImportPluginsInIsolation(input: Eviden
       throw Error('profile_import_plugin_stage_archive_changed')
     }
     archives.set(plugin.name, bytes)
-    await writePrivate(join(archiveDirectory, `${plugin.archiveDigest}.tgz`), bytes)
+    await writeOwnerPrivateFile(join(archiveDirectory, `${plugin.archiveDigest}.tgz`), bytes)
   }
   const manifest = manifestText(plan)
-  await writePrivate(join(sandboxRoot, 'package.json'), Buffer.from(manifest))
-  await writePrivate(join(sandboxRoot, '.npmrc'), Buffer.from('ignore-scripts=true\nauto-install-peers=false\n'))
-  await writePrivate(join(sandboxRoot, 'pnpm-workspace.yaml'), Buffer.from(ISOLATED_WORKSPACE))
-  await syncDirectory(archiveDirectory)
-  await syncDirectory(sandboxRoot)
+  await writeOwnerPrivateFile(join(sandboxRoot, 'package.json'), Buffer.from(manifest))
+  await writeOwnerPrivateFile(join(sandboxRoot, '.npmrc'), Buffer.from('ignore-scripts=true\nauto-install-peers=false\n'))
+  await writeOwnerPrivateFile(join(sandboxRoot, 'pnpm-workspace.yaml'), Buffer.from(ISOLATED_WORKSPACE))
+  await syncOwnerPrivateDirectory(archiveDirectory)
+  await syncOwnerPrivateDirectory(sandboxRoot)
   await runPnpm({ nodeExecutablePath: input.nodeExecutablePath,
     pnpmEntrypointPath: input.pnpmEntrypointPath, sandboxRoot, ...(signal ? { signal } : {}) })
   const lockfile = readExtensionStateFile(join(sandboxRoot, 'pnpm-lock.yaml'), uid,
@@ -187,16 +185,12 @@ export async function installStagedProfileImportPluginsInIsolation(input: Eviden
     throw Error('profile_import_plugin_isolated_resolution_invalid')
   }
   exactResolution(lockfile, plan, archives)
-  for (const plugin of plan.plugins) {
-    const entry = input.catalog.get(plugin.name, plugin.version)
-    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
-    await verifyCopiedBundledPlugin(input.catalog, entry, sandboxRoot, uid, 'copied')
-  }
+  await verifyPlanPlugins(input.catalog, plan, sandboxRoot, uid)
   if (!(await check())) throw Error('profile_import_plugin_stage_missing')
   const lockfileDigest = createHash('sha256').update(lockfile).digest('hex')
-  await writePrivate(join(sandboxRoot, 'install-receipt.json'), installReceipt(operationId, plan, lockfileDigest))
-  await syncDirectory(sandboxRoot)
-  await syncDirectory(sandboxParent)
+  await writeOwnerPrivateFile(join(sandboxRoot, 'install-receipt.json'), installReceipt(operationId, plan, lockfileDigest))
+  await syncOwnerPrivateDirectory(sandboxRoot)
+  await syncOwnerPrivateDirectory(sandboxParent)
   const completed = await inspectIsolatedProfileImportPluginInstall(input)
   if (!completed || completed.sandboxRoot !== sandboxRoot || completed.lockfileDigest !== lockfileDigest) {
     throw Error('profile_import_plugin_isolated_incomplete')
@@ -249,11 +243,7 @@ export async function inspectIsolatedProfileImportPluginInstall(input: Evidence)
     archives.set(plugin.name, bytes)
   }
   exactResolution(lockfile, plan, archives)
-  for (const plugin of plan.plugins) {
-    const entry = input.catalog.get(plugin.name, plugin.version)
-    if (!entry || entry.sha256 !== plugin.archiveDigest) throw Error('profile_import_plugin_isolated_install_invalid')
-    await verifyCopiedBundledPlugin(input.catalog, entry, sandboxRoot, uid, 'copied')
-  }
+  await verifyPlanPlugins(input.catalog, plan, sandboxRoot, uid)
   input.fence.assertOwnedPair(sourceProfileId, target.profileId, operationId)
   if (!(await inspectStagedProfileImportPluginArchives(input))) throw Error('profile_import_plugin_stage_missing')
   return { sandboxRoot, lockfileDigest }

@@ -42,6 +42,17 @@ type PluginPreparation = Readonly<{
   prepare(fenced: ProfileImportOperation): Promise<void>
 }>
 
+function inspectImportPair(source: Profile, target: Profile, uid: number,
+  signal?: AbortSignal): Promise<readonly [source: Awaited<ReturnType<typeof inspectProfileImportInventory>>,
+    target: Awaited<ReturnType<typeof inspectProfileImportInventory>>]> {
+  return Promise.all([
+    inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target, uid,
+      ...(signal ? { signal } : {}) }),
+    inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target, uid,
+      ...(signal ? { signal } : {}) }),
+  ])
+}
+
 /**
  * Owner-only coordinator. Caller must authenticate both Profile identities and supply
  * worker revocation/stop operations from the same Host supervisor. It records intent
@@ -83,6 +94,42 @@ export class ProfileImportSessionCoordinator {
     return { operations, nextOperationOffset: next < rows.length ? next : null }
   }
 
+  /** Reject a publisher whose durable identity does not match this coordinator, fence, and pair. */
+  private assertPublisherBinding(input: CommitInput & Readonly<{
+    pluginJournal: FileProfileImportPluginPublishJournal
+    pluginPublisher: ProfileImportPluginPublisherInput
+  }>): void {
+    const { source, target, pluginPublisher } = input
+    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
+      || pluginPublisher.profileRoot !== target.profileRoot
+      || pluginPublisher.operationId !== input.operationId
+      || pluginPublisher.sourceProfileId !== source.profileId
+      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
+      throw Error('profile_import_operation_not_recoverable')
+    }
+  }
+
+  /** Load the joint operation this plugin stage may still act on. */
+  private async loadPluginOperation(input: CommitInput, phases: readonly ProfileImportOperation['phase'][],
+    rejection: string): Promise<ProfileImportOperation> {
+    const { source, target } = input
+    await input.assertAuthority()
+    const current = await this.journal.load(input.operationId)
+    if (!current || current.sourceProfileId !== source.profileId
+      || current.targetProfileId !== target.profileId || current.selectedPluginNames.length === 0
+      || !phases.includes(current.phase)) {
+      throw Error(rejection)
+    }
+    return current
+  }
+
+  /** Reserve, revoke, and stop both workers, then settle every extension they still own. */
+  private async quiesceOwnedPair(sourceProfileId: string, targetProfileId: string, operationId: string): Promise<void> {
+    await this.fence.quiescePair({ sourceProfileId, targetProfileId, operationId,
+      revoke: (id) => { this.workers.revoke(id) }, stop: id => this.workers.stop(id) })
+    await this.settleExtensions(sourceProfileId, targetProfileId)
+  }
+
   private async settleExtensions(sourceProfileId: string, targetProfileId: string): Promise<void> {
     const results = await Promise.allSettled([sourceProfileId, targetProfileId]
       .flatMap(profileId => [
@@ -109,12 +156,7 @@ export class ProfileImportSessionCoordinator {
     const { source, target, uid, signal, selectedSessionIds, selectedPluginNames } = input
     signal?.throwIfAborted()
     await input.assertAuthority()
-    const [sourceInventory, targetInventory] = await Promise.all([
-      inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target, uid,
-        ...(signal ? { signal } : {}) }),
-      inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target, uid,
-        ...(signal ? { signal } : {}) }),
-    ])
+    const [sourceInventory, targetInventory] = await inspectImportPair(source, target, uid, signal)
     const preview = compareProfileImportInventory(sourceInventory, targetInventory)
     if (preview.previewDigest !== input.expectedPreviewDigest) throw new Error('profile_import_inventory_changed')
     const candidates = new Map(preview.sessions.map(row => [row.source.id, row.state]))
@@ -134,11 +176,7 @@ export class ProfileImportSessionCoordinator {
       previewDigest: preview.previewDigest, selectedSessionIds, selectedPluginNames,
       targetGeneration: targetInventory.generation, stagedGeneration: targetInventory.generation + 1,
     })
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id),
-    })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceOwnedPair(source.profileId, target.profileId, input.operationId)
     signal?.throwIfAborted()
     await input.assertAuthority()
     const fenced = await this.journal.advance(prepared, 'fenced')
@@ -165,12 +203,7 @@ export class ProfileImportSessionCoordinator {
         || JSON.stringify(plugin.record.selectedPluginNames) !== JSON.stringify(selectedPluginNames)) {
         throw Error('profile_import_plugin_publish_changed')
       }
-      const [sourceFinal, targetFinal] = await Promise.all([
-        inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target,
-          uid, ...(signal ? { signal } : {}) }),
-        inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target,
-          uid, ...(signal ? { signal } : {}) }),
-      ])
+      const [sourceFinal, targetFinal] = await inspectImportPair(source, target, uid, signal)
       if (sourceFinal.snapshotDigest !== prepared.sourceSnapshotDigest
         || targetFinal.snapshotDigest !== prepared.targetSnapshotDigest) {
         throw Error('profile_import_inventory_changed')
@@ -198,10 +231,7 @@ export class ProfileImportSessionCoordinator {
       throw new Error('profile_import_fence_missing')
     }
     if (pending) {
-      await this.fence.quiescePair({ sourceProfileId: current.sourceProfileId,
-        targetProfileId: current.targetProfileId, operationId: current.operationId,
-        revoke: id => this.workers.revoke(id), stop: id => this.workers.stop(id) })
-      await this.settleExtensions(current.sourceProfileId, current.targetProfileId)
+      await this.quiesceOwnedPair(current.sourceProfileId, current.targetProfileId, current.operationId)
     }
     const aborted = current.phase === 'aborted' ? current : await (async () => {
       await input.target.target.abortGeneration(current.stagedGeneration)
@@ -226,10 +256,7 @@ export class ProfileImportSessionCoordinator {
       const active = await target.target.inspectExistingPersistence()
       if (active.generation !== current.stagedGeneration) throw new Error('profile_import_generation_changed')
       if (this.fence.hasPendingPair(source.profileId, target.profileId, current.operationId)) {
-        await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-          operationId: current.operationId, revoke: id => this.workers.revoke(id),
-          stop: id => this.workers.stop(id) })
-        await this.settleExtensions(source.profileId, target.profileId)
+        await this.quiesceOwnedPair(source.profileId, target.profileId, current.operationId)
         const proof = await this.inspectCommitEvidence(input, ['committed'])
         if (proof.pointer !== 'staged') throw new Error('profile_import_generation_changed')
         await input.assertAuthority()
@@ -240,10 +267,7 @@ export class ProfileImportSessionCoordinator {
     if (current.phase !== 'staged' && current.phase !== 'committing') {
       throw new Error('profile_import_operation_not_committable')
     }
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: current.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id) })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceOwnedPair(source.profileId, target.profileId, current.operationId)
     if (current.phase === 'staged') {
       const proof = await this.inspectCommitEvidence(input, ['staged'])
       if (proof.pointer !== 'old') throw new Error('profile_import_generation_changed')
@@ -299,20 +323,9 @@ export class ProfileImportSessionCoordinator {
     activateCandidate: (leaseFd: number) => Promise<void>
   }>): Promise<ProfileImportOperation> {
     const { source, target, pluginPublisher } = input
-    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
-      || pluginPublisher.profileRoot !== target.profileRoot
-      || pluginPublisher.operationId !== input.operationId
-      || pluginPublisher.sourceProfileId !== source.profileId
-      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
-    await input.assertAuthority()
-    const current = await this.journal.load(input.operationId)
-    if (!current || current.sourceProfileId !== source.profileId
-      || current.targetProfileId !== target.profileId || current.selectedPluginNames.length === 0
-      || !['staged', 'committing', 'committed'].includes(current.phase)) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
+    this.assertPublisherBinding(input)
+    const current = await this.loadPluginOperation(input, ['staged', 'committing', 'committed'],
+      'profile_import_operation_not_recoverable')
     let operation: ProfileImportOperation = current
     if (current.phase === 'committed'
       && !this.fence.hasPendingPair(source.profileId, target.profileId, current.operationId)) {
@@ -330,10 +343,7 @@ export class ProfileImportSessionCoordinator {
       await input.assertAuthority()
       return current
     }
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id) })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceOwnedPair(source.profileId, target.profileId, input.operationId)
     const candidateLease = await input.candidateLease.acquireForSpawn()
     try {
       if (operation.phase === 'staged') {
@@ -452,21 +462,10 @@ export class ProfileImportSessionCoordinator {
   }>, assertCandidateStopped?: () => Promise<void>,
   assertOldCandidateStopped?: () => Promise<void>,
   restoreOldRuntime?: (oldGeneration: number, stagedGeneration: number) => Promise<void>): Promise<ProfileImportOperation> {
-    const { source, target, pluginPublisher } = input
-    if (pluginPublisher.journal !== input.pluginJournal || pluginPublisher.fence !== this.fence
-      || pluginPublisher.profileRoot !== target.profileRoot
-      || pluginPublisher.operationId !== input.operationId
-      || pluginPublisher.sourceProfileId !== source.profileId
-      || pluginPublisher.targetProfileId !== target.profileId || pluginPublisher.uid !== input.uid) {
-      throw Error('profile_import_operation_not_recoverable')
-    }
-    await input.assertAuthority()
-    const current = await this.journal.load(input.operationId)
-    if (!current || current.sourceProfileId !== source.profileId
-      || current.targetProfileId !== target.profileId || current.selectedPluginNames.length === 0
-      || !['staged', 'committing', 'aborted'].includes(current.phase)) {
-      throw Error('profile_import_operation_not_abortable')
-    }
+    const { source, target } = input
+    this.assertPublisherBinding(input)
+    const current = await this.loadPluginOperation(input, ['staged', 'committing', 'aborted'],
+      'profile_import_operation_not_abortable')
     const plugin = await inspectProfileImportPluginPublishRecovery({
       journal: input.pluginJournal, profileRoot: target.profileRoot,
       operationId: input.operationId, sourceProfileId: source.profileId,
@@ -486,10 +485,7 @@ export class ProfileImportSessionCoordinator {
       if (plugin.action !== 'rolled_back') throw Error('profile_import_plugin_publish_changed')
       return current
     }
-    await this.fence.quiescePair({ sourceProfileId: source.profileId, targetProfileId: target.profileId,
-      operationId: input.operationId, revoke: id => this.workers.revoke(id),
-      stop: id => this.workers.stop(id) })
-    await this.settleExtensions(source.profileId, target.profileId)
+    await this.quiesceOwnedPair(source.profileId, target.profileId, input.operationId)
     if (current.phase === 'staged') {
       if (plugin.action !== 'ready'
         || (await this.inspectCommitEvidence(input, ['staged'], true, true)).pointer !== 'old') {
@@ -498,24 +494,18 @@ export class ProfileImportSessionCoordinator {
     } else if (current.phase === 'committing' && plugin.action !== 'rolled_back') {
       const proof = await this.inspectCommittingWithPlugins(input)
       if (proof.pointer !== 'old'
-        && (assertCandidateStopped === undefined || proof.pointer !== 'staged'
-          || proof.pluginAction !== 'published')) {
+        && (assertCandidateStopped === undefined || proof.pluginAction !== 'published')) {
         throw Error('profile_import_generation_changed')
       }
     } else {
       if (plugin.action !== 'rolled_back') throw Error('profile_import_plugin_publish_changed')
-      const [sourceInventory, targetInventory] = await Promise.all([
-        inspectProfileImportInventory({ profileRoot: source.profileRoot, target: source.target,
-          uid: input.uid, ...(input.signal ? { signal: input.signal } : {}) }),
-        inspectProfileImportInventory({ profileRoot: target.profileRoot, target: target.target,
-          uid: input.uid, ...(input.signal ? { signal: input.signal } : {}) }),
-      ])
+      const [sourceInventory, targetInventory] = await inspectImportPair(source, target, input.uid, input.signal)
       if (sourceInventory.snapshotDigest !== current.sourceSnapshotDigest
         || targetInventory.snapshotDigest !== current.targetSnapshotDigest) {
         throw Error('profile_import_inventory_changed')
       }
     }
-    const publisher = { ...pluginPublisher, assertAuthority: input.assertAuthority,
+    const publisher = { ...input.pluginPublisher, assertAuthority: input.assertAuthority,
       assertSessionPointerOld: async () => {
         if ((await target.target.inspectExistingPersistence()).generation !== current.targetGeneration) {
           throw Error('profile_import_generation_changed')

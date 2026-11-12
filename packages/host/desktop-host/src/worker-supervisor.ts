@@ -178,7 +178,7 @@ export class ProfileWorkerSupervisor {
     assertFenced: () => void): Promise<void> {
     let adopted = false
     try {
-      await this.serial(profileId, async () => {
+      await this.serial(profileId, () => {
         if (this.closed) throw new HostAuthorityError('unavailable')
         assertFenced()
         if (this.workers.has(profileId)) throw new HostAuthorityError('conflict')
@@ -186,8 +186,8 @@ export class ProfileWorkerSupervisor {
           throw new HostAuthorityError('unavailable')
         }
         this.workers.set(profileId, worker)
-        adopted = true
       })
+      adopted = true
     } finally {
       if (!adopted) {
         worker.closeNotifications()
@@ -609,7 +609,7 @@ export class ProfileWorkerSupervisor {
     await worker.done
   }
 
-  private serial(profileId: string, operation: () => Promise<void>): Promise<void> {
+  private serial(profileId: string, operation: () => Promise<void> | void): Promise<void> {
     const previous = this.pending.get(profileId) ?? Promise.resolve()
     const current = previous.then(operation)
     // A failed start has no retained worker. Later cleanup must still run and await the same owner.
