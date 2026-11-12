@@ -1,14 +1,5 @@
 /** Fixed native projection of configured model providers; credential values never appear. */
-import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
-
-const bounded = (value: unknown, max: number): value is string => {
-  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > max) return false
-  for (const char of value) {
-    const code = char.codePointAt(0)
-    if (code === undefined || code <= 31 || code === 127) return false
-  }
-  return true
-}
+import { botBoundedVisible as bounded, botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 const providerID = (value: unknown): value is string => bounded(value, 100) &&
   /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value)
 const protocolIDs = new Set(['openai-completions', 'openai-responses', 'anthropic-messages'])

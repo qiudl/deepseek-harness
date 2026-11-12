@@ -1,14 +1,5 @@
 /** Native projection of the existing GitHub connector. Access tokens are write only. */
-import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
-
-const bounded = (value: unknown, max: number): value is string => {
-  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > max) return false
-  for (const char of value) {
-    const code = char.codePointAt(0)
-    if (code === undefined || code <= 31 || code === 127) return false
-  }
-  return true
-}
+import { botBoundedVisible as bounded, botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
 /** An empty request for the selected Profile connector status. */
 export type HostBotConnectorsRequest = Readonly<Record<string, never>>

@@ -15,6 +15,20 @@ export function botExactKeys(value: Record<string, unknown>, keys: readonly stri
   return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
 
+/** Require a nonempty Bot protocol string with bounded UTF-8 bytes and no control characters.
+ * @param value - Untrusted string value.
+ * @param max - Maximum UTF-8 byte length.
+ * @returns Whether the string satisfies the protocol bound.
+ */
+export function botBoundedVisible(value: unknown, max: number): value is string {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > max) return false
+  for (const char of value) {
+    const code = char.codePointAt(0)
+    if (code === undefined || code <= 31 || code === 127) return false
+  }
+  return true
+}
+
 /** Validate a Bot mutation target ID.
  * @param value - Untrusted target ID.
  * @returns Whether the ID has the supported characters and length.
