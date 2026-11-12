@@ -72,6 +72,7 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest, HostBotProvidersMutationRequest,
   HostBotConnectorsRequest, HostBotConnectorsMutationRequest, HostBotFeedbackRequest,
   HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
+  HostBotSecretsRequest, HostBotSecretsMutationRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
@@ -936,6 +937,20 @@ export function apply(ctx: Context, config: Config): void {
           signal.throwIfAborted()
           if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.clearLocalBotFeedback({}, signal)
+        }, async (request: HostBotSecretsMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotSecrets?: (input: Pick<HostBotSecretsMutationRequest,
+              'kind' | 'name' | 'value' | 'purpose' | 'scope'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotSecrets) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotSecrets({ kind: request.kind, name: request.name,
+            value: request.value, purpose: request.purpose, scope: request.scope }, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
@@ -1109,6 +1124,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotFeedbackLog) return null
           const value = await service.readLocalBotFeedbackLog(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotSecretsRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotSecrets?: (input: HostBotSecretsRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotSecrets) return null
+          const value = await service.readLocalBotSecrets(request)
           signal.throwIfAborted()
           return value
         })

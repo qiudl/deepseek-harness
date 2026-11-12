@@ -119,6 +119,8 @@ export { parseHostBotFeedbackLogRequest, parseHostBotFeedbackLogChunk } from './
 export type { HostBotFeedbackLogRequest, HostBotFeedbackLogChunk } from './bot-feedback-log.ts'
 export { parseHostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
 export type { HostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+export { parseHostBotSecretsRequest, parseHostBotSecrets, parseHostBotSecretsMutationRequest } from './bot-secrets.ts'
+export type { HostBotSecretsRequest, HostBotSecrets, HostBotSecretsMutationRequest } from './bot-secrets.ts'
 export type { HostBotAboutRequest, HostBotAbout } from './bot-about.ts'
 export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
 export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
