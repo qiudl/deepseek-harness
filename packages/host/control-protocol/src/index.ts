@@ -31,7 +31,7 @@ export {
   parseHostCollaborationRegistrationChallenge, parseHostCollaborationRegistrationAssertion,
   encodeHostCollaborationRegistrationSignaturePayload,
 } from './codec.js'
-export type { HostControlProtocolFailure } from './codec.js'
+export type { HostControlProtocolFailure, ProfileControlRequest } from './codec.js'
 export { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
   parseHostBotRosterPage, parseHostBotRosterTarget } from './bot-identity.js'
 export type { HostBotIdentity, HostBotIdentityV2, HostBotRosterPage } from './bot-identity.js'

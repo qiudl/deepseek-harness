@@ -112,6 +112,7 @@ import type {
   ProfileSkillHubClockWitnessRequest, ProfileSkillHubClockV2Request, ProfileSkillHubClockV2Result,
   HostSkillHubClockV2Command, HostProfileId,
   ProfileOpenLocalRequest,
+  ProfileControlRequest,
   ProfileViewActivateRequest,
   HostWorkspaceAuthorityChallenge, HostWorkspaceAuthorityAssertion, ProfileWorkspaceAuthorityRequest,
   HostCollaborationArchiveStateChallenge, HostCollaborationArchiveStateAssertion,
@@ -1245,6 +1246,36 @@ export class HostControlAuthority {
             viewLeaseId: viewLeaseId as never, leaseGeneration, runtimeGeneration, ownerId,
           })
         }
+        const importAuthority = (p: Readonly<{
+          authority_environment_id: string
+          account_binding_handle: string
+          authority_binding_version: number
+          account_issuer: string
+          account_subject: string
+          source_account_issuer: string
+          source_account_subject: string
+          source_profile_key_handle: string
+          source_unlock_material: string
+        }>, signal: AbortSignal) => {
+          const authority = {
+            authorityEnvironmentId: p.authority_environment_id,
+            accountBindingHandle: p.account_binding_handle,
+            authorityBindingVersion: p.authority_binding_version,
+            ownerId, issuer: p.account_issuer, subject: p.account_subject,
+            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
+            sourceKeyHandle: p.source_profile_key_handle,
+            sourceUnlockMaterial: p.source_unlock_material,
+          }
+          const selected = this.options.host.authorizeSlarkImportPreview(authority)
+          const recheck = () => {
+            const checked = this.options.host.authorizeSlarkImportPreview(authority)
+            if (checked.sourceProfileId !== selected.sourceProfileId
+              || checked.targetProfileId !== selected.targetProfileId) throw new HostAuthorityError('stale')
+          }
+          // oxlint-disable-next-line typescript/require-await -- the proof is synchronous; async surfaces a refusal as a rejection.
+          const assertAuthority = async () => { signal.throwIfAborted(); recheck() }
+          return { selected, assertAuthority, recheck }
+        }
         if (frame.method === 'profile.model_claim_confirm') {
           const inspectSource = this.options.inspectModelClaimSource
           if (!inspectSource || !this.options.modelClaimTransaction) throw new HostAuthorityError('upgrade_required')
@@ -1579,23 +1610,7 @@ export class HostControlAuthority {
           const list = this.options.listProfileImportStatus
           if (!list) throw new HostAuthorityError('upgrade_required')
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
-          const selected = this.options.host.authorizeSlarkImportPreview(authority)
-          const assertAuthority = async () => {
-            context.signal.throwIfAborted()
-            const checked = this.options.host.authorizeSlarkImportPreview(authority)
-            const stale = checked.sourceProfileId !== selected.sourceProfileId
-              || checked.targetProfileId !== selected.targetProfileId
-            if (stale) throw new HostAuthorityError('stale')
-          }
+          const { selected, assertAuthority } = importAuthority(p, context.signal)
           const status = await list({ ...selected, operationOffset: p.operation_offset, assertAuthority })
           await assertAuthority()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
@@ -1606,22 +1621,7 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
           || frame.method === 'profile.import_abort') {
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
-          const selected = this.options.host.authorizeSlarkImportPreview(authority)
-          const assertAuthority = async () => {
-            context.signal.throwIfAborted()
-            const checked = this.options.host.authorizeSlarkImportPreview(authority)
-            if (checked.sourceProfileId !== selected.sourceProfileId
-              || checked.targetProfileId !== selected.targetProfileId) throw new HostAuthorityError('stale')
-          }
+          const { selected, assertAuthority } = importAuthority(p, context.signal)
           const base = { ...selected, operationId: p.operation_id, assertAuthority, signal: context.signal }
           try {
             if (frame.method === 'profile.import_prepare') {
@@ -1664,16 +1664,7 @@ export class HostControlAuthority {
           const inspect = this.options.inspectProfileImport
           if (!inspect) throw new HostAuthorityError('upgrade_required')
           const p = frame.params
-          const authority = {
-            authorityEnvironmentId: p.authority_environment_id,
-            accountBindingHandle: p.account_binding_handle,
-            authorityBindingVersion: p.authority_binding_version,
-            ownerId, issuer: p.account_issuer, subject: p.account_subject,
-            sourceIssuer: p.source_account_issuer, sourceSubject: p.source_account_subject,
-            sourceKeyHandle: p.source_profile_key_handle,
-            sourceUnlockMaterial: p.source_unlock_material,
-          }
-          const selected = this.options.host.authorizeSlarkImportPreview(authority)
+          const { selected, recheck } = importAuthority(p, context.signal)
           let preview: ProfileImportPreview
           try { preview = await inspect(selected.sourceProfileId, selected.targetProfileId, context.signal) }
           catch (error) {
@@ -1685,9 +1676,8 @@ export class HostControlAuthority {
               throw new HostAuthorityError('profile_integrity_failed')
             throw error
           }
-          const checked = this.options.host.authorizeSlarkImportPreview(authority)
-          if (checked.sourceProfileId !== selected.sourceProfileId || checked.targetProfileId !== selected.targetProfileId
-            || (p.expected_preview_digest !== undefined && p.expected_preview_digest !== preview.previewDigest)) {
+          recheck()
+          if (p.expected_preview_digest !== undefined && p.expected_preview_digest !== preview.previewDigest) {
             throw new HostAuthorityError('stale')
           }
           if (p.session_offset > preview.sessions.length || p.plugin_offset > preview.plugins.length) {
@@ -6158,48 +6148,7 @@ export class UnixHostClient {
   }
 
   private async call(
-    request: ProfileRecoveryMaterialsDescribeRequest | ProfileRecoveryMaterialsValidateRequest
-      | ProfileExtensionsRequest | ProfileRemoteSessionRequest | ProfileRemoteUiReadRequest
-      | ProfileRemoteUiStreamRequest | ProfileModelClaimInventoryRequest
-      | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
-      | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest
-      | ProfileModelClaimRecoveryInventoryRequest
-      | ProfileModelClaimRetryRequest
-      | ProfileStatusRequest | ProfileEnsureRequest | ProfileRestoreRequest
-      | ProfileBootstrapLocalRequest | ProfileRestoreLocalRequest
-      | ProfileOpenRequest | ProfileOpenLocalRequest | ProfileSkillHubBindingRequest
-      | ProfileSkillHubBotMessageActorRequest
-      | ProfileSkillHubPackageChunkRequest | ProfileSkillHubPackageRequest
-      | ProfileSkillHubPackageSnapshotRequest | ProfileSkillHubExecutionReceiptRequest
-      | ProfileSkillHubClockWitnessRequest
-      | ProfileSkillHubClockV2Request
-      | ProfileRecoveryInspectRequest | ProfileRecoverOfflineAccountRequest
-      | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest | ProfileImportPreviewRequest
-      | ProfileImportStatusRequest
-      | ProfileImportPrepareRequest | ProfileImportCommitRequest | ProfileImportAbortRequest
-      | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
-      | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request
-      | ProfileTwinBindingRequest | ProfileBotRosterRequest
-      | ProfileNativeRoomRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
-      | ProfileBotGroupDeliverRequest
-      | ProfileBotGroupStopRequest
-      | ProfileBotGroupResultPageRequest
-      | ProfileBotGroupResultAckRequest
-  | ProfileWorkspaceAuthorityRequest
-  | ProfileCollaborationArchiveStateRequest
-  | ProfileGroupInputFenceRequest
-  | ProfileCollaborationArchiveIntentRequest
-  | ProfileCollaborationArchiveTransitionRequest
-  | ProfileSourceAuthorityRequest
-  | ProfileReferenceAuthorityRequest
-  | ProfileReferenceCaptureRequest
-  | ProfileReferenceContentRequest
-  | ProfileRootJournalRequest
-  | ProfileRootPlanningAttemptAuthorityRequest
-  | ProfileRootAuthorityRequest
-      | ProfileCollaborationAnalysisRequest | ProfileSourceSnapshotRequest
-      | ProfileCollaborationDeliveryRequest
-      | ProfileModelTextRequest | ProfileLeaseCloseRequest
+    request: ProfileControlRequest
       | MigrationExistingSourceInventoryRequest
       | MigrationExportInventoryRequest | MigrationExportBeginRequest | MigrationExportReadRequest
       | MigrationImportStageRequest | MigrationImportStatusRequest | MigrationImportVerifyRequest

@@ -17,10 +17,12 @@ vi.mock('../src/plugin-runtime-ack.ts', () => ({ waitForPluginRuntime: vi.fn() }
 function fixture() {
   let resolveDone!: () => void
   const done = new Promise<void>((resolve) => { resolveDone = resolve })
+  const closeNotifications = vi.fn()
+  const abort = vi.fn(() => { resolveDone() })
   const worker: ProfileWorkerHandle = {
     viewOrigin: 'http://127.0.0.1:43123', generation: 1,
     bootstrapCookie: { name: 'fixture', value: 'private' }, done,
-    closeNotifications: vi.fn(), abort: vi.fn(() => resolveDone()),
+    closeNotifications, abort,
   }
   const createImportCandidate = vi.fn(async () => worker)
   const adoptImportCandidate = vi.fn(async () => undefined)
@@ -32,11 +34,11 @@ function fixture() {
     pluginRoots: ['/tmp/test-import-target/plugins'], selectedPluginNames: ['@deepseek-ai/dsh-tools'],
     dshEntrypointPath: '/tmp/dsh-cli.js', leaseFd: 3, assertFenced: vi.fn(),
   }
-  return { input, worker, createImportCandidate, adoptImportCandidate, dispose }
+  return { input, worker, createImportCandidate, adoptImportCandidate, dispose, closeNotifications, abort }
 }
 
 it('adopts a live candidate only after selected plugins report active', async () => {
-  const { input, worker, createImportCandidate, adoptImportCandidate } = fixture()
+  const { input, worker, createImportCandidate, adoptImportCandidate, abort } = fixture()
   vi.mocked(waitForPluginRuntime).mockResolvedValueOnce()
   await activateProfileImportCandidate(input)
   expect(createImportCandidate).toHaveBeenCalledWith(expect.objectContaining({
@@ -46,16 +48,16 @@ it('adopts a live candidate only after selected plugins report active', async ()
     bootstrapCookie: worker.bootstrapCookie },
   [{ entryId: 'include:tools', moduleName: '@deepseek-ai/dsh-tools' }], expect.any(AbortSignal))
   expect(adoptImportCandidate).toHaveBeenCalledWith('target', worker, input.assertFenced)
-  expect(worker.abort).not.toHaveBeenCalled()
+  expect(abort).not.toHaveBeenCalled()
 })
 
 it('stops a candidate whose plugin runtime fails before adoption', async () => {
-  const { input, worker, adoptImportCandidate } = fixture()
+  const { input, adoptImportCandidate, closeNotifications, abort } = fixture()
   vi.mocked(waitForPluginRuntime).mockRejectedValueOnce(Error('plugin_startup_failed'))
   await expect(activateProfileImportCandidate(input)).rejects.toThrow('plugin_startup_failed')
   expect(adoptImportCandidate).not.toHaveBeenCalled()
-  expect(worker.closeNotifications).toHaveBeenCalledOnce()
-  expect(worker.abort).toHaveBeenCalledOnce()
+  expect(closeNotifications).toHaveBeenCalledOnce()
+  expect(abort).toHaveBeenCalledOnce()
 })
 
 it('stops a candidate that exits before plugin readiness', async () => {

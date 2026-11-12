@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { cp, lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { isAbsolute, join, relative } from 'node:path'
+import { readStableOwnerFile } from './private-file-io.ts'
 import { inspectProfileImportPluginComposition } from './profile-import-plugin-composition.ts'
 import { type ProfileImportTargetResolutionEvidence } from './profile-import-plugin-target-resolution.ts'
 
@@ -48,12 +49,7 @@ async function fingerprint(root: string, uid: number, exactRoot: boolean): Promi
       if (!before.isFile() || before.uid !== BigInt(uid) || before.size !== BigInt(stat.size)) {
         throw Error('profile_import_plugin_publish_unsafe')
       }
-      const bytes = await handle.readFile()
-      const after = await handle.stat({ bigint: true })
-      if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
-        || before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) {
-        throw Error('profile_import_plugin_publish_changed')
-      }
+      const bytes = await readStableOwnerFile(handle, before, () => Error('profile_import_plugin_publish_changed'))
       rows.push([name, 'file', stat.mode & 0o777, stat.size,
         createHash('sha256').update(bytes).digest('hex')])
     } finally { await handle.close() }

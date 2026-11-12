@@ -36,8 +36,10 @@ export async function activateProfileImportCandidate(input: Readonly<{
     profileRoot: input.profileRoot, credentialHandle: input.credentialHandle,
     pluginRoots: input.pluginRoots, env: {} }, input.leaseFd)
   let adopted = false
-  let exited = false
-  void worker.done.then(() => { exited = true }, () => { exited = true })
+  // The worker can exit during either await below, so each check reads the closure-owned flag again.
+  const workerExit = { exited: false }
+  const hasExited = (): boolean => workerExit.exited
+  void worker.done.then(() => { workerExit.exited = true }, () => { workerExit.exited = true })
   try {
     if (!worker.viewOrigin || !worker.bootstrapCookie) throw Error('profile_import_candidate_view_missing')
     await Promise.race([
@@ -48,11 +50,11 @@ export async function activateProfileImportCandidate(input: Readonly<{
       }),
     ])
     input.signal?.throwIfAborted()
-    if (exited) throw Error('profile_import_candidate_exited')
+    if (hasExited()) throw Error('profile_import_candidate_exited')
     input.assertFenced()
     await input.workers.adoptImportCandidate(input.profileId, worker, input.assertFenced)
     adopted = true
-    if (exited) throw Error('profile_import_candidate_exited')
+    if (hasExited()) throw Error('profile_import_candidate_exited')
     input.assertFenced()
   } catch (error) {
     if (adopted) await input.workers.dispose(input.profileId).catch(() => undefined)

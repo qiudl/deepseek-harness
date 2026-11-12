@@ -1836,7 +1836,25 @@ export function parseHostCollaborationAnalysisResult(value: unknown): HostCollab
   return { kind: 'output', json_base64url: row.json_base64url, ...(attested ? { analysis_receipt: parseHostCollaborationAnalysisReceipt(row.analysis_receipt) } : {}) }
 }
 
-function decodeProfileRequest(frame: Record<string, unknown>):
+/** Decode the import authority identity every Profile import request carries. */
+function importIdentity(params: Record<string, unknown>) {
+  return {
+    ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
+    account_binding_handle: opaqueHandle(params.account_binding_handle),
+    authority_binding_version: generation(params.authority_binding_version),
+    account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
+    source_account_issuer: accountIssuer(params.source_account_issuer),
+    source_account_subject: boundedText(params.source_account_subject, 512),
+    source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
+    source_unlock_material: unlockMaterial(params.source_unlock_material),
+  }
+}
+
+/**
+ * Every Profile control request this codec decodes. The Host transport accepts these plus its
+ * Migration requests, so the Profile set has one home here.
+ */
+export type ProfileControlRequest =
   | ProfileSkillHubBindingRequest
   | ProfileSkillHubBotMessageActorRequest
   | ProfileSkillHubPackageChunkRequest
@@ -1884,7 +1902,9 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileRemoteUiStreamRequest
   | ProfileModelClaimInventoryRequest | ProfileModelClaimConfirmRequest | ProfileModelClaimApplyRequest
   | ProfileModelClaimRecoveryInventoryRequest
-  | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest {
+  | ProfileModelClaimRecoveryStatusRequest | ProfileModelClaimRestoreRequest | ProfileModelClaimRetryRequest
+
+function decodeProfileRequest(frame: Record<string, unknown>): ProfileControlRequest {
   exactKeys(frame, ['version', 'type', 'request_id', 'method', 'params'])
   const params = record(frame.params)
   const requestId = uuid(frame.request_id) as HostControlRequestId
@@ -2427,14 +2447,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'source_unlock_material', 'session_offset', 'plugin_offset',
       ...(Object.hasOwn(params, 'expected_preview_digest') ? ['expected_preview_digest'] : [])])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_preview', params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
+      ...importIdentity(params),
       session_offset: nonnegative(params.session_offset), plugin_offset: nonnegative(params.plugin_offset),
       ...(Object.hasOwn(params, 'expected_preview_digest')
         ? { expected_preview_digest: digest(params.expected_preview_digest) } : {}),
@@ -2445,15 +2458,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'authority_binding_version', 'account_issuer', 'account_subject', 'source_account_issuer',
       'source_account_subject', 'source_profile_key_handle', 'source_unlock_material', 'operation_offset'])
     return { version: 1, type: 'request', request_id: requestId, method: 'profile.import_status', params: {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
-      operation_offset: nonnegative(params.operation_offset),
+      ...importIdentity(params), operation_offset: nonnegative(params.operation_offset),
     } }
   }
   if (frame.method === 'profile.import_prepare' || frame.method === 'profile.import_commit'
@@ -2463,17 +2468,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       'authority_binding_version', 'account_issuer', 'account_subject', 'source_account_issuer',
       'source_account_subject', 'source_profile_key_handle', 'source_unlock_material', 'operation_id',
       ...(prepare ? ['expected_preview_digest', 'selected_session_ids', 'selected_plugin_names'] : [])])
-    const identity = {
-      ...authorized(params), authority_environment_id: uuid(params.authority_environment_id) as HostAuthorityEnvironmentId,
-      account_binding_handle: opaqueHandle(params.account_binding_handle),
-      authority_binding_version: generation(params.authority_binding_version),
-      account_issuer: accountIssuer(params.account_issuer), account_subject: boundedText(params.account_subject, 512),
-      source_account_issuer: accountIssuer(params.source_account_issuer),
-      source_account_subject: boundedText(params.source_account_subject, 512),
-      source_profile_key_handle: opaqueHandle(params.source_profile_key_handle),
-      source_unlock_material: unlockMaterial(params.source_unlock_material),
-      operation_id: uuid(params.operation_id),
-    }
+    const identity = { ...importIdentity(params), operation_id: uuid(params.operation_id) }
     if (prepare) {
       if (!Array.isArray(params.selected_session_ids) || params.selected_session_ids.length > 1000
         || !Array.isArray(params.selected_plugin_names) || params.selected_plugin_names.length > 128
@@ -3137,7 +3132,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
       return { id: boundedText(item.id, 512), created_at: nonnegative(item.created_at),
         ...(Object.hasOwn(item, 'parent_session') ? { parent_session: boundedText(item.parent_session, 512) } : {}),
         event_count: nonnegative(item.event_count), source_digest: digest(item.source_digest),
-        state: item.state as 'new' | 'same' | 'conflict',
+        state: item.state,
         ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }
     })
     const plugins = result.plugins.map((value) => {
@@ -3148,7 +3143,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
       if (item.state !== 'new' && item.state !== 'same' && item.state !== 'conflict') reject()
       return { name: boundedText(item.name, 214),
         version: item.version === null ? null : boundedText(item.version, 128),
-        source_digest: digest(item.source_digest), state: item.state as 'new' | 'same' | 'conflict',
+        source_digest: digest(item.source_digest), state: item.state,
         ...(Object.hasOwn(item, 'target_version') ? {
           target_version: item.target_version === null ? null : boundedText(item.target_version, 128) } : {}),
         ...(Object.hasOwn(item, 'target_digest') ? { target_digest: digest(item.target_digest) } : {}) }
