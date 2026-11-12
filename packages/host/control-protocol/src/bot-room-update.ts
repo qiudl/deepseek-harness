@@ -5,7 +5,7 @@ import { parseHostBotRoomDetails, type HostBotRoomDetails } from './bot-room-det
 
 /** Only one group setting changes per command. */
 export type HostBotRoomUpdateChange =
-  | { readonly kind: 'name' | 'notice' | 'reply-mode' | 'member-add' | 'member-remove'; readonly value: string }
+  | { readonly kind: 'name' | 'notice' | 'reply-mode' | 'member-add' | 'member-remove' | 'member-stop'; readonly value: string }
   | { readonly kind: 'relay-limit'; readonly value: number | null }
   | { readonly kind: 'permission' | 'admin'; readonly value: string | null }
 /** No Account/Profile selector; expectedRevision prevents silently overwriting newer team state. */
@@ -45,7 +45,7 @@ export function parseHostBotRoomUpdateRequest(value: unknown): HostBotRoomUpdate
   else if (kind === 'permission' && (setting === null || textValid(setting, 200, true)))
     change = { kind, value: setting }
   else if (kind === 'admin' && (setting === null || botIdValid(setting))) change = { kind, value: setting }
-  else if ((kind === 'member-add' || kind === 'member-remove') && botIdValid(setting))
+  else if ((kind === 'member-add' || kind === 'member-remove' || kind === 'member-stop') && botIdValid(setting))
     change = { kind, value: setting }
   else throw Error('invalid_bot_room_update')
   return { roomId: value.roomId as HostBotRoomId, expectedRevision: value.expectedRevision, change }
@@ -63,7 +63,8 @@ export function parseHostBotRoomUpdateReceipt(value: unknown, request: HostBotRo
     !Number.isSafeInteger(value.revision) || value.revision < request.expectedRevision ||
     (value.state !== 'applied' && value.state !== 'stale') ||
     (value.state === 'stale' && value.details !== null) ||
-    (value.state === 'applied' && value.revision <= request.expectedRevision))
+    (value.state === 'applied' && value.revision <= request.expectedRevision &&
+      request.change.kind !== 'member-stop'))
     throw Error('invalid_bot_room_update_receipt')
   let details: HostBotRoomDetails | null = null
   if (value.state === 'applied') {

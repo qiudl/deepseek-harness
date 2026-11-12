@@ -29,4 +29,13 @@ describe('fixed owner Bot room update contract', () => {
       expect(() => parseHostBotRoomUpdateReceipt({ roomId: 'room-1', revision: 8,
         state: 'applied', details, ...patch }, parsed)).toThrow('invalid_bot_room_update_receipt')
   })
+  it('accepts a stop request without a settings revision change', () => {
+    const parsed = parseHostBotRoomUpdateRequest({ ...request,
+      change: { kind: 'member-stop', value: 'main' } })
+    expect(parseHostBotRoomUpdateReceipt({ roomId: 'room-1', revision: 7,
+      state: 'applied', details: { ...details, revision: 7 } }, parsed)?.state).toBe('applied')
+    expect(() => parseHostBotRoomUpdateReceipt({ roomId: 'room-1', revision: 7,
+      state: 'applied', details: { ...details, revision: 7 } },
+    parseHostBotRoomUpdateRequest(request))).toThrow('invalid_bot_room_update_receipt')
+  })
 })
