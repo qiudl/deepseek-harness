@@ -44,6 +44,7 @@ import { parseHostBotRoomMemory, parseHostBotRoomMemoryRequest } from '@deepseek
 import { parseHostBotSchedules, parseHostBotSchedulesRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotScheduleHistory, parseHostBotScheduleHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAbout } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotUsage, parseHostBotUsageRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -554,6 +555,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiBotSchedulesSupported?: boolean
   readonly remoteUiBotScheduleHistorySupported?: boolean
   readonly remoteUiBotAboutSupported?: boolean
+  readonly remoteUiBotUsageSupported?: boolean
   readonly remoteUiBotFoldersSupported?: boolean
   readonly remoteUiBotAvatarSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
@@ -723,7 +725,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2144,6 +2146,7 @@ export class HostControlAuthority {
               || (frame.params.endpoint === 'bot/schedules' && !this.options.remoteUiBotSchedulesSupported)
               || (frame.params.endpoint === 'bot/schedule-history' && !this.options.remoteUiBotScheduleHistorySupported)
               || (frame.params.endpoint === 'bot/about' && !this.options.remoteUiBotAboutSupported)
+              || (frame.params.endpoint === 'bot/usage' && !this.options.remoteUiBotUsageSupported)
               || (frame.params.endpoint === 'bot/folders' && !this.options.remoteUiBotFoldersSupported)
               || (frame.params.endpoint === 'bot/avatar' && !this.options.remoteUiBotAvatarSupported)
               || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
@@ -2170,6 +2173,8 @@ export class HostControlAuthority {
               parseHostBotScheduleHistory(value, parseHostBotScheduleHistoryRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/about')
               parseHostBotAbout(value)
+            if (frame.params.endpoint === 'bot/usage')
+              parseHostBotUsage(value, parseHostBotUsageRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/folders')
               parseHostBotFolders(value, parseHostBotFoldersRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/avatar')
@@ -3257,6 +3262,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead && this.options.remoteUiBotSchedulesSupported ? ['profile.remote_ui_read.bot_schedules'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotScheduleHistorySupported ? ['profile.remote_ui_read.bot_schedule_history'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAboutSupported ? ['profile.remote_ui_read.bot_about'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotUsageSupported ? ['profile.remote_ui_read.bot_usage'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotFoldersSupported ? ['profile.remote_ui_read.bot_folders'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAvatarSupported ? ['profile.remote_ui_read.bot_avatar'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
@@ -3464,6 +3470,8 @@ export class UnixHostClient {
   readonly remoteUiBotScheduleHistorySupported = true
   /** This SDK validates fixed updater status for the native About page. */
   readonly remoteUiBotAboutSupported = true
+  /** This SDK validates bounded native Bot usage pages. */
+  readonly remoteUiBotUsageSupported = true
   /** This SDK validates bounded owner Host directory reads. */
   readonly remoteUiBotFoldersSupported = true
   /** This SDK validates bounded owner Bot avatar chunks. */
@@ -6034,6 +6042,8 @@ export class UnixHostClient {
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_schedule_history' as HostControlCapability))
       || (input.endpoint === 'bot/about'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_about' as HostControlCapability))
+      || (input.endpoint === 'bot/usage'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_usage' as HostControlCapability))
       || (input.endpoint === 'bot/folders'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_folders' as HostControlCapability))
       || (input.endpoint === 'bot/avatar'
