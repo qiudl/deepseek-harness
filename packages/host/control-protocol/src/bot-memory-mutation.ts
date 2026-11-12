@@ -10,6 +10,7 @@ const target = (value: Record<string, unknown>): boolean =>
   value.targetKind === 'bot' ? botId(value.targetId) && value.targetId === value.ownerBotId :
     value.targetKind === 'room' && sessionId(value.targetId)
 
+/** An exact owner command for Bot or room memory. */
 export type HostBotMemoryMutationRequest =
   | { readonly mode: 'ask'
     readonly ownerBotId: string
@@ -34,6 +35,7 @@ export type HostBotMemoryMutationRequest =
     readonly targetKind: 'bot' | 'room'
     readonly targetId: string }
 
+/** The bounded durable result of a memory command. */
 export interface HostBotMemoryMutationReceipt {
   readonly requestId: string
   readonly operation: 'ask' | 'forget' | null
@@ -50,7 +52,10 @@ export interface HostBotMemoryMutationReceipt {
   readonly truncated: boolean
 }
 
-/** Validate a single user-directed memory operation and its exact target. */
+/** Validate a single user-directed memory operation and its exact target.
+ * @param value Untrusted IPC payload.
+ * @returns Validated memory mutation request.
+ */
 export function parseHostBotMemoryMutationRequest(value: unknown): HostBotMemoryMutationRequest {
   if (!record(value) || !botId(value.ownerBotId) || !sessionId(value.sessionId) ||
     !uuid(value.requestId) || !target(value)) throw Error('invalid_bot_memory_mutation')
@@ -69,7 +74,11 @@ export function parseHostBotMemoryMutationRequest(value: unknown): HostBotMemory
   throw Error('invalid_bot_memory_mutation')
 }
 
-/** Correlate a DS Bot receipt without admitting private journal or model data. */
+/** Correlate a DS Bot receipt without admitting private journal or model data.
+ * @param value Untrusted Host result.
+ * @param request The command this result must match.
+ * @returns A validated receipt, or null when no result is available.
+ */
 export function parseHostBotMemoryMutationReceipt(value: unknown,
   request: HostBotMemoryMutationRequest): HostBotMemoryMutationReceipt | null {
   if (value === null) return null

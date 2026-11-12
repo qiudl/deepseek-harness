@@ -3426,6 +3426,7 @@ export class UnixHostClient {
   readonly remoteBotRoomSupported = true
   /** This SDK can encode fixed owner room settings edits. */
   readonly remoteBotRoomUpdateSupported = true
+  /** This SDK accepts native owner room mirror commands. */
   readonly remoteBotChannelMirrorMutationSupported = true
   /** This Desktop supports revision-checked Bot profile edits. */
   readonly remoteBotSettingsUpdateSupported = true
@@ -3437,6 +3438,7 @@ export class UnixHostClient {
   readonly remoteBotCreateSupported = true
   /** This SDK accepts durable native Bot schedule mutations and result queries. */
   readonly remoteBotScheduleMutationSupported = true
+  /** This SDK accepts native Bot and room memory commands. */
   readonly remoteBotMemoryMutationSupported = true
   /** This SDK accepts durable native Bot update installs and result queries. */
   readonly remoteBotUpdateMutationSupported = true

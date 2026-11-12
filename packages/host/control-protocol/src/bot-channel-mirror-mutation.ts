@@ -6,6 +6,7 @@ const ROOM = /^session-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const TICKET = /^[A-Za-z0-9_-]{43}$/u
 const CONFIRMATION = new RegExp(`^${UUID.source.slice(1, -1)}\\.${UUID.source.slice(1, -1)}$`, 'u')
 
+/** An exact owner command to start, finish, or unbind a room mirror. */
 export type HostBotChannelMirrorMutationRequest =
   | { readonly kind: 'start'
     readonly roomId: string
@@ -16,6 +17,7 @@ export type HostBotChannelMirrorMutationRequest =
     readonly roomId: string
     readonly requestId: string }
 
+/** The bounded state and confirmation code returned for a mirror command. */
 export type HostBotChannelMirrorMutationReceipt = Readonly<{
   roomId: string
   requestId: string
@@ -24,6 +26,10 @@ export type HostBotChannelMirrorMutationReceipt = Readonly<{
   confirmationCode?: string
 }>
 
+/** Validate the exact owner command.
+ * @param value Untrusted IPC payload.
+ * @returns Validated mirror mutation request.
+ */
 export function parseHostBotChannelMirrorMutationRequest(value: unknown): HostBotChannelMirrorMutationRequest {
   if (!row(value) || !ROOM.test(value.roomId as string) || !UUID.test(value.requestId as string) ||
     !['start', 'finish', 'unbind'].includes(value.kind as string))
@@ -44,6 +50,11 @@ export function parseHostBotChannelMirrorMutationRequest(value: unknown): HostBo
     requestId: value.requestId as string }
 }
 
+/** Validate a result against its originating owner command.
+ * @param value Untrusted Host result.
+ * @param request The command this result must match.
+ * @returns A validated receipt, or null when no result is available.
+ */
 export function parseHostBotChannelMirrorMutationReceipt(value: unknown,
   request: HostBotChannelMirrorMutationRequest): HostBotChannelMirrorMutationReceipt | null {
   if (value === null) return null
