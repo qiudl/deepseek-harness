@@ -28,4 +28,11 @@ describe('fixed owner Bot room details', () => {
       expect(() => parseHostBotRoomDetails({ ...value, permissionChoices }, request))
         .toThrow('invalid_bot_room_details_result')
   })
+  it('accepts a bounded Channel mirror status without a credential', () => {
+    const mirror = { state: 'active', target: { projectId: 'project-1', channelId: 'channel-1',
+      defaultAgentId: 'agent-1' }, groupGap: 2, channelGap: 0, pauseReason: null }
+    expect(parseHostBotRoomDetails({ ...value, channelMirror: mirror }, request)?.channelMirror).toEqual(mirror)
+    expect(() => parseHostBotRoomDetails({ ...value,
+      channelMirror: { ...mirror, credential: 'secret' } }, request)).toThrow('invalid_bot_room_details_result')
+  })
 })
