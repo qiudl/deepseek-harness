@@ -171,6 +171,22 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/schedule-history', { args: { ...args, account: 'other' } }, signal))
       .rejects.toThrow('invalid_bot_schedule_history_request')
   })
+  it('reads fixed native About state through its dedicated updater reader', async () => {
+    const invoke = vi.fn()
+    const page = { bot: { name: 'ds-bot', current: '0.2.24', latest: null, source: 'git',
+      notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0, phase: 'idle',
+      installed: null, error: null, available: false }, dsh: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/about', { args: { fresh: true } }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith({ fresh: true }, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/about', { args: { fresh: true, profile: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_about_request')
+  })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()
     const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,

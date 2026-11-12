@@ -68,7 +68,7 @@ import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
-  HostBotScheduleHistoryRequest,
+  HostBotScheduleHistoryRequest, HostBotAboutRequest,
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -942,6 +942,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotScheduleHistory) return null
           const value = await service.readLocalBotScheduleHistory(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAboutRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAbout?: (input: HostBotAboutRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAbout) return null
+          const value = await service.readLocalBotAbout(request)
           signal.throwIfAborted()
           return value
         })

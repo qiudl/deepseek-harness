@@ -12,12 +12,13 @@ import { parseHostBotMemory, parseHostBotMemoryRequest, type HostBotMemoryReques
 import { parseHostBotRoomMemory, parseHostBotRoomMemoryRequest, type HostBotRoomMemoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSchedules, parseHostBotSchedulesRequest, type HostBotSchedulesRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotScheduleHistory, parseHostBotScheduleHistoryRequest, type HostBotScheduleHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAbout, parseHostBotAboutRequest, type HostBotAboutRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFolders, parseHostBotFoldersRequest, type HostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest, type HostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/folders', 'bot/avatar', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/folders', 'bot/avatar', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -42,7 +43,8 @@ export class DesktopRemoteUiExecutor {
     private readonly readBotMemory?: (request: HostBotMemoryRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotRoomMemory?: (request: HostBotRoomMemoryRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotSchedules?: (request: HostBotSchedulesRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly readBotScheduleHistory?: (request: HostBotScheduleHistoryRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly readBotScheduleHistory?: (request: HostBotScheduleHistoryRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotAbout?: (request: HostBotAboutRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -129,6 +131,14 @@ export class DesktopRemoteUiExecutor {
       const value = await this.readBotScheduleHistory(request, signal)
       signal.throwIfAborted()
       return parseHostBotScheduleHistory(value, request)
+    }
+    if (endpoint === 'bot/about') {
+      const request = parseHostBotAboutRequest(payload.args)
+      if (!this.readBotAbout) throw Error('desktop remote UI: Bot About reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotAbout(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAbout(value)
     }
     if (endpoint === 'bot/folders') {
       const request = parseHostBotFoldersRequest(payload.args)

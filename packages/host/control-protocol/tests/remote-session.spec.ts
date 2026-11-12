@@ -336,6 +336,11 @@ describe('Profile remote UI read wire commands', () => {
     expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
     expect(() => decode(readFrame('bot/schedule-history', { args: { ...args, profile: 'other' } }))).toThrow()
   })
+  it('round-trips only an exact native About refresh choice', () => {
+    const frame = readFrame('bot/about', { args: { fresh: true } })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/about', { args: { fresh: true, profileId: 'other' } }))).toThrow()
+  })
   it('round-trips only an exact native Bot folder selector', () => {
     const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
