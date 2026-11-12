@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseHostBotProviders, parseHostBotProvidersRequest,
-  parseHostBotProvidersMutationRequest } from '../src/bot-providers.js'
+  parseHostBotProvidersMutationRequest, parseHostBotProviderDiscovery } from '../src/bot-providers.js'
 
 const view = { available: true,
   providers: [{ id: 'deepseek', name: 'DeepSeek',
@@ -40,5 +40,12 @@ describe('native provider directory boundary', () => {
       value: { ...custom.value, baseURL: 'file:///etc/passwd' } })).toThrow()
     expect(() => parseHostBotProvidersMutationRequest({ ...custom,
       value: { ...custom.value, models: ['m1', 'm1'] } })).toThrow()
+    const discovery = { ...custom, kind: 'discover',
+      value: { ...custom.value, models: [] } }
+    expect(parseHostBotProvidersMutationRequest(discovery)).toEqual(discovery)
+    expect(parseHostBotProviderDiscovery({ models: [{ id: 'm1', name: 'Model One' }] }))
+      .toEqual({ models: [{ id: 'm1', name: 'Model One' }] })
+    expect(() => parseHostBotProviderDiscovery({ models: [{ id: 'm1', name: 'One' },
+      { id: 'm1', name: 'Two' }] })).toThrow()
   })
 })

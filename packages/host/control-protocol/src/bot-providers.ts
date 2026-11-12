@@ -10,7 +10,7 @@ export type HostBotProvidersRequest = Readonly<Record<string, never>>
 export type HostBotProvidersMutationRequest = Readonly<{
   botId: string
   sessionId: string
-  kind: 'key-set' | 'key-clear' | 'add-known' | 'add-custom' | 'remove'
+  kind: 'key-set' | 'key-clear' | 'add-known' | 'add-custom' | 'discover' | 'remove'
   provider: string
   value: string | null | Readonly<{
     name: string
@@ -36,6 +36,9 @@ export type HostBotProviders = Readonly<{
   protocols: readonly string[]
 }>
 
+/** Bounded model choices discovered from a custom provider without any credential value. */
+export type HostBotProviderDiscovery = Readonly<{ models: readonly Readonly<{ id: string; name: string }>[] }>
+
 /**
  * Validate the bot providers request at the native Host boundary.
  * @param value - Untrusted payload to validate.
@@ -60,6 +63,7 @@ export function parseHostBotProvidersMutationRequest(value: unknown): HostBotPro
   if (value.kind === 'key-set' && credential(value.value) ||
     value.kind === 'add-known' && (value.value === null || credential(value.value)) ||
     value.kind === 'add-custom' && customProvider(value.value) ||
+    value.kind === 'discover' && customProvider(value.value, true) ||
     (value.kind === 'key-clear' || value.kind === 'remove') && value.value === null)
     return { botId: value.botId, sessionId: value.sessionId, kind: value.kind,
       provider: value.provider, value: value.value }
@@ -69,16 +73,36 @@ export function parseHostBotProvidersMutationRequest(value: unknown): HostBotPro
 const credential = (value: unknown): value is string => bounded(value, 8192) &&
   /^[!-~]+$/u.test(value)
 
-function customProvider(value: unknown): value is Exclude<HostBotProvidersMutationRequest['value'], string | null> {
+function customProvider(value: unknown, discover = false): value is Exclude<HostBotProvidersMutationRequest['value'], string | null> {
   if (!record(value) || !exact(value, ['name', 'baseURL', 'api', 'key', 'models']) ||
     typeof value.name !== 'string' || Buffer.byteLength(value.name, 'utf8') > 80 ||
     typeof value.baseURL !== 'string' || value.baseURL.length > 4096 ||
     !protocolIDs.has(value.api as string) || !(value.key === null || credential(value.key)) ||
-    !Array.isArray(value.models) || value.models.length < 1 || value.models.length > 100 ||
+    !Array.isArray(value.models) || value.models.length < (discover ? 0 : 1) || value.models.length > 100 ||
     value.models.some((id: unknown) => !bounded(id, 200)) ||
-    new Set(value.models).size !== value.models.length) return false
+    new Set(value.models).size !== value.models.length || discover && value.models.length !== 0) return false
   try { const url = new URL(value.baseURL); return url.protocol === 'http:' || url.protocol === 'https:' }
   catch { return false }
+}
+
+/** Validate a credential-free model discovery response from the selected Profile.
+ * @param value - Untrusted Profile worker result.
+ * @returns Bounded model choices or null when the worker is unavailable.
+ */
+export function parseHostBotProviderDiscovery(value: unknown): HostBotProviderDiscovery | null {
+  if (value === null) return null
+  if (!record(value) || !exact(value, ['models']) || !Array.isArray(value.models) ||
+    value.models.length > 100 || Buffer.byteLength(JSON.stringify(value), 'utf8') > 40_000)
+    throw Error('invalid_bot_provider_discovery')
+  const seen = new Set<string>()
+  const models = value.models.map((entry: unknown) => {
+    if (!record(entry) || !exact(entry, ['id', 'name']) ||
+      !bounded(entry.id, 200) || !bounded(entry.name, 256) || seen.has(entry.id))
+      throw Error('invalid_bot_provider_discovery')
+    seen.add(entry.id)
+    return { id: entry.id, name: entry.name }
+  })
+  return { models }
 }
 
 /**

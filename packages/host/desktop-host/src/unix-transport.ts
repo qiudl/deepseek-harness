@@ -46,7 +46,7 @@ import { parseHostBotScheduleHistory, parseHostBotScheduleHistoryRequest } from 
 import { parseHostBotAbout } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotUsage, parseHostBotUsageRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGeneralSettings, parseHostBotGeneralSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotProviders, parseHostBotProvidersRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotProviders, parseHostBotProviderDiscovery, parseHostBotProvidersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotConnectors, parseHostBotConnectorsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFeedback, parseHostBotFeedbackRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotFeedbackClearRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -2160,7 +2160,10 @@ export class HostControlAuthority {
             if (botChannelMirrorMutation) parseHostBotChannelMirrorMutationReceipt(value, command.request)
             if (botSettingsUpdate) parseHostBotSettingsUpdateReceipt(value, command.request)
             if (botGeneralSettingsUpdate) parseHostBotGeneralSettingsUpdateResult(value)
-            if (botProvidersMutation) parseHostBotProviders(value)
+            if (command.operation === 'bot.providers.mutate') {
+              if (command.request.kind === 'discover') parseHostBotProviderDiscovery(value)
+              else parseHostBotProviders(value)
+            }
             if (botConnectorsMutation) parseHostBotConnectors(value)
             if (botSecretsMutation) parseHostBotSecrets(value)
             if (botCapabilityLibraryMutation) parseHostBotCapabilities(value)
@@ -6117,8 +6120,10 @@ export class UnixHostClient {
       parseHostBotSettingsUpdateReceipt(value, input.command.request)
     if (input.command.operation === 'bot.general.update')
       parseHostBotGeneralSettingsUpdateResult(value)
-    if (input.command.operation === 'bot.providers.mutate')
-      parseHostBotProviders(value)
+    if (input.command.operation === 'bot.providers.mutate') {
+      if (input.command.request.kind === 'discover') parseHostBotProviderDiscovery(value)
+      else parseHostBotProviders(value)
+    }
     if (input.command.operation === 'bot.connectors.mutate')
       parseHostBotConnectors(value)
     if (input.command.operation === 'bot.feedback.clear') {

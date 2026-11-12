@@ -105,9 +105,9 @@ export { parseHostBotGeneralSettingsRequest, parseHostBotGeneralSettings,
   parseHostBotGeneralSettingsUpdateRequest, parseHostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
 export type { HostBotGeneralSettingsRequest, HostBotGeneralSettings,
   HostBotGeneralSettingsUpdateRequest, HostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
-export { parseHostBotProvidersRequest, parseHostBotProviders,
+export { parseHostBotProvidersRequest, parseHostBotProviders, parseHostBotProviderDiscovery,
   parseHostBotProvidersMutationRequest } from './bot-providers.ts'
-export type { HostBotProvidersRequest, HostBotProviders,
+export type { HostBotProvidersRequest, HostBotProviders, HostBotProviderDiscovery,
   HostBotProvidersMutationRequest } from './bot-providers.ts'
 export { parseHostBotConnectorsRequest, parseHostBotConnectors,
   parseHostBotConnectorsMutationRequest } from './bot-connectors.ts'
