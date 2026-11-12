@@ -36,6 +36,7 @@ import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './type
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
 import { parseHostBotRoomSubmission } from './bot-room-submission.ts'
 import { parseHostBotRoomUpdateRequest } from './bot-room-update.ts'
+import { parseHostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
@@ -777,6 +778,14 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.room.update') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotRoomUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.roomId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.channel-mirror.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotChannelMirrorMutationRequest(command.request)
     const session_id = remoteIdentifier(command.session_id)
     if (session_id !== request.roomId) reject()
     return { operation: command.operation, command_id, session_id,

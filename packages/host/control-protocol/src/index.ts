@@ -84,6 +84,10 @@ export { parseHostBotRoomHistoryRequest, parseHostBotRoomHistory } from './bot-r
 export type { HostBotRoomHistoryRequest, HostBotRoomHistory } from './bot-room-history.ts'
 export { parseHostBotRoomDetailsRequest, parseHostBotRoomDetails } from './bot-room-details.ts'
 export type { HostBotRoomDetailsRequest, HostBotRoomDetails } from './bot-room-details.ts'
+export { parseHostBotChannelMirrorMutationRequest,
+  parseHostBotChannelMirrorMutationReceipt } from './bot-channel-mirror-mutation.ts'
+export type { HostBotChannelMirrorMutationRequest,
+  HostBotChannelMirrorMutationReceipt } from './bot-channel-mirror-mutation.ts'
 export { parseHostBotSettingsRequest, parseHostBotSettings } from './bot-settings.ts'
 export type { HostBotSettingsRequest, HostBotSettings } from './bot-settings.ts'
 export { parseHostBotMemoryRequest, parseHostBotMemory } from './bot-memory.ts'

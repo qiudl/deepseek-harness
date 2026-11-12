@@ -13,6 +13,8 @@ import { parseHostBotRoomSubmission, parseHostBotRoomReceipt,
   type HostBotRoomSubmission } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
   type HostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChannelMirrorMutationRequest, parseHostBotChannelMirrorMutationReceipt,
+  type HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDeleteRequest, parseHostBotDeleteReceipt, type HostBotDeleteRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt, type HostBotDuplicateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotCreateRequest, parseHostBotCreateReceipt, type HostBotCreateRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -72,6 +74,7 @@ function roomDetailsJson(details: HostBotRoomDetails): HostRemoteSessionJson {
       defaultPreset: details.permissionChoices.defaultPreset,
     }, adminBotId: details.adminBotId,
     members: details.members.map(member => ({ botId: member.botId, displayName: member.displayName })),
+    ...(details.channelMirror === undefined ? {} : { channelMirror: details.channelMirror }),
   }
 }
 
@@ -133,6 +136,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly mutateBotUpdate?: (request: HostBotUpdateMutationRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly mutateBotMemory?: (request: HostBotMemoryMutationRequest,
+      signal: AbortSignal) => Promise<unknown>,
+    private readonly mutateBotChannelMirror?: (request: HostBotChannelMirrorMutationRequest,
       signal: AbortSignal) => Promise<unknown>) {}
 
   /**
@@ -143,7 +148,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -271,6 +276,16 @@ export class DesktopRemoteSessionExecutor {
         const receipt = parseHostBotRoomUpdateReceipt(value, request)
         return receipt === null ? null : { roomId: receipt.roomId, revision: receipt.revision,
           state: receipt.state, details: receipt.details === null ? null : roomDetailsJson(receipt.details) }
+      }
+      case 'bot.channel-mirror.mutate': {
+        signal.throwIfAborted()
+        const request = parseHostBotChannelMirrorMutationRequest(command.request)
+        if (command.session_id !== request.roomId) throw Error('desktop Channel mirror: Room mismatch')
+        if (!this.mutateBotChannelMirror) return null
+        const value = await this.mutateBotChannelMirror(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotChannelMirrorMutationReceipt(value, request)
+        return receipt === null ? null : { ...receipt }
       }
       case 'bot.room.send':
       case 'bot.room.receipt': {

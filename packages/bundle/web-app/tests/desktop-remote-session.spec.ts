@@ -24,6 +24,28 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('runs a native Channel mirror mutation under room control and rejects substituted receipts', async () => {
+    const roomId = 'session-11111111-1111-4111-8111-111111111111'
+    const request = { kind: 'start' as const, roomId, requestId: randomUUID(),
+      endpoint: 'https://slark.test', ticket: 't'.repeat(43) }
+    const confirmationCode = `${randomUUID()}.${randomUUID()}`
+    const result = { kind: 'start', roomId, requestId: request.requestId,
+      state: 'awaiting_confirmation', confirmationCode }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, roomId)
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, mutate)
+    const command = { operation: 'bot.channel-mirror.mutate' as const,
+      command_id: randomUUID() as never, session_id: roomId, control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, credential: 'secret' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_channel_mirror_mutation_receipt')
+  })
   it('runs a memory question under the controlled Bot Session and validates its receipt', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')

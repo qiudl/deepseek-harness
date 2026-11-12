@@ -72,7 +72,7 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
-  HostBotMemoryMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotMemoryMutationRequest, HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -872,6 +872,14 @@ export function apply(ctx: Context, config: Config): void {
             ownerBotId, requestId, targetKind, targetId, text: request.text }, signal)
           return service.forgetLocalBotMemory({ ownerBotId, requestId, targetKind,
             targetId, scope: request.scope, topic: request.topic, text: request.text }, signal)
+        }, async (request: HostBotChannelMirrorMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            mutateLocalBotChannelMirror?: (input: HostBotChannelMirrorMutationRequest,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.mutateLocalBotChannelMirror) return null
+          return service.mutateLocalBotChannelMirror(request, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

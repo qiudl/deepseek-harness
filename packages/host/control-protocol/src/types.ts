@@ -4,6 +4,7 @@ import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './tas
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
+import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
 import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import type { HostBotDeleteRequest } from './bot-delete.ts'
 import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
@@ -2105,6 +2106,11 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly request: HostBotRoomUpdateRequest }
+  | { readonly operation: 'bot.channel-mirror.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotChannelMirrorMutationRequest }
   | { readonly operation: 'bot.room.send'
     readonly command_id: HostControlRequestId
     readonly session_id: string
