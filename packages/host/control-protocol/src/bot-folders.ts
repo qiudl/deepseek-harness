@@ -75,9 +75,13 @@ export function parseHostBotFolders(value: unknown, request: HostBotFoldersReque
     Array.isArray(value.folders) && value.folders.length <= 100 &&
     value.folders.every(folder => record(folder) && exact(folder, ['path', 'title']) &&
       fullPath(folder.path) && bounded(folder.title, 256)) && typeof value.truncated === 'boolean') {
+    const folders = value.folders.map((folder: unknown) => {
+      if (!record(folder) || !fullPath(folder.path) || !bounded(folder.title, 256))
+        throw Error('invalid_bot_folders_result')
+      return { path: folder.path, title: folder.title }
+    })
     return { botId: request.botId, kind: 'places', team: value.team,
-      canBrowse: value.canBrowse, folders: value.folders.map(folder => ({
-        path: folder.path, title: folder.title })), truncated: value.truncated }
+      canBrowse: value.canBrowse, folders, truncated: value.truncated }
   }
   if (request.path !== null && value.kind === 'browse' &&
     exact(value, ['botId', 'kind', 'path', 'home', 'crumbs', 'entries', 'truncated']) &&
@@ -85,10 +89,13 @@ export function parseHostBotFolders(value: unknown, request: HostBotFoldersReque
     value.crumbs.length <= 64 && value.crumbs.every(entry) &&
     Array.isArray(value.entries) && value.entries.length <= 100 &&
     value.entries.every(entry) && typeof value.truncated === 'boolean') {
+    const parseEntry = (folder: unknown): HostBotFolderEntry => {
+      if (!entry(folder)) throw Error('invalid_bot_folders_result')
+      return { name: folder.name, path: folder.path, hidden: folder.hidden }
+    }
     return { botId: request.botId, kind: 'browse', path: value.path, home: value.home,
-      crumbs: value.crumbs.map(folder => ({ name: folder.name, path: folder.path,
-        hidden: folder.hidden })), entries: value.entries.map(folder => ({
-        name: folder.name, path: folder.path, hidden: folder.hidden })),
+      crumbs: value.crumbs.map((folder: unknown) => parseEntry(folder)),
+      entries: value.entries.map((folder: unknown) => parseEntry(folder)),
       truncated: value.truncated }
   }
   throw Error('invalid_bot_folders_result')

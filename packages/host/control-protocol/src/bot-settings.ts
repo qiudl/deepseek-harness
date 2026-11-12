@@ -65,19 +65,23 @@ export function parseHostBotSettings(value: unknown, request: HostBotSettingsReq
     typeof value.isMain !== 'boolean' || typeof value.isPrimary !== 'boolean' ||
     (value.isPrimary && !value.isMain) || typeof value.pinned !== 'boolean' ||
     typeof value.hidden !== 'boolean' || !Array.isArray(value.capabilityChoices) ||
-    value.capabilityChoices.length > 1000 || !value.capabilityChoices.every(item => record(item) &&
-      exact(item, ['name', 'kind', 'description', 'attached']) &&
-      typeof item.name === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(item.name) &&
-      item.name.length <= 32 && item.name !== 'github' &&
-      (item.kind === 'mcp' || item.kind === 'skill' || item.kind === 'pack') &&
-      bounded(item.description, 8000) && typeof item.attached === 'boolean') ||
-    new Set(value.capabilityChoices.map(item => item.name)).size !== value.capabilityChoices.length)
+    value.capabilityChoices.length > 1000)
+    throw Error('invalid_bot_settings_result')
+  const capabilityChoices: HostBotCapabilityChoice[] = value.capabilityChoices.map((item: unknown) => {
+    if (!record(item) || !exact(item, ['name', 'kind', 'description', 'attached']) ||
+      typeof item.name !== 'string' || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(item.name) ||
+      item.name.length > 32 || item.name === 'github' ||
+      (item.kind !== 'mcp' && item.kind !== 'skill' && item.kind !== 'pack') ||
+      !bounded(item.description, 8000) || typeof item.attached !== 'boolean')
+      throw Error('invalid_bot_settings_result')
+    return { name: item.name, kind: item.kind, description: item.description, attached: item.attached }
+  })
+  if (new Set(capabilityChoices.map(item => item.name)).size !== capabilityChoices.length)
     throw Error('invalid_bot_settings_result')
   return { botId: request.botId, revision: value.revision, name: value.name,
     role: value.role, instructions: value.instructions, color: value.color,
     avatarShape: value.avatarShape, hasAvatarImage: value.hasAvatarImage,
     model: value.model, appliedModel: value.appliedModel, effort: value.effort, workDir: value.workDir,
     isMain: value.isMain, isPrimary: value.isPrimary, pinned: value.pinned, hidden: value.hidden,
-    capabilityChoices: value.capabilityChoices.map(item => ({ name: item.name, kind: item.kind,
-      description: item.description, attached: item.attached })) }
+    capabilityChoices }
 }
