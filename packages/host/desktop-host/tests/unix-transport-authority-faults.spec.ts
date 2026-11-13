@@ -534,7 +534,7 @@ describe('Unix transport authority failures', () => {
       payload: { args: { roomId: 'room-1', afterSeq: 0, limit: 1 } } }
     const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
       truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
-        authorRef: 'design', kind: null, text: 'plan', time: null }], nextCursor: null }
+        authorRef: 'design', kind: null, text: 'plan', time: null, attachments: [] }], nextCursor: null }
     const execute = vi.fn(async (): Promise<unknown> => page)
     const old = await authorityClient({ remoteUiRead: execute })
     await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })

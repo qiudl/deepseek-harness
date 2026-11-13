@@ -54,7 +54,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const invoke = vi.fn()
     const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
       truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
-        authorRef: 'design', kind: null, text: 'plan', time: null }], nextCursor: null }
+        authorRef: 'design', kind: null, text: 'plan', time: null, attachments: [] }], nextCursor: null }
     const read = vi.fn(async (): Promise<unknown> => page)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined, undefined, read)
     const signal = new AbortController().signal
