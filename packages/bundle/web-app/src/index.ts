@@ -1193,10 +1193,10 @@ export function apply(ctx: Context, config: Config): void {
         }, async (request: HostBotAttachmentDownloadReadRequest, signal) => {
           signal.throwIfAborted()
           const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
-            readLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadReadRequest) => Promise<unknown>
+            readLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadReadRequest, signal: AbortSignal) => Promise<unknown>
           }
           if (!service?.readLocalBotAttachmentDownload) return null
-          const value = await service.readLocalBotAttachmentDownload(request)
+          const value = await service.readLocalBotAttachmentDownload(request, signal)
           signal.throwIfAborted()
           return value
         })
