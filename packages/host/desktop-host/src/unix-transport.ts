@@ -2127,8 +2127,7 @@ export class HostControlAuthority {
             const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
             const botAttachment = command.operation === 'bot.attachment.send' || command.operation === 'bot.attachment.receipt'
             const botRoom = command.operation === 'bot.room.send' || command.operation === 'bot.room.receipt'
-            const botRoomFiles = botRoom && 'request' in command && command.request !== null &&
-              typeof command.request === 'object' && 'files' in command.request
+            const botRoomFiles = botRoom && 'request' in command && 'files' in command.request
             const botRoomUpdate = command.operation === 'bot.room.update'
             const botChannelMirrorMutation = command.operation === 'bot.channel-mirror.mutate'
             const botSettingsUpdate = command.operation === 'bot.settings.update'
