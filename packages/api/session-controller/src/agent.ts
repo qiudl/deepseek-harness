@@ -205,16 +205,19 @@ export class ApiSessionAgentController {
   /**
    * Resolve one ordinary Session from an already-retained exact observation.
    * @param observation - Host-owned observation whose preparation stays pinned through setup.
+   * @param signal - optional cancellation for the background activation owner.
    * @returns the live Agent or a stable Session-domain failure.
    */
-  async resolveObservedAgent(observation: SessionObservation): Promise<ApiSessionAgentResult> {
-    return this.resolve(observation.header.id, observation)
+  async resolveObservedAgent(observation: SessionObservation, signal?: AbortSignal): Promise<ApiSessionAgentResult> {
+    return this.resolve(observation.header.id, observation, signal)
   }
 
   private async resolve(
     sessionId: SessionId,
     observation?: SessionObservation,
+    signal?: AbortSignal,
   ): Promise<ApiSessionAgentResult> {
+    signal?.throwIfAborted()
     const live = this.liveAgent(sessionId)
     if (live !== undefined) return live
     const attached = this.ctx.sessions.get(sessionId)
@@ -224,7 +227,7 @@ export class ApiSessionAgentController {
 
     let resume = this.resumes.get(sessionId)
     if (resume === undefined) {
-      resume = this.resume(sessionId, observation).finally(() => { this.resumes.delete(sessionId) })
+      resume = this.resume(sessionId, observation, signal).finally(() => { this.resumes.delete(sessionId) })
       this.resumes.set(sessionId, resume)
     }
     try {
@@ -376,11 +379,12 @@ export class ApiSessionAgentController {
       : { agent }
   }
 
-  private async resume(sessionId: SessionId, supplied?: SessionObservation): Promise<Agent> {
-    if (supplied !== undefined) return this.resumeObserved(sessionId, supplied)
+  private async resume(sessionId: SessionId, supplied?: SessionObservation, signal?: AbortSignal): Promise<Agent> {
+    if (supplied !== undefined) return this.resumeObserved(sessionId, supplied, signal)
     try {
-      using observation = await this.ctx.sessionQuery.observeSession(sessionId)
-      return await this.resumeObserved(sessionId, observation)
+      using observation = await this.ctx.sessionQuery.observeSession(sessionId,
+        signal === undefined ? {} : { signal })
+      return await this.resumeObserved(sessionId, observation, signal)
     } catch (error: unknown) {
       if (error instanceof SessionQueryError
         && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
@@ -393,7 +397,9 @@ export class ApiSessionAgentController {
   private async resumeObserved(
     sessionId: SessionId,
     observation: SessionObservation,
+    signal?: AbortSignal,
   ): Promise<Agent> {
+    signal?.throwIfAborted()
     if (observation.header.id !== sessionId || observation.header.cwd === undefined) {
       throw new ApiSessionNotFound(`session "${sessionId}" not found`)
     }
@@ -401,6 +407,7 @@ export class ApiSessionAgentController {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
     const composition = await this.composeAgent(this.presetForObservation(observation))
+    signal?.throwIfAborted()
     const published = this.ctx.sessions.get(sessionId)
     const live = this.ctx.agents.get(sessionId)
     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
@@ -410,6 +417,7 @@ export class ApiSessionAgentController {
       resumeSessionId: sessionId,
       agentOptions: this.agentOptions(),
       setup: composition.setup,
+      ...(signal === undefined ? {} : { signal }),
     })).agent
   }
 
