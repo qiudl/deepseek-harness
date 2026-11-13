@@ -13,7 +13,11 @@ const MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 
 function digest(bytes: Buffer): string { return createHash('sha256').update(bytes).digest('hex') }
 
-async function checkedBytes(path: string, uid: number, maximum: number): Promise<Buffer> {
+/** Read bounded owner-verified plugin bytes through a stable, non-following file handle.
+ * @param path Exact package file. @param uid Required inode owner. @param maximum Maximum bytes.
+ * @returns Bytes whose inode, permissions, length and modification evidence remained stable.
+ */
+export async function checkedBytes(path: string, uid: number, maximum: number): Promise<Buffer> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
   try {
     const before = await handle.stat()

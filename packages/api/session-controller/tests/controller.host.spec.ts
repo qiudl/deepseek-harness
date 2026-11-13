@@ -305,4 +305,55 @@ describe('SessionController facade', () => {
     await disposal
     await expect(waiting).resolves.toMatchObject({ done: true })
   })
+
+  it('cancels a stalled background promotion when the controller unloads', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = SessionId('background-cancel-on-unload')
+    const header: SessionHeader = {
+      version: SESSION_FORMAT_VERSION, id: sessionId, createdAt: 1, cwd: '/workspace', isSeeded: false,
+    }
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([header]),
+      inspect: () => Promise.resolve({ meta: header, inheritedEventCount: SessionLogOffset(0), events: [] }),
+    }) as never)
+    const controller = await createSessionTestController(ctx, defaults)
+    const agents = Reflect.get(controller, 'agents') as ApiSessionAgentController
+    const started = Promise.withResolvers<undefined>()
+    const release = Promise.withResolvers<undefined>()
+    let observedSignal: AbortSignal | undefined
+    vi.spyOn(agents, 'resolveObservedAgent').mockImplementation(async (_observation, signal) => {
+      started.resolve(undefined)
+      observedSignal = signal
+      await Promise.race([
+        release.promise,
+        new Promise<void>((resolve) => {
+          signal?.addEventListener('abort', () => { resolve() }, { once: true })
+        }),
+      ])
+      return { error: new RemoteError('gateway/internal', 'promotion cancelled', {}) }
+    })
+    const iterator = controller.follow({
+      address: { kind: 'session', sessionId }, activate: true,
+    }, new AbortController().signal)[Symbol.asyncIterator]()
+    await expect(iterator.next()).resolves.toMatchObject({ value: { type: 'snapshot' } })
+    const waiting = iterator.next()
+    await started.promise
+    const disposal = ctx.fiber.dispose()
+    try {
+      await expect(Promise.race([
+        disposal.then(() => 'disposed'),
+        new Promise<string>((resolve) => {
+          setTimeout(() => { resolve('stalled') }, 250)
+        }),
+      ])).resolves.toBe('disposed')
+      expect(observedSignal?.aborted).toBe(true)
+    } finally {
+      release.resolve(undefined)
+      await disposal
+      await waiting
+    }
+  })
 })
