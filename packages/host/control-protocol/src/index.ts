@@ -138,6 +138,10 @@ export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'
 export type { HostBotAvatarRequest, HostBotAvatarChunk } from './bot-avatar.ts'
 export { parseHostBotAttachmentPreviewRequest, parseHostBotAttachmentPreview } from './bot-attachment-preview.ts'
 export type { HostBotAttachmentPreviewRequest, HostBotAttachmentPreviewChunk } from './bot-attachment-preview.ts'
+export { parseHostBotAttachmentDownloadOpenRequest, parseHostBotAttachmentDownloadOpen,
+  parseHostBotAttachmentDownloadReadRequest, parseHostBotAttachmentDownloadChunk } from './bot-attachment-download.ts'
+export type { HostBotAttachmentDownloadOpenRequest, HostBotAttachmentDownloadOpen,
+  HostBotAttachmentDownloadReadRequest, HostBotAttachmentDownloadChunk } from './bot-attachment-download.ts'
 export { parseHostBotAttachmentSubmission, parseHostBotAttachmentReceipt } from './bot-attachment-submission.ts'
 export type { HostBotAttachmentSubmission, HostBotAttachmentReceipt } from './bot-attachment-submission.ts'
 export { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt } from './bot-settings-update.ts'

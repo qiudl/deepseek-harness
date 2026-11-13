@@ -327,6 +327,35 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/attachment-preview', { args }, signal))
       .rejects.toThrow('invalid_bot_attachment_preview_result')
   })
+  it('opens a message-bound original Bot attachment and validates each byte chunk', async () => {
+    const invoke = vi.fn()
+    const args = { botId: 'main', sessionId: 'own-main', eventSeq: 7,
+      attachmentId: `sha256:${'a'.repeat(64)}` }
+    const transferId = '11111111-1111-4111-8111-111111111111'
+    const open = vi.fn(async (): Promise<unknown> => ({ transferId,
+      attachmentId: args.attachmentId, name: 'source.bin', bytes: 3 }))
+    const read = vi.fn(async (): Promise<unknown> => ({ transferId, offset: 0,
+      bytes: 3, chunk: Buffer.from('abc').toString('base64'), hasMore: false }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, open, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/attachment-download-open', { args }, signal))
+      .resolves.toEqual(await open())
+    await expect(executor.execute('bot/attachment-download-read',
+      { args: { transferId, offset: 0 } }, signal)).resolves.toEqual(await read())
+    expect(invoke).not.toHaveBeenCalled()
+    open.mockResolvedValueOnce({ transferId, attachmentId: args.attachmentId,
+      name: '../secret', bytes: 3 })
+    await expect(executor.execute('bot/attachment-download-open', { args }, signal))
+      .rejects.toThrow('invalid_bot_attachment_download_result')
+    read.mockResolvedValueOnce({ transferId, offset: 0, bytes: 3, chunk: '!', hasMore: false })
+    await expect(executor.execute('bot/attachment-download-read',
+      { args: { transferId, offset: 0 } }, signal)).rejects.toThrow('invalid_bot_attachment_download_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)

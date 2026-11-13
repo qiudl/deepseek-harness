@@ -58,6 +58,8 @@ import { parseHostBotGeneralSettingsUpdateResult } from '@deepseek-ai/dsh-host-c
 import { parseHostBotFolders, parseHostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAvatar, parseHostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAttachmentPreview, parseHostBotAttachmentPreviewRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAttachmentDownloadOpenRequest, parseHostBotAttachmentDownloadOpen,
+  parseHostBotAttachmentDownloadReadRequest, parseHostBotAttachmentDownloadChunk } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettingsUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDeleteReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotDuplicateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -583,6 +585,7 @@ export interface UnixHostServerOptions {
   readonly remoteUiBotFoldersSupported?: boolean
   readonly remoteUiBotAvatarSupported?: boolean
   readonly remoteUiBotAttachmentPreviewSupported?: boolean
+  readonly remoteUiBotAttachmentDownloadSupported?: boolean
   /** Advertise whole-asset gzip chunks only when the Profile worker implements them. */
   readonly remoteUiAssetGzipSupported?: boolean
   /** Advertise source-side history fragmentation only when the worker implements it. */
@@ -750,7 +753,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiBotAttachmentDownloadSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2204,6 +2207,8 @@ export class HostControlAuthority {
               || (frame.params.endpoint === 'bot/folders' && !this.options.remoteUiBotFoldersSupported)
               || (frame.params.endpoint === 'bot/avatar' && !this.options.remoteUiBotAvatarSupported)
               || (frame.params.endpoint === 'bot/attachment-preview' && !this.options.remoteUiBotAttachmentPreviewSupported)
+              || ((frame.params.endpoint === 'bot/attachment-download-open' || frame.params.endpoint === 'bot/attachment-download-read')
+                && !this.options.remoteUiBotAttachmentDownloadSupported)
               || (frame.params.endpoint === 'asset/read-gzip-chunk' && !this.options.remoteUiAssetGzipSupported)) {
               throw new HostAuthorityError('upgrade_required')
             }
@@ -2264,6 +2269,10 @@ export class HostControlAuthority {
               parseHostBotAvatar(value, parseHostBotAvatarRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/attachment-preview')
               parseHostBotAttachmentPreview(value, parseHostBotAttachmentPreviewRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/attachment-download-open')
+              parseHostBotAttachmentDownloadOpen(value, parseHostBotAttachmentDownloadOpenRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/attachment-download-read')
+              parseHostBotAttachmentDownloadChunk(value, parseHostBotAttachmentDownloadReadRequest(frame.params.payload.args))
           }
           if (authority() !== profileId) throw new HostAuthorityError('profile_mismatch')
           const response: HostControlFrame = { version: 1, type: 'result', request_id: frame.request_id,
@@ -3364,6 +3373,7 @@ export class HostControlAuthority {
           ...(this.options.remoteUiRead && this.options.remoteUiBotFoldersSupported ? ['profile.remote_ui_read.bot_folders'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAvatarSupported ? ['profile.remote_ui_read.bot_avatar'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotAttachmentPreviewSupported ? ['profile.remote_ui_read.bot_attachment_preview'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotAttachmentDownloadSupported ? ['profile.remote_ui_read.bot_attachment_download'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiAssetGzipSupported ? ['profile.remote_ui_asset_gzip'] : []),
           ...(this.options.remoteUiStream ? ['profile.remote_ui_stream',
             'profile.remote_ui_stream.workspace', 'profile.remote_ui_stream.events', 'profile.remote_ui_stream.session_list', 'profile.remote_ui_stream.workbench_read', 'profile.remote_ui_stream.terminal',
@@ -3603,6 +3613,8 @@ export class UnixHostClient {
   readonly remoteUiBotAvatarSupported = true
   /** This SDK validates message-bound Bot attachment previews. */
   readonly remoteUiBotAttachmentPreviewSupported = true
+  /** This SDK validates message-bound original Bot attachment chunks. */
+  readonly remoteUiBotAttachmentDownloadSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
   /** This SDK accepts opted-in history fragments; the current Host must also advertise its signed capability. */
@@ -6232,6 +6244,8 @@ export class UnixHostClient {
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_avatar' as HostControlCapability))
       || (input.endpoint === 'bot/attachment-preview'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_attachment_preview' as HostControlCapability))
+      || ((input.endpoint === 'bot/attachment-download-open' || input.endpoint === 'bot/attachment-download-read')
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_attachment_download' as HostControlCapability))
       || (input.endpoint === 'asset/read-gzip-chunk'
         && !this.inspection.capabilities.includes('profile.remote_ui_asset_gzip' as HostControlCapability))) {
       throw new HostAuthorityError('upgrade_required')

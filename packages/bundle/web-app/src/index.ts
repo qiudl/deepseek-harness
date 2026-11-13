@@ -74,7 +74,9 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
   HostBotSecretsRequest, HostBotSecretsMutationRequest,
   HostBotCapabilitiesRequest, HostBotCapabilitiesMutationRequest,
-  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest, HostBotAttachmentSubmission, HostBotDeleteRequest,
+  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest,
+  HostBotAttachmentDownloadOpenRequest, HostBotAttachmentDownloadReadRequest,
+  HostBotAttachmentSubmission, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
   HostBotMemoryMutationRequest, HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -1177,6 +1179,24 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotAttachmentPreview) return null
           const value = await service.readLocalBotAttachmentPreview(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentDownloadOpenRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            openLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadOpenRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.openLocalBotAttachmentDownload) return null
+          const value = await service.openLocalBotAttachmentDownload(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentDownloadReadRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadReadRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAttachmentDownload) return null
+          const value = await service.readLocalBotAttachmentDownload(request)
           signal.throwIfAborted()
           return value
         })
