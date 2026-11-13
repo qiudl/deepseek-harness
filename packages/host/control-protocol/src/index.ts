@@ -84,8 +84,68 @@ export { parseHostBotRoomHistoryRequest, parseHostBotRoomHistory } from './bot-r
 export type { HostBotRoomHistoryRequest, HostBotRoomHistory } from './bot-room-history.ts'
 export { parseHostBotRoomDetailsRequest, parseHostBotRoomDetails } from './bot-room-details.ts'
 export type { HostBotRoomDetailsRequest, HostBotRoomDetails } from './bot-room-details.ts'
+export { parseHostBotChannelMirrorMutationRequest,
+  parseHostBotChannelMirrorMutationReceipt } from './bot-channel-mirror-mutation.ts'
+export type { HostBotChannelMirrorMutationRequest,
+  HostBotChannelMirrorMutationReceipt } from './bot-channel-mirror-mutation.ts'
 export { parseHostBotSettingsRequest, parseHostBotSettings } from './bot-settings.ts'
 export type { HostBotSettingsRequest, HostBotSettings } from './bot-settings.ts'
+export { parseHostBotMemoryRequest, parseHostBotMemory } from './bot-memory.ts'
+export { parseHostBotRoomMemoryRequest, parseHostBotRoomMemory } from './bot-room-memory.ts'
+export type { HostBotRoomMemoryRequest, HostBotRoomMemory, HostBotRoomMemoryEntry } from './bot-room-memory.ts'
+export type { HostBotMemoryRequest, HostBotMemory, HostBotMemoryEntry } from './bot-memory.ts'
+export { parseHostBotSchedulesRequest, parseHostBotSchedules } from './bot-schedules.ts'
+export type { HostBotSchedulesRequest, HostBotSchedules, HostBotSchedule } from './bot-schedules.ts'
+export { parseHostBotScheduleHistoryRequest, parseHostBotScheduleHistory } from './bot-schedule-history.ts'
+export type { HostBotScheduleHistoryRequest, HostBotScheduleHistory } from './bot-schedule-history.ts'
+export { parseHostBotAboutRequest, parseHostBotAbout } from './bot-about.ts'
+export { parseHostBotUsageRequest, parseHostBotUsage } from './bot-usage.ts'
+export type { HostBotUsageRequest, HostBotUsage, HostBotUsageRow } from './bot-usage.ts'
+export { parseHostBotGeneralSettingsRequest, parseHostBotGeneralSettings,
+  parseHostBotGeneralSettingsUpdateRequest, parseHostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
+export type { HostBotGeneralSettingsRequest, HostBotGeneralSettings,
+  HostBotGeneralSettingsUpdateRequest, HostBotGeneralSettingsUpdateResult } from './bot-general-settings.ts'
+export { parseHostBotProvidersRequest, parseHostBotProviders, parseHostBotProviderDiscovery,
+  parseHostBotProvidersMutationRequest } from './bot-providers.ts'
+export type { HostBotProvidersRequest, HostBotProviders, HostBotProviderDiscovery,
+  HostBotProvidersMutationRequest } from './bot-providers.ts'
+export { parseHostBotConnectorsRequest, parseHostBotConnectors,
+  parseHostBotConnectorsMutationRequest } from './bot-connectors.ts'
+export type { HostBotConnectorsRequest, HostBotConnectors,
+  HostBotConnectorsMutationRequest } from './bot-connectors.ts'
+export { parseHostBotFeedbackRequest, parseHostBotFeedback } from './bot-feedback.ts'
+export type { HostBotFeedbackRequest, HostBotFeedback } from './bot-feedback.ts'
+export { parseHostBotFeedbackLogRequest, parseHostBotFeedbackLogChunk } from './bot-feedback-log.ts'
+export type { HostBotFeedbackLogRequest, HostBotFeedbackLogChunk } from './bot-feedback-log.ts'
+export { parseHostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+export type { HostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+export { parseHostBotSecretsRequest, parseHostBotSecrets, parseHostBotSecretsMutationRequest } from './bot-secrets.ts'
+export type { HostBotSecretsRequest, HostBotSecrets, HostBotSecretsMutationRequest } from './bot-secrets.ts'
+export { parseHostBotCapabilitiesRequest, parseHostBotCapabilities,
+  parseHostBotCapabilitiesMutationRequest } from './bot-capabilities.ts'
+export type { HostBotCapabilitiesRequest, HostBotCapabilities,
+  HostBotCapabilitiesMutationRequest } from './bot-capabilities.ts'
+export type { HostBotAboutRequest, HostBotAbout } from './bot-about.ts'
+export { parseHostBotScheduleMutationRequest, parseHostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
+export type { HostBotScheduleMutationRequest, HostBotScheduleMutationReceipt } from './bot-schedule-mutation.ts'
+export { parseHostBotUpdateMutationRequest, parseHostBotUpdateMutationReceipt } from './bot-update-mutation.ts'
+export type { HostBotUpdateMutationRequest, HostBotUpdateMutationReceipt } from './bot-update-mutation.ts'
+export { parseHostBotMemoryMutationRequest, parseHostBotMemoryMutationReceipt } from './bot-memory-mutation.ts'
+export type { HostBotMemoryMutationRequest, HostBotMemoryMutationReceipt } from './bot-memory-mutation.ts'
+export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.ts'
+export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
+export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'
+export type { HostBotAvatarRequest, HostBotAvatarChunk } from './bot-avatar.ts'
+export { parseHostBotAttachmentPreviewRequest, parseHostBotAttachmentPreview } from './bot-attachment-preview.ts'
+export type { HostBotAttachmentPreviewRequest, HostBotAttachmentPreviewChunk } from './bot-attachment-preview.ts'
+export { parseHostBotAttachmentDownloadOpenRequest, parseHostBotAttachmentDownloadOpen,
+  parseHostBotAttachmentDownloadReadRequest, parseHostBotAttachmentDownloadChunk } from './bot-attachment-download.ts'
+export type { HostBotAttachmentDownloadOpenRequest, HostBotAttachmentDownloadOpen,
+  HostBotAttachmentDownloadReadRequest, HostBotAttachmentDownloadChunk } from './bot-attachment-download.ts'
+export { parseHostBotAttachmentSubmission, parseHostBotAttachmentReceipt } from './bot-attachment-submission.ts'
+export type { HostBotAttachmentSubmission, HostBotAttachmentReceipt } from './bot-attachment-submission.ts'
+export { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt } from './bot-settings-update.ts'
+export type { HostBotSettingsUpdateRequest, HostBotSettingsUpdateReceipt, HostBotSettingsUpdateChange } from './bot-settings-update.ts'
 export { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,
   parseHostBotRoomCreateReceipt, parseHostBotRoomDeleteReceipt } from './bot-room-lifecycle.ts'
 export type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest,
@@ -93,7 +153,7 @@ export type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest,
 export { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt } from './bot-room-update.ts'
 export type { HostBotRoomUpdateRequest, HostBotRoomUpdateReceipt, HostBotRoomUpdateChange } from './bot-room-update.ts'
 export { parseHostBotRoomSubmission, parseHostBotRoomReceipt } from './bot-room-submission.ts'
-export type { HostBotRoomSubmission, HostBotRoomReceipt, HostBotRoomSubmissionId } from './bot-room-submission.ts'
+export type { HostBotRoomSubmission, HostBotRoomAttachment, HostBotRoomReceipt, HostBotRoomSubmissionId } from './bot-room-submission.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
@@ -397,3 +457,10 @@ export type { RuntimeEntryAnalysisCommand, RuntimeEntryOriginCommand, RuntimeEnt
 
 export { parseHostRuntimeEntryOriginsConfiguration, parseHostRuntimeEntryOriginsJson } from './runtime-entry-bootstrap.ts'
 export type { HostRuntimeEntryOriginsConfiguration } from './runtime-entry-bootstrap.ts'
+
+export { parseHostBotDeleteRequest, parseHostBotDeleteReceipt } from './bot-delete.ts'
+export type { HostBotDeleteRequest, HostBotDeleteReceipt } from './bot-delete.ts'
+export { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt } from './bot-duplicate.ts'
+export type { HostBotDuplicateRequest, HostBotDuplicateReceipt } from './bot-duplicate.ts'
+export { parseHostBotCreateRequest, parseHostBotCreateReceipt } from './bot-create.ts'
+export type { HostBotCreateRequest, HostBotCreateReceipt } from './bot-create.ts'

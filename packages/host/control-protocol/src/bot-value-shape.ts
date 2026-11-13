@@ -14,3 +14,43 @@ export function botRecord(value: unknown): value is Record<string, unknown> {
 export function botExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 }
+
+/** Require a nonempty Bot protocol string with bounded UTF-8 bytes and no control characters.
+ * @param value - Untrusted string value.
+ * @param max - Maximum UTF-8 byte length.
+ * @returns Whether the string satisfies the protocol bound.
+ */
+export function botBoundedVisible(value: unknown, max: number): value is string {
+  if (typeof value !== 'string' || value.length === 0 || Buffer.byteLength(value, 'utf8') > max) return false
+  for (const char of value) {
+    const code = char.codePointAt(0)
+    if (code === undefined || code <= 31 || code === 127) return false
+  }
+  return true
+}
+
+/** Validate a Bot mutation target ID.
+ * @param value - Untrusted target ID.
+ * @returns Whether the ID has the supported characters and length.
+ */
+export const botMutationId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[A-Za-z0-9_-]{1,200}$/u.test(value)
+/** Validate the Session that authorizes a Bot mutation.
+ * @param value - Untrusted Session ID.
+ * @returns Whether the ID is bounded and cannot denote a path.
+ */
+export const botMutationSessionId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[!-~]{1,256}$/u.test(value) && !value.includes('/') && !value.includes(String.fromCharCode(92)) &&
+  value !== '.' && value !== '..'
+/** Validate a durable Bot mutation request ID.
+ * @param value - Untrusted request ID.
+ * @returns Whether the ID is a UUID.
+ */
+export const botMutationRequestId = (value: unknown): value is string => typeof value === 'string' &&
+  /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu.test(value)
+/** Validate a nonnegative Bot revision.
+ * @param value - Untrusted revision.
+ * @returns Whether the revision is a safe integer.
+ */
+export const botMutationRevision = (value: unknown): value is number => typeof value === 'number' &&
+  Number.isSafeInteger(value) && value >= 0

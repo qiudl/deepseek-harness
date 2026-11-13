@@ -4,9 +4,10 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
-import { parseHostBotChatSubmission, parseHostBotRoomSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
+import { parseHostBotChatSubmission, parseHostBotAttachmentSubmission, parseHostBotRoomSubmission,
+  encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotRoomUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomUpdateRequest, parseHostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
 import { DesktopRemoteApprovalEvents } from '../src/desktop-remote-ui-stream.ts'
@@ -24,6 +25,235 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('edits model provider credentials only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'key-set' as const,
+      provider: 'deepseek-official', value: 'sk-secret123' }
+    const result = { available: true, providers: [], addable: [], protocols: [] }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.providers.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
+  it('edits GitHub connector only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'connect' as const,
+      id: 'github' as const, token: 'ghp_secret123' }
+    const result = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.connectors.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
+  it('updates shared Bot preferences only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 4,
+      change: { kind: 'width' as const, value: 50 } }
+    const result = { state: 'applied', settings: {
+      revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50,
+      teamWorkspace: '/team' } }
+    const update = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, update)
+    const command = { operation: 'bot.general.update' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(update).toHaveBeenCalledWith(request, signal)
+    update.mockResolvedValueOnce({ ...result, settings: { ...result.settings, secret: 'private' } })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_general_result')
+    await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+  })
+  it('runs a native Channel mirror mutation under room control and rejects substituted receipts', async () => {
+    const roomId = 'session-11111111-1111-4111-8111-111111111111'
+    const request = { kind: 'start' as const, roomId, requestId: randomUUID(),
+      endpoint: 'https://slark.test', ticket: 't'.repeat(43) }
+    const confirmationCode = `${randomUUID()}.${randomUUID()}`
+    const result = { kind: 'start', roomId, requestId: request.requestId,
+      state: 'awaiting_confirmation', confirmationCode }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, roomId)
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, mutate)
+    const command = { operation: 'bot.channel-mirror.mutate' as const,
+      command_id: randomUUID() as never, session_id: roomId, control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    mutate.mockResolvedValueOnce({ ...result, credential: 'secret' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_channel_mirror_mutation_receipt')
+  })
+  it('runs a memory question under the controlled Bot Session and validates its receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { mode: 'ask' as const, ownerBotId: 'main', sessionId: 'chat-1',
+      requestId: randomUUID(), targetKind: 'bot' as const, targetId: 'main', text: 'Remember tea' }
+    const result = { requestId: request.requestId, operation: 'ask', targetKind: 'bot',
+      targetId: 'main', state: 'applied', reply: 'Done', changes: [], truncated: false }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.memory.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledTimes(1)
+    mutate.mockResolvedValueOnce({ ...result, targetId: 'other' })
+    await expect(executor.execute(command, new AbortController().signal))
+      .rejects.toThrow('invalid_bot_memory_mutation_receipt')
+  })
+  it('starts a controlled native About update and rejects an unrelated receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { mode: 'start' as const, ownerBotId: 'main', sessionId: 'chat-1',
+      requestId: randomUUID(), target: 'bot' as const, version: '0.2.25' }
+    const result = { requestId: request.requestId, target: 'bot', version: '0.2.25', state: 'pending' }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.update.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledTimes(1)
+    mutate.mockResolvedValueOnce({ ...result, target: 'dsh' })
+    await expect(executor.execute(command, new AbortController().signal))
+      .rejects.toThrow('invalid_bot_update_mutation_receipt')
+  })
+  it('controls a Bot profile edit through its Session and validates the saved result', async () => {
+    const request = parseHostBotSettingsUpdateRequest({ botId: 'main', sessionId: 'chat-1',
+      expectedRevision: 7, change: { kind: 'pinned', value: true } })
+    const settings = { botId: 'main', revision: 8, name: 'Main', role: '', instructions: '',
+      color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
+      effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true, hidden: false,
+      capabilityChoices: [] }
+    const result = { botId: 'main', state: 'applied', revision: 8, settings }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const update = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn(() => { throw Error('no generic Bot edit') })
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control,
+      undefined, undefined, undefined, undefined, undefined, undefined, update)
+    const command = { operation: 'bot.settings.update' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(update).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    update.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_settings_update_receipt')
+  })
+  it('deletes a Bot only through the fixed controlled service', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7 }
+    const result = { botId: 'main', state: 'deleted', revision: 8 }
+    const deleteBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, deleteBot)
+    const command = { operation: 'bot.delete' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(deleteBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    deleteBot.mockResolvedValueOnce({ ...result, botId: 'other' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_delete_receipt')
+  })
+  it('checks an uncertain Bot copy using the same durable request ID', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { sourceBotId: 'main', sessionId: 'chat-1', copyRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'status' as const }
+    const result = { sourceBotId: 'main', copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'copy', revision: 8 }
+    const duplicateBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, duplicateBot)
+    const command = { operation: 'bot.duplicate' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(duplicateBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    duplicateBot.mockResolvedValueOnce({ ...result, copyRequestId: randomUUID() })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_duplicate_receipt')
+  })
+  it('creates a Bot only through the fixed owner service and validates its receipt', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', createRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'create' as const, bot: { name: 'Research', color: null,
+        avatarShape: null, avatarImage: null, model: null, effort: null, brief: '' } }
+    const result = { ownerBotId: 'main', createRequestId: request.createRequestId,
+      state: 'created', botId: 'new', revision: 8 }
+    const createBot = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, createBot)
+    const command = { operation: 'bot.create' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(createBot).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    createBot.mockResolvedValueOnce({ ...result, botId: 'main' })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_create_receipt')
+  })
+  it('runs a schedule mutation only under the controlled Bot Session', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', requestId: randomUUID(),
+      mode: 'create' as const, targetKind: 'bot' as const, targetId: 'main',
+      title: 'Briefing', prompt: 'Report progress',
+      when: { kind: 'daily' as const, time: '09:00', timeZone: 'UTC' } }
+    const result = { requestId: request.requestId, operation: 'create', state: 'pending',
+      taskId: null, sessionId: null }
+    const mutate = vi.fn(async (): Promise<unknown> => result)
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, mutate)
+    const command = { operation: 'bot.schedule.mutate' as const,
+      command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(mutate).toHaveBeenCalledWith(request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    mutate.mockResolvedValueOnce({ ...result, requestId: randomUUID() })
+    await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_schedule_mutation_receipt')
+  })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
     const createProof = remoteProof(control, 'chat-1')
@@ -146,6 +376,38 @@ describe('Desktop remote Session bridge', () => {
     await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_chat_receipt')
     const abort = new AbortController(); abort.abort()
     await expect(executor.execute(receipt, abort.signal)).rejects.toThrow()
+  })
+  it('spends a Bot attachment receipt only under the original Session claim', async () => {
+    const request = parseHostBotAttachmentSubmission({ botId: 'bot_1', sessionId: 'own-2',
+      submissionId: randomUUID(), receiptId: randomUUID(), kind: 'file',
+      attachmentId: `sha256:${'a'.repeat(64)}` })
+    const result = { botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted' }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'own-2')
+    const invoke = vi.fn(() => { throw Error('Bot must not fall back to naked Session prompt') })
+    const botAttachment = vi.fn(async (): Promise<unknown> => result)
+    const unused = [undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined] as const
+    const args = [gatewayFixture({ invoke }), undefined, control, undefined,
+      ...unused, botAttachment] satisfies ConstructorParameters<typeof DesktopRemoteSessionExecutor>
+    const executor = new DesktopRemoteSessionExecutor(...args)
+    const send = { operation: 'bot.attachment.send' as const, command_id: randomUUID() as never,
+      session_id: 'own-2', control: proof, request }
+    const receipt = { operation: 'bot.attachment.receipt' as const, command_id: randomUUID() as never, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
+    await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
+    expect(botAttachment).toHaveBeenCalledTimes(2)
+    expect(botAttachment).toHaveBeenNthCalledWith(1, 'bot.attachment.send', request, signal)
+    expect(botAttachment).toHaveBeenNthCalledWith(2, 'bot.attachment.receipt', request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    botAttachment.mockResolvedValueOnce({ ...result, sessionId: 'foreign' })
+    await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_attachment_receipt')
   })
   it('binds terminal calls to live control and preserves only typed terminal failures', async () => {
     const control = new DesktopSessionControl()

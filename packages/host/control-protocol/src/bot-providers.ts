@@ -1,0 +1,157 @@
+/** Fixed native projection of configured model providers; credential values never appear. */
+import { botBoundedVisible as bounded, botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
+const providerID = (value: unknown): value is string => bounded(value, 100) &&
+  /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value)
+const protocolIDs = new Set(['openai-completions', 'openai-responses', 'anthropic-messages'])
+
+/** An empty request for the selected Profile provider directory. */
+export type HostBotProvidersRequest = Readonly<Record<string, never>>
+/** An owner command for a model provider or its credential. */
+export type HostBotProvidersMutationRequest = Readonly<{
+  botId: string
+  sessionId: string
+  kind: 'key-set' | 'key-clear' | 'add-known' | 'add-custom' | 'discover' | 'remove'
+  provider: string
+  value: string | null | Readonly<{
+    name: string
+    baseURL: string
+    api: string
+    key: string | null
+    models: readonly string[]
+  }>
+}>
+/** Configured and addable model providers without credential values. */
+export type HostBotProviders = Readonly<{
+  available: boolean
+  providers: readonly Readonly<{
+    id: string
+    name: string
+    models: readonly Readonly<{ ref: string; name: string }>[]
+    key: Readonly<{ configured: boolean; writable: boolean }> | null
+    removable: boolean
+    custom: boolean
+    hasError: boolean
+  }>[]
+  addable: readonly Readonly<{ id: string; name: string }>[]
+  protocols: readonly string[]
+}>
+
+/** Bounded model choices discovered from a custom provider without any credential value. */
+export type HostBotProviderDiscovery = Readonly<{ models: readonly Readonly<{ id: string; name: string }>[] }>
+
+/**
+ * Validate the bot providers request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers request.
+ */
+export function parseHostBotProvidersRequest(value: unknown): HostBotProvidersRequest {
+  if (!record(value) || !exact(value, [])) throw Error('invalid_bot_providers_request')
+  return {}
+}
+
+/**
+ * Validate the bot providers mutation request at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers mutation request.
+ */
+export function parseHostBotProvidersMutationRequest(value: unknown): HostBotProvidersMutationRequest {
+  if (!record(value) || !exact(value, ['botId', 'sessionId', 'kind', 'provider', 'value']) ||
+    !bounded(value.botId, 200) || !/^[A-Za-z0-9_-]+$/u.test(value.botId) ||
+    !bounded(value.sessionId, 256) || !/^[!-~]+$/u.test(value.sessionId) ||
+    /[/\\]/u.test(value.sessionId) || value.sessionId === '.' || value.sessionId === '..' ||
+    !providerID(value.provider)) throw Error('invalid_bot_providers_mutation')
+  if (value.kind === 'key-set' && credential(value.value) ||
+    value.kind === 'add-known' && (value.value === null || credential(value.value)) ||
+    value.kind === 'add-custom' && customProvider(value.value) ||
+    value.kind === 'discover' && customProvider(value.value, true) ||
+    (value.kind === 'key-clear' || value.kind === 'remove') && value.value === null)
+    return { botId: value.botId, sessionId: value.sessionId, kind: value.kind,
+      provider: value.provider, value: value.value }
+  throw Error('invalid_bot_providers_mutation')
+}
+
+const credential = (value: unknown): value is string => bounded(value, 8192) &&
+  /^[!-~]+$/u.test(value)
+
+function customProvider(value: unknown, discover = false): value is Exclude<HostBotProvidersMutationRequest['value'], string | null> {
+  if (!record(value) || !exact(value, ['name', 'baseURL', 'api', 'key', 'models']) ||
+    typeof value.name !== 'string' || Buffer.byteLength(value.name, 'utf8') > 80 ||
+    typeof value.baseURL !== 'string' || value.baseURL.length > 4096 ||
+    !protocolIDs.has(value.api as string) || !(value.key === null || credential(value.key)) ||
+    !Array.isArray(value.models) || value.models.length < (discover ? 0 : 1) || value.models.length > 100 ||
+    value.models.some((id: unknown) => !bounded(id, 200)) ||
+    new Set(value.models).size !== value.models.length || discover && value.models.length !== 0) return false
+  try { const url = new URL(value.baseURL); return url.protocol === 'http:' || url.protocol === 'https:' }
+  catch { return false }
+}
+
+/** Validate a credential-free model discovery response from the selected Profile.
+ * @param value - Untrusted Profile worker result.
+ * @returns Bounded model choices or null when the worker is unavailable.
+ */
+export function parseHostBotProviderDiscovery(value: unknown): HostBotProviderDiscovery | null {
+  if (value === null) return null
+  if (!record(value) || !exact(value, ['models']) || !Array.isArray(value.models) ||
+    value.models.length > 100 || Buffer.byteLength(JSON.stringify(value), 'utf8') > 40_000)
+    throw Error('invalid_bot_provider_discovery')
+  const seen = new Set<string>()
+  const models = value.models.map((entry: unknown) => {
+    if (!record(entry) || !exact(entry, ['id', 'name']) ||
+      !bounded(entry.id, 200) || !bounded(entry.name, 256) || seen.has(entry.id))
+      throw Error('invalid_bot_provider_discovery')
+    seen.add(entry.id)
+    return { id: entry.id, name: entry.name }
+  })
+  return { models }
+}
+
+/**
+ * Validate the bot providers at the native Host boundary.
+ * @param value - Untrusted payload to validate.
+ * @returns The validated bot providers.
+ */
+export function parseHostBotProviders(value: unknown): HostBotProviders | null {
+  if (value === null) return null
+  if (!record(value) || !exact(value, ['available', 'providers', 'addable', 'protocols']) ||
+    typeof value.available !== 'boolean' || !Array.isArray(value.providers) || value.providers.length > 100 ||
+    !Array.isArray(value.addable) || value.addable.length > 100 ||
+    !Array.isArray(value.protocols) || value.protocols.length > 3 ||
+    Buffer.byteLength(JSON.stringify(value), 'utf8') > 60_000) throw Error('invalid_bot_providers_result')
+  const seen = new Set<string>()
+  let modelCount = 0
+  const providers = value.providers.map((entry: unknown) => {
+    if (!record(entry) || !exact(entry, ['id', 'name', 'models', 'key', 'removable', 'custom', 'hasError']) ||
+      !providerID(entry.id) || seen.has(entry.id) || !bounded(entry.name, 256) ||
+      !Array.isArray(entry.models) || entry.models.length > 500 ||
+      typeof entry.removable !== 'boolean' || typeof entry.custom !== 'boolean' ||
+      typeof entry.hasError !== 'boolean') throw Error('invalid_bot_providers_result')
+    seen.add(entry.id)
+    let key: { configured: boolean; writable: boolean } | null = null
+    if (entry.key !== null) {
+      if (!record(entry.key) || !exact(entry.key, ['configured', 'writable']) ||
+        typeof entry.key.configured !== 'boolean' || typeof entry.key.writable !== 'boolean')
+        throw Error('invalid_bot_providers_result')
+      key = { configured: entry.key.configured, writable: entry.key.writable }
+    }
+    modelCount += entry.models.length
+    if (modelCount > 2000) throw Error('invalid_bot_providers_result')
+    const models = entry.models.map((model: unknown) => {
+      if (!record(model) || !exact(model, ['ref', 'name']) ||
+        !bounded(model.ref, 512) || !bounded(model.name, 256)) throw Error('invalid_bot_providers_result')
+      return { ref: model.ref, name: model.name }
+    })
+    return { id: entry.id, name: entry.name, models, key,
+      removable: entry.removable, custom: entry.custom, hasError: entry.hasError }
+  })
+  const addable = value.addable.map((entry: unknown) => {
+    if (!record(entry) || !exact(entry, ['id', 'name']) || !providerID(entry.id) ||
+      seen.has(entry.id) || !bounded(entry.name, 256)) throw Error('invalid_bot_providers_result')
+    seen.add(entry.id)
+    return { id: entry.id, name: entry.name }
+  })
+  if (value.protocols.some((id: unknown) => typeof id !== 'string' || !protocolIDs.has(id)) ||
+    new Set(value.protocols).size !== value.protocols.length ||
+    (!value.available && (providers.length > 0 || addable.length > 0 || value.protocols.length > 0)))
+    throw Error('invalid_bot_providers_result')
+  return { available: value.available, providers, addable, protocols: (value.protocols as string[]).slice() }
+}

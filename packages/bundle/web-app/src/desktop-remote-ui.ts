@@ -8,10 +8,30 @@ import { parseHostBotRoomList, parseHostBotRoomListRequest, type HostBotRoomList
 import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest, type HostBotRoomHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest, type HostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSettings, parseHostBotSettingsRequest, type HostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotMemory, parseHostBotMemoryRequest, type HostBotMemoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomMemory, parseHostBotRoomMemoryRequest, type HostBotRoomMemoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSchedules, parseHostBotSchedulesRequest, type HostBotSchedulesRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotScheduleHistory, parseHostBotScheduleHistoryRequest, type HostBotScheduleHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAbout, parseHostBotAboutRequest, type HostBotAboutRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotUsage, parseHostBotUsageRequest, type HostBotUsageRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotGeneralSettings, parseHostBotGeneralSettingsRequest, type HostBotGeneralSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotProviders, parseHostBotProvidersRequest, type HostBotProvidersRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotConnectors, parseHostBotConnectorsRequest, type HostBotConnectorsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotFeedback, parseHostBotFeedbackRequest, type HostBotFeedbackRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotFeedbackLogChunk, parseHostBotFeedbackLogRequest, type HostBotFeedbackLogRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotSecrets, parseHostBotSecretsRequest, type HostBotSecretsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotCapabilities, parseHostBotCapabilitiesRequest, type HostBotCapabilitiesRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotFolders, parseHostBotFoldersRequest, type HostBotFoldersRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAvatar, parseHostBotAvatarRequest, type HostBotAvatarRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAttachmentPreview, parseHostBotAttachmentPreviewRequest,
+  type HostBotAttachmentPreviewRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAttachmentDownloadOpenRequest, parseHostBotAttachmentDownloadOpen,
+  parseHostBotAttachmentDownloadReadRequest, parseHostBotAttachmentDownloadChunk,
+  type HostBotAttachmentDownloadOpenRequest, type HostBotAttachmentDownloadReadRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/usage', 'bot/general', 'bot/providers', 'bot/connectors', 'bot/secrets', 'bot/capability-library', 'bot/feedback', 'bot/feedback-log', 'bot/folders', 'bot/avatar', 'bot/attachment-preview', 'bot/attachment-download-open', 'bot/attachment-download-read', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -30,7 +50,26 @@ export class DesktopRemoteUiExecutor {
     private readonly listBotRooms?: (request: HostBotRoomListRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotRoomHistory?: (request: HostBotRoomHistoryRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotRoomDetails?: (request: HostBotRoomDetailsRequest, signal: AbortSignal) => Promise<unknown>,
-    private readonly readBotSettings?: (request: HostBotSettingsRequest, signal: AbortSignal) => Promise<unknown>) {}
+    private readonly readBotSettings?: (request: HostBotSettingsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotFolders?: (request: HostBotFoldersRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotAvatar?: (request: HostBotAvatarRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotMemory?: (request: HostBotMemoryRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotRoomMemory?: (request: HostBotRoomMemoryRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotSchedules?: (request: HostBotSchedulesRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotScheduleHistory?: (request: HostBotScheduleHistoryRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotAbout?: (request: HostBotAboutRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotUsage?: (request: HostBotUsageRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotGeneralSettings?: (request: HostBotGeneralSettingsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotProviders?: (request: HostBotProvidersRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotConnectors?: (request: HostBotConnectorsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotFeedback?: (request: HostBotFeedbackRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotFeedbackLog?: (request: HostBotFeedbackLogRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotSecrets?: (request: HostBotSecretsRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotCapabilityLibrary?: (request: HostBotCapabilitiesRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotAttachmentPreview?: (request: HostBotAttachmentPreviewRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly openBotAttachmentDownload?: (request: HostBotAttachmentDownloadOpenRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotAttachmentDownload?: (
+      request: HostBotAttachmentDownloadReadRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -85,6 +124,150 @@ export class DesktopRemoteUiExecutor {
       const value = await this.readBotSettings(request, signal)
       signal.throwIfAborted()
       return parseHostBotSettings(value, request)
+    }
+    if (endpoint === 'bot/memory') {
+      const request = parseHostBotMemoryRequest(payload.args)
+      if (!this.readBotMemory) throw Error('desktop remote UI: Bot memory reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotMemory(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotMemory(value, request)
+    }
+    if (endpoint === 'bot/room-memory') {
+      const request = parseHostBotRoomMemoryRequest(payload.args)
+      if (!this.readBotRoomMemory) throw Error('desktop remote UI: group memory reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotRoomMemory(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotRoomMemory(value, request)
+    }
+    if (endpoint === 'bot/schedules') {
+      const request = parseHostBotSchedulesRequest(payload.args)
+      if (!this.readBotSchedules) throw Error('desktop remote UI: Bot schedules reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotSchedules(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotSchedules(value, request)
+    }
+    if (endpoint === 'bot/schedule-history') {
+      const request = parseHostBotScheduleHistoryRequest(payload.args)
+      if (!this.readBotScheduleHistory) throw Error('desktop remote UI: Bot schedule history reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotScheduleHistory(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotScheduleHistory(value, request)
+    }
+    if (endpoint === 'bot/about') {
+      const request = parseHostBotAboutRequest(payload.args)
+      if (!this.readBotAbout) throw Error('desktop remote UI: Bot About reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotAbout(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAbout(value)
+    }
+    if (endpoint === 'bot/usage') {
+      const request = parseHostBotUsageRequest(payload.args)
+      if (!this.readBotUsage) throw Error('desktop remote UI: Bot usage reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotUsage(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotUsage(value, request)
+    }
+    if (endpoint === 'bot/general') {
+      const request = parseHostBotGeneralSettingsRequest(payload.args)
+      if (!this.readBotGeneralSettings) throw Error('desktop remote UI: Bot general settings reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotGeneralSettings(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotGeneralSettings(value)
+    }
+    if (endpoint === 'bot/providers') {
+      const request = parseHostBotProvidersRequest(payload.args)
+      if (!this.readBotProviders) throw Error('desktop remote UI: Bot provider reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotProviders(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotProviders(value)
+    }
+    if (endpoint === 'bot/connectors') {
+      const request = parseHostBotConnectorsRequest(payload.args)
+      if (!this.readBotConnectors) throw Error('desktop remote UI: Bot connector reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotConnectors(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotConnectors(value)
+    }
+    if (endpoint === 'bot/feedback') {
+      const request = parseHostBotFeedbackRequest(payload.args)
+      if (!this.readBotFeedback) throw Error('desktop remote UI: Bot feedback reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotFeedback(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotFeedback(value)
+    }
+    if (endpoint === 'bot/feedback-log') {
+      const request = parseHostBotFeedbackLogRequest(payload.args)
+      if (!this.readBotFeedbackLog) throw Error('desktop remote UI: Bot feedback log reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotFeedbackLog(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotFeedbackLogChunk(value, request)
+    }
+    if (endpoint === 'bot/secrets') {
+      const request = parseHostBotSecretsRequest(payload.args)
+      if (!this.readBotSecrets) throw Error('desktop remote UI: Bot secrets reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotSecrets(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotSecrets(value)
+    }
+    if (endpoint === 'bot/capability-library') {
+      const request = parseHostBotCapabilitiesRequest(payload.args)
+      if (!this.readBotCapabilityLibrary) throw Error('desktop remote UI: Bot capability library reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotCapabilityLibrary(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotCapabilities(value)
+    }
+    if (endpoint === 'bot/folders') {
+      const request = parseHostBotFoldersRequest(payload.args)
+      if (!this.readBotFolders) throw Error('desktop remote UI: Bot folder reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotFolders(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotFolders(value, request)
+    }
+    if (endpoint === 'bot/avatar') {
+      const request = parseHostBotAvatarRequest(payload.args)
+      if (!this.readBotAvatar) throw Error('desktop remote UI: Bot avatar reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotAvatar(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAvatar(value, request)
+    }
+    if (endpoint === 'bot/attachment-preview') {
+      const request = parseHostBotAttachmentPreviewRequest(payload.args)
+      if (!this.readBotAttachmentPreview) throw Error('desktop remote UI: Bot attachment preview reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotAttachmentPreview(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAttachmentPreview(value, request)
+    }
+    if (endpoint === 'bot/attachment-download-open') {
+      const request = parseHostBotAttachmentDownloadOpenRequest(payload.args)
+      if (!this.openBotAttachmentDownload) throw Error('desktop remote UI: Bot attachment download unavailable')
+      signal.throwIfAborted()
+      const value = await this.openBotAttachmentDownload(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAttachmentDownloadOpen(value, request)
+    }
+    if (endpoint === 'bot/attachment-download-read') {
+      const request = parseHostBotAttachmentDownloadReadRequest(payload.args)
+      if (!this.readBotAttachmentDownload) throw Error('desktop remote UI: Bot attachment download unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotAttachmentDownload(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotAttachmentDownloadChunk(value, request)
     }
     if (endpoint === 'boot/injections') {
       if (Object.keys(payload.args).length !== 0) throw new Error('desktop remote UI: invalid payload')

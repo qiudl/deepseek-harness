@@ -15,6 +15,51 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('round trips fixed Bot profile edits under the claimed Bot Session', () => {
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7,
+      change: { kind: 'pinned', value: true } }
+    const command = { operation: 'bot.settings.update', command_id: randomUUID(),
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
+      { ...command, request: { ...request, profileId: 'other' } },
+      { ...command, request: { ...request, change: { kind: 'unsupported', value: 'Changed' } } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
+  it('round trips Bot deletion only under the claimed Bot Session', () => {
+    const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7 }
+    const command = { operation: 'bot.delete', command_id: randomUUID(),
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
+      { ...command, request: { ...request, force: true } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
+  it('round trips Bot copy status only under the claimed source Session', () => {
+    const request = { sourceBotId: 'main', sessionId: 'chat-1',
+      copyRequestId: randomUUID(), expectedRevision: 7, mode: 'status' }
+    const command = { operation: 'bot.duplicate', command_id: randomUUID(),
+      session_id: 'chat-1', control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' },
+      { ...command, request: { ...request, accountId: 'other' } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
+  it('round trips fixed Bot creation only under the claimed owner Session', () => {
+    const request = { ownerBotId: 'main', sessionId: 'chat-1', createRequestId: randomUUID(),
+      expectedRevision: 7, mode: 'create', bot: { name: 'Research', color: null,
+        avatarShape: null, avatarImage: null, model: null, effort: null, brief: '' } }
+    const command = { operation: 'bot.create', command_id: randomUUID(), session_id: 'chat-1',
+      control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const input = frame(command)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' },
+      { ...command, request: { ...request, bot: { ...request.bot, workDir: '/private' } } }])
+      expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed group create/delete commands under claimed Sessions', () => {
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
     const create = { operation: 'bot.room.create', command_id: randomUUID(),
@@ -262,6 +307,46 @@ describe('Profile remote UI read wire commands', () => {
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
     for (const args of [{ botId: '../other' }, { botId: 'main', account: 'other' }, {}])
       expect(() => decode(readFrame('bot/settings', { args }))).toThrow()
+  })
+  it('round-trips only bounded Bot memory selectors', () => {
+    const args = { botId: 'main', cursor: null, limit: 20, summarize: true }
+    const input = readFrame('bot/memory', { args })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const bad of [{ ...args, botId: '../other' }, { ...args, limit: 21 },
+      { ...args, cursor: 'bad' }, { ...args, account: 'other' }])
+      expect(() => decode(readFrame('bot/memory', { args: bad }))).toThrow()
+  })
+  it('keeps a group memory selector inside the signed read frame', () => {
+    const args = { roomId: 'room-1', cursor: null, limit: 12, summarize: true }
+    const frame = readFrame('bot/room-memory', { args })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/room-memory', { args: { ...args, roomId: '../other' } }))).toThrow()
+    expect(() => decode(readFrame('bot/room-memory', { args: { ...args, profile: 'other' } }))).toThrow()
+  })
+  it('keeps the schedule page selector inside the signed read frame', () => {
+    const args = { cursor: null, limit: 20 }
+    const frame = readFrame('bot/schedules', { args })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/schedules', { args: { ...args, profile: 'other' } }))).toThrow()
+    expect(() => decode(readFrame('bot/schedules', { args: { ...args, limit: 21 } }))).toThrow()
+  })
+  it('keeps the task delivery selector inside the signed read frame', () => {
+    const args = { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }
+    const frame = readFrame('bot/schedule-history', { args })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/schedule-history', { args: { ...args, profile: 'other' } }))).toThrow()
+  })
+  it('round-trips only an exact native About refresh choice', () => {
+    const frame = readFrame('bot/about', { args: { fresh: true } })
+    expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
+    expect(() => decode(readFrame('bot/about', { args: { fresh: true, profileId: 'other' } }))).toThrow()
+  })
+  it('round-trips only an exact native Bot folder selector', () => {
+    const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ botId: '../other', path: null }, { botId: 'main', path: '/team\nsecret' },
+      { botId: 'main', path: null, account: 'other' }])
+      expect(() => decode(readFrame('bot/folders', { args }))).toThrow()
   })
 
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {

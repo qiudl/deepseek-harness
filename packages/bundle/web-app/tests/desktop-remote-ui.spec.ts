@@ -54,7 +54,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const invoke = vi.fn()
     const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
       truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
-        authorRef: 'design', kind: null, text: 'plan', time: null }], nextCursor: null }
+        authorRef: 'design', kind: null, text: 'plan', time: null, attachments: [] }], nextCursor: null }
     const read = vi.fn(async (): Promise<unknown> => page)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined, undefined, read)
     const signal = new AbortController().signal
@@ -90,7 +90,7 @@ describe('Desktop remote UI read-only bridge', () => {
     const settings = { botId: 'main', revision: 7, name: 'Main', role: 'Coordinator',
       instructions: 'Coordinate', color: 'deepseek', avatarShape: 'whale', hasAvatarImage: false,
       model: 'provider/model', appliedModel: null, effort: null, workDir: '/team',
-      isMain: true, isPrimary: true, pinned: true, hidden: false }
+      isMain: true, isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] }
     const read = vi.fn(async (): Promise<unknown> => settings)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
       undefined, undefined, undefined, undefined, read)
@@ -102,6 +102,259 @@ describe('Desktop remote UI read-only bridge', () => {
     read.mockResolvedValueOnce({ ...settings, secret: 'hidden' })
     await expect(executor.execute('bot/settings', { args: { botId: 'main' } }, signal))
       .rejects.toThrow('invalid_bot_settings_result')
+  })
+  it('reads a bounded Bot memory page without invoking the generic Profile gateway', async () => {
+    const invoke = vi.fn()
+    const page = { botId: 'main', available: true, total: 1,
+      entries: [{ scope: 'own', topic: null, text: 'Remember this', added: null,
+        by: null, source: null }], nextCursor: null,
+      sizes: { own: 20, team: 0 }, limits: { main: 4000 },
+      summary: null, fresh: false, summarizing: true, error: null }
+    const read = vi.fn(async (): Promise<unknown> => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    const args = { botId: 'main', cursor: null, limit: 20, summarize: true }
+    await expect(executor.execute('bot/memory', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/memory', { args: { ...args, profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_memory_request')
+    read.mockResolvedValueOnce({ ...page, entries: [{ ...page.entries[0], secret: 'private' }] })
+    await expect(executor.execute('bot/memory', { args }, signal))
+      .rejects.toThrow('invalid_bot_memory_result')
+  })
+  it('routes group memory only to its dedicated plugin reader', async () => {
+    const invoke = vi.fn()
+    const args = { roomId: 'room-1', cursor: null, limit: 12, summarize: true }
+    const page = { roomId: 'room-1', available: false }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/room-memory', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/room-memory', { args: { ...args, profile: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_room_memory_request')
+  })
+  it('routes Bot schedules only to their dedicated plugin reader', async () => {
+    const invoke = vi.fn()
+    const args = { cursor: null, limit: 20 }
+    const page = { available: false, total: 0, tasks: [], nextCursor: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/schedules', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/schedules', { args: { ...args, account: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_schedules_request')
+  })
+  it('routes one task delivery page through its dedicated bounded reader', async () => {
+    const invoke = vi.fn()
+    const args = { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }
+    const page = { available: false, sessionId: args.sessionId, id: args.id, code: null,
+      records: [], nextBefore: null, earlierRecordsUnavailable: false,
+      earlierRecordsPruned: false, retention: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/schedule-history', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/schedule-history', { args: { ...args, account: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_schedule_history_request')
+  })
+  it('reads fixed native About state through its dedicated updater reader', async () => {
+    const invoke = vi.fn()
+    const page = { bot: { name: 'ds-bot', current: '0.2.24', latest: null, source: 'git',
+      notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0, phase: 'idle',
+      installed: null, error: null, available: false }, dsh: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/about', { args: { fresh: true } }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith({ fresh: true }, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/about', { args: { fresh: true, profile: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_about_request')
+  })
+  it('reads bounded native usage through its dedicated ledger reader', async () => {
+    const invoke = vi.fn()
+    const args = { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 20 }
+    const page = { rangeDays: 7, timeZone: 'UTC', now: '2026-11-12 10', scanning: false,
+      totals: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 },
+      rows: [], nextCursor: null }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/usage', { args }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith(args, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/usage', { args: { ...args, profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_usage_request')
+  })
+  it('reads shared general preferences only through the verified Bot service', async () => {
+    const invoke = vi.fn()
+    const page = { revision: 4, theme: 'paper', accent: null, motion: 'quiet', width: 92,
+      teamWorkspace: '/team' }
+    const read = vi.fn(async () => page)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/general', { args: {} }, signal)).resolves.toEqual(page)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/general', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_general_request')
+  })
+  it('reads model providers only through the verified credential-free Bot service', async () => {
+    const invoke = vi.fn()
+    const directory = { available: true, providers: [{ id: 'openai', name: 'OpenAI',
+      models: [{ ref: 'openai/gpt', name: 'GPT' }], key: { configured: true, writable: true },
+      removable: false, custom: false, hasError: false }], addable: [],
+    protocols: ['openai-responses'] }
+    const read = vi.fn(async () => directory)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/providers', { args: {} }, signal)).resolves.toEqual(directory)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/providers', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_providers_request')
+    read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
+    await expect(executor.execute('bot/providers', { args: {} }, signal)).rejects.toThrow()
+  })
+  it('reads GitHub connector only through the verified credential-free Bot service', async () => {
+    const invoke = vi.fn()
+    const directory = { connectors: [{ id: 'github', name: 'GitHub', state: 'ready',
+      account: 'alice', hasError: false }] }
+    const read = vi.fn(async () => directory)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/connectors', { args: {} }, signal)).resolves.toEqual(directory)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/connectors', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_connectors_request')
+    read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
+    await expect(executor.execute('bot/connectors', { args: {} }, signal)).rejects.toThrow()
+  })
+  it('reads redacted Feedback report only through the verified credential-free Bot service', async () => {
+    const invoke = vi.fn()
+    const directory = { total: 1, entries: [{ time: 1700000000000, level: 'error', source: 'host', text: 'Connection failed', code: null }], markdown: 'Redacted report', markdownTruncated: false, issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }
+    const read = vi.fn(async () => directory)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/feedback', { args: {} }, signal)).resolves.toEqual(directory)
+    expect(read).toHaveBeenCalledWith({}, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/feedback', { args: { profileId: 'other' } }, signal))
+      .rejects.toThrow('invalid_bot_feedback_request')
+    read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
+    await expect(executor.execute('bot/feedback', { args: {} }, signal)).rejects.toThrow()
+  })
+  it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
+    const invoke = vi.fn()
+    const places = { botId: 'main', kind: 'places', team: '/team', canBrowse: true,
+      folders: [{ path: '/project', title: 'Project' }], truncated: false }
+    const read = vi.fn(async (): Promise<unknown> => places)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null } }, signal))
+      .resolves.toEqual(places)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null,
+      account: 'other' } }, signal)).rejects.toThrow('invalid_bot_folders_request')
+    read.mockResolvedValueOnce({ ...places, secret: 'hidden' })
+    await expect(executor.execute('bot/folders', { args: { botId: 'main', path: null } }, signal))
+      .rejects.toThrow('invalid_bot_folders_result')
+  })
+  it('reads bounded Bot avatar slices from the plugin service only', async () => {
+    const invoke = vi.fn()
+    const chunk = 'data:image/png;base64,AA=='
+    const value = { botId: 'main', totalBytes: chunk.length, offset: 0,
+      sha256: 'a'.repeat(64), chunk, hasMore: false }
+    const read = vi.fn(async (): Promise<unknown> => value)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 0 } }, signal))
+      .resolves.toEqual(value)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 1 } }, signal))
+      .rejects.toThrow('invalid_bot_avatar_request')
+    read.mockResolvedValueOnce({ ...value, botId: 'other' })
+    await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 0 } }, signal))
+      .rejects.toThrow('invalid_bot_avatar_result')
+  })
+  it('reads only correlated Bot attachment preview chunks from the plugin service', async () => {
+    const invoke = vi.fn()
+    const args = { botId: 'main', sessionId: 'own-main', eventSeq: 7,
+      attachmentId: `sha256:${'a'.repeat(64)}`, offset: 0 }
+    const value = { ...args, name: 'report.txt', total: 6, sha256: 'b'.repeat(64),
+      chunk: 'report', hasMore: false, whole: true }
+    const read = vi.fn(async (): Promise<unknown> => value)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/attachment-preview', { args }, signal)).resolves.toEqual(value)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/attachment-preview', { args: { ...args, eventSeq: 0 } }, signal))
+      .rejects.toThrow('invalid_bot_attachment_preview_request')
+    read.mockResolvedValueOnce({ ...value, sessionId: 'foreign' })
+    await expect(executor.execute('bot/attachment-preview', { args }, signal))
+      .rejects.toThrow('invalid_bot_attachment_preview_result')
+  })
+  it('opens a message-bound original Bot attachment and validates each byte chunk', async () => {
+    const invoke = vi.fn()
+    const args = { botId: 'main', sessionId: 'own-main', eventSeq: 7,
+      attachmentId: `sha256:${'a'.repeat(64)}` }
+    const transferId = '11111111-1111-4111-8111-111111111111'
+    const open = vi.fn(async (): Promise<unknown> => ({ transferId,
+      attachmentId: args.attachmentId, name: 'source.bin', bytes: 3 }))
+    const read = vi.fn(async (): Promise<unknown> => ({ transferId, offset: 0,
+      bytes: 3, chunk: Buffer.from('abc').toString('base64'), hasMore: false }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, open, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/attachment-download-open', { args }, signal))
+      .resolves.toEqual(await open())
+    await expect(executor.execute('bot/attachment-download-read',
+      { args: { transferId, offset: 0 } }, signal)).resolves.toEqual(await read())
+    expect(invoke).not.toHaveBeenCalled()
+    open.mockResolvedValueOnce({ transferId, attachmentId: args.attachmentId,
+      name: '../secret', bytes: 3 })
+    await expect(executor.execute('bot/attachment-download-open', { args }, signal))
+      .rejects.toThrow('invalid_bot_attachment_download_result')
+    read.mockResolvedValueOnce({ transferId, offset: 0, bytes: 3, chunk: '!', hasMore: false })
+    await expect(executor.execute('bot/attachment-download-read',
+      { args: { transferId, offset: 0 } }, signal)).rejects.toThrow('invalid_bot_attachment_download_result')
   })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
