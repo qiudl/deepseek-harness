@@ -387,8 +387,12 @@ describe('Desktop remote Session bridge', () => {
     const proof = remoteProof(control, 'own-2')
     const invoke = vi.fn(() => { throw Error('Bot must not fall back to naked Session prompt') })
     const botAttachment = vi.fn(async (): Promise<unknown> => result)
+    const unused = [undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined] as const
     const args = [gatewayFixture({ invoke }), undefined, control, undefined,
-      ...Array<undefined>(19).fill(undefined), botAttachment] as unknown as ConstructorParameters<typeof DesktopRemoteSessionExecutor>
+      ...unused, botAttachment] satisfies ConstructorParameters<typeof DesktopRemoteSessionExecutor>
     const executor = new DesktopRemoteSessionExecutor(...args)
     const send = { operation: 'bot.attachment.send' as const, command_id: randomUUID() as never,
       session_id: 'own-2', control: proof, request }

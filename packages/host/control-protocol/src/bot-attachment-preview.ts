@@ -1,6 +1,7 @@
 /** Bounded text or image preview tied to one visible Bot chat attachment block. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
+/** Selector for one visible attachment in a Bot-owned conversation. */
 export interface HostBotAttachmentPreviewRequest {
   readonly botId: string
   readonly sessionId: string
@@ -9,6 +10,7 @@ export interface HostBotAttachmentPreviewRequest {
   readonly offset: number
 }
 
+/** One bounded and correlated preview chunk from the Host plugin. */
 export interface HostBotAttachmentPreviewChunk extends HostBotAttachmentPreviewRequest {
   readonly name: string
   readonly total: number
@@ -23,7 +25,10 @@ const session = (value: unknown): value is string => typeof value === 'string' &
   /^[!-~]{1,256}$/u.test(value) && !value.includes('/') && !value.includes('\\') &&
   value !== '.' && value !== '..'
 
-/** Parse an exact selector supplied by a remote native client. */
+/** Parse an exact selector supplied by a remote native client.
+ * @param value - Untrusted selector value.
+ * @returns A validated Bot attachment selector.
+ */
 export function parseHostBotAttachmentPreviewRequest(value: unknown): HostBotAttachmentPreviewRequest {
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'eventSeq', 'attachmentId', 'offset']) ||
     typeof value.botId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(value.botId) ||
@@ -37,7 +42,11 @@ export function parseHostBotAttachmentPreviewRequest(value: unknown): HostBotAtt
     attachmentId: value.attachmentId, offset: value.offset }
 }
 
-/** Validate a Host reply against the exact selector before forwarding it. */
+/** Validate a Host reply against the exact selector before forwarding it.
+ * @param value - Untrusted plugin reply.
+ * @param request - Validated original selector.
+ * @returns A correlated preview chunk or null when no preview is available.
+ */
 export function parseHostBotAttachmentPreview(value: unknown,
   request: HostBotAttachmentPreviewRequest): HostBotAttachmentPreviewChunk | null {
   if (value === null) return null
@@ -55,5 +64,8 @@ export function parseHostBotAttachmentPreview(value: unknown,
     typeof value.chunk !== 'string' || Array.from(value.chunk).length !== Math.min(CHUNK, value.total - request.offset) ||
     typeof value.hasMore !== 'boolean' || value.hasMore !== (request.offset + Array.from(value.chunk).length < value.total) ||
     typeof value.whole !== 'boolean') throw Error('invalid_bot_attachment_preview_result')
-  return value as unknown as HostBotAttachmentPreviewChunk
+  return { botId: request.botId, sessionId: request.sessionId, eventSeq: request.eventSeq,
+    attachmentId: request.attachmentId, offset: request.offset, name: value.name,
+    total: value.total, sha256: value.sha256, chunk: value.chunk,
+    hasMore: value.hasMore, whole: value.whole }
 }

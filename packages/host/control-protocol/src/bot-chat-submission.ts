@@ -47,7 +47,8 @@ export function parseHostBotChatSubmission(value: unknown): HostBotChatSubmissio
  * @param request - Captured submission, independent from transport request ID.
  * @returns A correlated acceptance observation, without prompt content.
  */
-export function parseHostBotChatReceipt(value: unknown, request: HostBotChatSubmission): HostBotChatReceipt | null {
+export function parseHostBotChatReceipt(value: unknown,
+  request: Pick<HostBotChatSubmission, 'botId' | 'sessionId' | 'submissionId'>): HostBotChatReceipt | null {
   if (value === null) return null
   if (!row(value) || !exact(value, ['botId', 'sessionId', 'submissionId', 'state'])
     || value.botId !== request.botId || value.sessionId !== request.sessionId || value.submissionId !== request.submissionId

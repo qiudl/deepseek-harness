@@ -3527,6 +3527,7 @@ function botGroupClientStop(input: { readonly computerId: string
 export class UnixHostClient {
   /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
   readonly remoteBotChatSupported = true
+  /** This SDK encodes Bot attachment submissions under a separately signed Host capability. */
   readonly remoteBotAttachmentSupported = true
   /** This SDK can encode fixed owner room submissions. */
   readonly remoteBotRoomSupported = true
@@ -3600,6 +3601,7 @@ export class UnixHostClient {
   readonly remoteUiBotFoldersSupported = true
   /** This SDK validates bounded owner Bot avatar chunks. */
   readonly remoteUiBotAvatarSupported = true
+  /** This SDK validates message-bound Bot attachment previews. */
   readonly remoteUiBotAttachmentPreviewSupported = true
   /** This SDK codec accepts gzip asset chunks; the current Host must separately advertise its signed capability. */
   readonly remoteUiAssetGzipSupported = true
