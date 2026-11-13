@@ -136,6 +136,8 @@ export { parseHostBotFoldersRequest, parseHostBotFolders } from './bot-folders.t
 export type { HostBotFoldersRequest, HostBotFolders } from './bot-folders.ts'
 export { parseHostBotAvatarRequest, parseHostBotAvatar } from './bot-avatar.ts'
 export type { HostBotAvatarRequest, HostBotAvatarChunk } from './bot-avatar.ts'
+export { parseHostBotAttachmentPreviewRequest, parseHostBotAttachmentPreview } from './bot-attachment-preview.ts'
+export type { HostBotAttachmentPreviewRequest, HostBotAttachmentPreviewChunk } from './bot-attachment-preview.ts'
 export { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt } from './bot-settings-update.ts'
 export type { HostBotSettingsUpdateRequest, HostBotSettingsUpdateReceipt, HostBotSettingsUpdateChange } from './bot-settings-update.ts'
 export { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest,

@@ -306,6 +306,27 @@ describe('Desktop remote UI read-only bridge', () => {
     await expect(executor.execute('bot/avatar', { args: { botId: 'main', offset: 0 } }, signal))
       .rejects.toThrow('invalid_bot_avatar_result')
   })
+  it('reads only correlated Bot attachment preview chunks from the plugin service', async () => {
+    const invoke = vi.fn()
+    const args = { botId: 'main', sessionId: 'own-main', eventSeq: 7,
+      attachmentId: `sha256:${'a'.repeat(64)}`, offset: 0 }
+    const value = { ...args, name: 'report.txt', total: 6, sha256: 'b'.repeat(64),
+      chunk: 'report', hasMore: false, whole: true }
+    const read = vi.fn(async (): Promise<unknown> => value)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    await expect(executor.execute('bot/attachment-preview', { args }, signal)).resolves.toEqual(value)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(executor.execute('bot/attachment-preview', { args: { ...args, eventSeq: 0 } }, signal))
+      .rejects.toThrow('invalid_bot_attachment_preview_request')
+    read.mockResolvedValueOnce({ ...value, sessionId: 'foreign' })
+    await expect(executor.execute('bot/attachment-preview', { args }, signal))
+      .rejects.toThrow('invalid_bot_attachment_preview_result')
+  })
   it('preserves an absent Bot provider and suppresses chat replies after cancellation', async () => {
     const read = vi.fn(async () => null)
     const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke: vi.fn() }), () => [], read)

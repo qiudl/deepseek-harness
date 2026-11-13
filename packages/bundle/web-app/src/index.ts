@@ -74,7 +74,7 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
   HostBotSecretsRequest, HostBotSecretsMutationRequest,
   HostBotCapabilitiesRequest, HostBotCapabilitiesMutationRequest,
-  HostBotFoldersRequest, HostBotAvatarRequest, HostBotDeleteRequest,
+  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
   HostBotMemoryMutationRequest, HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -1157,6 +1157,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotCapabilities) return null
           const value = await service.readLocalBotCapabilities(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentPreviewRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAttachmentPreview?: (input: HostBotAttachmentPreviewRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAttachmentPreview) return null
+          const value = await service.readLocalBotAttachmentPreview(request, signal)
           signal.throwIfAborted()
           return value
         })
