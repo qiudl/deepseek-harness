@@ -9,6 +9,14 @@ const request = { botId: 'main', sessionId: 'chat-main', eventSeq: 7,
   attachmentId: `sha256:${'a'.repeat(64)}` }
 
 describe('Bot original attachment transfer', () => {
+  it('admits only an exact retained room-line selector', () => {
+    const room = { roomId: 'room-1', lineSeq: 4, attachmentId: request.attachmentId }
+    expect(parseHostBotAttachmentDownloadOpenRequest(room)).toEqual(room)
+    for (const invalid of [{ ...room, lineSeq: 0 }, { ...room, roomId: '../foreign' },
+      { ...room, botId: 'main' }])
+      expect(() => parseHostBotAttachmentDownloadOpenRequest(invalid))
+        .toThrow('invalid_bot_attachment_download_request')
+  })
   it('binds a safe handle to a visible message selector', () => {
     expect(parseHostBotAttachmentDownloadOpenRequest(request)).toEqual(request)
     expect(parseHostBotAttachmentDownloadOpen({ transferId, attachmentId: request.attachmentId,

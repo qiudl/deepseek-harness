@@ -2,12 +2,21 @@
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
 
 /** Selector for one original attachment in a Bot chat message. */
-export interface HostBotAttachmentDownloadOpenRequest {
+export interface HostBotChatAttachmentDownloadOpenRequest {
   readonly botId: string
   readonly sessionId: string
   readonly eventSeq: number
   readonly attachmentId: string
 }
+/** Selector for one retained original in an owner Bot group line. */
+export interface HostBotRoomAttachmentDownloadOpenRequest {
+  readonly roomId: string
+  readonly lineSeq: number
+  readonly attachmentId: string
+}
+/** Exact selector for a Bot chat event or a retained Bot group line. */
+export type HostBotAttachmentDownloadOpenRequest = HostBotChatAttachmentDownloadOpenRequest |
+  HostBotRoomAttachmentDownloadOpenRequest
 
 /** Short lived transfer handle. */
 export interface HostBotAttachmentDownloadOpen {
@@ -42,6 +51,13 @@ const size = (value: unknown): value is number | null => value === null ||
  * @returns Exact selector.
  */
 export function parseHostBotAttachmentDownloadOpenRequest(value: unknown): HostBotAttachmentDownloadOpenRequest {
+  if (record(value) && exact(value, ['roomId', 'lineSeq', 'attachmentId']) &&
+    typeof value.roomId === 'string' && /^[!-~]{1,256}$/u.test(value.roomId) &&
+    !value.roomId.includes('/') && !value.roomId.includes('\\') &&
+    value.roomId !== '.' && value.roomId !== '..' &&
+    typeof value.lineSeq === 'number' && Number.isSafeInteger(value.lineSeq) && value.lineSeq >= 1 &&
+    typeof value.attachmentId === 'string' && /^sha256:[0-9a-f]{64}$/u.test(value.attachmentId))
+    return { roomId: value.roomId, lineSeq: value.lineSeq, attachmentId: value.attachmentId }
   if (!record(value) || !exact(value, ['botId', 'sessionId', 'eventSeq', 'attachmentId']) ||
     typeof value.botId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(value.botId) ||
     typeof value.sessionId !== 'string' || !/^[!-~]{1,256}$/u.test(value.sessionId) ||

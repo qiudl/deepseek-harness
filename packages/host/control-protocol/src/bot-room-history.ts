@@ -23,6 +23,12 @@ export interface HostBotRoomHistory {
     readonly kind: string | null
     readonly text: string
     readonly time: number | null
+    readonly attachments: readonly {
+      readonly kind: 'file' | 'image'
+      readonly attachmentId: string
+      readonly name: string
+      readonly bytes: number | null
+    }[]
   }[]
   readonly nextCursor: number | null
 }
@@ -58,7 +64,7 @@ export function parseHostBotRoomHistory(value: unknown, request: HostBotRoomHist
   let previous = request.afterSeq
   const messages: HostBotRoomHistory['messages'][number][] = []
   for (const line of value.messages) {
-    if (!record(line) || !exact(line, ['seq', 'authorKind', 'authorName', 'authorRef', 'kind', 'text', 'time']) ||
+    if (!record(line) || !exact(line, ['seq', 'authorKind', 'authorName', 'authorRef', 'kind', 'text', 'time', 'attachments']) ||
       typeof line.seq !== 'number' || !Number.isSafeInteger(line.seq) || line.seq <= previous ||
       line.seq < value.oldestSeq || line.seq > value.latestSeq ||
       typeof line.authorKind !== 'string' || !['user', 'bot', 'external', 'system'].includes(line.authorKind) ||
@@ -67,10 +73,19 @@ export function parseHostBotRoomHistory(value: unknown, request: HostBotRoomHist
       (line.authorKind === 'bot') !== (line.authorRef !== null) ||
       (line.kind !== null && (typeof line.kind !== 'string' || line.kind.length < 1 || line.kind.length > 64)) ||
       typeof line.text !== 'string' || Buffer.byteLength(line.text, 'utf8') > 8192 ||
-      (line.time !== null && (typeof line.time !== 'number' || !Number.isSafeInteger(line.time) || line.time < 0)))
+      (line.time !== null && (typeof line.time !== 'number' || !Number.isSafeInteger(line.time) || line.time < 0)) ||
+      !Array.isArray(line.attachments) || line.attachments.length > 20 ||
+      !line.attachments.every(file => record(file) && exact(file, ['kind', 'attachmentId', 'name', 'bytes']) &&
+        (file.kind === 'file' || file.kind === 'image') &&
+        typeof file.attachmentId === 'string' && /^sha256:[0-9a-f]{64}$/u.test(file.attachmentId) &&
+        typeof file.name === 'string' && file.name.length > 0 && Buffer.byteLength(file.name, 'utf8') <= 512 &&
+        file.name !== '.' && file.name !== '..' && !/[\\/]/u.test(file.name) &&
+        !Array.from(file.name).some((char) => { const point = char.codePointAt(0) ?? 0; return point < 32 || point === 127 }) &&
+        (file.bytes === null || (typeof file.bytes === 'number' && Number.isSafeInteger(file.bytes) && file.bytes >= 0))))
       throw Error('invalid_bot_room_history_result')
     messages.push({ seq: line.seq, authorKind: line.authorKind as HostBotRoomHistory['messages'][number]['authorKind'],
-      authorName: line.authorName, authorRef: line.authorRef, kind: line.kind, text: line.text, time: line.time })
+      authorName: line.authorName, authorRef: line.authorRef, kind: line.kind, text: line.text, time: line.time,
+      attachments: line.attachments as HostBotRoomHistory['messages'][number]['attachments'] })
     previous = line.seq
   }
   if (value.nextCursor !== null && (messages.length === 0 || value.nextCursor !== previous))
