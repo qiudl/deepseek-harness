@@ -21,4 +21,16 @@ describe('fixed owner Bot room submission', () => {
     expect(() => parseHostBotRoomReceipt({ roomId: request.roomId, submissionId: request.submissionId,
       state: 'accepted', text: 'private' }, request)).toThrow('invalid_bot_room_receipt')
   })
+
+  it('accepts ordered staged files with optional text and rejects malformed selectors', () => {
+    const input = { roomId: 'room-1', submissionId: '11111111-1111-4111-8111-111111111111', text: '',
+      files: [{ kind: 'image', receiptId: '22222222-2222-4222-8222-222222222222',
+        attachmentId: `sha256:${'a'.repeat(64)}` }] }
+    expect(parseHostBotRoomSubmission(input).files).toEqual(input.files)
+    for (const files of [[], [input.files[0], input.files[0]],
+      [{ ...input.files[0], receiptId: 'bad' }],
+      [{ ...input.files[0], attachmentId: '../private' }],
+      [{ ...input.files[0], extra: true }], Array(6).fill(input.files[0])])
+      expect(() => parseHostBotRoomSubmission({ ...input, files })).toThrow('invalid_bot_room_submission')
+  })
 })
