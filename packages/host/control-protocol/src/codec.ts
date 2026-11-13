@@ -34,6 +34,7 @@ import { parseHostBotCapabilitiesRequest, parseHostBotCapabilitiesMutationReques
 import { parseHostBotFoldersRequest } from './bot-folders.ts'
 import { parseHostBotAvatarRequest } from './bot-avatar.ts'
 import { parseHostBotAttachmentPreviewRequest } from './bot-attachment-preview.ts'
+import { parseHostBotAttachmentSubmission } from './bot-attachment-submission.ts'
 import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
 import { parseHostBotDeleteRequest } from './bot-delete.ts'
 import { parseHostBotDuplicateRequest } from './bot-duplicate.ts'
@@ -872,6 +873,19 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.chat.receipt') {
     exactKeys(command, ['operation', 'command_id', 'request'])
     return { operation: command.operation, command_id, request: parseHostBotChatSubmission(command.request) }
+  }
+  if (command.operation === 'bot.attachment.send') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotAttachmentSubmission(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.attachment.receipt') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    return { operation: command.operation, command_id,
+      request: parseHostBotAttachmentSubmission(command.request) }
   }
   if (command.operation === 'control.status') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'controller_id'])

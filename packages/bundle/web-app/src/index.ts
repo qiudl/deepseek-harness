@@ -74,7 +74,7 @@ import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDeta
   HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
   HostBotSecretsRequest, HostBotSecretsMutationRequest,
   HostBotCapabilitiesRequest, HostBotCapabilitiesMutationRequest,
-  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest, HostBotDeleteRequest,
+  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest, HostBotAttachmentSubmission, HostBotDeleteRequest,
   HostBotDuplicateRequest, HostBotCreateRequest,
   HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
   HostBotMemoryMutationRequest, HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -966,6 +966,17 @@ export function apply(ctx: Context, config: Config): void {
           if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
           return service.mutateLocalBotCapabilities({ kind: request.kind,
             expectedRevision: request.expectedRevision, name: request.name, item: request.item }, signal)
+        }, async (operation: 'bot.attachment.send' | 'bot.attachment.receipt',
+          request: HostBotAttachmentSubmission, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            sendLocalBotAttachment?: (input: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>
+            readLocalBotAttachmentReceipt?: (input: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>
+          }
+          const method = operation === 'bot.attachment.send'
+            ? service?.sendLocalBotAttachment : service?.readLocalBotAttachmentReceipt
+          if (!method) return null
+          return method.call(service, request, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',

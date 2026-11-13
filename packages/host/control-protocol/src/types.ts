@@ -2,6 +2,7 @@ import type { RuntimeEntryAnalysisCommand } from './runtime-entry-carrier.ts'
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
+import type { HostBotAttachmentSubmission } from './bot-attachment-submission.ts'
 import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
 import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
@@ -2163,6 +2164,14 @@ export type HostRemoteSessionCommand =
   | { readonly operation: 'bot.chat.receipt'
     readonly command_id: HostControlRequestId
     readonly request: HostBotChatSubmission }
+  | { readonly operation: 'bot.attachment.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotAttachmentSubmission }
+  | { readonly operation: 'bot.attachment.receipt'
+    readonly command_id: HostControlRequestId
+    readonly request: HostBotAttachmentSubmission }
   | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
   | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
   | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }

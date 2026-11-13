@@ -31,6 +31,7 @@ import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOut
   type HostNativeRoomPreparationOutcome, type ProfileNativeRoomPreparationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotAttachmentReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotChannelMirrorMutationReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -538,6 +539,7 @@ export interface UnixHostServerOptions {
   ) => Promise<unknown>
   /** Advertise Bot admission and reconciliation only for the bundled Profile worker. */
   readonly remoteBotChatSupported?: boolean
+  readonly remoteBotAttachmentSupported?: boolean
   /** Advertise fixed owner room submission only for a worker with that plugin service. */
   readonly remoteBotRoomSupported?: boolean
   /** Advertise fixed owner group setting edits only for a worker with that plugin service. */
@@ -748,7 +750,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2119,6 +2121,7 @@ export class HostControlAuthority {
             const execute = this.options.remoteSession
             const command = frame.params.command
             const botChat = command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt'
+            const botAttachment = command.operation === 'bot.attachment.send' || command.operation === 'bot.attachment.receipt'
             const botRoom = command.operation === 'bot.room.send' || command.operation === 'bot.room.receipt'
             const botRoomUpdate = command.operation === 'bot.room.update'
             const botChannelMirrorMutation = command.operation === 'bot.channel-mirror.mutate'
@@ -2137,6 +2140,7 @@ export class HostControlAuthority {
             const botUpdateMutation = command.operation === 'bot.update.mutate'
             const botRoomLifecycle = command.operation === 'bot.room.create' || command.operation === 'bot.room.delete'
             if (!execute || (botChat && !this.options.remoteBotChatSupported) ||
+              (botAttachment && !this.options.remoteBotAttachmentSupported) ||
               (botRoom && !this.options.remoteBotRoomSupported) ||
               (botRoomUpdate && !this.options.remoteBotRoomUpdateSupported) ||
               (botChannelMirrorMutation && !this.options.remoteBotChannelMirrorMutationSupported) ||
@@ -2157,6 +2161,7 @@ export class HostControlAuthority {
             value = await execute(profileId, command, context.signal)
             if (command.operation === 'bot.chat.send' || command.operation === 'bot.chat.receipt')
               parseHostBotChatReceipt(value, command.request)
+            if (botAttachment) parseHostBotAttachmentReceipt(value, command.request)
             if (botRoom) parseHostBotRoomReceipt(value, command.request)
             if (botRoomUpdate) parseHostBotRoomUpdateReceipt(value, command.request)
             if (botChannelMirrorMutation) parseHostBotChannelMirrorMutationReceipt(value, command.request)
@@ -3316,6 +3321,7 @@ export class HostControlAuthority {
           ...(this.options.inspectCollaborationArchiveIntent ? ['profile.collaboration_archive_intent'] : []),
           ...(this.options.transitionCollaborationArchive ? ['profile.collaboration_archive_transition'] : []),
           ...(this.options.remoteSession && this.options.remoteBotChatSupported ? ['profile.remote_session.bot_chat'] : []),
+          ...(this.options.remoteSession && this.options.remoteBotAttachmentSupported ? ['profile.remote_session.bot_attachment'] : []),
           ...(this.options.remoteSession && this.options.remoteBotRoomSupported ? ['profile.remote_session.bot_room'] : []),
           ...(this.options.remoteSession && this.options.remoteBotRoomUpdateSupported ? ['profile.remote_session.bot_room_update'] : []),
           ...(this.options.remoteSession && this.options.remoteBotChannelMirrorMutationSupported
@@ -3521,6 +3527,7 @@ function botGroupClientStop(input: { readonly computerId: string
 export class UnixHostClient {
   /** This SDK encodes Bot sends and receipts; the Host must separately advertise its signed capability. */
   readonly remoteBotChatSupported = true
+  readonly remoteBotAttachmentSupported = true
   /** This SDK can encode fixed owner room submissions. */
   readonly remoteBotRoomSupported = true
   /** This SDK can encode fixed owner room settings edits. */
@@ -6106,6 +6113,9 @@ export class UnixHostClient {
     if ((input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
       && !this.inspection.capabilities.includes('profile.remote_session.bot_chat' as HostControlCapability))
       throw new HostAuthorityError('upgrade_required')
+    if ((input.command.operation === 'bot.attachment.send' || input.command.operation === 'bot.attachment.receipt')
+      && !this.inspection.capabilities.includes('profile.remote_session.bot_attachment' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
     if (!this.inspection.capabilities.includes('profile.remote_session' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
@@ -6117,6 +6127,8 @@ export class UnixHostClient {
     const value = await this.remoteProfileValue(request, input.signal)
     if (input.command.operation === 'bot.chat.send' || input.command.operation === 'bot.chat.receipt')
       parseHostBotChatReceipt(value, input.command.request)
+    if (input.command.operation === 'bot.attachment.send' || input.command.operation === 'bot.attachment.receipt')
+      parseHostBotAttachmentReceipt(value, input.command.request)
     if (input.command.operation === 'bot.room.send' || input.command.operation === 'bot.room.receipt')
       parseHostBotRoomReceipt(value, input.command.request)
     if (input.command.operation === 'bot.room.update')

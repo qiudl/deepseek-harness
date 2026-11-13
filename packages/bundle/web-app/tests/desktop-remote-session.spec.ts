@@ -4,7 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { describe, expect, it, vi } from 'vitest'
 import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
-import { parseHostBotChatSubmission, parseHostBotRoomSubmission, encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
+import { parseHostBotChatSubmission, parseHostBotAttachmentSubmission, parseHostBotRoomSubmission,
+  encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
   type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
@@ -375,6 +376,34 @@ describe('Desktop remote Session bridge', () => {
     await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_chat_receipt')
     const abort = new AbortController(); abort.abort()
     await expect(executor.execute(receipt, abort.signal)).rejects.toThrow()
+  })
+  it('spends a Bot attachment receipt only under the original Session claim', async () => {
+    const request = parseHostBotAttachmentSubmission({ botId: 'bot_1', sessionId: 'own-2',
+      submissionId: randomUUID(), receiptId: randomUUID(), kind: 'file',
+      attachmentId: `sha256:${'a'.repeat(64)}` })
+    const result = { botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted' }
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'own-2')
+    const invoke = vi.fn(() => { throw Error('Bot must not fall back to naked Session prompt') })
+    const botAttachment = vi.fn(async (): Promise<unknown> => result)
+    const args = [gatewayFixture({ invoke }), undefined, control, undefined,
+      ...Array<undefined>(19).fill(undefined), botAttachment] as unknown as ConstructorParameters<typeof DesktopRemoteSessionExecutor>
+    const executor = new DesktopRemoteSessionExecutor(...args)
+    const send = { operation: 'bot.attachment.send' as const, command_id: randomUUID() as never,
+      session_id: 'own-2', control: proof, request }
+    const receipt = { operation: 'bot.attachment.receipt' as const, command_id: randomUUID() as never, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
+    await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
+    expect(botAttachment).toHaveBeenCalledTimes(2)
+    expect(botAttachment).toHaveBeenNthCalledWith(1, 'bot.attachment.send', request, signal)
+    expect(botAttachment).toHaveBeenNthCalledWith(2, 'bot.attachment.receipt', request, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    botAttachment.mockResolvedValueOnce({ ...result, sessionId: 'foreign' })
+    await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_attachment_receipt')
   })
   it('binds terminal calls to live control and preserves only typed terminal failures', async () => {
     const control = new DesktopSessionControl()
