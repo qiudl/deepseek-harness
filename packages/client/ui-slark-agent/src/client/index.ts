@@ -1,7 +1,9 @@
 import { NativeDuetButton } from './NativeDuetButton.tsx'
 import { SlarkAccountLauncher, type SlarkAccountIdentity } from './SlarkAccountLauncher.tsx'
 import { DraftPersistence } from './DraftPersistence.tsx'
+import { createDraftPersistenceDock } from './draft-persistence-dock.ts'
 import type { DraftBridge } from './draft-persistence.ts'
+import { createDraftTransitionRegistry, type DraftTransitionBridge } from './draft-transition.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-trajectory/client'
 import { CollaborationTrajectory } from './CollaborationTrajectory.tsx'
 /** DSH `@` source for the live, employee-assigned Slark Agent directory. */
@@ -97,6 +99,7 @@ interface DesktopAgentDirectory extends WorkspaceBridge, CollaborationResultsBri
     { ok: true; value: { items: ConversationRow[]; global_pending_count: number } } |
     { ok: false; errorCode: string }>
   conversationDraft?: DraftBridge
+  conversationDraftLifecycle?: DraftTransitionBridge
   collaborationScopeAvailable?: boolean
   collaborationExecutionAvailable?: boolean
   collaborationPlanningAvailable?: boolean
@@ -142,6 +145,7 @@ declare global {
     __DSH_NATIVE_WORKBENCH__?: {
       duetStart?: (sessionId: string) => Promise<void>
       conversationDraft?: DraftBridge
+      conversationDraftLifecycle?: DraftTransitionBridge
       dictate?: (sessionId: string, signal: AbortSignal) => Promise<string | null>
     }
   }
@@ -328,20 +332,38 @@ export function apply(ctx: ClientContext): void {
       name: 'shell.mobile.collaboration', inject: injected, locale: NS,
     }, CollaborationMobileTab))
   })
+  const draftTransitions = createDraftTransitionRegistry()
+  const holdDraft = () => draftTransitions.register(() => Promise.resolve(false))
   ctx.slots.inject('conversation.input.right', () => {
     const start = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.duetStart
     const dictate = typeof window === 'undefined' ? undefined : window.__DSH_NATIVE_WORKBENCH__?.dictate
     if (!start && !dictate) return () => {}
     return ctx.slots.register({ name: 'conversation.input.right', id: 'slark-native-duet', order: 10, locale: NS,
-      inject: () => ({ ...(start ? { start } : {}), ...(dictate ? { dictate } : {}) }),
+      inject: () => ({ ...(start ? { start } : {}), ...(dictate ? { dictate, holdDraft } : {}) }),
     }, NativeDuetButton)
   })
+  ctx.effect(() => {
+    const carrier = typeof window === 'undefined' ? undefined
+      : window.__DSH_NATIVE_WORKBENCH__?.conversationDraftLifecycle ?? window.__DSH_DESKTOP_HOST__?.conversationDraftLifecycle
+    const release = carrier?.onPrepare(() => draftTransitions.prepare())
+    return () => { release?.(); draftTransitions.dispose() }
+  })
+  const draftDocks = new WeakMap<ClientContext, ReturnType<typeof createDraftPersistenceDock>>()
   ctx.slots.inject('conversation.input.dock', () => {
     const bridge = typeof window === 'undefined' ? undefined
       : window.__DSH_NATIVE_WORKBENCH__?.conversationDraft ?? window.__DSH_DESKTOP_HOST__?.conversationDraft
     if (!bridge) return () => {}
     return ctx.slots.register({ name: 'conversation.input.dock', id: 'slark-draft-persistence', order: 5, locale: NS,
-      inject: sessionId => ({ sessionId, bridge }),
+      inject: (sessionId) => {
+        const scope = ctx.sessions.scope(sessionId)
+        if (!scope) throw Error('draft_unavailable')
+        let dock = draftDocks.get(scope)
+        if (!dock) {
+          dock = createDraftPersistenceDock(ctx, scope, ctx.conversation.input.for(scope), bridge, sessionId, draftTransitions)
+          draftDocks.set(scope, dock)
+        }
+        return dock
+      },
     }, DraftPersistence)
   })
   ctx.slots.inject('conversation.input.dock', () => {
