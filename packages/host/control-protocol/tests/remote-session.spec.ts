@@ -349,6 +349,14 @@ describe('Profile remote UI read wire commands', () => {
       expect(() => decode(readFrame('bot/folders', { args }))).toThrow()
   })
 
+  it('round-trips only bounded Bot work pages without a caller-selected Bot or Session', () => {
+    const input = readFrame('bot/work', { args: { cursor: null, limit: 20 } })
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    for (const args of [{ cursor: null, limit: 0 }, { cursor: null, limit: 51 },
+      { cursor: null, limit: 20, botId: 'other' }, { cursor: null, limit: 20, sessionId: 's' }])
+      expect(() => decode(readFrame('bot/work', { args }))).toThrow()
+  })
+
   it('round-trips gzip chunks while rejecting invalid compressed offsets and selectors', () => {
     for (const offset of [0, 16 * 1024 * 1024 + 64 * 1024]) {
       const input = readFrame('asset/read-gzip-chunk', { args: { url: '/plugins/a.js', offset } })
