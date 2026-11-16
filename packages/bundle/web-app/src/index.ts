@@ -1199,6 +1199,15 @@ export function apply(ctx: Context, config: Config): void {
           const value = await service.readLocalBotAttachmentDownload(request, signal)
           signal.throwIfAborted()
           return value
+        }, async (request: HostBotWorkRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotWork?: (input: HostBotWorkRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotWork) return null
+          const value = await service.readLocalBotWork(request)
+          signal.throwIfAborted()
+          return value
         })
       const streamExecutor = new DesktopRemoteUiStreamExecutor(
         bindDesktopRemoteGateway(remoteCtx.typertGateway, desktopPeer), remoteApprovalEvents,

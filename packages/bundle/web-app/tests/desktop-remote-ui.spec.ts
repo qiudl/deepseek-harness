@@ -23,7 +23,10 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 describe('Desktop remote UI read-only bridge', () => {
   it('keeps Bot work on its explicit provider and refuses forged fields', async () => {
     const invoke = vi.fn(), read = vi.fn(async (): Promise<unknown> => ({ schemaVersion: 1, state: 'loading' }))
-    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [], undefined, read)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
     const signal = new AbortController().signal
     expect(await executor.execute('bot/work', { args: { cursor: null, limit: 20 } }, signal))
       .toEqual({ schemaVersion: 1, state: 'loading' })

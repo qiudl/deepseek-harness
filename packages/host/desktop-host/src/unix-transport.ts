@@ -30,7 +30,8 @@ import { parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOut
   type HostNativeRoomPreparationTarget,
   type HostNativeRoomPreparationOutcome, type ProfileNativeRoomPreparationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { matchHostRootAnalysisDiagnostic } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChatReceipt, parseHostBotChat, parseHostBotChatRequest,
+  parseHostBotWork, parseHostBotWorkRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAttachmentReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomReceipt } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateReceipt } from '@deepseek-ai/dsh-host-control-protocol'
@@ -565,6 +566,8 @@ export interface UnixHostServerOptions {
   readonly remoteBotRoomLifecycleSupported?: boolean
   /** Advertise existing Bot chat reads only for the bundled Profile worker. */
   readonly remoteUiBotChatSupported?: boolean
+  /** Advertise bounded Bot work reads only for the bundled Profile worker. */
+  readonly remoteUiBotWorkSupported?: boolean
   /** Advertise owner room summaries only for a worker with the fixed plugin reader. */
   readonly remoteUiBotRoomsSupported?: boolean
   /** Advertise retained owner room messages only for a worker with the fixed plugin reader. */
@@ -754,7 +757,7 @@ export type HostControlAuthorityOptions = Pick<
     | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
-    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomAttachmentSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiBotAttachmentDownloadSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
+    | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomAttachmentSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotWorkSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiBotAttachmentDownloadSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
 >
 
 /** Client trust roots and native Host process attestation. */
@@ -2191,6 +2194,7 @@ export class HostControlAuthority {
           } else {
             const execute = this.options.remoteUiRead
             if (!execute || (frame.params.endpoint === 'bot/chat' && !this.options.remoteUiBotChatSupported)
+              || (frame.params.endpoint === 'bot/work' && !this.options.remoteUiBotWorkSupported)
               || (frame.params.endpoint === 'bot/rooms' && !this.options.remoteUiBotRoomsSupported)
               || (frame.params.endpoint === 'bot/room-history' && !this.options.remoteUiBotRoomHistorySupported)
               || (frame.params.endpoint === 'bot/room-details' && !this.options.remoteUiBotRoomDetailsSupported)
@@ -2218,6 +2222,8 @@ export class HostControlAuthority {
             value = await execute(profileId, frame.params.endpoint, frame.params.payload, context.signal) as HostRemoteSessionJson
             if (frame.params.endpoint === 'bot/chat')
               parseHostBotChat(value, parseHostBotChatRequest(frame.params.payload.args))
+            if (frame.params.endpoint === 'bot/work')
+              parseHostBotWork(value, parseHostBotWorkRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/rooms')
               parseHostBotRoomList(value, parseHostBotRoomListRequest(frame.params.payload.args))
             if (frame.params.endpoint === 'bot/room-history')
@@ -3358,6 +3364,7 @@ export class HostControlAuthority {
             'profile.remote_session.control_lease'] : []),
           ...(this.options.remoteUiRead ? ['profile.remote_ui_read'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotChatSupported ? ['profile.remote_ui_read.bot_chat'] : []),
+          ...(this.options.remoteUiRead && this.options.remoteUiBotWorkSupported ? ['profile.remote_ui_read.bot_work'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotRoomsSupported ? ['profile.remote_ui_read.bot_rooms'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotRoomHistorySupported ? ['profile.remote_ui_read.bot_room_history'] : []),
           ...(this.options.remoteUiRead && this.options.remoteUiBotRoomDetailsSupported ? ['profile.remote_ui_read.bot_room_details'] : []),
@@ -3581,6 +3588,8 @@ export class UnixHostClient {
   readonly remoteBotRoomLifecycleSupported = true
   /** This SDK can encode the existing Bot identity/current-chat read. */
   readonly remoteUiBotChatSupported = true
+  /** This SDK encodes Bot work reads; the Host separately advertises its signed capability. */
+  readonly remoteUiBotWorkSupported = true
   /** This SDK can encode owner room summary reads. */
   readonly remoteUiBotRoomsSupported = true
   /** This SDK can encode retained owner room messages. */
@@ -6216,6 +6225,8 @@ export class UnixHostClient {
     if (!this.inspection.capabilities.includes('profile.remote_ui_read' as HostControlCapability)
       || (input.endpoint === 'bot/chat'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_chat' as HostControlCapability))
+      || (input.endpoint === 'bot/work'
+        && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_work' as HostControlCapability))
       || (input.endpoint === 'bot/rooms'
         && !this.inspection.capabilities.includes('profile.remote_ui_read.bot_rooms' as HostControlCapability))
       || (input.endpoint === 'bot/room-history'

@@ -3,7 +3,8 @@ import type { DesktopRemoteGateway } from './desktop-remote-gateway.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import { parseWorkbenchTerminalRequest, parseHostCollaborationSourceDescriptor } from '@deepseek-ai/dsh-host-control-protocol'
-import { parseHostBotChat, parseHostBotChatRequest } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotChat, parseHostBotChatRequest, parseHostBotWork, parseHostBotWorkRequest,
+  type HostBotWorkRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomList, parseHostBotRoomListRequest, type HostBotRoomListRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomHistory, parseHostBotRoomHistoryRequest, type HostBotRoomHistoryRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomDetails, parseHostBotRoomDetailsRequest, type HostBotRoomDetailsRequest } from '@deepseek-ai/dsh-host-control-protocol'
@@ -31,7 +32,7 @@ import { parseHostBotAttachmentDownloadOpenRequest, parseHostBotAttachmentDownlo
 import { isDesktopBearerRequest } from './desktop-model.ts'
 import { readDesktopRemotePrivateBody } from './desktop-remote-private-request.ts'
 
-const READ_ENDPOINTS = new Set(['bot/chat', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/usage', 'bot/general', 'bot/providers', 'bot/connectors', 'bot/secrets', 'bot/capability-library', 'bot/feedback', 'bot/feedback-log', 'bot/folders', 'bot/avatar', 'bot/attachment-preview', 'bot/attachment-download-open', 'bot/attachment-download-read', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
+const READ_ENDPOINTS = new Set(['bot/chat', 'bot/work', 'bot/rooms', 'bot/room-history', 'bot/room-details', 'bot/settings', 'bot/memory', 'bot/room-memory', 'bot/schedules', 'bot/schedule-history', 'bot/about', 'bot/usage', 'bot/general', 'bot/providers', 'bot/connectors', 'bot/secrets', 'bot/capability-library', 'bot/feedback', 'bot/feedback-log', 'bot/folders', 'bot/avatar', 'bot/attachment-preview', 'bot/attachment-download-open', 'bot/attachment-download-read', 'session/list', 'session/page', 'session/modelCatalog', 'terminal/environment', 'terminal/shells', 'terminal/list', 'commands/list', 'skills/list', 'session/collaborationSources', 'session/collaborationMembership',
   'llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list', 'dynamicCordisRunner/inventory',
   'credentials/describe', 'permissionPresets/catalog', 'cotTranslation/limits'])
 const STARTUP_ZERO_ARG = new Set(['llm/listProviders', 'llm/listConfigurableProviders', 'settings/describe', 'agentPresets/list',
@@ -69,7 +70,8 @@ export class DesktopRemoteUiExecutor {
     private readonly readBotAttachmentPreview?: (request: HostBotAttachmentPreviewRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly openBotAttachmentDownload?: (request: HostBotAttachmentDownloadOpenRequest, signal: AbortSignal) => Promise<unknown>,
     private readonly readBotAttachmentDownload?: (
-      request: HostBotAttachmentDownloadReadRequest, signal: AbortSignal) => Promise<unknown>) {}
+      request: HostBotAttachmentDownloadReadRequest, signal: AbortSignal) => Promise<unknown>,
+    private readonly readBotWork?: (request: HostBotWorkRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Dispatch an exact endpoint after validating the carrier payload.
@@ -92,6 +94,14 @@ export class DesktopRemoteUiExecutor {
       const value = await this.readBotChat(request.botId, signal)
       signal.throwIfAborted()
       return parseHostBotChat(value, request)
+    }
+    if (endpoint === 'bot/work') {
+      const request = parseHostBotWorkRequest(payload.args)
+      if (!this.readBotWork) throw Error('desktop remote UI: Bot work reader unavailable')
+      signal.throwIfAborted()
+      const value = await this.readBotWork(request, signal)
+      signal.throwIfAborted()
+      return parseHostBotWork(value, request)
     }
     if (endpoint === 'bot/rooms') {
       const request = parseHostBotRoomListRequest(payload.args)
