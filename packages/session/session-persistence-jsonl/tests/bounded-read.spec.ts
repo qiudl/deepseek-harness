@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -85,4 +85,33 @@ it('refuses historical generations and observes cancellation', async () => {
   await expect(ctx.sessionPersistence.inspectBounded(header.id, {
     ...options, signal: controller.signal,
   })).rejects.toThrow(/cancelled bounded read/)
+})
+
+it('refuses a source that grows while the opened descriptor is being read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-bounded-race-'))
+  roots.push(root)
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(JsonlPersistence, { root, compression: 'none' })
+  const header = meta('bounded-race')
+  const writer = await ctx.sessionPersistence.create(header)
+  await writer.append(oneTurnLog())
+  await writer.close()
+  const path = logPath(root, header.cwd, header.id, 'none')
+  const probe = await open(path, 'r')
+  const prototype = Object.getPrototypeOf(probe) as { read: typeof probe.read }
+  const originalRead = prototype.read
+  await probe.close()
+  prototype.read = (async function (this: unknown, ...args: unknown[]) {
+    const result = await Reflect.apply(originalRead, this, args) as { bytesRead: number }
+    if (args[3] === 0) await appendFile(path, '\n')
+    return result
+  }) as typeof probe.read
+  try {
+    await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+      maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 100,
+    })).rejects.toThrow(/source changed during read/)
+  } finally {
+    prototype.read = originalRead
+  }
 })
