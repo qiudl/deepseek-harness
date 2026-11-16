@@ -4,6 +4,7 @@ import { IconMicrophoneOutlineRegular, MenuSurface } from '@deepseek-ai/dsh-clie
 import css from './NativeDuetButton.module.css'
 
 type Props = PropsRuntime<'conversation.input.right'> & PropsLocale<'slarkAgent'> & {
+  holdDraft?: () => () => void
   start?: (sessionId: string) => Promise<void>
   dictate?: (sessionId: string, signal: AbortSignal) => Promise<string | null>
 }
@@ -11,7 +12,7 @@ type Props = PropsRuntime<'conversation.input.right'> & PropsLocale<'slarkAgent'
  * @param props Current Session and the advertised native start capability.
  * @returns A compact voice button with localized uncertain-connection feedback.
  */
-export function NativeDuetButton({ sessionId, start, dictate, inputActions, t }: Props) {
+export function NativeDuetButton({ sessionId, start, dictate, holdDraft, inputActions, t }: Props) {
   const owner = useMemo(() => ({ active: false, busy: false, abort: new AbortController() }), [sessionId, start, dictate, inputActions])
   const [state, setState] = useState<{ owner: typeof owner; pending: boolean; notice?: 'call' | 'dictation' | 'changed'; retained?: string } | null>(null)
   const [menu, setMenu] = useState(false)
@@ -25,6 +26,7 @@ export function NativeDuetButton({ sessionId, start, dictate, inputActions, t }:
   const begin = async (mode: 'call' | 'dictation'): Promise<void> => {
     if (!isActive() || owner.busy) return
     owner.busy = true; setMenu(false); setState({ owner, pending: true })
+    const releaseDraft = mode === 'dictation' ? holdDraft?.() : undefined
     let notice: 'call' | 'dictation' | 'changed' | undefined, retained: string | undefined
     try {
       if (mode === 'call') await start?.(sessionId)
@@ -35,6 +37,7 @@ export function NativeDuetButton({ sessionId, start, dictate, inputActions, t }:
       }
     } catch { notice = mode === 'call' ? 'call' : 'dictation' }
     finally {
+      releaseDraft?.()
       owner.busy = false
       if (isActive()) setState({ owner, pending: false, ...(notice ? { notice } : {}), ...(retained ? { retained } : {}) })
     }

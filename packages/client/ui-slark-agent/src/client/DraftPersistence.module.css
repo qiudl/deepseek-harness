@@ -1,0 +1,5 @@
+.notice { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1); font-size: 12px; }
+.notice p { flex: 1; margin: 0; }
+.notice button { flex: none; min-height: 32px; border: 0; padding: 6px 10px; border-radius: var(--dsw-radius-sm); color: inherit; background: var(--dsw-alias-interactive-bg-hover); cursor: pointer; }
+.notice button:disabled { opacity: .5; cursor: default; }
+.notice button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color); outline-offset: 2px; }
