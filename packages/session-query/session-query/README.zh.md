@@ -33,6 +33,7 @@ kind: "package-reference"
 |---|---|
 | `listSessions()` | 每个逻辑会话，最新的在前，带 `live` 与 `persisted` 可用性标志及可选 `formatStatus` |
 | `readSession(id)` | 经过回放校验的完整原始事件日志，且不会让该会话变为实时 |
+| `readColdSessionBounded(id, options)` | 在物理字节、解压字节与事件数预算内读取经过回放校验的完整当前格式持久日志，并返回来源 revision |
 | `filterSessions(filters)` | 匹配 AND 连接的元数据与可用性谓词的会话 |
 | `filterEvents(id, filters)` | 匹配元数据与字面文本谓词的语义事件文档 |
 | `readTitleSnapshots(ids)` | 每个会话的最新折叠标题，绑定到其来源 header |
@@ -148,7 +149,7 @@ kind: "package-reference"
 
 - **无调用方授权**——这是上下文范围内的可信基础设施；模型工具或 UI 必须限制调用方可检查的会话。
 - **无提供方协调器或回退**——服务在搜索上是抽象的，组合必须挂载具体后端；没有搜索提供方注册表或回退实现。
-- **精确读取回放整个日志**——`readSession`、`readSurface`、`filterEvents` 与事件追踪会加载并校验完整逻辑日志，因此非常大的历史每次调用都要付出完整检查；`listSessions` 保持轻量。
+- **精确读取回放整个日志**——`readSession`、`readSurface`、`filterEvents` 与事件追踪会加载并校验完整逻辑日志，因此非常大的历史每次调用都要付出完整检查；`listSessions` 保持轻量。`readColdSessionBounded` 遇到不支持的后端、历史格式、超预算、不完整记录或来源变化时会拒绝，不返回部分日志。
 - **字面文本扫描，而非全文搜索**——`text` 过滤器用正则表达式扫描提取出的文档且不提供排名；带排名的搜索需要挂载后端。
 
 <a id="dev-note"></a>

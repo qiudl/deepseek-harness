@@ -12,6 +12,8 @@ import SessionPersistence, {
   SessionReadOnlyError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type {
+  SessionBoundedInspection,
+  SessionBoundedReadOptions,
   SessionAccess,
   SessionHandle,
   SessionHandleReadOptions,
@@ -174,6 +176,17 @@ class TestPersistence extends SessionPersistence {
     }))
     TestPersistence.afterList?.()
     return Promise.resolve(snapshots)
+  }
+
+
+  override async inspectBounded(id: SessionIdType, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection> {
+    options.signal?.throwIfAborted()
+    const entry = TestPersistence.entries.get(id)
+    if (entry === undefined) throw new SessionPersistenceNotFoundError(id)
+    if (entry.events.length > options.maxEvents) throw new Error('event budget exceeded')
+    const revision = entryRevision(entry)
+    if (options.expectedRevision !== undefined && revision !== options.expectedRevision) throw new Error('revision changed')
+    return { meta: structuredClone(entry.meta), inheritedEventCount: SessionLogOffset(0), events: structuredClone(entry.events), revision }
   }
 }
 
@@ -476,6 +489,22 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
 )
 
 describe('session-query exact reads', () => {
+  it('replay-validates a bounded cold log and carries its source revision', async () => {
+    const valid = header('bounded-valid')
+    const corrupt = header('bounded-corrupt')
+    const validEvents = eventLog()
+    TestPersistence.reset([
+      { meta: valid, events: validEvents },
+      { meta: corrupt, events: [{ ...eventLog()[0]!, seq: SessionSeq(1) }] },
+    ])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const options = { maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1 }
+    const result = await ctx.sessionQuery.readColdSessionBounded(valid.id, options)
+    expect(result.events).toEqual(validEvents)
+    expect(result.revision).toBe(SessionPersistenceRevision('events:1'))
+    await expect(ctx.sessionQuery.readColdSessionBounded(corrupt.id, options)).rejects.toThrow(/seed event at index 0 has seq 1/)
+  })
   it('returns a detached replay-valid full log and rejects a corrupt persisted seed', async () => {
     const valid = header('valid-log', 2)
     const corrupt = header('corrupt-log', 1)

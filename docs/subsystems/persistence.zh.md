@@ -4,7 +4,7 @@
 
 事件日志的**持久性 seam**。[session.md](session.zh.md) 描述了内存中的 `Session`：仅追加的 `SessionEvent` 日志即为真源。本页描述如何使该日志持久化：抽象的 `SessionPersistence` 服务、它的提供方模型与随产品交付的 JSONL 后端、flush 检查点、崩溃恢复，以及随日志一同存储的元数据头。日志承载的事件词汇在生成的[持久化日志事件目录](../persistence-catalog.zh.md)中逐项列举。
 
-该 seam 是一个[能力 seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.zh.md)：一个抽象服务（[dsh-session-persistence](../../packages/session/session-persistence)，`ctx.sessionPersistence`）在现有 `SessionEvent` 上暴露 `create`/`open`/`stat`/`list`——**没有平行的持久化事件类型**——其中 `create` 与 `open` 返回逐会话的 `SessionHandle`（`read`/`append`/`flush`/`close`），它承载全部日志访问与单写者所有权。仓库随产品交付 [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) 作为其 provider；仓库外 provider 可以实现同一服务约定。见[基于句柄的持久化 Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.zh.md)与 [session-persistence reference](../../packages/session/session-persistence/README.zh.md)。
+该 seam 是一个[能力 seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.zh.md)：一个抽象服务（[dsh-session-persistence](../../packages/session/session-persistence)，`ctx.sessionPersistence`）在现有 `SessionEvent` 上暴露 `create`/`open`/`stat`/`list` 与可选的 `inspectBounded`——**没有平行的持久化事件类型**——其中 `create` 与 `open` 返回逐会话的 `SessionHandle`（`read`/`append`/`flush`/`close`），它承载常规日志访问与单写者所有权。仓库随产品交付 [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) 作为其 provider；仓库外 provider 可以实现同一服务约定。见[基于句柄的持久化 Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.zh.md)与 [session-persistence reference](../../packages/session/session-persistence/README.zh.md)。
 
 ## `SessionHandle`——通向已存储会话的一条打开通道
 
@@ -350,6 +350,27 @@ interface SessionPersistenceSnapshot {
 
 可选的 `eventCount`/`sizeBytes` 字段仍是供明确需要它们的 consumer 使用的低成本 backend observation。Session 列表不借助这两个字段打开冷日志，只读取 header 与经过 identity 校验的 projection cache hint，因此 cache 或 Session format 升级不会把启动变成 body scan。
 
+`inspectBounded` 在明确的物理字节、解压字节和事件数预算内读取完整的当前格式持久日志。JSONL 后端通过同一文件句柄读取；revision 变化、记录不完整、历史 generation 或超预算时均拒绝。查询服务的 `readColdSessionBounded` 还会执行回放校验，并在内存中补齐中断回合。
+
+```ts type-equiv
+/** Limits for a complete cold read. Every limit is a positive safe integer. */
+interface SessionBoundedReadOptions {
+  readonly maxPhysicalBytes: number
+  readonly maxDecodedBytes: number
+  readonly maxEvents: number
+  /** Optional revision obtained from `stat`; a changed source is refused. */
+  readonly expectedRevision?: SessionPersistenceRevision
+  readonly signal?: AbortSignal
+}
+```
+
+```ts type-equiv
+/** Complete validated log and the physical revision from which it was read. */
+interface SessionBoundedInspection extends SessionInspection {
+  readonly revision: SessionPersistenceRevision
+}
+```
+
 ## 后端
 
 随产品交付的 provider 实现抽象 `SessionPersistence` 约定（`create`/`open`/`stat`/`list`，逐会话 `SessionHandle` 承载 `read`/`append`/`flush`/`close`，全程可选支持取消），并通过共享的持久化契约套件：
@@ -429,6 +450,16 @@ abstract flush(): Promise<void>
  * @returns the snapshot, or `undefined` when the session does not exist.
  */
 abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<SessionPersistenceSnapshot | undefined>
+
+/**
+ * Read a complete current-format log within physical, decoded, and event
+ * budgets. Refuse a changed source or any exceeded budget without returning
+ * a partial log. Backends without bounded reads reject explicitly.
+ * @param id - stored Session identity.
+ * @param options - physical, decoded, and event budgets with optional revision and cancellation.
+ * @returns one complete validated current-format log and its source revision.
+ */
+inspectBounded(id: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection>
 
 /**
  * List every stored session visible to this process, in no promised order.

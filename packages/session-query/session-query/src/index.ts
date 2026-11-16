@@ -9,6 +9,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import {
   Session,
   SessionSeq,
+  interruptedTurnClosers,
   snapshotSessionEvent,
   type SessionId,
   type SessionSeq as SessionSeqType,
@@ -45,6 +46,7 @@ import {
   type Config,
 } from './config.ts'
 import { SessionCorpus } from './corpus.ts'
+import type { SessionBoundedReadOptions, SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import {
   SessionObservationReader,
   type SessionObservation,
@@ -194,6 +196,36 @@ export abstract class SessionQueryEngine extends Service {
       session: structuredClone(loaded.header),
       inheritedEventCount: loaded.inheritedEventCount,
       events: loaded.events.map(snapshotSessionEvent),
+    }
+  }
+
+  /**
+   * Read and replay-validate a complete persisted current-format log under budgets.
+   * @param sessionId - persisted Session to read.
+   * @param options - physical, decoded, and event limits with optional revision and cancellation.
+   * @returns detached log with its physical source revision.
+   */
+  async readColdSessionBounded(
+    sessionId: SessionId,
+    options: SessionBoundedReadOptions,
+  ): Promise<SessionLogSnapshot & { revision: SessionPersistenceRevision }> {
+    const loaded = await this._corpus.inspectColdBounded(sessionId, options)
+    options.signal?.throwIfAborted()
+    const events = [...loaded.events, ...interruptedTurnClosers(loaded.events)]
+    if (events.length > options.maxEvents) throw new Error('bounded Session read exceeded event budget after balancing')
+    Session.create(
+      sessionId,
+      events,
+      loaded.meta,
+      loaded.inheritedEventCount,
+      currentSessionMessageProjections,
+    )
+    options.signal?.throwIfAborted()
+    return {
+      session: structuredClone(loaded.meta),
+      inheritedEventCount: loaded.inheritedEventCount,
+      events: events.map(snapshotSessionEvent),
+      revision: loaded.revision,
     }
   }
 

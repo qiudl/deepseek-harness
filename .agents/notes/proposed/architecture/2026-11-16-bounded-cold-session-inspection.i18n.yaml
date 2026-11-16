@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for 2026-11-16-bounded-cold-session-inspection.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/proposed/architecture/2026-11-16-bounded-cold-session-inspection.md
+/agent-note-bounded-cold-session-inspection:
+  en: a6d30d4edaac3a47
+  zh: ee5b1e20168d6314
+/agent-note-bounded-cold-session-inspection/problem:
+  en: 9c23e7841f0a6f82
+  zh: 25dc13cb632b6734
+/agent-note-bounded-cold-session-inspection/proposal:
+  en: 75f3fe418cafda97
+  zh: 60354348243c6ba0
+/agent-note-bounded-cold-session-inspection/alternatives-considered:
+  en: 708232c89c875fb8
+  zh: 8c1b605e2fe8a394
+/agent-note-bounded-cold-session-inspection/acceptance-criteria:
+  en: 2b946c0c6ea81aa4
+  zh: 3977eafadac05fa6
+/agent-note-bounded-cold-session-inspection/risks:
+  en: a3e32ca638ad0618
+  zh: d400dfa2475f40eb

@@ -4,7 +4,7 @@ English | [中文](persistence.zh.md)
 
 The **durability seam** for the event log. [session.md](session.md) describes the in-memory `Session` — the append-only `SessionEvent` log that is the source of truth. This page describes how that log is made durable: the abstract `SessionPersistence` service, its provider model and shipped JSONL backend, the flush checkpoint, crash recovery, and the metadata header that travels alongside the log. The event vocabulary the log carries is enumerated, member by member, in the generated [persistence log event catalog](../persistence-catalog.md).
 
-The seam is a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): one abstract service ([dsh-session-persistence](../../packages/session/session-persistence), `ctx.sessionPersistence`) exposing `create`/`open`/`stat`/`list` over the existing `SessionEvent` — **no parallel persisted event type** — where `create` and `open` return a per-session `SessionHandle` (`read`/`append`/`flush`/`close`) that carries all log access and single-writer ownership. The repository ships [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) as its provider; out-of-tree providers may implement the same service contract. See the [handle-based persistence Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.md) and the [session-persistence reference](../../packages/session/session-persistence/README.md).
+The seam is a [capability seam](../../.agents/notes/implemented/architecture/2026-06-13-capability-seams.md): one abstract service ([dsh-session-persistence](../../packages/session/session-persistence), `ctx.sessionPersistence`) exposing `create`/`open`/`stat`/`list` and optional `inspectBounded` over the existing `SessionEvent` — **no parallel persisted event type** — where `create` and `open` return a per-session `SessionHandle` (`read`/`append`/`flush`/`close`) that carries normal log access and single-writer ownership. The repository ships [dsh-session-persistence-jsonl](../../packages/session/session-persistence-jsonl) as its provider; out-of-tree providers may implement the same service contract. See the [handle-based persistence Agent Note](../../.agents/notes/implemented/architecture/2026-08-27-handle-based-session-persistence.md) and the [session-persistence reference](../../packages/session/session-persistence/README.md).
 
 ## `SessionHandle` — one open channel onto a stored session
 
@@ -350,6 +350,27 @@ interface SessionPersistenceSnapshot {
 
 The optional `eventCount`/`sizeBytes` fields remain cheap backend observations for consumers that explicitly need them. Session listing does not use either field to open cold logs: it reads headers plus identity-checked projection-cache hints only, so a cache or Session-format upgrade never turns startup into a body scan.
 
+`inspectBounded` reads a complete current-format persisted log under explicit physical, decoded, and event budgets. The JSONL backend reads through one file handle and rejects a changed revision, an incomplete record, a historical generation, or an exceeded budget. The query service adds replay validation and in-memory interrupted-turn balancing through `readColdSessionBounded`.
+
+```ts type-equiv
+/** Limits for a complete cold read. Every limit is a positive safe integer. */
+interface SessionBoundedReadOptions {
+  readonly maxPhysicalBytes: number
+  readonly maxDecodedBytes: number
+  readonly maxEvents: number
+  /** Optional revision obtained from `stat`; a changed source is refused. */
+  readonly expectedRevision?: SessionPersistenceRevision
+  readonly signal?: AbortSignal
+}
+```
+
+```ts type-equiv
+/** Complete validated log and the physical revision from which it was read. */
+interface SessionBoundedInspection extends SessionInspection {
+  readonly revision: SessionPersistenceRevision
+}
+```
+
 ## The backend
 
 The shipped provider implements the abstract `SessionPersistence` contract (`create`/`open`/`stat`/`list`, with per-session `SessionHandle`s carrying `read`/`append`/`flush`/`close` and optional cancellation throughout) and passes the shared persistence contract suite:
@@ -429,6 +450,16 @@ abstract flush(): Promise<void>
  * @returns the snapshot, or `undefined` when the session does not exist.
  */
 abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<SessionPersistenceSnapshot | undefined>
+
+/**
+ * Read a complete current-format log within physical, decoded, and event
+ * budgets. Refuse a changed source or any exceeded budget without returning
+ * a partial log. Backends without bounded reads reject explicitly.
+ * @param id - stored Session identity.
+ * @param options - physical, decoded, and event budgets with optional revision and cancellation.
+ * @returns one complete validated current-format log and its source revision.
+ */
+inspectBounded(id: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection>
 
 /**
  * List every stored session visible to this process, in no promised order.
