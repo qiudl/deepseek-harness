@@ -1,4 +1,6 @@
 /** Bounded, read-only Bot execution work projection for an authorized Profile. */
+import { botMutationId as botId, botMutationSessionId as sessionId } from './bot-value-shape.js'
+
 export interface HostBotWorkRequest { readonly cursor: string | null; readonly limit: number }
 
 export interface HostBotWorkItem {
@@ -31,9 +33,6 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
   Reflect.ownKeys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
-const botId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,200}$/u.test(value)
-const sessionId = (value: unknown): value is string => typeof value === 'string' && /^[!-~]{1,256}$/u.test(value)
-  && !/[/\\]/u.test(value) && value !== '.' && value !== '..'
 const digest = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value)
 const cursor = (value: unknown): value is string | null => value === null ||
   (typeof value === 'string' && value.length > 0 && value.length <= 400 && /^[A-Za-z0-9_-]+$/u.test(value))
