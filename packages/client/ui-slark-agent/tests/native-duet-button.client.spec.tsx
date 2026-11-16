@@ -118,3 +118,20 @@ it('shows localized failure and ignores a late failure after changing Sessions',
   fireEvent.click(view.getByRole('button')); fail(Error('unavailable'))
   await vi.waitFor(() => { expect(view.getByRole('status').textContent).toBe('暂未确认通话连接，请查看悬浮通话状态。') })
 })
+
+it('keeps Profile preparation blocked until dictation has inserted its final semantic text', async () => {
+  const { createDraftTransitionRegistry } = await import('../src/client/draft-transition.ts')
+  const registry = createDraftTransitionRegistry(), pending = Promise.withResolvers<string>()
+  const props = dockRuntime('original')
+  props.inputActions.captureInsertion = () => ({ start: 0, end: 0, draftRev: 0 })
+  const insertText = vi.fn(() => true); props.inputActions.insertText = insertText
+  const view = render(createElement(NativeDuetButton, { ...props, t: dockTranslate,
+    dictate: () => pending.promise, holdDraft: () => registry.register(async () => false) }))
+  onTestFinished(() => { pending.resolve(''); view.unmount(); registry.dispose() })
+  fireEvent.click(view.getByRole('button', { name: '语音输入' }))
+  fireEvent.click(view.getByRole('menuitem', { name: '语音转写' }))
+  expect(await registry.prepare()).toBe(false)
+  await act(async () => { pending.resolve('最后的文字'); await pending.promise })
+  expect(insertText).toHaveBeenCalledWith('最后的文字', { start: 0, end: 0, draftRev: 0 })
+  expect(await registry.prepare()).toBe(true)
+})
