@@ -1,8 +1,10 @@
 /** Bounded, read-only Bot execution work projection for an authorized Profile. */
 import { botMutationId as botId, botMutationSessionId as sessionId } from './bot-value-shape.js'
 
+/** Cursor and page budget for one Profile-scoped Bot work read. */
 export interface HostBotWorkRequest { readonly cursor: string | null; readonly limit: number }
 
+/** One instruction's stable identity, source coordinates and proven turn state. */
 export interface HostBotWorkItem {
   readonly taskId: string
   readonly botId: string
@@ -16,6 +18,7 @@ export interface HostBotWorkItem {
   readonly updatedAt: number
 }
 
+/** Explicit loading/failure states or one versioned, same-generation work page. */
 export type HostBotWork = {
   readonly schemaVersion: 1
   readonly state: 'loading' | 'unavailable' | 'snapshot_changed'
@@ -38,15 +41,22 @@ const cursor = (value: unknown): value is string | null => value === null ||
   (typeof value === 'string' && value.length > 0 && value.length <= 400 && /^[A-Za-z0-9_-]+$/u.test(value))
 const invalid = (): never => { throw Error('invalid_bot_work') }
 
-/** Reject authority, Profile, Session and Bot selectors supplied by the caller. */
+/** Reject authority, Profile, Session and Bot selectors supplied by the caller.
+ * @param value - Untrusted Remote UI request arguments.
+ * @returns A bounded cursor and page limit.
+ */
 export function parseHostBotWorkRequest(value: unknown): HostBotWorkRequest {
   if (!record(value)) return invalid()
   if (!exact(value, ['cursor', 'limit']) || !cursor(value.cursor)
     || !integer(value.limit) || value.limit < 1 || value.limit > 50) return invalid()
-  return { cursor: value.cursor as string | null, limit: value.limit as number }
+  return { cursor: value.cursor, limit: value.limit }
 }
 
-/** Capture the whole worker result before it crosses the trusted Host boundary. */
+/** Capture the whole worker result before it crosses the trusted Host boundary.
+ * @param value - Untrusted opt-in worker reply.
+ * @param request - The validated page request that bounds item count.
+ * @returns A strictly captured work state, or null when the provider is missing.
+ */
 export function parseHostBotWork(value: unknown, request: HostBotWorkRequest): HostBotWork | null {
   if (value === null) return null
   if (!record(value)) return invalid()
