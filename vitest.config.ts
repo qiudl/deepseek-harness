@@ -173,6 +173,15 @@ const windowsRunnerCoverageExclusions = process.platform === 'win32'
       // Windows does not expose this upgrade path. The POSIX lane covers both files.
       'packages/host/desktop-host/src/plugin-tree-snapshot.ts',
       'packages/host/desktop-host/src/plugin-upgrade-plan.ts',
+      // Slark's governed Bot data upgrade is composed only by the POSIX Host.
+      // Its uid/mode, writer-quiescence and generation suites run in the POSIX
+      // lane at 100%; shared state/data parsers and failures remain measured here.
+      'packages/host/desktop-host/src/bot-upgrade-generation.ts',
+      'packages/host/desktop-host/src/profile-upgrade-journal.ts',
+      'packages/host/desktop-host/src/profile-upgrade-sessions.ts',
+      'packages/host/desktop-host/src/slark-bot-profile-upgrades.ts',
+      'packages/host/desktop-host/src/slark-bot-upgrade-policy.ts',
+      'packages/host/desktop-host/src/slark-bot-upgrade-reader.ts',
       'packages/host/desktop-host/src/posix-extension-files.ts',
       'packages/host/desktop-host/src/profile-mcp-executor.ts',
       'packages/host/desktop-host/src/profile-mcp-storage.ts',
