@@ -1295,7 +1295,8 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
 })
 
 /** The source producer is controlled here; HTTP grammar and the opaque worker reader are real. */
-it('passes the original optional native cut through HTTP and rejects malformed or mismatched cut metadata before the producer', async () => {
+// This fixture opens the POSIX owner-private SQLite directory; Windows metadata has dedicated native suites.
+it.skipIf(process.platform === 'win32')('passes the original optional native cut through HTTP and rejects malformed or mismatched cut metadata before the producer', async () => {
   const f = await fixture(true, randomUUID())
   await f.call()
   const body = f.commands.at(-1)
