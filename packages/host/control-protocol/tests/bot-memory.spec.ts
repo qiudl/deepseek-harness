@@ -13,7 +13,10 @@ const page = { botId: 'main', available: true, total: 3, entries: [entry, { ...e
 describe('native Bot memory page', () => {
   it('validates the exact selector and stable page continuity', () => {
     expect(parseHostBotMemoryRequest(request)).toEqual(request)
+    expect(parseHostBotMemory(null, request)).toBeNull()
     expect(parseHostBotMemory(page, request)).toEqual(page)
+    expect(parseHostBotMemory({ ...page, summary: null }, request))
+      .toMatchObject({ summary: null })
     const next = { ...request, cursor: `${digest}:2`, summarize: false }
     expect(parseHostBotMemory({ ...page, entries: [{ ...entry, text: 'Third' }], nextCursor: null }, next))
       .toMatchObject({ total: 3, nextCursor: null })
