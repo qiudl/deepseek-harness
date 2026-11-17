@@ -1962,7 +1962,7 @@ export type HostExtensionOperationId = Branded<'HostExtensionOperationId'>
 export type HostExtensionKind = 'plugin' | 'mcp' | 'skill'
 /** Paths and executable arguments are never accepted as operation selectors. */
 export type HostExtensionCommand =
-  | { readonly action: 'inventory'; readonly kind: HostExtensionKind }
+  | { readonly action: 'inventory'; readonly kind: HostExtensionKind; readonly plugin_versions?: 1 }
   | { readonly action: 'prepare'; readonly kind: HostExtensionKind; readonly payload: string }
   | {
     readonly action: 'commit'
@@ -1987,6 +1987,8 @@ export type HostExtensionResponse =
     /** Explicit support for confirmed GitHub directory archives; absent means unsupported. */
     readonly plugin_remove?: boolean
     readonly plugin_update?: boolean
+    /** Opt-in installed package metadata; absent for legacy inventory requests. */
+    readonly plugin_versions?: 1
     readonly plugin_toggle?: boolean
     readonly skill_archives?: boolean
     readonly skill_remove?: boolean
@@ -2000,6 +2002,8 @@ export type HostExtensionResponse =
       readonly id: string
       readonly name: string
       readonly transport: string
+      /** Installed manifest version; never a claim about an already running worker. */
+      readonly plugin_version?: string
       readonly model_invocable?: boolean
       readonly user_invocable?: boolean
       readonly skill_source?: 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other'

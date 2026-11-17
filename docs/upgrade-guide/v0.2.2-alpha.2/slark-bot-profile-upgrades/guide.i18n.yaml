@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/slark-bot-profile-upgrades/guide.md
+/:
+  en: 957f100e9019540f
+  zh: 439a3fb076b6c4e0
+/existing-slark-bot-upgrades:
+  en: 3fc991aeee36c96a
+  zh: 900077b8a362f0c6
+/existing-slark-bot-upgrades/change:
+  en: c8ebad7902aedd8f
+  zh: a0fdbcc791ac01be
+/existing-slark-bot-upgrades/migration:
+  en: 32d440553ba9c5fe
+  zh: fa62cd80cd53fc2d

@@ -18,6 +18,8 @@ export interface PluginInventoryEntry {
   readonly entryId: PluginEntryId
   /** Exact module specifier imported by the Loader entry. */
   readonly moduleName: string
+  /** Package identity resolved in this worker; activation and a fresh generation are verified separately. */
+  readonly packageVersion?: string
   /** Local package display metadata, independent of whether the entry is enabled. */
   readonly meta?: PluginLocalizedMeta
   /** Effective Loader enablement, including disabled ancestor groups. */

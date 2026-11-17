@@ -13,7 +13,7 @@ import { setTimeout } from 'node:timers/promises'
  */
 export async function waitForPluginRuntime(
   worker: { origin: string; bootstrapCookie: { name: string; value: string } },
-  expected: readonly { entryId: string; moduleName: string }[],
+  expected: readonly { entryId: string; moduleName: string; packageVersion?: string }[],
   signal: AbortSignal,
   absent: readonly string[] = [],
   disabled: readonly { entryId: string; moduleName: string }[] = [],
@@ -58,7 +58,7 @@ export async function waitForPluginRuntime(
       const matches = entries.filter((entry: unknown) => typeof entry === 'object' && entry !== null
         && (entry as { entryId?: unknown }).entryId === entryId)
       if (matches.length > 1) throw new Error('invalid_runtime_response')
-      return matches[0] as { moduleName?: unknown; enabled?: unknown; fiberPhase?: unknown } | undefined
+      return matches[0] as { moduleName?: unknown; packageVersion?: unknown; enabled?: unknown; fiberPhase?: unknown } | undefined
     })
     // REQ-20261028-0021: a fiber can report failed during the same boot that later activates it
     // (the runtime retries startup while the composition settles); only the bounded lifetime
@@ -77,6 +77,7 @@ export async function waitForPluginRuntime(
       return row?.moduleName === moduleName && row.enabled === false && row.fiberPhase === null
     })
     if (removed && inactive && matching.every((entry, index) => entry !== undefined && entry.moduleName === expected[index]?.moduleName
+      && (expected[index]?.packageVersion === undefined || entry.packageVersion === expected[index].packageVersion)
       && entry.enabled === true && entry.fiberPhase === 'active')) return
     await setTimeout(100, undefined, { signal: lifetime })
   }

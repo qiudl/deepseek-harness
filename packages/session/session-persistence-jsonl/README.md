@@ -183,3 +183,5 @@ These limits define when this backend is a poor fit or needs special operational
 None.
 
 </details>
+
+Owner-local import recovery uses `OwnerMigrationImportService.find()` when an absent original intent is expected: it returns `undefined` without staging another import. `status()` retains its not-found error. Both lookups retain the same transfer, generation, installation and Profile binding and perform terminal secret cleanup; unrelated storage failures remain errors.

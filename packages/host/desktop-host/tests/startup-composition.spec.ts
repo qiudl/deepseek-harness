@@ -50,13 +50,15 @@ const mocks = vi.hoisted(() => ({
   recoveryPrepare: vi.fn(async (_profile: unknown, _preflight: unknown) => undefined),
   packagedRuntimeAppRoot: vi.fn(() => '/fixture/runtime-app'),
   pluginOptions: undefined as ConstructorParameters<typeof import('../src/profile-plugin-executor.ts').ProfilePluginExecutor>[0] | undefined,
-  verifyRollback: vi.fn(async () => ({ spec: 'bundled:ds-bot@0.2.10', digest: 'd'.repeat(64) })),
+  upgradeOptions: undefined as ConstructorParameters<typeof import('../src/slark-bot-profile-upgrades.ts').BotProfileUpgrades>[0] | undefined,
+  verifyRollback: vi.fn(async () => ({ spec: 'bundled:ds-bot@0.2.0', digest: 'd'.repeat(64) })),
   verifyTarget: vi.fn(async () => 'e'.repeat(64)),
   captureTree: vi.fn(() => ({ bytes: Buffer.from('tree'), digest: 'f'.repeat(64) })),
   prepareUpgrade: vi.fn(async () => ({ patch: '[]\n', patches: [] })),
 }))
 
-vi.mock('@deepseek-ai/dsh-app-boot', () => ({
+vi.mock('@deepseek-ai/dsh-app-boot', async load => ({
+  ...await load<typeof import('@deepseek-ai/dsh-app-boot')>(),
   loadProfileDirectory: mocks.loadProfileDirectory,
   loadOverlayPatches: mocks.loadOverlayPatches,
 }))
@@ -69,6 +71,14 @@ vi.mock('../src/profile-plugin-executor.ts', async (load) => {
   return { ...actual, ProfilePluginExecutor: class extends actual.ProfilePluginExecutor {
     constructor(options: ConstructorParameters<typeof actual.ProfilePluginExecutor>[0]) {
       super(options); mocks.pluginOptions = options
+    }
+  } }
+})
+vi.mock('../src/slark-bot-profile-upgrades.ts', async (load) => {
+  const actual = await load<typeof import('../src/slark-bot-profile-upgrades.ts')>()
+  return { ...actual, BotProfileUpgrades: class extends actual.BotProfileUpgrades {
+    constructor(options: ConstructorParameters<typeof actual.BotProfileUpgrades>[0]) {
+      super(options); mocks.upgradeOptions = options
     }
   } }
 })
@@ -140,12 +150,16 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
   const bundledPluginsRoot = join(root, 'bundled-plugins'); mkdirSync(bundledPluginsRoot, { mode: 0o755 })
   writeFileSync(join(bundledPluginsRoot, 'dsh-duet-0.3.0.tgz'), BUNDLED_ARCHIVE, { mode: 0o644 })
   const botArchive = Buffer.from('bundled bot archive'); const botDigest = createHash('sha256').update(botArchive).digest('hex')
-  writeFileSync(join(bundledPluginsRoot, 'ds-bot-0.2.16.tgz'), botArchive, { mode: 0o644 })
+  writeFileSync(join(bundledPluginsRoot, 'ds-bot-0.3.8-slark.1.tgz'), botArchive, { mode: 0o644 })
   writeFileSync(join(bundledPluginsRoot, 'catalog.v1.json'), JSON.stringify({ schemaVersion: 1, plugins: [{
     name: 'dsh-duet', version: '0.3.0', file: 'dsh-duet-0.3.0.tgz', sha256: BUNDLED_DIGEST,
     repository: 'https://github.com/qiudl/dsh-duet.git', sourceSha: 'c'.repeat(40), entryIds: ['duplex-harness-control'] }, {
-    name: 'ds-bot', version: '0.2.16', file: 'ds-bot-0.2.16.tgz', sha256: botDigest,
+    name: 'ds-bot', version: '0.3.8-slark.1', file: 'ds-bot-0.3.8-slark.1.tgz', sha256: botDigest,
     repository: 'https://github.com/qiudl/ds-bot.git', sourceSha: 'd'.repeat(40), entryIds: ['bot', 'web-search-auto'] }] }), { mode: 0o644 })
+  writeFileSync(join(bundledPluginsRoot, 'profile-upgrades.v1.json'), JSON.stringify({
+    schemaVersion: 1, upgrades: [{ policy: 'ds-bot-v1', name: 'ds-bot', targetVersion: '0.3.8-slark.1',
+      targetSha256: botDigest, sources: [{ version: '0.2.0', sha256: 'd'.repeat(64) }] }],
+  }), { mode: 0o644 })
   writeFileSync(deviceKey, Buffer.alloc(32, 7), { mode: 0o600 })
   writeFileSync(accountKeyringPath, keyring, { mode: 0o600 })
   writeFileSync(installationPrivateKeyPath,
@@ -351,35 +365,62 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const lifetime = { kind: 'plugin' as const, signal, guard() {} }
   const profileRoot = join(root, 'profiles', profile.profileId)
   const homePatch = join(profileRoot, 'cordis.patch.yml')
+  const upgradeOptions = mocks.upgradeOptions
+  if (!upgradeOptions) throw Error('missing governed upgrade owner composition')
+  expect(upgradeOptions.profileRoot(profile.profileId)).toBe(profileRoot)
+  expect(() => upgradeOptions.profileRoot(randomUUID())).toThrow()
+  const savedHomePatch = readFileSync(homePatch)
+  for (const [config, expected] of [
+    [undefined, 'bot'], [{}, 'bot'], [null, undefined], [[], undefined], ['invalid', undefined],
+    [{ home: 'relative' }, undefined], [{ home: 3 }, undefined], [{ home: join(profileRoot, 'bot') }, 'bot'],
+  ] as const) {
+    mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [{ insert: [{ id: 'bot', name: 'ds-bot', config }] }] } as never)
+    expect(upgradeOptions.home(profile.profileId)).toBe(expected)
+  }
+  expect(upgradeOptions.home(profile.profileId)).toBe('bot')
+  await upgradeOptions.workers.withProfileMaintenance(profile.profileId, async (permit) => {
+    await upgradeOptions.materialize(upgradeOptions.profile(profile.profileId), permit)
+    expect((await permit.activate()).generation).toBe(workerSpecs.length)
+  })
+  writeFileSync(homePatch, savedHomePatch, { mode: 0o600 })
   if (existsSync(homePatch)) unlinkSync(homePatch)
+  mocks.loadProfileDirectory.mockReturnValueOnce({
+    layers: [{ packageName: 'fixture', patches: [{ insert: [{ id: 'bot', name: 'ds-bot', config: { home: join(profileRoot, 'bot') } }] }] }],
+    patches: [],
+  } as never)
+  expect(upgradeOptions.home(profile.profileId)).toBe('bot')
   mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
   mocks.pluginEntries.mockReturnValueOnce([]).mockReturnValueOnce([
     { entryId: 'include:bot', moduleName: 'ds-bot' }, { entryId: 'include:web-search-auto', moduleName: 'ds-bot/web-search' },
   ])
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
-    .resolves.toMatchObject({ patch: '[]\n', rollback: { spec: 'bundled:ds-bot@0.2.10' } })
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'other', 'bundled:other@0.2.16', '[]\n', 'file:old.tgz'))
-    .rejects.toThrow('upgrade_required')
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
+    .resolves.toMatchObject({ patch: '[]\n', rollback: { spec: 'bundled:ds-bot@0.2.0' } })
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'other', 'bundled:other@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('profile_upgrade_policy_unavailable')
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.9', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
+    .rejects.toThrow('profile_upgrade_source_unsupported')
   const catalogGet = vi.spyOn(BundledPluginCatalog.prototype, 'get').mockReturnValueOnce(undefined)
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
     .rejects.toThrow('bundled_plugin_unavailable')
   catalogGet.mockRestore()
   mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [{}] } as never)
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
     .rejects.toThrow('plugin_bundle_missing')
   mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
   mocks.prepareUpgrade.mockResolvedValueOnce({ patch: '[', patches: [] })
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
     .rejects.toThrow('invalid_patch')
   mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [
     { packageName: 'ds-bot', patches: [] }, { packageName: 'base', patches: [] },
   ], patches: [], skippedBundles: [] } as never)
   writeFileSync(homePatch, '[]\n', { mode: 0o600 })
   mocks.pluginEntries.mockReturnValueOnce([]).mockReturnValueOnce([])
-  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.2.16', '[]\n', 'file:old.tgz'))
+  await expect(pluginOptions.upgradePlan(profile.profileId, 'ds-bot', 'bundled:ds-bot@0.3.8-slark.1', '[]\n', 'file:old.tgz'))
     .rejects.toThrow('plugin_entry_conflict')
   const upgrade = { operationId: randomUUID(), beforeDigest: 'a'.repeat(64), afterDigest: 'b'.repeat(64),
-    rollbackSpec: 'bundled:ds-bot@0.2.10', rollbackDigest: 'd'.repeat(64), treeDigest: 'c'.repeat(64) }
+    rollbackSpec: 'bundled:ds-bot@0.2.0', rollbackDigest: 'd'.repeat(64), treeDigest: 'c'.repeat(64) }
   await expect(pluginOptions.rollbackUpgrade(profileRoot, upgrade, lifetime)).resolves.toBe('f'.repeat(64))
   await expect(pluginOptions.verifyRollbackTree(profileRoot, upgrade, lifetime)).resolves.toBe('f'.repeat(64))
   await expect(pluginOptions.verifyRetainedRollbackTree(profileRoot, upgrade, '/retained', lifetime)).resolves.toBe('f'.repeat(64))
@@ -393,8 +434,40 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(pluginOptions.verifyRollbackTree(profileRoot, upgrade, lifetime)).rejects.toThrow('invalid_recovery')
   mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.9', digest: 'd'.repeat(64) })
   await expect(pluginOptions.verifyRetainedRollbackTree(profileRoot, upgrade, '/retained', lifetime)).rejects.toThrow('invalid_recovery')
-  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:ds-bot@0.2.16', lifetime)).resolves.toBeUndefined()
-  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:other@0.2.16', lifetime)).rejects.toThrow('bundled_plugin_unavailable')
+  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:ds-bot@0.3.8-slark.1', lifetime)).resolves.toBeUndefined()
+  await expect(pluginOptions.verifyUpgradeTarget(profileRoot, 'bundled:other@0.3.8-slark.1', lifetime)).rejects.toThrow('bundled_plugin_unavailable')
+  const participant: Parameters<typeof upgradeOptions.recoverPackage>[3] = {
+    recovery: { digest: 'a'.repeat(64), beforeRootDigest: 'b'.repeat(64), afterRootDigest: 'c'.repeat(64) },
+    rewritePatch: patch => patch, prepare() {}, selectData: async () => {},
+    restart: async () => ({ origin: 'http://127.0.0.1:43123', generation: workerSpecs.length,
+      bootstrapCookie: { name: 'fixture', value: 'private' } }),
+    rollbackAllowed: () => false, restoreData: async () => {},
+  }
+  await expect(upgradeOptions.recoverPackage(profile.profileId, {
+    action: 'install', packageName: 'startup-plugin', spec: 'startup-plugin@1.0.0',
+    originalSpecDigest: 'a'.repeat(64), scopeDigest: 'b'.repeat(64), removedIds: [], stage: 'prepared',
+  }, lifetime, participant)).rejects.toThrow('invalid_recovery')
+  const packageManifest = join(profileRoot, 'profiles/web/package.json')
+  const originalManifest = readFileSync(packageManifest)
+  writeFileSync(packageManifest, JSON.stringify({ dependencies: { 'ds-bot': `file:.bundled-plugins/${'d'.repeat(64)}.tgz` },
+    dsh: { profile: { bundles: ['ds-bot'] } } }), { mode: 0o600 })
+  mocks.pluginEntries.mockReturnValueOnce([{ entryId: 'include:bot', moduleName: 'ds-bot' }])
+  await pluginOptions.acknowledge(profile.profileId, 'ds-bot', lifetime, participant)
+  expect(mocks.pluginRuntime).toHaveBeenLastCalledWith(expect.anything(), [
+    { entryId: 'include:bot', moduleName: 'ds-bot', packageVersion: '0.2.0' },
+  ], signal)
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'invalid', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.acknowledge(profile.profileId, 'ds-bot', lifetime, participant)).rejects.toThrow('plugin_version_mismatch')
+  mocks.verifyRollback.mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.0', digest: 'd'.repeat(64) })
+    .mockResolvedValueOnce({ spec: 'bundled:ds-bot@0.2.1', digest: 'd'.repeat(64) })
+  await expect(pluginOptions.acknowledge(profile.profileId, 'ds-bot', lifetime, participant)).rejects.toThrow('plugin_version_mismatch')
+  unlinkSync(packageManifest)
+  mocks.pluginEntries.mockReturnValueOnce([{ entryId: 'include:bot', moduleName: 'ds-bot' }])
+  await pluginOptions.acknowledge(profile.profileId, 'ds-bot', lifetime, participant)
+  expect(mocks.pluginRuntime).toHaveBeenLastCalledWith(expect.anything(), [
+    { entryId: 'include:bot', moduleName: 'ds-bot' },
+  ], signal)
+  writeFileSync(packageManifest, originalManifest, { mode: 0o600 })
   mocks.pluginCommand.mockClear(); mocks.pluginEntries.mockClear()
   const tree = (directory: string): unknown[] => readdirSync(directory).sort().map((name) => {
     const path = join(directory, name), metadata = lstatSync(path)
@@ -486,7 +559,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
   await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
     .resolves.toEqual(analysisCommand)
-  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, collaborationSignal)
+  // REQ-20261117-0005: the owner combines cancellation lifetimes; identity is not the forwarding contract.
+  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, expect.any(AbortSignal))
   const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
   if (!deliveryReceiver) throw new Error('missing original delivery receiver')
   expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()
@@ -774,6 +848,11 @@ it.skipIf(process.platform === 'win32')('restores a partially written Account cl
   if (!claims) throw Error('missing model claim recovery')
   const authorizeAccountProfile = () => application.host.authorizeAccountModelClaimRecovery(account)
   expect(claims.status({ candidateId, authorizeAccountProfile })?.status).toBe('pending')
+  let authorizations = 0
+  await expect(claims.restore({ candidateId, operationId,
+    authorizeAccountProfile: () => ++authorizations === 1 ? profile.profileId : randomUUID(),
+  })).rejects.toMatchObject({ code: 'profile_mismatch' })
+  expect(marker.pending(profile.profileId)).toBe(true)
   expect(await claims.restore({ candidateId, operationId, authorizeAccountProfile })).toEqual({
     state: 'restored', cleanupPending: false,
   })

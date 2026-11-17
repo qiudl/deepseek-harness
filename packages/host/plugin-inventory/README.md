@@ -114,3 +114,5 @@ These limits define what a point-in-time inventory cannot tell a client. They ar
 None.
 
 </details>
+
+Loader rows may carry `packageVersion` from the package resolved for that exact module. Missing package metadata leaves it absent. The version describes resolved code; consumers must separately require enabled entries and active fibers on a fresh worker before acknowledging an upgrade.

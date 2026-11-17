@@ -684,8 +684,9 @@ function accountChallengeParams(params: Record<string, unknown>) {
 function extensionCommand(value: unknown): HostExtensionCommand {
   const command = record(value)
   if (command.action === 'inventory') {
-    exactKeys(command, ['action', 'kind'])
-    return { action: 'inventory', kind: extensionKind(command.kind) }
+    exactKeys(command, ['action', 'kind', ...('plugin_versions' in command ? ['plugin_versions'] : [])])
+    if ('plugin_versions' in command && (command.kind !== 'plugin' || command.plugin_versions !== 1)) reject()
+    return { action: 'inventory', kind: extensionKind(command.kind), ...('plugin_versions' in command ? { plugin_versions: 1 as const } : {}) }
   }
   if (command.action === 'prepare') {
     exactKeys(command, ['action', 'kind', 'payload'])
@@ -1085,11 +1086,12 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
       ...(scripts ? { scripts, script_digest: digest(result.script_digest) } : {}) }
   }
   if (result.state === 'inventory') {
-    exactKeys(result, ['state', 'kind', 'entries', ...('plugin_remove' in result ? ['plugin_remove'] : []), ...('plugin_update' in result ? ['plugin_update'] : []), ...('plugin_toggle' in result ? ['plugin_toggle'] : []), ...('skill_archives' in result ? ['skill_archives'] : []), ...('skill_remove' in result ? ['skill_remove'] : []), ...('skill_replace' in result ? ['skill_replace'] : []), ...('skill_files' in result ? ['skill_files'] : []), ...('skill_invocation' in result ? ['skill_invocation'] : []), ...('mcp_remove' in result ? ['mcp_remove'] : []), ...('mcp_update' in result ? ['mcp_update'] : [])])
+    exactKeys(result, ['state', 'kind', 'entries', ...('plugin_remove' in result ? ['plugin_remove'] : []), ...('plugin_update' in result ? ['plugin_update'] : []), ...('plugin_versions' in result ? ['plugin_versions'] : []), ...('plugin_toggle' in result ? ['plugin_toggle'] : []), ...('skill_archives' in result ? ['skill_archives'] : []), ...('skill_remove' in result ? ['skill_remove'] : []), ...('skill_replace' in result ? ['skill_replace'] : []), ...('skill_files' in result ? ['skill_files'] : []), ...('skill_invocation' in result ? ['skill_invocation'] : []), ...('mcp_remove' in result ? ['mcp_remove'] : []), ...('mcp_update' in result ? ['mcp_update'] : [])])
     if ('mcp_update' in result && (result.kind !== 'mcp' || typeof result.mcp_update !== 'boolean')) reject()
     if ('mcp_remove' in result && (result.kind !== 'mcp' || typeof result.mcp_remove !== 'boolean')) reject()
     if ('skill_invocation' in result && (result.kind !== 'skill' || typeof result.skill_invocation !== 'boolean')) reject()
     if ('plugin_remove' in result && (result.kind !== 'plugin' || typeof result.plugin_remove !== 'boolean')) reject()
+    if ('plugin_versions' in result && (result.kind !== 'plugin' || result.plugin_versions !== 1)) reject()
     if ('plugin_update' in result && (result.kind !== 'plugin' || typeof result.plugin_update !== 'boolean')) reject()
     if ('plugin_toggle' in result && (result.kind !== 'plugin' || typeof result.plugin_toggle !== 'boolean')) reject()
     if ('skill_remove' in result && (result.kind !== 'skill' || typeof result.skill_remove !== 'boolean')) reject()
@@ -1100,13 +1102,16 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
     const entries = result.entries.map((value: unknown) => {
       const entry = record(value)
       const invocation = 'model_invocable' in entry || 'user_invocable' in entry
-      exactKeys(entry, ['id', 'name', 'transport', ...(invocation ? ['model_invocable', 'user_invocable'] : []), ...('plugin_state' in entry ? ['plugin_state'] : []), ...('skill_source' in entry ? ['skill_source', 'skill_status'] : []), ...('effective_source' in entry ? ['effective_source'] : [])])
+      exactKeys(entry, ['id', 'name', 'transport', ...(invocation ? ['model_invocable', 'user_invocable'] : []), ...('plugin_state' in entry ? ['plugin_state'] : []), ...('plugin_version' in entry ? ['plugin_version'] : []), ...('skill_source' in entry ? ['skill_source', 'skill_status'] : []), ...('effective_source' in entry ? ['effective_source'] : [])])
       if ('skill_source' in entry && (result.kind !== 'skill' || !invocation
         || typeof entry.skill_source !== 'string' || !['user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(entry.skill_source)
         || typeof entry.skill_status !== 'string' || !['effective', 'shadowed', 'not_visible'].includes(entry.skill_status))) reject()
       if ('effective_source' in entry && (entry.skill_status !== 'shadowed' || typeof entry.effective_source !== 'string'
         || !['user-dsh', 'user-agents', 'custom', 'bundled', 'runtime', 'other'].includes(entry.effective_source))) reject()
       if (entry.skill_status === 'shadowed' && !('effective_source' in entry)) reject()
+      if ('plugin_version' in entry && (result.kind !== 'plugin' || result.plugin_versions !== 1
+        || typeof entry.plugin_version !== 'string' || entry.plugin_version.length > 64
+        || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(entry.plugin_version))) reject()
       if ('plugin_state' in entry && (result.kind !== 'plugin' || typeof entry.plugin_state !== 'string'
         || !['enabled', 'disabled', 'mixed', 'unsupported'].includes(entry.plugin_state))) reject()
       if (invocation && (result.kind !== 'skill' || typeof entry.model_invocable !== 'boolean' || typeof entry.user_invocable !== 'boolean')) reject()
@@ -1118,10 +1123,11 @@ function extensionResponse(result: Record<string, unknown>): HostExtensionRespon
       return { id: entry.id as string, name: entry.name as string, transport: entry.transport as string,
         ...(invocation ? { model_invocable: entry.model_invocable as boolean, user_invocable: entry.user_invocable as boolean } : {}),
         ...('plugin_state' in entry ? { plugin_state: entry.plugin_state as 'enabled' | 'disabled' | 'mixed' | 'unsupported' } : {}),
+        ...('plugin_version' in entry ? { plugin_version: entry.plugin_version as string } : {}),
         ...('skill_source' in entry ? { skill_source: entry.skill_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other', skill_status: entry.skill_status as 'effective' | 'shadowed' | 'not_visible' } : {}),
         ...('effective_source' in entry ? { effective_source: entry.effective_source as 'user-dsh' | 'user-agents' | 'custom' | 'bundled' | 'runtime' | 'other' } : {}) }
     })
-    return { state: 'inventory', kind: extensionKind(result.kind), entries, ...('plugin_remove' in result ? { plugin_remove: result.plugin_remove as boolean } : {}), ...('plugin_update' in result ? { plugin_update: result.plugin_update as boolean } : {}), ...('plugin_toggle' in result ? { plugin_toggle: result.plugin_toggle as boolean } : {}), ...('skill_archives' in result ? { skill_archives: result.skill_archives as boolean } : {}), ...('skill_remove' in result ? { skill_remove: result.skill_remove as boolean } : {}), ...('skill_replace' in result ? { skill_replace: result.skill_replace as boolean } : {}), ...('skill_files' in result ? { skill_files: result.skill_files as boolean } : {}), ...('skill_invocation' in result ? { skill_invocation: result.skill_invocation as boolean } : {}), ...('mcp_remove' in result ? { mcp_remove: result.mcp_remove as boolean } : {}), ...('mcp_update' in result ? { mcp_update: result.mcp_update as boolean } : {}) }
+    return { state: 'inventory', kind: extensionKind(result.kind), entries, ...('plugin_remove' in result ? { plugin_remove: result.plugin_remove as boolean } : {}), ...('plugin_update' in result ? { plugin_update: result.plugin_update as boolean } : {}), ...('plugin_versions' in result ? { plugin_versions: 1 as const } : {}), ...('plugin_toggle' in result ? { plugin_toggle: result.plugin_toggle as boolean } : {}), ...('skill_archives' in result ? { skill_archives: result.skill_archives as boolean } : {}), ...('skill_remove' in result ? { skill_remove: result.skill_remove as boolean } : {}), ...('skill_replace' in result ? { skill_replace: result.skill_replace as boolean } : {}), ...('skill_files' in result ? { skill_files: result.skill_files as boolean } : {}), ...('skill_invocation' in result ? { skill_invocation: result.skill_invocation as boolean } : {}), ...('mcp_remove' in result ? { mcp_remove: result.mcp_remove as boolean } : {}), ...('mcp_update' in result ? { mcp_update: result.mcp_update as boolean } : {}) }
   }
   if (result.state !== 'receipt') reject()
   exactKeys(result, ['state', 'operation_id', 'outcome', 'cancellation_requested', 'created_at', 'updated_at',

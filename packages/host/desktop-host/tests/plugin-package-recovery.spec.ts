@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { upgradePatchScope, validPluginPackageRecovery } from '../src/plugin-package-recovery.ts'
+import { upgradePatchScope, upgradeRootPatchScope, validPluginPackageRecovery } from '../src/plugin-package-recovery.ts'
 
 const intent = {
   action: 'install', packageName: 'fixture', spec: 'fixture@1.0.0',
@@ -90,4 +90,13 @@ it.each([
   Array.from({ length: 129 }, (_, i) => `include:${i}`),
 ])('rejects invalid or oversized removed entry identities: %j', (...removedIds) => {
   expect(validPluginPackageRecovery({ ...intent, action: 'remove', spec: undefined, removedIds })).toBe(false)
+})
+
+
+it('binds a data upgrade to exactly its predecessor and candidate root patches', () => {
+  const digest = (patch: string | null) => createHash('sha256').update(JSON.stringify(patch)).digest('hex')
+  const data = { digest: 'a'.repeat(64), beforeRootDigest: digest(null), afterRootDigest: digest('[]\n') }
+  expect(upgradeRootPatchScope(null, data)).toEqual({ dataUpgrade: true })
+  expect(upgradeRootPatchScope('[]\n', data)).toEqual({ dataUpgrade: true })
+  expect(() => upgradeRootPatchScope('- id: unrelated\n', data)).toThrow('plugin_state_changed')
 })

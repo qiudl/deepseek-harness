@@ -28,6 +28,34 @@ function expectMutationsRejected(source: string, path: readonly string[], values
 }
 
 describe('Host control protocol golden vectors', () => {
+  it('REQ-20261117-0005 bounds installed plugin versions and requires the opt-in result schema', () => {
+    const frame = { version: 1, type: 'result', request_id: '018f0f4c-87f8-7e2d-a2f8-7b93d34e3110',
+      method: 'profile.extensions', result: { state: 'inventory', kind: 'plugin',
+        entries: [{ id: 'bot', name: 'ds-bot', transport: 'bundle', plugin_state: 'enabled', plugin_version: '0.2.0' }], plugin_update: true, plugin_versions: 1 } }
+    expect(encodeHostControlFrame(decodeHostControlFrame(wire(frame)))).toBe(wire(frame))
+    const source = wire(frame)
+    expectMutationsRejected(source, ['result', 'plugin_versions'], [0, 2, true, null])
+    expectMutationsRejected(source, ['result', 'kind'], ['skill', 'mcp'])
+    expectMutationsRejected(source, ['result', 'entries', '0', 'plugin_version'], ['../private', '1.2', '1.2.3+meta', '', 'a'.repeat(65)])
+    const unnegotiated = structuredClone(frame)
+    delete (unnegotiated.result as { plugin_versions?: number }).plugin_versions
+    expect(() => decodeHostControlFrame(wire(unnegotiated))).toThrow(HostControlProtocolError)
+    const request = { version: 1, type: 'request', request_id: frame.request_id, method: 'profile.extensions',
+      params: { client_instance_id: frame.request_id, host_instance_id: frame.request_id,
+        process_nonce: 'A'.repeat(43), jti: frame.request_id, issued_at: 1000, expires_at: 2000,
+        view_lease_id: frame.request_id, lease_generation: 1, runtime_generation: 1,
+        command: { action: 'inventory', kind: 'plugin', plugin_versions: 1 } } }
+    expect(() => decodeHostControlFrame(wire(request))).not.toThrow()
+    // Wrong-kind and malformed opt-ins are rejected before invoking an extension inventory.
+    for (const command of [
+      { action: 'inventory', kind: 'mcp', plugin_versions: 1 },
+      { action: 'inventory', kind: 'plugin', plugin_versions: 2 },
+    ]) {
+      expect(() => decodeHostControlFrame(wire({ ...request, params: { ...request.params, command } })))
+        .toThrow(HostControlProtocolError)
+    }
+  })
+
   it('encodes the host.inspect request byte-for-byte', () => {
     const message = decodeHostControlFrame(fixture('host-inspect.request.jsonl'))
     expect(encodeHostControlFrame(message)).toBe(fixture('host-inspect.request.jsonl'))

@@ -1,7 +1,18 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { waitForPluginRuntime } from '../src/plugin-runtime-ack.ts'
 const worker = { origin: 'http://127.0.0.1:12345', bootstrapCookie: { name: 'fixture', value: 'private' } }
-const expected = [{ entryId: 'demo', moduleName: '@fixture/plugin' }]
+const expected = [{ entryId: 'demo', moduleName: '@fixture/plugin' }] as const
+
+it('REQ-20261117-0005 does not acknowledge an active older or unversioned package as the target', async () => {
+  for (const packageVersion of [undefined, '0.2.0']) {
+    response([{ ...expected[0], enabled: true, fiberPhase: 'active', ...(packageVersion ? { packageVersion } : {}) }])
+    await expect(waitForPluginRuntime(worker, [{ ...expected[0], packageVersion: '0.3.8-slark.1' }], AbortSignal.timeout(30)))
+      .rejects.toThrow()
+  }
+  response([{ ...expected[0], enabled: true, fiberPhase: 'active', packageVersion: '0.3.8-slark.1' }])
+  await expect(waitForPluginRuntime(worker, [{ ...expected[0], packageVersion: '0.3.8-slark.1' }], new AbortController().signal))
+    .resolves.toBeUndefined()
+})
 afterEach(() => { vi.unstubAllGlobals() })
 function response(entries: unknown[]) {
   vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
