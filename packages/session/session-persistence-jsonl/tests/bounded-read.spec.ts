@@ -207,7 +207,7 @@ it('refuses a source that grows or is replaced while the opened descriptor is be
   }
 
   await writeFile(path, validBytes)
-  const service = ctx.sessionPersistence as unknown as {
+  const service = ctx.sessionPersistence as typeof ctx.sessionPersistence & {
     assertStoredIdentity: (...args: unknown[]) => Promise<void>
   }
   const originalIdentity = service.assertStoredIdentity
