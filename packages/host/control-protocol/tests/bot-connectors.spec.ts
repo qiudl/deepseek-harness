@@ -10,6 +10,9 @@ describe('native GitHub connector wire contract', () => {
     expect(parseHostBotConnectorsRequest({})).toEqual({})
     expect(() => parseHostBotConnectorsRequest({ botId: 'x' })).toThrow()
     expect(parseHostBotConnectors(view)).toEqual(view)
+    expect(parseHostBotConnectors(null)).toBeNull()
+    expect(parseHostBotConnectors({ connectors: [{ ...view.connectors[0], state: 'error' }] }))
+      .toEqual({ connectors: [{ ...view.connectors[0], state: 'error' }] })
     expect(() => parseHostBotConnectors({ ...view, token: 'private' })).toThrow()
     expect(() => parseHostBotConnectors({ connectors: [{ ...view.connectors[0],
       error: 'private' }] })).toThrow()

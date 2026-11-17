@@ -8,6 +8,9 @@ describe('controlled Bot delete', () => {
       .toEqual({ botId: 'main', state: 'deleted', revision: 8 })
     expect(parseHostBotDeleteReceipt({ botId: 'main', state: 'missing', revision: 7 }, request))
       .toEqual({ botId: 'main', state: 'missing', revision: 7 })
+    expect(parseHostBotDeleteReceipt({ botId: 'main', state: 'stale', revision: 7 }, request))
+      .toEqual({ botId: 'main', state: 'stale', revision: 7 })
+    expect(parseHostBotDeleteReceipt(null, request)).toBeNull()
     for (const forged of [{ botId: '../main', sessionId: 'part-1', expectedRevision: 7 },
       { botId: 'main', sessionId: 'part-1', expectedRevision: 7, force: true }])
       expect(() => parseHostBotDeleteRequest(forged)).toThrow('invalid_bot_delete')

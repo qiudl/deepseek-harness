@@ -9,12 +9,16 @@ const value = { ...request, name: 'report.txt', total: 6, sha256: 'b'.repeat(64)
 describe('native Bot attachment preview contract', () => {
   it('binds every reply coordinate and text boundary', () => {
     expect(parseHostBotAttachmentPreviewRequest(request)).toEqual(request)
+    expect(parseHostBotAttachmentPreview(null, request)).toBeNull()
     expect(parseHostBotAttachmentPreview(value, request)).toEqual(value)
     expect(parseHostBotAttachmentPreview({ ...value, name: 'image' }, request)).toEqual({ ...value, name: 'image' })
     expect(parseHostBotAttachmentPreview({ ...value, name: 'photo.png' }, request)).toEqual({ ...value, name: 'photo.png' })
     for (const patch of [{ sessionId: 'foreign' }, { eventSeq: 8 }, { attachmentId: `sha256:${'c'.repeat(64)}` },
       { offset: 8_000 }, { chunk: 'wrong' }, { name: 'archive.zip' }, { hasMore: true }])
       expect(() => parseHostBotAttachmentPreview({ ...value, ...patch }, request)).toThrow('invalid_bot_attachment_preview_result')
+    const later = parseHostBotAttachmentPreviewRequest({ ...request, offset: 8_000 })
+    expect(() => parseHostBotAttachmentPreview({ ...value, offset: 8_000, total: 8_000,
+      chunk: '' }, later)).toThrow('invalid_bot_attachment_preview_result')
   })
   it('rejects arbitrary selectors', () => {
     for (const patch of [{ sessionId: '../other' }, { botId: '../main' }, { eventSeq: 0 },

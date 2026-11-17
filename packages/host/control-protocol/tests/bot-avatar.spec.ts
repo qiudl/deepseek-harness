@@ -8,6 +8,7 @@ describe('bounded Bot avatar read', () => {
     const chunk = 'data:image/png;base64,AA=='
     const value = { botId: 'main', totalBytes: chunk.length, offset: 0,
       sha256: createHash('sha256').update(chunk).digest('hex'), chunk, hasMore: false }
+    expect(parseHostBotAvatar(null, request)).toBeNull()
     expect(parseHostBotAvatar(value, request)).toEqual(value)
     for (const forged of [{ botId: '../main', offset: 0 }, { botId: 'main', offset: 1 },
       { botId: 'main', offset: 0, account: 'other' }])
