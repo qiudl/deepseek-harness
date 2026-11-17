@@ -13,12 +13,19 @@ const page = { botId: 'main', available: true, total: 3, entries: [entry, { ...e
 describe('native Bot memory page', () => {
   it('validates the exact selector and stable page continuity', () => {
     expect(parseHostBotMemoryRequest(request)).toEqual(request)
+    expect(parseHostBotMemory(null, request)).toBeNull()
     expect(parseHostBotMemory(page, request)).toEqual(page)
+    expect(parseHostBotMemory({ ...page, summary: null }, request))
+      .toMatchObject({ summary: null })
     const next = { ...request, cursor: `${digest}:2`, summarize: false }
     expect(parseHostBotMemory({ ...page, entries: [{ ...entry, text: 'Third' }], nextCursor: null }, next))
       .toMatchObject({ total: 3, nextCursor: null })
     expect(parseHostBotMemory({ botId: 'main', available: false }, request))
       .toEqual({ botId: 'main', available: false })
+    const teamPage = parseHostBotMemory({ ...page, entries: [{ ...entry, scope: 'team' }],
+      nextCursor: `${digest}:1` }, request)
+    expect(teamPage?.available).toBe(true)
+    if (teamPage?.available) expect(teamPage.entries[0]?.scope).toBe('team')
     for (const bad of [{ ...request, botId: '../main' }, { ...request, limit: 21 },
       { ...request, cursor: 'bad' }, { ...request, extra: true }])
       expect(() => parseHostBotMemoryRequest(bad)).toThrow('invalid_bot_memory_request')
@@ -32,6 +39,10 @@ describe('native Bot memory page', () => {
       { ...page, total: 2 },
       { ...page, summary: { ...page.summary, at: -1 } }])
       expect(() => parseHostBotMemory(bad, request)).toThrow('invalid_bot_memory_result')
+    expect(() => parseHostBotMemory({ botId: 'main', available: false, private: true }, request))
+      .toThrow('invalid_bot_memory_result')
+    expect(() => parseHostBotMemory({ ...page, error: 'x'.repeat(2049) }, request))
+      .toThrow('invalid_bot_memory_result')
     const next = { ...request, cursor: `${digest}:2` }
     expect(() => parseHostBotMemory({ ...page, entries: [entry],
       nextCursor: `${'b'.repeat(64)}:3` }, next)).toThrow('invalid_bot_memory_result')

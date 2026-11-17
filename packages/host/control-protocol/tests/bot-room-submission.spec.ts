@@ -8,6 +8,10 @@ describe('fixed owner Bot room submission', () => {
     expect(request.text).toBe('Plan')
     expect(parseHostBotRoomReceipt({ roomId: request.roomId, submissionId: request.submissionId,
       state: 'accepted' }, request)?.state).toBe('accepted')
+    for (const state of ['unobserved', 'conflict', 'stale'] as const) {
+      expect(parseHostBotRoomReceipt({ roomId: request.roomId, submissionId: request.submissionId,
+        state }, request)?.state).toBe(state)
+    }
   })
 
   it('rejects caller scope, invalid targets and substituted receipts', () => {

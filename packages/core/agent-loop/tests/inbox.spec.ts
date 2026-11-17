@@ -82,6 +82,17 @@ async function reconstructPersistedInbox(
 }
 
 describe('ReactLoopInbox', () => {
+  it('keeps an opaque reservation when a different occurrence tries to materialize it', async () => {
+    const { inbox } = await inboxAgent('opaque-guard')
+    const occurrence = {}
+    const generation = inbox.reserveOpaque(occurrence)
+    expect(generation).toBeDefined()
+    const message = createUserMessage({ content: [{ type: 'text', text: 'approved' }], source: { kind: 'user' } })
+    expect(() => { inbox.materializeOpaque({}, message) }).toThrow('runtime_entry_occurrence_cancelled')
+    expect(inbox.isOpaqueHead(occurrence, generation!)).toBe(true)
+    inbox.discardOpaque(occurrence)
+  })
+
   it('retains inbox reads after the shared registration is released', async () => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())

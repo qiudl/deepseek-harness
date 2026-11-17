@@ -382,8 +382,7 @@ export class ApiSessionAgentController {
   private async resume(sessionId: SessionId, supplied?: SessionObservation, signal?: AbortSignal): Promise<Agent> {
     if (supplied !== undefined) return this.resumeObserved(sessionId, supplied, signal)
     try {
-      using observation = await this.ctx.sessionQuery.observeSession(sessionId,
-        signal === undefined ? {} : { signal })
+      using observation = await this.ctx.sessionQuery.observeSession(sessionId, {})
       return await this.resumeObserved(sessionId, observation, signal)
     } catch (error: unknown) {
       if (error instanceof SessionQueryError
