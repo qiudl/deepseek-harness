@@ -24,6 +24,8 @@ describe('fixed Bot work read', () => {
     const ready = { schemaVersion: 1, state: 'ready', generation: 2, total: 1,
       items: [item], nextCursor: null }
     expect(parseHostBotWork(ready, request)).toEqual(ready)
+    expect(() => parseHostBotWork({ ...ready, nextCursor: 'same' },
+      { cursor: 'same', limit: 20 })).toThrow()
     for (const state of ['loading', 'unavailable', 'snapshot_changed'])
       expect(parseHostBotWork({ schemaVersion: 1, state }, request)).toEqual({ schemaVersion: 1, state })
     expect(parseHostBotWork(null, request)).toBeNull()
