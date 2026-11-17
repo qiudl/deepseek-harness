@@ -1,9 +1,10 @@
-import type { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
+import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { ProjectOperationMemoryNativeSource } from './project-operation-memory-native-source.ts'
-import type { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
+import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryRecipientImports } from './project-operation-memory-recipient-imports.ts'
 import type { TwinBindingReceipts } from './twin-binding-receipts.ts'
-import type { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+import type { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import type { HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 import { ProjectOperationMemorySourceExports } from './project-operation-memory-source-exports.ts'
@@ -57,6 +58,17 @@ class ProfileMemoryOwners<T extends { close(): Promise<void> }> {
 
 /** Independent source/recipient Profile caches share shutdown, never files, formats or records. */
 export class ProjectOperationMemoryDatabases extends ProfileMemoryOwners<ProjectOperationMemoryDatabase> {
+  /** Open each purpose from its own platform-owned Profile files.
+   * @param files - Current platform's private file selector for each store purpose.
+   * @returns One lifecycle owner for all three purpose-specific databases.
+   */
+  static fromProfileFiles(files: (profileId: string, role: 'source' | 'recipient' | 'native') => Promise<ProjectOperationMemoryDatabaseFiles>): ProjectOperationMemoryDatabases {
+    return new ProjectOperationMemoryDatabases(
+      async profileId => ProjectOperationMemoryDatabase.open(await files(profileId, 'source')),
+      async profileId => ProjectOperationMemoryRecipientDatabase.open(await files(profileId, 'recipient')),
+      async profileId => ProjectOperationMemoryNativeDatabase.open(await files(profileId, 'native')),
+    )
+  }
   private readonly recipientOwners: ProfileMemoryOwners<ProjectOperationMemoryRecipientDatabase> | undefined
   private readonly nativeOwners: ProfileMemoryOwners<ProjectOperationMemoryNativeDatabase> | undefined
   private allClosing: Promise<void> | undefined

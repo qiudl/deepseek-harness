@@ -67,7 +67,19 @@ import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from 
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
-  HostBotSettingsRequest } from '@deepseek-ai/dsh-host-control-protocol'
+  HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
+  HostBotScheduleHistoryRequest, HostBotAboutRequest, HostBotUsageRequest, HostBotGeneralSettingsRequest,
+  HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest, HostBotProvidersMutationRequest,
+  HostBotConnectorsRequest, HostBotConnectorsMutationRequest, HostBotFeedbackRequest,
+  HostBotFeedbackLogRequest, HostBotFeedbackClearRequest,
+  HostBotSecretsRequest, HostBotSecretsMutationRequest,
+  HostBotCapabilitiesRequest, HostBotCapabilitiesMutationRequest,
+  HostBotFoldersRequest, HostBotAvatarRequest, HostBotAttachmentPreviewRequest,
+  HostBotAttachmentDownloadOpenRequest, HostBotAttachmentDownloadReadRequest,
+  HostBotAttachmentSubmission, HostBotDeleteRequest,
+  HostBotDuplicateRequest, HostBotCreateRequest,
+  HostBotScheduleMutationRequest, HostBotUpdateMutationRequest,
+  HostBotMemoryMutationRequest, HostBotChannelMirrorMutationRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteApprovalEvents, DesktopRemoteUiStreamExecutor,
   handleDesktopRemoteUiStreamRequest } from './desktop-remote-ui-stream.ts'
 import { parsePublicUrl } from './public-url.ts'
@@ -686,6 +698,10 @@ export function apply(ctx: Context, config: Config): void {
         localControlStatus: sessionId => control.browserStatus(sessionId),
         localControlTakeover: (sessionId, expectedEpoch) => control.takeoverBrowser(sessionId, expectedEpoch),
       }), 'web-app: Desktop browser Session admission')
+      const isBotSessionOwner = (owner: unknown, botId: string, sessionId: string): boolean =>
+        owner !== null && typeof owner === 'object' && !Array.isArray(owner) &&
+        Object.keys(owner).sort().join(',') === 'botId,sessionId' &&
+        Reflect.get(owner, 'botId') === botId && Reflect.get(owner, 'sessionId') === sessionId
       const executor = new DesktopRemoteSessionExecutor(
         bindDesktopRemoteGateway(remoteCtx.typertGateway, desktopPeer), remoteApprovalEvents, control, terminalStreams,
         async (operation, request, signal) => {
@@ -724,10 +740,7 @@ export function apply(ctx: Context, config: Config): void {
           const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
             sessionId: request.sessionId })
           signal.throwIfAborted()
-          if (!owner || typeof owner !== 'object' || Array.isArray(owner) ||
-            Object.keys(owner).sort().join(',') !== 'botId,sessionId' ||
-            Reflect.get(owner, 'botId') !== request.ownerBotId ||
-            Reflect.get(owner, 'sessionId') !== request.sessionId) return null
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
           return service.createLocalBotRoom({ expectedRevision: request.expectedRevision,
             members: [...request.members], name: request.name, notice: request.notice,
             replyMode: request.replyMode, adminBotId: request.adminBotId }, signal)
@@ -738,6 +751,234 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.deleteLocalBotRoom) return null
           return service.deleteLocalBotRoom(request, signal)
+        }, async (request, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            updateLocalBotSettings?: (input: Omit<typeof request, 'sessionId'>,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.updateLocalBotSettings) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.updateLocalBotSettings({ botId: request.botId,
+            expectedRevision: request.expectedRevision, change: request.change }, signal)
+        }, async (request: HostBotDeleteRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            deleteLocalBot?: (input: Omit<HostBotDeleteRequest, 'sessionId'>,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.deleteLocalBot) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.deleteLocalBot({ botId: request.botId,
+            expectedRevision: request.expectedRevision }, signal)
+        }, async (request: HostBotDuplicateRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            duplicateLocalBot?: (input: {
+              sourceBotId: string
+              copyRequestId: string
+              expectedRevision: number
+            }, signal: AbortSignal) => Promise<unknown>
+            readLocalBotDuplicate?: (input: { sourceBotId: string; copyRequestId: string }, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.duplicateLocalBot || !service.readLocalBotDuplicate) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.sourceBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.sourceBotId, request.sessionId)) return null
+          return request.mode === 'create'
+            ? service.duplicateLocalBot({ sourceBotId: request.sourceBotId,
+              copyRequestId: request.copyRequestId, expectedRevision: request.expectedRevision }, signal)
+            : service.readLocalBotDuplicate({ sourceBotId: request.sourceBotId,
+              copyRequestId: request.copyRequestId }, signal)
+        }, async (request: HostBotCreateRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            createLocalBot?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotCreate?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.createLocalBot || !service.readLocalBotCreate) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          return request.mode === 'create'
+            ? service.createLocalBot({ ownerBotId: request.ownerBotId,
+              createRequestId: request.createRequestId, expectedRevision: request.expectedRevision,
+              bot: request.bot }, signal)
+            : service.readLocalBotCreate({ ownerBotId: request.ownerBotId,
+              createRequestId: request.createRequestId }, signal)
+        }, async (request: HostBotScheduleMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            createLocalBotSchedule?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            deleteLocalBotSchedule?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotScheduleResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.createLocalBotSchedule ||
+            !service.deleteLocalBotSchedule || !service.readLocalBotScheduleResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          if (request.mode === 'status') return service.readLocalBotScheduleResult({
+            ownerBotId: request.ownerBotId, requestId: request.requestId }, signal)
+          if (request.mode === 'delete') return service.deleteLocalBotSchedule({
+            ownerBotId: request.ownerBotId, requestId: request.requestId,
+            sessionId: request.taskSessionId, id: request.taskId }, signal)
+          return service.createLocalBotSchedule({ ownerBotId: request.ownerBotId,
+            requestId: request.requestId, targetKind: request.targetKind, targetId: request.targetId,
+            title: request.title, prompt: request.prompt, when: request.when }, signal)
+        }, async (request: HostBotUpdateMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            startLocalBotUpdate?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotUpdateResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.startLocalBotUpdate ||
+            !service.readLocalBotUpdateResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          return request.mode === 'status'
+            ? service.readLocalBotUpdateResult({ requestId: request.requestId,
+              target: request.target }, signal)
+            : service.startLocalBotUpdate({ requestId: request.requestId,
+              target: request.target, version: request.version }, signal)
+        }, async (request: HostBotMemoryMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            askLocalBotMemory?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            forgetLocalBotMemory?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+            readLocalBotMemoryMutationResult?: (input: unknown, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.askLocalBotMemory ||
+            !service.forgetLocalBotMemory || !service.readLocalBotMemoryMutationResult) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.ownerBotId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.ownerBotId, request.sessionId)) return null
+          const { ownerBotId, requestId, targetKind, targetId } = request
+          if (request.mode === 'status') return service.readLocalBotMemoryMutationResult({
+            ownerBotId, requestId, targetKind, targetId }, signal)
+          if (request.mode === 'ask') return service.askLocalBotMemory({
+            ownerBotId, requestId, targetKind, targetId, text: request.text }, signal)
+          return service.forgetLocalBotMemory({ ownerBotId, requestId, targetKind,
+            targetId, scope: request.scope, topic: request.topic, text: request.text }, signal)
+        }, async (request: HostBotChannelMirrorMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            mutateLocalBotChannelMirror?: (input: HostBotChannelMirrorMutationRequest,
+              signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.mutateLocalBotChannelMirror) return null
+          return service.mutateLocalBotChannelMirror(request, signal)
+        }, async (request: HostBotGeneralSettingsUpdateRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            updateLocalBotGeneralSettings?: (input: Pick<HostBotGeneralSettingsUpdateRequest,
+              'expectedRevision' | 'change'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.updateLocalBotGeneralSettings) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.updateLocalBotGeneralSettings({ expectedRevision: request.expectedRevision,
+            change: request.change }, signal)
+        }, async (request: HostBotProvidersMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotProviders?: (input: Pick<HostBotProvidersMutationRequest,
+              'kind' | 'provider' | 'value'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotProviders) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotProviders({ kind: request.kind, provider: request.provider,
+            value: request.value }, signal)
+        }, async (request: HostBotConnectorsMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotConnectors?: (input: Pick<HostBotConnectorsMutationRequest,
+              'kind' | 'id' | 'token'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotConnectors) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotConnectors({ kind: request.kind, id: request.id, token: request.token }, signal)
+        }, async (request: HostBotFeedbackClearRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            clearLocalBotFeedback?: (input: Record<string, never>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.clearLocalBotFeedback) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.clearLocalBotFeedback({}, signal)
+        }, async (request: HostBotSecretsMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotSecrets?: (input: Pick<HostBotSecretsMutationRequest,
+              'kind' | 'name' | 'value' | 'purpose' | 'scope'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotSecrets) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotSecrets({ kind: request.kind, name: request.name,
+            value: request.value, purpose: request.purpose, scope: request.scope }, signal)
+        }, async (request: HostBotCapabilitiesMutationRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            resolveLocalBotSession?: (input: { botId: string; sessionId: string }) => Promise<unknown>
+            mutateLocalBotCapabilities?: (input: Pick<HostBotCapabilitiesMutationRequest,
+              'kind' | 'expectedRevision' | 'name' | 'item'>, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.resolveLocalBotSession || !service.mutateLocalBotCapabilities) return null
+          const owner = await service.resolveLocalBotSession({ botId: request.botId,
+            sessionId: request.sessionId })
+          signal.throwIfAborted()
+          if (!isBotSessionOwner(owner, request.botId, request.sessionId)) return null
+          return service.mutateLocalBotCapabilities({ kind: request.kind,
+            expectedRevision: request.expectedRevision, name: request.name, item: request.item }, signal)
+        }, async (operation: 'bot.attachment.send' | 'bot.attachment.receipt',
+          request: HostBotAttachmentSubmission, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            sendLocalBotAttachment?: (input: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>
+            readLocalBotAttachmentReceipt?: (input: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>
+          }
+          const method = operation === 'bot.attachment.send'
+            ? service?.sendLocalBotAttachment : service?.readLocalBotAttachmentReceipt
+          if (!method) return null
+          return method.call(service, request, signal)
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
@@ -794,6 +1035,168 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotSettings) return null
           const value = await service.readLocalBotSettings(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFoldersRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFolders?: (input: HostBotFoldersRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFolders) return null
+          const value = await service.readLocalBotFolders(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAvatarRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAvatar?: (input: HostBotAvatarRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAvatar) return null
+          const value = await service.readLocalBotAvatar(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotMemoryRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotMemory?: (input: HostBotMemoryRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotMemory) return null
+          const value = await service.readLocalBotMemory(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotRoomMemoryRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotRoomMemory?: (input: HostBotRoomMemoryRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotRoomMemory) return null
+          const value = await service.readLocalBotRoomMemory(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotSchedulesRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotSchedules?: (input: HostBotSchedulesRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotSchedules) return null
+          const value = await service.readLocalBotSchedules(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotScheduleHistoryRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotScheduleHistory?: (input: HostBotScheduleHistoryRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotScheduleHistory) return null
+          const value = await service.readLocalBotScheduleHistory(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAboutRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAbout?: (input: HostBotAboutRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAbout) return null
+          const value = await service.readLocalBotAbout(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotUsageRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotUsage?: (input: HostBotUsageRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotUsage) return null
+          const value = await service.readLocalBotUsage(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotGeneralSettingsRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotGeneralSettings?: (input: HostBotGeneralSettingsRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotGeneralSettings) return null
+          const value = await service.readLocalBotGeneralSettings(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotProvidersRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotProviders?: (input: HostBotProvidersRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotProviders) return null
+          const value = await service.readLocalBotProviders(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotConnectorsRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotConnectors?: (input: HostBotConnectorsRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotConnectors) return null
+          const value = await service.readLocalBotConnectors(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFeedbackRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFeedback?: (input: HostBotFeedbackRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFeedback) return null
+          const value = await service.readLocalBotFeedback(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotFeedbackLogRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotFeedbackLog?: (input: HostBotFeedbackLogRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotFeedbackLog) return null
+          const value = await service.readLocalBotFeedbackLog(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotSecretsRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotSecrets?: (input: HostBotSecretsRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotSecrets) return null
+          const value = await service.readLocalBotSecrets(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotCapabilitiesRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotCapabilities?: (input: HostBotCapabilitiesRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotCapabilities) return null
+          const value = await service.readLocalBotCapabilities(request)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentPreviewRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAttachmentPreview?: (input: HostBotAttachmentPreviewRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAttachmentPreview) return null
+          const value = await service.readLocalBotAttachmentPreview(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentDownloadOpenRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            openLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadOpenRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.openLocalBotAttachmentDownload) return null
+          const value = await service.openLocalBotAttachmentDownload(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotAttachmentDownloadReadRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotAttachmentDownload?: (input: HostBotAttachmentDownloadReadRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          if (!service?.readLocalBotAttachmentDownload) return null
+          const value = await service.readLocalBotAttachmentDownload(request, signal)
           signal.throwIfAborted()
           return value
         })

@@ -1,9 +1,6 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
@@ -529,11 +526,7 @@ export async function startDesktopHostApplication(
         uid, pid: process.pid, processNonce: config.processNonce,
       })
     }
-    const databases = new ProjectOperationMemoryDatabases(
-      async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-      async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-      async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-    )
+    const databases = ProjectOperationMemoryDatabases.fromProfileFiles(memoryFiles)
     memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)
@@ -937,14 +930,46 @@ export async function startDesktopHostApplication(
         authority: commandAuthority, workers, profileId, command, signal,
       }),
       remoteBotChatSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotAttachmentSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotRoomSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotRoomAttachmentSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotRoomUpdateSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotChannelMirrorMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotSettingsUpdateSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotGeneralSettingsUpdateSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotProvidersMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotConnectorsMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotFeedbackClearSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotSecretsMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotCapabilityLibraryMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotDeleteSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotDuplicateSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotCreateSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotScheduleMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotMemoryMutationSupported: dependencies.profileWorkerFactory === undefined,
+      remoteBotUpdateMutationSupported: dependencies.profileWorkerFactory === undefined,
       remoteBotRoomLifecycleSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotChatSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotRoomsSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotRoomHistorySupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotRoomDetailsSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiBotSettingsSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotMemorySupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotRoomMemorySupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotSchedulesSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotScheduleHistorySupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotAboutSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotUsageSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotGeneralSettingsSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotProvidersSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotConnectorsSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotFeedbackSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotSecretsSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotCapabilityLibrarySupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotFoldersSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotAvatarSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotAttachmentPreviewSupported: dependencies.profileWorkerFactory === undefined,
+      remoteUiBotAttachmentDownloadSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiAssetGzipSupported: dependencies.profileWorkerFactory === undefined,
       remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
       remoteUiItemChunksSupported: dependencies.profileWorkerFactory === undefined,

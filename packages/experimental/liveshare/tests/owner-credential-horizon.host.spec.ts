@@ -17,9 +17,9 @@ import { describe, expect, it, onTestFinished } from 'vitest'
 import type {} from '../src/index.ts'
 import { apply } from '../src/host/share-host.ts'
 
-const START = Date.parse('2026-10-15T00:00:00.000Z')
-const PAST = new Date(START).toISOString()
-const LIVE = new Date(START + 30 * 24 * 60 * 60_000).toISOString()
+const NOW = Date.now()
+const PAST = new Date(NOW - 24 * 60 * 60_000).toISOString()
+const LIVE = new Date(NOW + 30 * 24 * 60 * 60_000).toISOString()
 const STORED_TOKEN = 'stored-payload.stored-signature'
 
 /**

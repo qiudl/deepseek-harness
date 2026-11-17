@@ -1,11 +1,8 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostTaskCoordinationEnvironments, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import { parseHostProjectMemoryEnvironments, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
@@ -475,11 +472,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           userSid, pid: process.pid, processNonce: config.processNonce, bindings,
         })
       }
-      const databases = new ProjectOperationMemoryDatabases(
-        async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-        async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-        async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-      )
+      const databases = ProjectOperationMemoryDatabases.fromProfileFiles(memoryFiles)
       memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
       const registryFiles = createWindowsProfileRegistryFileAuthority({
@@ -731,14 +724,47 @@ async function startWindowsDesktopHostApplicationWithTrust(
         ...rootWorkerOperations(workers),
         collaborationDeliveryReceiver: profileId => workers.collaborationDeliveryReceiver(profileId),
         remoteSession,
+        remoteBotChatSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotRoomSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotRoomAttachmentSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotAttachmentSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotRoomUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotChannelMirrorMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotSettingsUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotGeneralSettingsUpdateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotProvidersMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotConnectorsMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotFeedbackClearSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotSecretsMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotCapabilityLibraryMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotDeleteSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotDuplicateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotCreateSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotScheduleMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotMemoryMutationSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteBotUpdateMutationSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteBotRoomLifecycleSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiAssetGzipSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomsSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomHistorySupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotRoomDetailsSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiBotSettingsSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotMemorySupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotRoomMemorySupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotSchedulesSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotScheduleHistorySupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotAboutSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotUsageSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotGeneralSettingsSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotProvidersSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotConnectorsSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotFeedbackSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotSecretsSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotCapabilityLibrarySupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotFoldersSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotAvatarSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotAttachmentPreviewSupported: dependencies.createProfileWorkerFactory === undefined,
+        remoteUiBotAttachmentDownloadSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiRead: (profileId, endpoint, payload, signal) => workers.remoteUiRead(profileId, endpoint, payload, signal),
         remoteUiItemChunksSupported: dependencies.createProfileWorkerFactory === undefined,
         remoteUiStream: (profileId, endpoint, payload, signal, itemChunks) =>

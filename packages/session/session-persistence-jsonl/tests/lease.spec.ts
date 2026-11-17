@@ -417,6 +417,16 @@ describe('cross-process write lock', () => {
     expect(existsSync(join(dir, LOCK))).toBe(true)
   })
 
+  it.skipIf(process.platform === 'win32')('rejects a held lease after its lock path disappears', async () => {
+    const root = await freshRoot()
+    const dir = join(root, 'missing-lock-path')
+    const lease = await SessionWriteLease.acquire(dir, SessionId('missing-lock-path'))
+    expect(lease.isCurrent()).toBe(true)
+    await rm(join(dir, LOCK))
+    expect(lease.isCurrent()).toBe(false)
+    await lease.release()
+  })
+
 
   it('keeps distinct sessions independently lockable', async () => {
     const root = await freshRoot()

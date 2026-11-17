@@ -55,7 +55,7 @@ it('refuses missing private owners and closed lifetimes before calling Session o
   onTestFinished(() => installed.close())
   const operation = { action: 'consumer_start' }
   await expect(installed.rootFeedback(operation, new AbortController().signal)).rejects.toThrow('consumer refused')
-  expect(consumption).toHaveBeenCalledWith(operation, expect.any(AbortSignal))
+  expect(consumption).toHaveBeenCalledWith(operation, expect.any(AbortSignal), undefined)
   expect(feedback).toHaveBeenCalledTimes(1)
   expect(noModel).not.toHaveBeenCalled()
 })

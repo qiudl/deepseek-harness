@@ -16,7 +16,12 @@ export interface HostBotRoomDetails {
   readonly permissionChoices: { readonly options: readonly { readonly value: string; readonly name: string }[]
     readonly defaultPreset: string | null } | null
   readonly adminBotId: string | null
-  readonly members: readonly { readonly botId: string; readonly displayName: string }[]
+  readonly members: readonly { readonly botId: string; readonly displayName: string; readonly workingHere?: boolean }[]
+  readonly channelMirror?: { readonly state: string
+    readonly target: { readonly projectId: string; readonly channelId: string; readonly defaultAgentId: string } | null
+    readonly groupGap: number | null
+    readonly channelGap: number | null
+    readonly pauseReason: string | null } | null
 }
 
 /** Parse one exact owner-room selector.
@@ -36,8 +41,11 @@ export function parseHostBotRoomDetailsRequest(value: unknown): HostBotRoomDetai
  */
 export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDetailsRequest): HostBotRoomDetails | null {
   if (value === null) return null
-  if (!record(value) || !exact(value, ['roomId', 'revision', 'displayName', 'notice', 'replyMode',
-    'relayLimit', 'permissionPreset', 'permissionChoices', 'adminBotId', 'members']) || value.roomId !== request.roomId ||
+  if (!record(value) || !(exact(value, ['roomId', 'revision', 'displayName', 'notice', 'replyMode',
+    'relayLimit', 'permissionPreset', 'permissionChoices', 'adminBotId', 'members']) ||
+    exact(value, ['roomId', 'revision', 'displayName', 'notice', 'replyMode',
+      'relayLimit', 'permissionPreset', 'permissionChoices', 'adminBotId', 'members', 'channelMirror'])) ||
+    value.roomId !== request.roomId ||
     typeof value.revision !== 'number' || !Number.isSafeInteger(value.revision) || value.revision < 0 ||
     typeof value.displayName !== 'string' || !value.displayName.trim() || Buffer.byteLength(value.displayName, 'utf8') > 512 ||
     typeof value.notice !== 'string' || Buffer.byteLength(value.notice, 'utf8') > 8192 ||
@@ -53,14 +61,50 @@ export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDeta
   const members: HostBotRoomDetails['members'][number][] = []
   const seen = new Set<string>()
   for (const member of value.members) {
-    if (!record(member) || !exact(member, ['botId', 'displayName']) ||
+    if (!record(member) || !(exact(member, ['botId', 'displayName']) ||
+      exact(member, ['botId', 'displayName', 'workingHere'])) ||
       typeof member.botId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(member.botId) || seen.has(member.botId) ||
       typeof member.displayName !== 'string' || !member.displayName.trim() ||
-      Buffer.byteLength(member.displayName, 'utf8') > 512) throw Error('invalid_bot_room_details_result')
+      Buffer.byteLength(member.displayName, 'utf8') > 512 ||
+      (Object.hasOwn(member, 'workingHere') && typeof member.workingHere !== 'boolean'))
+      throw Error('invalid_bot_room_details_result')
     seen.add(member.botId)
-    members.push({ botId: member.botId, displayName: member.displayName })
+    members.push({ botId: member.botId, displayName: member.displayName,
+      ...(Object.hasOwn(member, 'workingHere') ? { workingHere: member.workingHere as boolean } : {}) })
   }
   if (value.adminBotId !== null && !seen.has(value.adminBotId)) throw Error('invalid_bot_room_details_result')
+  let channelMirror: HostBotRoomDetails['channelMirror']
+  if (Object.hasOwn(value, 'channelMirror')) {
+    const mirror = value.channelMirror
+    if (mirror === null) channelMirror = null
+    else {
+      const states = ['unbound', 'awaiting_confirmation', 'credential_issued', 'connecting',
+        'active', 'offline', 'paused', 'ended']
+      if (!record(mirror) || !exact(mirror, ['state', 'target', 'groupGap', 'channelGap', 'pauseReason']) ||
+        !states.includes(mirror.state as string) ||
+        (mirror.groupGap !== null && (typeof mirror.groupGap !== 'number' ||
+          !Number.isSafeInteger(mirror.groupGap) || mirror.groupGap < 0)) ||
+        (mirror.channelGap !== null && (typeof mirror.channelGap !== 'number' ||
+          !Number.isSafeInteger(mirror.channelGap) || mirror.channelGap < 0)) ||
+        (mirror.pauseReason !== null && (typeof mirror.pauseReason !== 'string' ||
+          !/^(authority_revoked|source_changed|unsupported_content|reply_mapping_missing)$/u.test(mirror.pauseReason))))
+        throw Error('invalid_bot_room_details_result')
+      let target: NonNullable<typeof channelMirror>['target'] = null
+      if (mirror.target !== null) {
+        if (!record(mirror.target) || !exact(mirror.target, ['projectId', 'channelId', 'defaultAgentId']))
+          throw Error('invalid_bot_room_details_result')
+        const coordinate = (field: unknown) => typeof field === 'string' && field.length > 0 &&
+          Buffer.byteLength(field, 'utf8') <= 256 && !/[\x00-\x1f\x7f]/u.test(field)
+        if (!coordinate(mirror.target.projectId) || !coordinate(mirror.target.channelId) ||
+          !coordinate(mirror.target.defaultAgentId)) throw Error('invalid_bot_room_details_result')
+        target = { projectId: mirror.target.projectId as string,
+          channelId: mirror.target.channelId as string, defaultAgentId: mirror.target.defaultAgentId as string }
+      }
+      channelMirror = { state: mirror.state as string, target,
+        groupGap: mirror.groupGap, channelGap: mirror.channelGap,
+        pauseReason: mirror.pauseReason }
+    }
+  }
   let permissionChoices: HostBotRoomDetails['permissionChoices'] = null
   if (value.permissionChoices !== null) {
     const catalog = value.permissionChoices
@@ -84,5 +128,6 @@ export function parseHostBotRoomDetails(value: unknown, request: HostBotRoomDeta
   }
   return { roomId: request.roomId, revision: value.revision, displayName: value.displayName,
     notice: value.notice, replyMode: value.replyMode, relayLimit: value.relayLimit,
-    permissionPreset: value.permissionPreset, permissionChoices, adminBotId: value.adminBotId, members }
+    permissionPreset: value.permissionPreset, permissionChoices, adminBotId: value.adminBotId, members,
+    ...(channelMirror === undefined ? {} : { channelMirror }) }
 }

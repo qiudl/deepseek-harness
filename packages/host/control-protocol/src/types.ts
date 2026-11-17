@@ -2,8 +2,23 @@ import type { RuntimeEntryAnalysisCommand } from './runtime-entry-carrier.ts'
 import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
+import type { HostBotAttachmentSubmission } from './bot-attachment-submission.ts'
 import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
+import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
+import type { HostBotSettingsUpdateRequest } from './bot-settings-update.ts'
+import type { HostBotGeneralSettingsUpdateRequest } from './bot-general-settings.ts'
+import type { HostBotProvidersMutationRequest } from './bot-providers.ts'
+import type { HostBotConnectorsMutationRequest } from './bot-connectors.ts'
+import type { HostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+import type { HostBotSecretsMutationRequest } from './bot-secrets.ts'
+import type { HostBotCapabilitiesMutationRequest } from './bot-capabilities.ts'
+import type { HostBotDeleteRequest } from './bot-delete.ts'
+import type { HostBotDuplicateRequest } from './bot-duplicate.ts'
+import type { HostBotCreateRequest } from './bot-create.ts'
+import type { HostBotScheduleMutationRequest } from './bot-schedule-mutation.ts'
+import type { HostBotMemoryMutationRequest } from './bot-memory-mutation.ts'
+import type { HostBotUpdateMutationRequest } from './bot-update-mutation.ts'
 import type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import type { WorkbenchCredentialWrite } from './workbench-credentials.js'
 import type { WorkbenchSettingsWrite } from './workbench-settings.js'
@@ -2048,6 +2063,71 @@ export interface HostRemoteSessionControlProof {
 
 /** Closed command set exposed to a remote personal client through a leased Profile. */
 export type HostRemoteSessionCommand =
+  | { readonly operation: 'bot.capability-library.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotCapabilitiesMutationRequest }
+  | { readonly operation: 'bot.secrets.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotSecretsMutationRequest }
+  | { readonly operation: 'bot.feedback.clear'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotFeedbackClearRequest }
+  | { readonly operation: 'bot.connectors.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotConnectorsMutationRequest }
+  | { readonly operation: 'bot.providers.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotProvidersMutationRequest }
+  | { readonly operation: 'bot.general.update'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotGeneralSettingsUpdateRequest }
+  | { readonly operation: 'bot.settings.update'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotSettingsUpdateRequest }
+  | { readonly operation: 'bot.delete'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotDeleteRequest }
+  | { readonly operation: 'bot.duplicate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotDuplicateRequest }
+  | { readonly operation: 'bot.create'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotCreateRequest }
+  | { readonly operation: 'bot.schedule.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotScheduleMutationRequest }
+  | { readonly operation: 'bot.memory.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotMemoryMutationRequest }
+  | { readonly operation: 'bot.update.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotUpdateMutationRequest }
   | { readonly operation: 'bot.room.create'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -2063,6 +2143,11 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly request: HostBotRoomUpdateRequest }
+  | { readonly operation: 'bot.channel-mirror.mutate'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotChannelMirrorMutationRequest }
   | { readonly operation: 'bot.room.send'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -2079,6 +2164,14 @@ export type HostRemoteSessionCommand =
   | { readonly operation: 'bot.chat.receipt'
     readonly command_id: HostControlRequestId
     readonly request: HostBotChatSubmission }
+  | { readonly operation: 'bot.attachment.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotAttachmentSubmission }
+  | { readonly operation: 'bot.attachment.receipt'
+    readonly command_id: HostControlRequestId
+    readonly request: HostBotAttachmentSubmission }
   | { readonly operation: 'terminal.apply'; readonly command_id: HostControlRequestId; readonly session_id: string; readonly control: HostRemoteSessionControlProof; readonly request: WorkbenchTerminalRequest }
   | { readonly operation: 'credentials.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchCredentialWrite }
   | { readonly operation: 'settings.apply'; readonly command_id: HostControlRequestId; readonly request: WorkbenchSettingsWrite }
@@ -2219,7 +2312,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/providers' | 'bot/connectors' | 'bot/secrets' | 'bot/capability-library' | 'bot/feedback' | 'bot/feedback-log' | 'bot/folders' | 'bot/avatar' | 'bot/attachment-preview' | 'bot/attachment-download-open' | 'bot/attachment-download-read' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'

@@ -128,6 +128,9 @@ describe('ApiSession Agent lookup and recovery', () => {
 
     await expect(agents.resolveObservedAgent(observed)).resolves.toEqual({ agent: resumed })
     expect(resume).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: meta.id }))
+    const signal = new AbortController().signal
+    await expect(agents.resolveObservedAgent(observed, signal)).resolves.toEqual({ agent: resumed })
+    expect(resume).toHaveBeenLastCalledWith(expect.objectContaining({ resumeSessionId: meta.id, signal }))
 
     const invalid = {
       ...observed,

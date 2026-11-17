@@ -1210,19 +1210,25 @@ describe('JSONL immutable generation publication', () => {
       const source = compression === 'zstd'
         ? await encodeZstd(0, [event0])
         : Buffer.from(line(header(0)) + line(event0))
-      const expected = compression === 'zstd'
-        ? await encodeZstd(SESSION_FORMAT_VERSION, [event0])
-        : Buffer.from(line(header(SESSION_FORMAT_VERSION)) + line(event0))
       const appended = compression === 'zstd'
         ? await compressZstdFrame(line(event1))
         : Buffer.from(line(event1))
-      const winner = Buffer.concat([expected, appended])
+      let winner: Buffer | undefined
       await writeFile(request.sourcePath, source)
-      await writeFile(request.currentPath, winner)
 
-      const result = await ensureJsonlGenerationCurrent(request)
+      const result = await ensureWithOverrides(request, {
+        platform: 'darwin',
+        fs: posixSimulationFs({
+          link: async (staged: string, target: string) => {
+            winner = Buffer.concat([await readFile(staged), appended])
+            await writeFile(target, winner)
+            throw fsError('EEXIST')
+          },
+        }),
+      })
 
       expect(result).toMatchObject({ status: 'migrated', path: request.currentPath })
+      expect(winner).toBeDefined()
       expect(result.snapshot.bytes).toEqual(winner)
       expect(await readFile(request.currentPath)).toEqual(winner)
     },

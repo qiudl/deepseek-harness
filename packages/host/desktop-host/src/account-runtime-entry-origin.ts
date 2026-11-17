@@ -224,6 +224,15 @@ export function assertRuntimeEntryOriginArtifacts(artifactPins: AccountRuntimeEn
 
 /** Independent Main reader/signer; neither receipt DTOs nor caller paths are accepted. */
 export class AccountRuntimeEntryOrigin {
+  private currentWitness(entryId: string, signal: AbortSignal) {
+    signal.throwIfAborted()
+    const lease = this.options.captureCurrentLease()
+    lease.assertCurrent(); this.artifacts()
+    ownedPath(this.options.profileRoot, this.options.entryJournalPath)
+    const original = readRuntimeEntryWitness(this.options.entryJournalPath, entryId)
+    if (original === undefined) unavailable()
+    return { lease, original }
+  }
   /** @param options - Actual bootstrap pins, fixed Profile storage and authenticated original-chain routes. */
   constructor(private readonly options: AccountRuntimeEntryOriginOptions) {
     this.artifacts()
@@ -312,12 +321,7 @@ export class AccountRuntimeEntryOrigin {
    * @returns Fresh installation observation of a verified published source mapping.
    */
   async observe(entryId: string, signal: AbortSignal): Promise<RuntimeEntryObservation> {
-    signal.throwIfAborted()
-    const lease = this.options.captureCurrentLease()
-    lease.assertCurrent(); this.artifacts()
-    ownedPath(this.options.profileRoot, this.options.entryJournalPath)
-    const original = readRuntimeEntryWitness(this.options.entryJournalPath, entryId)
-    if (original === undefined) unavailable()
+    const { lease, original } = this.currentWitness(entryId, signal)
     lease.assertCurrent()
     const captured = await this.capture(original.receipt.binding.consumerCommandId, entryId, signal)
     lease.assertCurrent()
@@ -366,12 +370,7 @@ export class AccountRuntimeEntryOrigin {
    * @returns Fresh installation observation containing the complete independently read original mapping.
    */
   async observeCandidate(entryId: string, signal: AbortSignal): Promise<RuntimeEntryObservation> {
-    signal.throwIfAborted()
-    const lease = this.options.captureCurrentLease()
-    lease.assertCurrent(); this.artifacts()
-    ownedPath(this.options.profileRoot, this.options.entryJournalPath)
-    const original = readRuntimeEntryWitness(this.options.entryJournalPath, entryId)
-    if (!original) unavailable()
+    const { lease, original } = this.currentWitness(entryId, signal)
     const captured = await this.capture(original.receipt.binding.consumerCommandId, entryId, signal)
     lease.assertCurrent()
     const first = this.mapping(captured.candidate, false)

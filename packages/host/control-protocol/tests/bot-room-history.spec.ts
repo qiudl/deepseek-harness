@@ -7,9 +7,10 @@ describe('bounded owner Bot room history', () => {
     expect(parseHostBotRoomHistory({ roomId: 'room-1', revision: 7, oldestSeq: 2, latestSeq: 5,
       truncatedBefore: true, messages: [
         { seq: 2, authorKind: 'user', authorName: 'User', authorRef: null,
-          kind: null, text: 'hello', time: null },
+          kind: null, text: 'hello', time: null, attachments: [] },
         { seq: 3, authorKind: 'bot', authorName: 'Design', authorRef: 'design',
-          kind: null, text: 'plan', time: 123 },
+          kind: null, text: 'plan', time: 123, attachments: [{ kind: 'file',
+            attachmentId: `sha256:${'a'.repeat(64)}`, name: 'plan.pdf', bytes: 42 }] },
       ], nextCursor: 3 }, request)?.messages).toHaveLength(2)
   })
 
@@ -21,7 +22,7 @@ describe('bounded owner Bot room history', () => {
     const request = parseHostBotRoomHistoryRequest({ roomId: 'room-1', afterSeq: 0, limit: 1 })
     const page = { roomId: 'room-1', revision: 7, oldestSeq: 1, latestSeq: 1,
       truncatedBefore: false, messages: [{ seq: 1, authorKind: 'bot', authorName: 'Design',
-        authorRef: null, kind: null, text: 'plan', time: null }], nextCursor: null }
+        authorRef: null, kind: null, text: 'plan', time: null, attachments: [] }], nextCursor: null }
     expect(() => parseHostBotRoomHistory(page, request)).toThrow('invalid_bot_room_history_result')
     expect(() => parseHostBotRoomHistory({ ...page, messages: [], truncatedBefore: true }, request))
       .toThrow('invalid_bot_room_history_result')

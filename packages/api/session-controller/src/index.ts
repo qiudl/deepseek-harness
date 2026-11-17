@@ -295,6 +295,7 @@ export class SessionController extends TypertRemoteService {
   private readonly canOpenPath: () => boolean
   private readonly listWorkSliceMs: number
   private readonly promotions = new Set<Promise<void>>()
+  private readonly promotionLifetime = new AbortController()
   private readonly collaborationLifetime = new AbortController()
   private readonly collaborationAnalysis = new CollaborationAnalysisRunner(this.collaborationLifetime.signal)
   private collaborationCaptureTail: Promise<void> = Promise.resolve()
@@ -459,6 +460,7 @@ export class SessionController extends TypertRemoteService {
     // Registered before history so reverse-order teardown closes every
     // follower before waiting for already-admitted promotions.
     ctx.effect(() => async () => {
+      this.promotionLifetime.abort(new DOMException('Session controller disposed', 'AbortError'))
       await Promise.allSettled([...this.promotions])
     }, 'session-controller.promotions')
     ctx.on('workspace/session-collaboration', async ({ sessionId }, next) => {
@@ -533,9 +535,11 @@ export class SessionController extends TypertRemoteService {
     const sessionId = observation.header.id
     const task = (async () => {
       using ownedObservation = observation
-      const result = await this.agents.resolveObservedAgent(ownedObservation)
+      const result = await this.agents.resolveObservedAgent(ownedObservation, this.promotionLifetime.signal)
+      if (this.promotionLifetime.signal.aborted) return
       if ('error' in result) this.ctx.emit('api-session/error', sessionId, result.error.message)
     })().catch((error: unknown) => {
+      if (this.promotionLifetime.signal.aborted) return
       this.ctx.logger.error(`session-controller: background activation for "${sessionId}" failed: ${errorChain(error)}`)
     })
     this.promotions.add(task)

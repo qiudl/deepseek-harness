@@ -24,9 +24,10 @@ const toBytes = (data: string | Uint8Array | ArrayBuffer): Uint8Array => {
   return data
 }
 
-/** Node's streaming Hash face, restricted to the update/digest pair in use. */
+/** Node's synchronous Hash face used by the Worker host tree. */
 export interface Hash {
   update(data: string | Uint8Array | ArrayBuffer, encoding?: string): Hash
+  copy(): Hash
   digest(): Buffer
   digest(encoding: 'hex' | 'base64'): string
 }
@@ -41,25 +42,30 @@ export function createHash(algorithm: string): Hash {
   if (hasher === undefined) {
     throw new Error(`web-preview: node:crypto.createHash("${algorithm}") is not available in the worker host`)
   }
-  const chunks: Uint8Array[] = []
-  const hash: Hash = {
-    update(data) {
-      chunks.push(toBytes(data))
-      return hash
-    },
-    digest(encoding?: 'hex' | 'base64') {
-      const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
-      const joined = new Uint8Array(total)
-      let at = 0
-      for (const chunk of chunks) {
-        joined.set(chunk, at)
-        at += chunk.byteLength
-      }
-      const digest = Buffer.from(hasher(joined))
-      return (encoding === undefined ? digest : digest.toString(encoding)) as Buffer & string
-    },
+  const create = (chunks: Uint8Array[]): Hash => {
+    const hash: Hash = {
+      update(data) {
+        // Node consumes the supplied bytes at update time. Own them so a
+        // caller's later mutation cannot change this state or its copies.
+        chunks.push(Uint8Array.from(toBytes(data)))
+        return hash
+      },
+      copy() { return create(chunks.slice()) },
+      digest(encoding?: 'hex' | 'base64') {
+        const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
+        const joined = new Uint8Array(total)
+        let at = 0
+        for (const chunk of chunks) {
+          joined.set(chunk, at)
+          at += chunk.byteLength
+        }
+        const digest = Buffer.from(hasher(joined))
+        return (encoding === undefined ? digest : digest.toString(encoding)) as Buffer & string
+      },
+    }
+    return hash
   }
-  return hash
+  return create([])
 }
 
 /**

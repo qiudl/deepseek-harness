@@ -14,6 +14,8 @@ import Include from '@deepseek-ai/cordis-plugin-include'
 import SessionController, { openCollaborationAnalysisJournal, createCollaborationAnalysisWriter, collaborationJournalDigest, parseCollaborationClarificationInput, parseCollaborationReferenceMetadata, parseCollaborationRootSubmission } from '@deepseek-ai/dsh-api-session-controller'
 import type { CollaborationRootPlanningRecord } from '@deepseek-ai/dsh-api-session-controller'
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import Tools from '@deepseek-ai/dsh-tools'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
@@ -94,7 +96,8 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
   installSessionReadTestServices(ctx)
   const plugins = {
     ...(sourceOnly ? { commands: CommandRuntime, uploads: FileUploads } : {}),
-    storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
+    storage: Storage, sessions: SessionStore, systemPrompt: SystemPrompt, tools: Tools,
+    agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
     controller: SessionController, web: WebApp,
     extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
     domain: { name: 'source-test-domain', inject: ['storage'], apply(domainCtx: Context) {

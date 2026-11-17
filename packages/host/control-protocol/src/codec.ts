@@ -17,11 +17,39 @@ import { parseHostBotRoomListRequest } from './bot-room-list.ts'
 import { parseHostBotRoomHistoryRequest } from './bot-room-history.ts'
 import { parseHostBotRoomDetailsRequest } from './bot-room-details.ts'
 import { parseHostBotSettingsRequest } from './bot-settings.ts'
+import { parseHostBotMemoryRequest } from './bot-memory.ts'
+import { parseHostBotRoomMemoryRequest } from './bot-room-memory.ts'
+import { parseHostBotSchedulesRequest } from './bot-schedules.ts'
+import { parseHostBotScheduleHistoryRequest } from './bot-schedule-history.ts'
+import { parseHostBotAboutRequest } from './bot-about.ts'
+import { parseHostBotUsageRequest } from './bot-usage.ts'
+import { parseHostBotGeneralSettingsRequest, parseHostBotGeneralSettingsUpdateRequest } from './bot-general-settings.ts'
+import { parseHostBotProvidersRequest, parseHostBotProvidersMutationRequest } from './bot-providers.ts'
+import { parseHostBotConnectorsRequest, parseHostBotConnectorsMutationRequest } from './bot-connectors.ts'
+import { parseHostBotFeedbackRequest } from './bot-feedback.ts'
+import { parseHostBotFeedbackLogRequest } from './bot-feedback-log.ts'
+import { parseHostBotFeedbackClearRequest } from './bot-feedback-clear.ts'
+import { parseHostBotSecretsRequest, parseHostBotSecretsMutationRequest } from './bot-secrets.ts'
+import { parseHostBotCapabilitiesRequest, parseHostBotCapabilitiesMutationRequest } from './bot-capabilities.ts'
+import { parseHostBotFoldersRequest } from './bot-folders.ts'
+import { parseHostBotAvatarRequest } from './bot-avatar.ts'
+import { parseHostBotAttachmentPreviewRequest } from './bot-attachment-preview.ts'
+import { parseHostBotAttachmentDownloadOpenRequest,
+  parseHostBotAttachmentDownloadReadRequest } from './bot-attachment-download.ts'
+import { parseHostBotAttachmentSubmission } from './bot-attachment-submission.ts'
+import { parseHostBotSettingsUpdateRequest } from './bot-settings-update.ts'
+import { parseHostBotDeleteRequest } from './bot-delete.ts'
+import { parseHostBotDuplicateRequest } from './bot-duplicate.ts'
+import { parseHostBotCreateRequest } from './bot-create.ts'
+import { parseHostBotScheduleMutationRequest } from './bot-schedule-mutation.ts'
+import { parseHostBotMemoryMutationRequest } from './bot-memory-mutation.ts'
+import { parseHostBotUpdateMutationRequest } from './bot-update-mutation.ts'
 import { parseHostTwinBindingInput, parseHostTwinBindingResult } from './twin-binding.ts'
 import type { ProfileTwinBindingRequest, ProfileTwinBindingResult } from './types.ts'
 import { parseHostBotChatSubmission } from './bot-chat-submission.ts'
 import { parseHostBotRoomSubmission } from './bot-room-submission.ts'
 import { parseHostBotRoomUpdateRequest } from './bot-room-update.ts'
+import { parseHostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
 import { parseHostBotRoomCreateRequest, parseHostBotRoomDeleteRequest } from './bot-room-lifecycle.ts'
 import { parseSkillHubBotMessageActorInput } from './skillhub-bot-message-actor.ts'
 import { parseHostBotIdentity, parseHostBotIdentityV2, parseHostBotIdentityTarget,
@@ -688,6 +716,110 @@ function remoteSessionControlProof(value: unknown): HostRemoteSessionControlProo
 function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   const command = record(value)
   const command_id = uuid(command.command_id) as HostControlRequestId
+  if (command.operation === 'bot.capability-library.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotCapabilitiesMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.secrets.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotSecretsMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.feedback.clear') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotFeedbackClearRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.connectors.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotConnectorsMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.providers.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotProvidersMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.general.update') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotGeneralSettingsUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.settings.update') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotSettingsUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.delete') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotDeleteRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.duplicate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotDuplicateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.create') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotCreateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.schedule.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotScheduleMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.memory.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotMemoryMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.update.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotUpdateMutationRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
   if (command.operation === 'bot.room.create') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotRoomCreateRequest(command.request)
@@ -707,6 +839,14 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.room.update') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
     const request = parseHostBotRoomUpdateRequest(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.roomId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.channel-mirror.mutate') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotChannelMirrorMutationRequest(command.request)
     const session_id = remoteIdentifier(command.session_id)
     if (session_id !== request.roomId) reject()
     return { operation: command.operation, command_id, session_id,
@@ -735,6 +875,19 @@ function remoteSessionCommand(value: unknown): HostRemoteSessionCommand {
   if (command.operation === 'bot.chat.receipt') {
     exactKeys(command, ['operation', 'command_id', 'request'])
     return { operation: command.operation, command_id, request: parseHostBotChatSubmission(command.request) }
+  }
+  if (command.operation === 'bot.attachment.send') {
+    exactKeys(command, ['operation', 'command_id', 'session_id', 'control', 'request'])
+    const request = parseHostBotAttachmentSubmission(command.request)
+    const session_id = remoteIdentifier(command.session_id)
+    if (session_id !== request.sessionId) reject()
+    return { operation: command.operation, command_id, session_id,
+      control: remoteSessionControlProof(command.control), request }
+  }
+  if (command.operation === 'bot.attachment.receipt') {
+    exactKeys(command, ['operation', 'command_id', 'request'])
+    return { operation: command.operation, command_id,
+      request: parseHostBotAttachmentSubmission(command.request) }
   }
   if (command.operation === 'control.status') {
     exactKeys(command, ['operation', 'command_id', 'session_id', 'controller_id'])
@@ -2043,7 +2196,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
+    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'bot/memory' && params.endpoint !== 'bot/room-memory' && params.endpoint !== 'bot/schedules' && params.endpoint !== 'bot/schedule-history' && params.endpoint !== 'bot/about' && params.endpoint !== 'bot/usage' && params.endpoint !== 'bot/general' && params.endpoint !== 'bot/providers' && params.endpoint !== 'bot/connectors' && params.endpoint !== 'bot/secrets' && params.endpoint !== 'bot/capability-library' && params.endpoint !== 'bot/feedback' && params.endpoint !== 'bot/feedback-log' && params.endpoint !== 'bot/folders' && params.endpoint !== 'bot/avatar' && params.endpoint !== 'bot/attachment-preview' && params.endpoint !== 'bot/attachment-download-open' && params.endpoint !== 'bot/attachment-download-read' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
@@ -2062,6 +2215,24 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     if (params.endpoint === 'bot/room-history') parseHostBotRoomHistoryRequest(args)
     if (params.endpoint === 'bot/room-details') parseHostBotRoomDetailsRequest(args)
     if (params.endpoint === 'bot/settings') parseHostBotSettingsRequest(args)
+    if (params.endpoint === 'bot/memory') parseHostBotMemoryRequest(args)
+    if (params.endpoint === 'bot/room-memory') parseHostBotRoomMemoryRequest(args)
+    if (params.endpoint === 'bot/schedules') parseHostBotSchedulesRequest(args)
+    if (params.endpoint === 'bot/schedule-history') parseHostBotScheduleHistoryRequest(args)
+    if (params.endpoint === 'bot/about') parseHostBotAboutRequest(args)
+    if (params.endpoint === 'bot/usage') parseHostBotUsageRequest(args)
+    if (params.endpoint === 'bot/general') parseHostBotGeneralSettingsRequest(args)
+    if (params.endpoint === 'bot/providers') parseHostBotProvidersRequest(args)
+    if (params.endpoint === 'bot/connectors') parseHostBotConnectorsRequest(args)
+    if (params.endpoint === 'bot/secrets') parseHostBotSecretsRequest(args)
+    if (params.endpoint === 'bot/capability-library') parseHostBotCapabilitiesRequest(args)
+    if (params.endpoint === 'bot/feedback') parseHostBotFeedbackRequest(args)
+    if (params.endpoint === 'bot/feedback-log') parseHostBotFeedbackLogRequest(args)
+    if (params.endpoint === 'bot/folders') parseHostBotFoldersRequest(args)
+    if (params.endpoint === 'bot/avatar') parseHostBotAvatarRequest(args)
+    if (params.endpoint === 'bot/attachment-preview') parseHostBotAttachmentPreviewRequest(args)
+    if (params.endpoint === 'bot/attachment-download-open') parseHostBotAttachmentDownloadOpenRequest(args)
+    if (params.endpoint === 'bot/attachment-download-read') parseHostBotAttachmentDownloadReadRequest(args)
     if (params.endpoint === 'boot/injections' && Object.keys(args).length !== 0) reject()
     if ((params.endpoint === 'llm/listProviders' || params.endpoint === 'llm/listConfigurableProviders' || params.endpoint === 'settings/describe' || params.endpoint === 'agentPresets/list'
       || params.endpoint === 'dynamicCordisRunner/inventory' || params.endpoint === 'permissionPresets/catalog'
