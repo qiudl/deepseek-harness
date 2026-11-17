@@ -32,6 +32,9 @@ describe('Desktop remote UI read-only bridge', () => {
       .toEqual({ schemaVersion: 1, state: 'loading' })
     expect(read).toHaveBeenCalledWith({ cursor: null, limit: 20 }, signal)
     expect(invoke).not.toHaveBeenCalled()
+    await expect(new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+      .execute('bot/work', { args: { cursor: null, limit: 20 } }, signal))
+      .rejects.toThrow('Bot work reader unavailable')
     await expect(executor.execute('bot/work', { args: { cursor: null, limit: 20, botId: 'other' } }, signal))
       .rejects.toThrow()
     read.mockResolvedValueOnce({ schemaVersion: 1, state: 'ready', generation: 0, total: 0,
