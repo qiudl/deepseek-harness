@@ -19,6 +19,11 @@ function fixture() {
 }
 
 describe('registry authority validation', () => {
+  it('refuses a change signal for a Profile outside this registry', () => {
+    const { registry } = fixture()
+    expect(() => registry.profileChangeSignal('unknown-profile' as never)).toThrow(/profile_mismatch/)
+  })
+
   it('supports one external stable-file authority without touching POSIX metadata', async () => {
     let snapshot: unknown
     const prepareRoot = vi.fn()
