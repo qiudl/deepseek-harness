@@ -67,6 +67,7 @@ export function parseHostBotWork(value: unknown, request: HostBotWorkRequest): H
   }
   if (value.state !== 'ready' || !exact(value, ['schemaVersion', 'state', 'generation', 'total', 'items', 'nextCursor'])
     || !integer(value.generation) || !integer(value.total) || !cursor(value.nextCursor)
+    || (value.nextCursor !== null && value.nextCursor === request.cursor)
     || !Array.isArray(value.items) || value.items.length > request.limit || value.total < value.items.length
     || (value.items.length === 0 && value.nextCursor !== null)) return invalid()
   const seen = new Set<string>()
