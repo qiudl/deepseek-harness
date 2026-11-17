@@ -1,11 +1,8 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostTaskCoordinationEnvironments, type HostTaskCoordinationEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import { parseHostProjectMemoryEnvironments, type HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostBotGroupPublicKeyring } from '@deepseek-ai/dsh-host-control-protocol'
@@ -475,11 +472,7 @@ async function startWindowsDesktopHostApplicationWithTrust(
           userSid, pid: process.pid, processNonce: config.processNonce, bindings,
         })
       }
-      const databases = new ProjectOperationMemoryDatabases(
-        async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-        async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-        async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-      )
+      const databases = ProjectOperationMemoryDatabases.fromProfileFiles(memoryFiles)
       memoryDatabases = databases
       const registryRoot = win32.join(config.root, 'registry')
       const registryFiles = createWindowsProfileRegistryFileAuthority({
