@@ -19,12 +19,16 @@ describe('native Bot schedule delivery history', () => {
       { ...page, records: [{ ...page.records[0], prompt: 'x'.repeat(16_001) }] },
     ]) expect(() => parseHostBotScheduleHistory(forged, request)).toThrow()
     expect(() => parseHostBotScheduleHistoryRequest({ ...request, ownerBotId: 'foreign' })).toThrow()
+    expect(() => parseHostBotScheduleHistoryRequest({ ...request, before: 'bad cursor' })).toThrow()
+    expect(() => parseHostBotScheduleHistory(page, { ...request, before: 'm1' })).toThrow()
   })
 
   it('does not invent delivery records for absent tasks or disabled service', () => {
     const empty = { ...page, code: 'schedule_not_found', records: [],
       nextBefore: null, retention: null, earlierRecordsUnavailable: false }
     expect(parseHostBotScheduleHistory(empty, request)?.code).toBe('schedule_not_found')
+    expect(parseHostBotScheduleHistory({ ...empty, code: 'delivery_cursor_not_found' }, request)?.code)
+      .toBe('delivery_cursor_not_found')
     expect(parseHostBotScheduleHistory({ ...empty, available: false, code: null }, request)?.available).toBe(false)
     expect(() => parseHostBotScheduleHistory({ ...empty, records: page.records }, request)).toThrow()
   })
