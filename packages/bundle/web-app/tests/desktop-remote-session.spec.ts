@@ -891,6 +891,28 @@ describe('Desktop remote Session bridge', () => {
       clientId: 'client-1', eventId: 'event-1', outcome: { kind: 'result', value: 'allowed-once' },
     })
   })
+
+  it('delivers approval cancellation to a polling client after another answer wins', async () => {
+    async function* events() {
+      yield { type: 'ready', clientId: 'client-1', host: { home: '/hidden' } }
+      yield { type: 'waterfall', event: 'approval/request', eventId: 'event-1', agentId: 'session-1',
+        request: { toolName: 'bash', reason: 'run command' } }
+      yield { type: 'cancel', eventId: 'event-1' }
+    }
+    const gateway = gatewayFixture({ wireStream: { open: vi.fn(async () => events()) } })
+    const executor = new DesktopRemoteSessionExecutor(gateway)
+    const signal = new AbortController().signal
+    const commandId = '123e4567-e89b-42d3-a456-426614174000' as never
+    const first = await executor.execute({ operation: 'approval.poll', command_id: commandId, wait_ms: 100 },
+      signal) as Record<string, unknown>
+    const firstFrame = (first.frames as Array<Record<string, unknown>>)[0]!
+    expect(firstFrame.payload).toMatchObject({ type: 'approval/requested', approvalId: 'client-1:event-1' })
+    const second = await executor.execute({ operation: 'approval.poll', command_id: commandId,
+      cursor: first.cursor as string, wait_ms: 100 }, signal) as Record<string, unknown>
+    expect(second.frames).toEqual([{ rpcId: 'event-1', payload: {
+      type: 'approval/cancelled', approvalId: 'client-1:event-1', sessionId: 'session-1',
+    } }])
+  })
 })
 
 

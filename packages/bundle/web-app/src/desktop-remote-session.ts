@@ -644,7 +644,12 @@ export class DesktopRemoteSessionExecutor {
       const frame = next.value as RemoteEventDownlinkFrame
       if (frame.type === 'cancel') {
         for (const [approvalId, pending] of this.approvals) {
-          if (pending.clientId === id && pending.eventId === frame.eventId) this.approvals.delete(approvalId)
+          if (pending.clientId === id && pending.eventId === frame.eventId) {
+            this.approvals.delete(approvalId)
+            frames.push({ rpcId: frame.eventId, payload: {
+              type: 'approval/cancelled', approvalId, sessionId: pending.sessionId,
+            } })
+          }
         }
         continue
       }
