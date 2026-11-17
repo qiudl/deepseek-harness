@@ -131,6 +131,19 @@ export function assertPrivateTreeFilesPreserved(before: Buffer, beforeDigest: st
   }
 }
 
+function writeSnapshotEntries(root: string, snapshot: Snapshot, guard: () => void): void {
+  for (const entry of snapshot.entries) {
+    guard()
+    const path = join(root, ...entry.path.split('/'))
+    if (entry.kind === 'directory') mkdirSync(path, { mode: 0o700 })
+    else {
+      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, entry.mode)
+      try { writeFileSync(fd, Buffer.from(entry.content, 'base64')); fsyncSync(fd) } finally { closeSync(fd) }
+      chmodSync(path, entry.mode)
+    }
+  }
+}
+
 /** Materialize an immutable snapshot into a new private sibling; never replace an existing tree.
  * @param root New, Host-selected candidate path beneath an owner-private directory.
  * @param bytes Private snapshot bytes.
@@ -147,16 +160,7 @@ export function materializePrivateTreeSnapshot(root: string, bytes: Buffer, dige
     throw Error('unsafe_snapshot_target')
   }
   guard(); mkdirSync(root, { mode: 0o700 })
-  for (const entry of snapshot.entries) {
-    guard()
-    const path = join(root, ...entry.path.split('/'))
-    if (entry.kind === 'directory') mkdirSync(path, { mode: 0o700 })
-    else {
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, entry.mode)
-      try { writeFileSync(fd, Buffer.from(entry.content, 'base64')); fsyncSync(fd) } finally { closeSync(fd) }
-      chmodSync(path, entry.mode)
-    }
-  }
+  writeSnapshotEntries(root, snapshot, guard)
   for (const entry of [...snapshot.entries].reverse()) if (entry.kind === 'directory') {
     const directory = join(root, ...entry.path.split('/'))
     chmodSync(directory, entry.mode)
@@ -190,15 +194,7 @@ export function restorePluginTree(
   const attempt = randomUUID()
   const staged = join(parent, `.plugin-tree-stage-${operationId}-${attempt}`); const previous = join(parent, `.plugin-tree-replaced-${operationId}-${attempt}`)
   guard(); mkdirSync(staged, { mode: 0o700 })
-  for (const entry of snapshot.entries) {
-    guard(); const path = join(staged, ...entry.path.split('/'))
-    if (entry.kind === 'directory') mkdirSync(path, { mode: 0o700 })
-    else {
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, entry.mode)
-      try { writeFileSync(fd, Buffer.from(entry.content, 'base64')); fsyncSync(fd) } finally { closeSync(fd) }
-      chmodSync(path, entry.mode)
-    }
-  }
+  writeSnapshotEntries(staged, snapshot, guard)
   for (const entry of [...snapshot.entries].reverse()) if (entry.kind === 'directory') {
     const path = join(staged, ...entry.path.split('/')); chmodSync(path, entry.mode)
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { fsyncSync(fd) } finally { closeSync(fd) }
