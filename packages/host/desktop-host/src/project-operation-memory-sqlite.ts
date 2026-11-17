@@ -1,10 +1,12 @@
 /** Private SQLite mechanics shared by two literal, independently pinned Host store formats. */
+import { verify, type KeyObject } from 'node:crypto'
 import type { DatabaseSync, SQLInputValue, SQLOutputValue } from 'node:sqlite'
 import { ProjectMemoryOwnershipRetainedError } from './project-operation-memory-ownership-error.ts'
 import type { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import { HostAuthorityError } from './types.ts'
 type SqlRow = Record<string, SQLOutputValue>
 type Group = 'permanent' | 'transient'
+const RANGE_BYTES = 320
 const fail = (): never => { throw new HostAuthorityError('unavailable') }
 /** Only module-owned literal schemas reach this private engine; callers and wire requests never select a format. */
 export interface ProjectMemorySqliteFormat {
@@ -82,6 +84,109 @@ export class ProjectOperationMemorySqlite<K extends string> {
     return this.files.identity
   }
   protected capacity: ProjectMemoryDatabaseLimits = PROJECT_MEMORY_DATABASE_LIMITS
+  /** Merge signed contiguous ranges inside this purpose's private transaction.
+   * @param scope - Exact signed owner and recipient scope digest.
+   * @param before - Original committed interval start.
+   * @param target - Original committed interval end.
+   * @param frontier - Previous continuous prefix.
+   * @param guard - Current metadata publication fence.
+   * @param sign - Installation signer for a derived merged range.
+   * @param domain - Fixed signature domain selected by the owning store.
+   * @param verificationKey - Installation public key for signed ranges.
+   * @returns The continuous prefix after merging the committed interval.
+   */
+  protected mergeRangeDelta(
+    scope: string,
+    before: bigint,
+    target: bigint,
+    frontier: bigint,
+    guard: () => void,
+    sign: (payload: Buffer) => string,
+    domain: 'private' | 'native',
+    verificationKey: KeyObject,
+  ): bigint {
+    const rangeBytes = (start: bigint, finish: bigint): Buffer => Buffer.from(
+      `dsh.project-operation-memory-${domain}-range/v1\0` +
+        JSON.stringify([
+          this.identity.profileId,
+          this.identity.installationId,
+          this.identity.publicKeyDigest,
+          scope,
+          start.toString(),
+          finish.toString(),
+        ]),
+    )
+    const verifyRange = (row: SqlRow): void => {
+      if (
+        typeof row.start !== 'bigint' ||
+        typeof row.finish !== 'bigint' ||
+        typeof row.signature !== 'string' ||
+        !verify(null, rangeBytes(row.start, row.finish), verificationKey, Buffer.from(row.signature, 'base64url'))
+      ) fail()
+    }
+    return this.transaction(guard, () => {
+      const db = this.connection()
+      if (
+        !/^[a-f0-9]{64}$/u.test(scope) ||
+        before < 0n ||
+        target < before ||
+        target > 9223372036854775807n ||
+        frontier < 0n ||
+        frontier > 9223372036854775807n
+      )
+        return fail()
+      if (before === target || target <= frontier) return frontier
+      // Disjoint ranges permit one indexed predecessor plus only the ranges actually covered by this interval.
+      // A finish>=before filter over all prior starts would turn ordinary ascending gaps into a historical scan.
+      const predecessor = db.prepare(
+        'SELECT start,finish,signature FROM memory_ranges WHERE scope=? AND start<=? ORDER BY start DESC LIMIT 1',
+      )
+      predecessor.setReadBigInts(true)
+      const prior = predecessor.get(scope, before),
+        lower = prior && typeof prior.finish === 'bigint' && prior.finish >= before ? (prior.start as bigint) : before
+      const statement = db.prepare(
+        'SELECT min(start) start,max(finish) finish,count(*) n FROM memory_ranges WHERE scope=? AND start>=? AND start<=?',
+      )
+      statement.setReadBigInts(true)
+      const row = statement.get(scope, lower, target) as SqlRow // Aggregate returns one row; COUNT is bigint.
+      const start = row.start === null ? before : (row.start as bigint),
+        finish = row.finish === null ? target : (row.finish as bigint),
+        mergedStart = start < before ? start : before,
+        mergedFinish = finish > target ? finish : target,
+        consumed = mergedStart <= frontier,
+        count = Number(row.n),
+        nextRows = consumed ? 0 : 1
+      // The new committed receipt itself covers [before,target]. Only an authenticated predecessor can
+      // bridge a prior gap, and only an authenticated extending range can justify passing target.
+      // Fully covered ranges cannot enlarge the prefix, so no historical signature scan is needed.
+      if (prior && lower < before) verifyRange(prior)
+      if (mergedFinish > target) {
+        const extending = db.prepare(
+          'SELECT start,finish,signature FROM memory_ranges WHERE scope=? AND start>=? AND start<=? AND finish=? LIMIT 1',
+        )
+        extending.setReadBigInts(true)
+        // The aggregate MAX proves this row exists in the same writer transaction.
+        const original = extending.get(scope, lower, target, mergedFinish) as SqlRow
+        verifyRange(original)
+      }
+      this.adjust('permanent', {
+        actual_rows: nextRows - count,
+        actual_bytes: (nextRows - count) * RANGE_BYTES,
+        charged_rows: nextRows - count,
+        charged_bytes: (nextRows - count) * RANGE_BYTES,
+      })
+      db.prepare('DELETE FROM memory_ranges WHERE scope=? AND start>=? AND start<=?').run(scope, lower, target)
+      if (!consumed) {
+        guard()
+        const bytes = rangeBytes(mergedStart, mergedFinish),
+          signature = sign(bytes)
+        if (!verify(null, bytes, verificationKey, Buffer.from(signature, 'base64url'))) return fail()
+        guard()
+        db.prepare('INSERT INTO memory_ranges VALUES(?,?,?,?)').run(scope, mergedStart, mergedFinish, signature)
+      }
+      return consumed ? mergedFinish : frontier
+    })
+  }
   protected constructor(
     protected readonly files: ProjectOperationMemoryDatabaseFiles,
     private readonly format: ProjectMemorySqliteFormat,
