@@ -490,6 +490,13 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
 )
 
 describe('session-query exact reads', () => {
+  it('rejects a bounded cold read when persistence is unavailable', async () => {
+    const ctx = await liveContext()
+    await expect(ctx.sessionQuery.readColdSessionBounded(header('bounded-no-persistence').id, {
+      maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1,
+    })).rejects.toThrow(/not found/i)
+  })
+
   it('refuses a cold log whose interrupted-turn closure exceeds the event budget', async () => {
     const openTurn = header('bounded-open-turn')
     const persistedEvents = oneTurnLog().slice(0, -1)

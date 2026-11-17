@@ -138,8 +138,9 @@ it('refuses a source that grows or is replaced while the opened descriptor is be
   await writer.append(oneTurnLog())
   await writer.close()
   const path = logPath(root, header.cwd, header.id, 'none')
+  const validBytes = await readFile(path)
   const probe = await open(path, 'r')
-  const prototype = Object.getPrototypeOf(probe) as { read: typeof probe.read }
+  const prototype = Object.getPrototypeOf(probe) as { read: typeof probe.read; stat: typeof probe.stat }
   const originalRead = prototype.read
   await probe.close()
   prototype.read = (async function (this: unknown, ...args: unknown[]) {
@@ -170,5 +171,55 @@ it('refuses a source that grows or is replaced while the opened descriptor is be
     })).rejects.toThrow(/source changed during read/)
   } finally {
     prototype.read = originalRead
+  }
+
+  prototype.read = (async function (this: unknown, ...args: unknown[]) {
+    if (args[3] === 0) return { bytesRead: 0, buffer: args[0] }
+    return await Reflect.apply(originalRead, this, args) as { bytesRead: number; buffer: Buffer }
+  })
+  try {
+    await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+      maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 100,
+    })).rejects.toThrow(/source changed during read/)
+  } finally {
+    prototype.read = originalRead
+  }
+
+  await writeFile(path, validBytes)
+  const originalStat = prototype.stat
+  let completedRead = false
+  prototype.read = (async function (this: unknown, ...args: unknown[]) {
+    completedRead = true
+    return await Reflect.apply(originalRead, this, args) as { bytesRead: number; buffer: Buffer }
+  })
+  prototype.stat = (async function (this: unknown, ...args: unknown[]) {
+    const result = await Reflect.apply(originalStat, this, args) as Awaited<ReturnType<typeof probe.stat>>
+    if (completedRead) await appendFile(path, '\n')
+    return result
+  }) as typeof probe.stat
+  try {
+    await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+      maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 100,
+    })).rejects.toThrow(/source changed during read/)
+  } finally {
+    prototype.read = originalRead
+    prototype.stat = originalStat
+  }
+
+  await writeFile(path, validBytes)
+  const service = ctx.sessionPersistence as unknown as {
+    assertStoredIdentity: (...args: unknown[]) => Promise<void>
+  }
+  const originalIdentity = service.assertStoredIdentity
+  service.assertStoredIdentity = async function (this: unknown, ...args: unknown[]) {
+    await Reflect.apply(originalIdentity, this, args)
+    await appendFile(path, '\n')
+  }
+  try {
+    await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+      maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 100,
+    })).rejects.toThrow(/source changed during validation/)
+  } finally {
+    service.assertStoredIdentity = originalIdentity
   }
 })
