@@ -21,6 +21,27 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 }
 
 describe('Desktop remote UI read-only bridge', () => {
+  it('keeps Bot work on its explicit provider and refuses forged fields', async () => {
+    const invoke = vi.fn(), read = vi.fn(async (): Promise<unknown> => ({ schemaVersion: 1, state: 'loading' }))
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, read)
+    const signal = new AbortController().signal
+    expect(await executor.execute('bot/work', { args: { cursor: null, limit: 20 } }, signal))
+      .toEqual({ schemaVersion: 1, state: 'loading' })
+    expect(read).toHaveBeenCalledWith({ cursor: null, limit: 20 }, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    await expect(new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+      .execute('bot/work', { args: { cursor: null, limit: 20 } }, signal))
+      .rejects.toThrow('Bot work reader unavailable')
+    await expect(executor.execute('bot/work', { args: { cursor: null, limit: 20, botId: 'other' } }, signal))
+      .rejects.toThrow()
+    read.mockResolvedValueOnce({ schemaVersion: 1, state: 'ready', generation: 0, total: 0,
+      items: [{ text: 'private' }], nextCursor: null })
+    await expect(executor.execute('bot/work', { args: { cursor: null, limit: 20 } }, signal))
+      .rejects.toThrow('invalid_bot_work')
+  })
   it('reads only an existing Bot own-chat selection and never invokes the generic gateway', async () => {
     const invoke = vi.fn(), read = vi.fn(async () => ({ revision: 4, defaultBotId: 'z',
       bot: { botId: 'z', actorRef: 'deepseek-bot:z', displayName: 'Main Bot', sessionId: 'current-part' } }))

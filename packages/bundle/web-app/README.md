@@ -126,6 +126,8 @@ When an isolated Desktop Profile worker supplies `DSH_PROFILE_MODEL_TOKEN`, the 
 
 The private `bot/chat` read uses the selected Profile's opt-in Bot service to resolve an existing default or explicit Bot and its current own-chat Session. It returns no Bot configuration, secrets or history and performs no bootstrap or send. Missing providers return null; malformed or retargeted replies are refused. The [Host control protocol](../../host/control-protocol/README.md) owns the request limits and capability negotiation.
 
+The private `bot/work` read uses the same opt-in service for body-free Bot instruction coordinates and states. It accepts only `cursor` and `limit` (1–50), validates the entire response, and has a separate signed Host capability. Missing providers return null; unverified sources return `loading` or `unavailable`.
+
 The private `bot/rooms` read uses the same opt-in service for a page of owner-visible room summaries. It accepts only `afterRoomId` and `limit` and returns the team revision, room IDs, names, Bot counts, pinned and hidden flags, and a next cursor. The worker validates the complete page; missing providers return null. It does not expose room messages, settings, or mutations.
 
 The private `bot.room.send` and `bot.room.receipt` Session commands use only the installed Bot service under the existing remote Session control proof. The worker checks the exact room request and correlated receipt; a missing provider returns null. No generic plugin command is reachable through this lane.

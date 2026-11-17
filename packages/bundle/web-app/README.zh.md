@@ -126,6 +126,8 @@ dsh --profile web --no-open --host "$(hostname -i | awk '{print $1}')" --public-
 
 私有 `bot/chat` 读取通过所选 Profile 显式启用的 Bot 服务，解析已有的默认或指定 Bot 及其当前私聊 Session。它不返回 Bot 配置、密钥或历史，也不执行 bootstrap 或发送。缺少提供者时返回 null；格式错误或目标被替换的响应会被拒绝。[Host 控制协议](../../host/control-protocol/README.zh.md)定义请求上限与 capability 协商。
 
+私有 `bot/work` 读取经同一显式启用的服务返回不含正文的 Bot 指令坐标与状态。它只接受 `cursor` 和 1–50 的 `limit`，校验完整响应，并使用独立签名 Host 能力。缺失提供方返回 null，来源未核验返回 `loading` 或 `unavailable`。
+
 私有 `bot/rooms` 读取通过同一显式启用的服务获取用户可见的群摘要页。请求只接受 `afterRoomId` 和 `limit`，返回团队修订号、群 ID、名称、Bot 数量、置顶与隐藏标记，以及下一页游标。worker 校验整页数据；缺少提供者时返回 null。该接口不暴露群消息、设置或修改操作。
 
 私有 `bot.room.send` 和 `bot.room.receipt` Session 命令只在既有远程 Session 控制权凭据下调用已安装的 Bot 服务。worker 校验精确群请求与关联回执；缺少提供者时返回 null。该通道不开放通用插件命令。

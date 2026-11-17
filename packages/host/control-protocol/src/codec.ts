@@ -13,6 +13,7 @@ import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostNa
 import type { ProfileBoundBotRoomsRequest, ProfileBoundBotRoomsResult, ProfileNativeRoomProjectionRequest, ProfileNativeRoomProjectionResult } from './types.ts'
 import { parseWorkbenchTerminalRequest, parseWorkbenchTerminalStreamPayload } from './workbench-terminal.js'
 import { parseHostBotChatRequest } from './bot-chat.ts'
+import { parseHostBotWorkRequest } from './bot-work.ts'
 import { parseHostBotRoomListRequest } from './bot-room-list.ts'
 import { parseHostBotRoomHistoryRequest } from './bot-room-history.ts'
 import { parseHostBotRoomDetailsRequest } from './bot-room-details.ts'
@@ -2196,7 +2197,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.remote_ui_read') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'view_lease_id', 'lease_generation', 'runtime_generation', 'endpoint', 'payload'])
-    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'bot/memory' && params.endpoint !== 'bot/room-memory' && params.endpoint !== 'bot/schedules' && params.endpoint !== 'bot/schedule-history' && params.endpoint !== 'bot/about' && params.endpoint !== 'bot/usage' && params.endpoint !== 'bot/general' && params.endpoint !== 'bot/providers' && params.endpoint !== 'bot/connectors' && params.endpoint !== 'bot/secrets' && params.endpoint !== 'bot/capability-library' && params.endpoint !== 'bot/feedback' && params.endpoint !== 'bot/feedback-log' && params.endpoint !== 'bot/folders' && params.endpoint !== 'bot/avatar' && params.endpoint !== 'bot/attachment-preview' && params.endpoint !== 'bot/attachment-download-open' && params.endpoint !== 'bot/attachment-download-read' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
+    if (params.endpoint !== 'bot/chat' && params.endpoint !== 'bot/work' && params.endpoint !== 'bot/rooms' && params.endpoint !== 'bot/room-history' && params.endpoint !== 'bot/room-details' && params.endpoint !== 'bot/settings' && params.endpoint !== 'bot/memory' && params.endpoint !== 'bot/room-memory' && params.endpoint !== 'bot/schedules' && params.endpoint !== 'bot/schedule-history' && params.endpoint !== 'bot/about' && params.endpoint !== 'bot/usage' && params.endpoint !== 'bot/general' && params.endpoint !== 'bot/providers' && params.endpoint !== 'bot/connectors' && params.endpoint !== 'bot/secrets' && params.endpoint !== 'bot/capability-library' && params.endpoint !== 'bot/feedback' && params.endpoint !== 'bot/feedback-log' && params.endpoint !== 'bot/folders' && params.endpoint !== 'bot/avatar' && params.endpoint !== 'bot/attachment-preview' && params.endpoint !== 'bot/attachment-download-open' && params.endpoint !== 'bot/attachment-download-read' && params.endpoint !== 'boot/injections' && params.endpoint !== 'asset/read' && params.endpoint !== 'asset/read-gzip-chunk' && params.endpoint !== 'asset/describe'
       && params.endpoint !== 'session/list' && params.endpoint !== 'session/page'
       && params.endpoint !== 'session/modelCatalog' && params.endpoint !== 'session/collaborationSources'
       && params.endpoint !== 'session/collaborationMembership'
@@ -2211,6 +2212,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     const args = remoteSessionJson(payload.args)
     if (!args || typeof args !== 'object' || Array.isArray(args)) reject()
     if (params.endpoint === 'bot/chat') parseHostBotChatRequest(args)
+    if (params.endpoint === 'bot/work') parseHostBotWorkRequest(args)
     if (params.endpoint === 'bot/rooms') parseHostBotRoomListRequest(args)
     if (params.endpoint === 'bot/room-history') parseHostBotRoomHistoryRequest(args)
     if (params.endpoint === 'bot/room-details') parseHostBotRoomDetailsRequest(args)

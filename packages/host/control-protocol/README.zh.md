@@ -46,6 +46,8 @@ kind: "package-reference"
 
 `profile.remote_ui_read.bot_chat` 单独发布固定的 `bot/chat` 读取能力。精确参数 `{ botId: string | null }` 选择已有 Bot 或团队的第一个 Main Bot。响应仅包含团队 revision、默认 Bot 身份，以及所选 Bot 的公开身份和当前私聊 Session ID；提供者不可用与 Bot 不存在保持不同语义。读取不初始化团队、不创建 Session，也不授予 prompt 权限。消费方同时要求已签名的 Host capability 和本地 SDK 的 `remoteUiBotChatSupported` 标志。
 
+`profile.remote_ui_read.bot_work` 单独发布仅供随包 Profile worker 使用的固定 `bot/work` 读取能力。精确请求 `{ cursor: string | null, limit: 1..50 }` 不允许指定 Bot、Session、Profile 或 Account。版本化响应只含任务身份、原 Session 事件坐标、状态、总数与同一代游标；源缺失或快照失效保持显式状态。Host 校验每一项并拒绝正文与多余字段。消费方同时要求已签名能力和本地 SDK 的 `remoteUiBotWorkSupported` 标志。Bot 插件的原 Session 日志仍是权威来源；此读取不授予发送或审批权限。
+
 `profile.remote_session.bot_chat` 单独发布 `bot.chat.send` 和 `bot.chat.receipt`。二者将已有 Bot、预期私聊分段、稳定 submission UUID 与至多 16 KiB 的规范化文本绑定。发送持有既有 Session 控制权并调用显式启用的 Bot 提供者，保留能力准备与 prompt 语义。回执与原 Session 日志对应；unobserved 不代表可安全重试。提供者缺失仍返回 null。消费方同时要求已签名 capability 和 SDK 的 remoteBotChatSupported 标志；旧或自定义 worker 不隐式继承支持。
 
 `profile.remote_session.bot_room` 独立发布固定的 `bot.room.send` 和 `bot.room.receipt` 命令。精确请求绑定已有用户群、稳定 submission UUID 和至多 16 KiB 的文本。发送要求群 Session 控制权凭据；回执关联原群 Session 事件，不暴露输入内容。旧 worker 或 SDK 不继承该能力。群成员和设置需要独立命令。

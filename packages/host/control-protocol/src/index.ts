@@ -155,6 +155,8 @@ export type { HostBotRoomUpdateRequest, HostBotRoomUpdateReceipt, HostBotRoomUpd
 export { parseHostBotRoomSubmission, parseHostBotRoomReceipt } from './bot-room-submission.ts'
 export type { HostBotRoomSubmission, HostBotRoomAttachment, HostBotRoomReceipt, HostBotRoomSubmissionId } from './bot-room-submission.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
+export { parseHostBotWorkRequest, parseHostBotWork } from './bot-work.ts'
+export type { HostBotWorkRequest, HostBotWork, HostBotWorkItem } from './bot-work.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
 export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId } from './bot-chat-submission.ts'
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,

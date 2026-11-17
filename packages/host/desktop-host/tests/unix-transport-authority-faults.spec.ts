@@ -512,6 +512,21 @@ describe('Unix transport authority failures', () => {
     expect(missing.client.inspection.capabilities).not.toContain('profile.remote_ui_read.bot_chat')
     missing.client.close()
   })
+  it('negotiates Bot work separately and captures the worker result', async () => {
+    const input = { ...opened, endpoint: 'bot/work' as const, payload: { args: { cursor: null, limit: 20 } } }
+    const execute = vi.fn(async (): Promise<unknown> => ({ schemaVersion: 1, state: 'loading' }))
+    const old = await authorityClient({ remoteUiRead: execute })
+    await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotWorkSupported: true })
+    expect(enabled.client.remoteUiBotWorkSupported).toBe(true)
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_work')
+    await expect(enabled.client.remoteUiRead(input)).resolves.toEqual({ schemaVersion: 1, state: 'loading' })
+    execute.mockResolvedValueOnce({ schemaVersion: 1, state: 'loading', items: [] })
+    await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates owner Bot room pages and rejects malformed Host results', async () => {
     const input = { ...opened, endpoint: 'bot/rooms' as const,
       payload: { args: { afterRoomId: '', limit: 1 } } }

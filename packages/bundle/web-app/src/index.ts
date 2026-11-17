@@ -39,7 +39,7 @@ import type {} from '@deepseek-ai/dsh-shell-env'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-llm'
 import { describeCollaborationReference } from '@deepseek-ai/dsh-api-session-controller'
-import { nativeAgentResultChunkFields } from '@deepseek-ai/dsh-host-control-protocol'
+import { nativeAgentResultChunkFields, type HostBotWorkRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
 import { handleDesktopCollaborationSourceRequest, handleDesktopCollaborationSourceSnapshotRequest } from './desktop-collaboration-source.ts'
 import { handleDesktopCollaborationReferenceGrantRequest, handleDesktopCollaborationReferenceCaptureRequest } from './desktop-collaboration-source.ts'
@@ -1197,6 +1197,15 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (!service?.readLocalBotAttachmentDownload) return null
           const value = await service.readLocalBotAttachmentDownload(request, signal)
+          signal.throwIfAborted()
+          return value
+        }, async (request: HostBotWorkRequest, signal) => {
+          signal.throwIfAborted()
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotWork?: (input: HostBotWorkRequest) => Promise<unknown>
+          }
+          if (!service?.readLocalBotWork) return null
+          const value = await service.readLocalBotWork(request)
           signal.throwIfAborted()
           return value
         })
