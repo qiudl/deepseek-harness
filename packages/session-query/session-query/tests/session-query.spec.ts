@@ -3,6 +3,7 @@ import type { ContextFormed, MessageSource } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { oneTurnLog } from '../../../session/session-persistence/tests/contract.ts'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -489,6 +490,17 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
 )
 
 describe('session-query exact reads', () => {
+  it('refuses a cold log whose interrupted-turn closure exceeds the event budget', async () => {
+    const openTurn = header('bounded-open-turn')
+    const persistedEvents = oneTurnLog().slice(0, -1)
+    TestPersistence.reset([{ meta: openTurn, events: persistedEvents }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    await expect(ctx.sessionQuery.readColdSessionBounded(openTurn.id, {
+      maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: persistedEvents.length,
+    })).rejects.toThrow(/event budget after balancing/)
+  })
+
   it('replay-validates a bounded cold log and carries its source revision', async () => {
     const valid = header('bounded-valid')
     const corrupt = header('bounded-corrupt')

@@ -87,6 +87,31 @@ it('refuses historical generations and observes cancellation', async () => {
   })).rejects.toThrow(/cancelled bounded read/)
 })
 
+it('rejects invalid limits, missing logs, and incomplete plaintext records', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-bounded-invalid-'))
+  roots.push(root)
+  const ctx = new Context()
+  contexts.push(ctx)
+  await ctx.plugin(JsonlPersistence, { root, compression: 'none' })
+  const header = meta('bounded-invalid')
+  const limits = { maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 10 }
+  await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+    ...limits, maxEvents: 0,
+  })).rejects.toThrow(/positive safe integer/)
+  await expect(ctx.sessionPersistence.inspectBounded(header.id, limits)).rejects.toThrow(/not found/i)
+
+  const path = logPath(root, header.cwd, header.id, 'none')
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, '{')
+  await expect(ctx.sessionPersistence.inspectBounded(header.id, limits)).rejects.toThrow(/incomplete header/)
+  await rm(path)
+  const writer = await ctx.sessionPersistence.create(header)
+  await writer.append(oneTurnLog())
+  await writer.close()
+  await appendFile(path, '{')
+  await expect(ctx.sessionPersistence.inspectBounded(header.id, limits)).rejects.toThrow(/incomplete record/)
+})
+
 it('refuses a source that grows while the opened descriptor is being read', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-bounded-race-'))
   roots.push(root)
