@@ -77,7 +77,7 @@ export function parseHostBotScheduleHistory(value: unknown,
   if (value.code !== null || !value.available) {
     if (records.length || value.nextBefore !== null || value.retention !== null ||
       value.earlierRecordsUnavailable || value.earlierRecordsPruned ||
-      !value.available && value.code !== null || value.available && value.code === null)
+      !value.available && value.code !== null)
       throw Error('invalid_bot_schedule_history_result')
     return { available: value.available, sessionId: request.sessionId, id: request.id,
       code: value.code, records: [], nextBefore: null,

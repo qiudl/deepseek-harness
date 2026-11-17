@@ -16,5 +16,14 @@ describe('controlled Bot duplicate', () => {
       state: 'created', botId: 'source', revision: 8 }, request)).toThrow('invalid_bot_duplicate_receipt')
     expect(() => parseHostBotDuplicateReceipt({ sourceBotId: 'source', copyRequestId: request.copyRequestId,
       state: 'created', botId: 'copy', revision: 6 }, request)).toThrow('invalid_bot_duplicate_receipt')
+    for (const state of ['stale', 'missing'] as const) {
+      expect(parseHostBotDuplicateReceipt({ sourceBotId: 'source', copyRequestId: request.copyRequestId,
+        state, botId: null, revision: 7 }, request)?.state).toBe(state)
+    }
+    expect(() => parseHostBotDuplicateReceipt({ sourceBotId: 'source', copyRequestId: request.copyRequestId,
+      state: 'created', botId: null, revision: 8 }, request)).toThrow('invalid_bot_duplicate_receipt')
+    expect(() => parseHostBotDuplicateReceipt({ sourceBotId: 'source', copyRequestId: request.copyRequestId,
+      state: 'stale', botId: null, revision: 8 }, { ...request, mode: 'status' }))
+      .toThrow('invalid_bot_duplicate_receipt')
   })
 })
