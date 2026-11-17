@@ -3,7 +3,7 @@
 import type { Context, Fiber } from '@deepseek-ai/cordis'
 import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
-import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionBoundedInspection, SessionBoundedReadOptions, SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
@@ -52,6 +52,19 @@ export class SessionCorpus {
     _ctx.effect(() => {
       return () => this._optionalPersistenceFiber.dispose()
     }, 'sessionQuery.optionalPersistence')
+  }
+
+  /**
+   * Read one persisted current-format log without the unbounded corpus loader.
+   * @param sessionId - persisted Session identity.
+   * @param options - read budgets, expected revision, and cancellation.
+   * @returns one complete validated persisted log with its revision.
+   */
+  async inspectColdBounded(sessionId: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection> {
+    options.signal?.throwIfAborted()
+    const persistence = this._persistence
+    if (persistence === undefined) throw notFound(sessionId)
+    return persistence.inspectBounded(sessionId, options)
   }
 
   /**

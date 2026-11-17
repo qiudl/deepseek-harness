@@ -425,6 +425,7 @@ export class SessionLogScanner {
   constructor(
     headerRecord: Buffer,
     private readonly recovery: SessionFormatRecovery = 'recoverable',
+    private readonly maxEvents = Number.POSITIVE_INFINITY,
   ) {
     const parsed = parseHeaderRecord(headerRecord)
     this.meta = parsed.meta
@@ -524,6 +525,7 @@ export class SessionLogScanner {
         && (decoded as { type?: unknown }).type === 'turn/end') throw this.issue
       return
     }
+    if (this.eventCount >= this.maxEvents) throw new Error('bounded Session read exceeded event budget')
     try {
       this.restore.decodeRow(decoded)
     } catch (error: unknown) {

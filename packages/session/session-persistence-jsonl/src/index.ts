@@ -15,6 +15,7 @@ import {
 } from '@deepseek-ai/dsh-session-format-catalog'
 import { readdirSync, type Dirent } from 'node:fs'
 import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { zstdDecompressSync } from 'node:zlib'
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -30,6 +31,7 @@ import {
   type SessionLocation, type SessionPersistenceCreateOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
+  type SessionBoundedInspection, type SessionBoundedReadOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
 import { JsonlBackendTracker, JsonlSessionHandle, type StorageHandleState } from './storage.ts'
@@ -511,6 +513,94 @@ class JsonlSessionPersistence extends SessionPersistence {
       if (isENOENT(error)) return undefined
       throw error
     }
+  }
+
+  /** Read a complete current-generation artifact within caller budgets. */
+  override async inspectBounded(id: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection> {
+    const { maxPhysicalBytes, maxDecodedBytes, maxEvents, expectedRevision, signal } = options
+    for (const [name, value] of Object.entries({ maxPhysicalBytes, maxDecodedBytes, maxEvents })) {
+      if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${name} must be a positive safe integer`)
+    }
+    signal?.throwIfAborted()
+    await this.ensureRootEncoding()
+    const selected = await this.findLog(id, signal)
+    if (selected === undefined) throw new SessionPersistenceNotFoundError(id)
+    if (selected.sourceVersion !== SESSION_FORMAT_VERSION) {
+      throw new SessionFormatUnsupportedError(
+        `bounded Session read requires the current format (raw log: ${selected.sourcePath})`,
+        { kind: 'jsonl', path: selected.sourcePath },
+      )
+    }
+    const file = await open(selected.sourcePath, 'r')
+    let bytes: Buffer
+    let revision: PersistenceRevision
+    try {
+      const before = await file.stat({ bigint: true })
+      revision = fileRevision(before)
+      if (expectedRevision !== undefined && revision !== expectedRevision) {
+        throw new Error('bounded Session read source revision changed')
+      }
+      if (before.size > BigInt(maxPhysicalBytes)) throw new Error('bounded Session read exceeded physical byte budget')
+      bytes = Buffer.alloc(Number(before.size))
+      let offset = 0
+      while (offset < bytes.length) {
+        signal?.throwIfAborted()
+        const result = await file.read(bytes, offset, Math.min(64 * 1024, bytes.length - offset), offset)
+        if (result.bytesRead === 0) throw new Error('bounded Session read source changed during read')
+        offset += result.bytesRead
+      }
+      signal?.throwIfAborted()
+      if (fileRevision(await file.stat({ bigint: true })) !== revision) {
+        throw new Error('bounded Session read source changed during read')
+      }
+    } finally {
+      await file.close()
+    }
+    if (fileRevision(await stat(selected.sourcePath, { bigint: true })) !== revision) {
+      throw new Error('bounded Session read source changed during read')
+    }
+    let decodedBytes = 0
+    const consume = (buffer: Buffer): Buffer => {
+      decodedBytes += buffer.length
+      if (decodedBytes > maxDecodedBytes) throw new Error('bounded Session read exceeded decoded byte budget')
+      return buffer
+    }
+    let scanner: SessionLogScanner
+    if (this.compression === 'zstd') {
+      // Every produced non-header frame contains an event; reject surplus frames before decoding.
+      const { frames, tornStart } = scanZstdFrames(bytes, maxEvents + 1)
+      if (tornStart !== undefined || frames.length === 0) throw new Error('bounded Session read refuses incomplete Zstandard log')
+      if (frames.at(-1)?.end !== bytes.length) throw new Error('bounded Session read exceeded frame budget')
+      const header = frames[0] as (typeof frames)[number]
+      const headerBytes = consume(zstdDecompressSync(bytes.subarray(header.start, header.end), {
+        maxOutputLength: maxDecodedBytes,
+      }))
+      assertZstdHeaderFrame(headerBytes)
+      scanner = new SessionLogScanner(headerBytes, 'strict', maxEvents)
+      for (const frame of frames.slice(1)) {
+        signal?.throwIfAborted()
+        const plaintext = consume(zstdDecompressSync(bytes.subarray(frame.start, frame.end), {
+          maxOutputLength: maxDecodedBytes - decodedBytes,
+        }))
+        scanner.write(plaintext)
+      }
+    } else {
+      consume(bytes)
+      const headerEnd = bytes.indexOf(0x0A)
+      if (headerEnd < 0) throw new Error('bounded Session read refuses incomplete header')
+      scanner = new SessionLogScanner(bytes.subarray(0, headerEnd + 1), 'strict', maxEvents)
+      scanner.write(bytes.subarray(headerEnd + 1))
+    }
+    const result = scanner.finish()
+    if (result.committedBytes !== decodedBytes) throw new Error('bounded Session read refuses incomplete record')
+    await this.assertStoredIdentity(selected.sourcePath, SESSION_FORMAT_VERSION, result.meta, id, signal)
+    assertStoredId(id, result.meta)
+    validateStoredEvents(result.meta, result.events, this.locate(result.meta))
+    signal?.throwIfAborted()
+    if (fileRevision(await stat(selected.sourcePath, { bigint: true })) !== revision) {
+      throw new Error('bounded Session read source changed during validation')
+    }
+    return { meta: result.meta, inheritedEventCount: result.inheritedEventCount, events: result.events, revision }
   }
 
   /**

@@ -97,6 +97,21 @@ export interface SessionInspection extends SessionStorageMetadata {
   readonly events: readonly SessionEvent[]
 }
 
+/** Limits for a complete cold read. Every limit is a positive safe integer. */
+export interface SessionBoundedReadOptions {
+  readonly maxPhysicalBytes: number
+  readonly maxDecodedBytes: number
+  readonly maxEvents: number
+  /** Optional revision obtained from `stat`; a changed source is refused. */
+  readonly expectedRevision?: SessionPersistenceRevision
+  readonly signal?: AbortSignal
+}
+
+/** Complete validated log and the physical revision from which it was read. */
+export interface SessionBoundedInspection extends SessionInspection {
+  readonly revision: SessionPersistenceRevision
+}
+
 /** Options for {@link SessionPersistence.open}. */
 export interface SessionPersistenceOpenOptions {
   /** Optional cancellation observed before backend work starts. */
@@ -201,6 +216,19 @@ export abstract class SessionPersistence extends Service {
    * @returns the snapshot, or `undefined` when the session does not exist.
    */
   abstract stat(id: SessionId, options?: SessionPersistenceStatOptions): Promise<SessionPersistenceSnapshot | undefined>
+
+  /**
+   * Read a complete current-format log within physical, decoded, and event
+   * budgets. Refuse a changed source or any exceeded budget without returning
+   * a partial log. Backends without bounded reads reject explicitly.
+   * @param id - stored Session identity.
+   * @param options - physical, decoded, and event budgets with optional revision and cancellation.
+   * @returns one complete validated current-format log and its source revision.
+   */
+  inspectBounded(id: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection> {
+    options.signal?.throwIfAborted()
+    return Promise.reject(new Error(`bounded Session inspection of "${id}" is unsupported by this persistence backend`))
+  }
 
   /**
    * List every stored session visible to this process, in no promised order.

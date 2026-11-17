@@ -3131,6 +3131,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the snapshot, or `undefined` when the session does not exist.',
       },
       {
+        signature: 'inspectBounded(id: SessionId, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection>',
+        description: 'Read a complete current-format log within physical, decoded, and event budgets. Refuse a changed source or any exceeded budget without returning a partial log. Backends without bounded reads reject explicitly.',
+        parameters: [{ name: 'id', description: 'stored Session identity.' }, { name: 'options', description: 'physical, decoded, and event budgets with optional revision and cancellation.' }],
+        returns: 'one complete validated current-format log and its source revision.',
+      },
+      {
         signature: 'abstract list(options?: SessionPersistenceListOptions): Promise<readonly SessionPersistenceSnapshot[]>',
         description: 'List every stored session visible to this process, in no promised order.',
         parameters: [{ name: 'options', description: 'optional cancellation.' }],
@@ -3283,6 +3289,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'sessionId', description: 'live or persisted session id to read.' }],
         returns: 'cloned header and complete raw event log from one observation.',
         throws: ['when persistence, header compatibility, or replay validation fails.'],
+      },
+      {
+        signature: 'async readColdSessionBounded( sessionId: SessionId, options: SessionBoundedReadOptions, ): Promise<SessionLogSnapshot & { revision: SessionPersistenceRevision }>',
+        description: 'Read and replay-validate a complete persisted current-format log under budgets.',
+        parameters: [{ name: 'sessionId', description: 'persisted Session to read.' }, { name: 'options', description: 'physical, decoded, and event limits with optional revision and cancellation.' }],
+        returns: 'detached log with its physical source revision.',
       },
       {
         signature: 'async filterSessions( filters: readonly SessionResultFilter[], signal?: AbortSignal, ): Promise<SessionRecord[]>',
@@ -8874,6 +8886,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SessionAvailability',
     declaration: 'export type SessionAvailability = \'live\' | \'persisted\';',
+  },
+  {
+    name: 'SessionBoundedInspection',
+    declaration: 'export interface SessionBoundedInspection extends SessionInspection {\n    readonly revision: SessionPersistenceRevision;\n}',
+  },
+  {
+    name: 'SessionBoundedReadOptions',
+    declaration: 'export interface SessionBoundedReadOptions {\n    readonly maxPhysicalBytes: number;\n    readonly maxDecodedBytes: number;\n    readonly maxEvents: number;\n    readonly expectedRevision?: SessionPersistenceRevision;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'SessionCancelRequest',

@@ -3,6 +3,7 @@ import type { ContextFormed, MessageSource } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import { oneTurnLog } from '../../../session/session-persistence/tests/contract.ts'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
 import SessionPersistence, {
@@ -12,6 +13,8 @@ import SessionPersistence, {
   SessionReadOnlyError,
 } from '@deepseek-ai/dsh-session-persistence'
 import type {
+  SessionBoundedInspection,
+  SessionBoundedReadOptions,
   SessionAccess,
   SessionHandle,
   SessionHandleReadOptions,
@@ -174,6 +177,17 @@ class TestPersistence extends SessionPersistence {
     }))
     TestPersistence.afterList?.()
     return Promise.resolve(snapshots)
+  }
+
+
+  override async inspectBounded(id: SessionIdType, options: SessionBoundedReadOptions): Promise<SessionBoundedInspection> {
+    options.signal?.throwIfAborted()
+    const entry = TestPersistence.entries.get(id)
+    if (entry === undefined) throw new SessionPersistenceNotFoundError(id)
+    if (entry.events.length > options.maxEvents) throw new Error('event budget exceeded')
+    const revision = entryRevision(entry)
+    if (options.expectedRevision !== undefined && revision !== options.expectedRevision) throw new Error('revision changed')
+    return { meta: structuredClone(entry.meta), inheritedEventCount: SessionLogOffset(0), events: structuredClone(entry.events), revision }
   }
 }
 
@@ -476,6 +490,40 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
 )
 
 describe('session-query exact reads', () => {
+  it('rejects a bounded cold read when persistence is unavailable', async () => {
+    const ctx = await liveContext()
+    await expect(ctx.sessionQuery.readColdSessionBounded(header('bounded-no-persistence').id, {
+      maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1,
+    })).rejects.toThrow(/not found/i)
+  })
+
+  it('refuses a cold log whose interrupted-turn closure exceeds the event budget', async () => {
+    const openTurn = header('bounded-open-turn')
+    const persistedEvents = oneTurnLog().slice(0, -1)
+    TestPersistence.reset([{ meta: openTurn, events: persistedEvents }])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    await expect(ctx.sessionQuery.readColdSessionBounded(openTurn.id, {
+      maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: persistedEvents.length,
+    })).rejects.toThrow(/event budget after balancing/)
+  })
+
+  it('replay-validates a bounded cold log and carries its source revision', async () => {
+    const valid = header('bounded-valid')
+    const corrupt = header('bounded-corrupt')
+    const validEvents = eventLog()
+    TestPersistence.reset([
+      { meta: valid, events: validEvents },
+      { meta: corrupt, events: [{ ...eventLog()[0]!, seq: SessionSeq(1) }] },
+    ])
+    const ctx = await liveContext()
+    await ctx.plugin(TestPersistence)
+    const options = { maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1 }
+    const result = await ctx.sessionQuery.readColdSessionBounded(valid.id, options)
+    expect(result.events).toEqual(validEvents)
+    expect(result.revision).toBe(SessionPersistenceRevision('events:1'))
+    await expect(ctx.sessionQuery.readColdSessionBounded(corrupt.id, options)).rejects.toThrow(/seed event at index 0 has seq 1/)
+  })
   it('returns a detached replay-valid full log and rejects a corrupt persisted seed', async () => {
     const valid = header('valid-log', 2)
     const corrupt = header('corrupt-log', 1)

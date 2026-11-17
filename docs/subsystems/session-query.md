@@ -421,6 +421,14 @@ listSessions(signal?: AbortSignal): Promise<SessionRecord[]>
 async readSession(sessionId: SessionId): Promise<SessionLogSnapshot>
 
 /**
+ * Read and replay-validate a complete persisted current-format log under budgets.
+ * @param sessionId - persisted Session to read.
+ * @param options - physical, decoded, and event limits with optional revision and cancellation.
+ * @returns detached log with its physical source revision.
+ */
+async readColdSessionBounded( sessionId: SessionId, options: SessionBoundedReadOptions, ): Promise<SessionLogSnapshot & { revision: SessionPersistenceRevision }>
+
+/**
  * Filter the complete logical corpus with provider-independent predicates.
  * @param filters - ANDed session metadata and availability clauses.
  * @param signal - optional cancellation for persistence listing.
@@ -505,7 +513,7 @@ async traceEvent(request: SessionEventTraceRequest, signal?: AbortSignal): Promi
 async readEvent(request: SessionEventReadRequest, signal?: AbortSignal): Promise<SessionEventWindow>
 ```
 
-Types: [SessionId](core.md) · [SessionTitleSnapshot](session-title.md)
+Types: [SessionBoundedReadOptions](persistence.md) · [SessionId](core.md) · [SessionPersistenceRevision](persistence.md) · [SessionTitleSnapshot](session-title.md)
 
 Source: [`packages/session-query/session-query/src/index.ts`](../../packages/session-query/session-query/src/index.ts)
 <!-- END GENERATED cordis-surface -->

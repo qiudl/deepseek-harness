@@ -318,7 +318,8 @@ describe('web e2e: plugin configuration pages', () => {
 
     await expect.poll(async () => (await settingsDocument()).includes('timeoutMs: 12000'), { timeout: 10_000 })
       .toBe(true)
-    expect(scaffold.ctx.shell.resolve({ command: 'true' }).timeoutMs).toBe(12000)
+    await expect.poll(() => scaffold.ctx.shell.resolve({ command: 'true' }).timeoutMs,
+      { timeout: 10_000 }).toBe(12000)
     expect(entry.fiber === fiber).toBe(true)
     // Presence in the user layer is what the badge reports, and the reset is
     // offered only for a field that has one.
