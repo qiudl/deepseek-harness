@@ -11,6 +11,10 @@ describe('native redacted Bot feedback contract', () => {
     expect(parseHostBotFeedbackRequest({})).toEqual({})
     expect(() => parseHostBotFeedbackRequest({ account: 'other' })).toThrow()
     expect(parseHostBotFeedback(report)).toEqual(report)
+    for (const source of ['turn', 'api', 'browser'] as const) {
+      const entry = { ...report.entries[0], level: 'warn', source, code: 'network' }
+      expect(parseHostBotFeedback({ ...report, entries: [entry] })?.entries[0]).toEqual(entry)
+    }
     expect(() => parseHostBotFeedback({ ...report, token: 'private' })).toThrow()
     expect(() => parseHostBotFeedback({ ...report, issuesUrl: 'https://evil.test' })).toThrow()
     expect(() => parseHostBotFeedback({ ...report,
