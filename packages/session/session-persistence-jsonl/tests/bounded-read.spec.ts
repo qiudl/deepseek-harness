@@ -56,6 +56,7 @@ for (const compression of ['none', 'zstd'] as const) {
 
     if (compression === 'zstd') {
       const path = logPath(root, header.cwd, header.id, compression)
+      const originalBytes = await readFile(path)
       await appendFile(path, await compressZstdFrame(Buffer.alloc(200_000, 0x20)))
       const compressed = await ctx.sessionPersistence.stat(header.id)
       expect(compressed!.sizeBytes).toBeLessThan(2048)
@@ -65,6 +66,15 @@ for (const compression of ['none', 'zstd'] as const) {
         maxEvents: events.length + 1,
         expectedRevision: compressed!.revision,
       })).rejects.toThrow(/Cannot create a Buffer larger than \d+ bytes/)
+      const emptyFrame = await compressZstdFrame(Buffer.alloc(0))
+      await writeFile(path, Buffer.concat([originalBytes, ...Array.from({ length: events.length + 1 }, () => emptyFrame)]))
+      const manyFrames = await ctx.sessionPersistence.stat(header.id)
+      await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+        maxPhysicalBytes: manyFrames!.sizeBytes!,
+        maxDecodedBytes: 1024 * 1024,
+        maxEvents: events.length,
+        expectedRevision: manyFrames!.revision,
+      })).rejects.toThrow(/frame budget/)
       await writeFile(path, Buffer.from([0x28, 0xB5, 0x2F]))
       await expect(ctx.sessionPersistence.inspectBounded(header.id, {
         maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1,

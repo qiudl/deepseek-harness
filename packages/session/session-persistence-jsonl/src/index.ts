@@ -567,8 +567,10 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     let scanner: SessionLogScanner
     if (this.compression === 'zstd') {
-      const { frames, tornStart } = scanZstdFrames(bytes)
+      // A produced event batch occupies at least one frame; reject surplus frames before decoding.
+      const { frames, tornStart } = scanZstdFrames(bytes, maxEvents + 1)
       if (tornStart !== undefined || frames.length === 0) throw new Error('bounded Session read refuses incomplete Zstandard log')
+      if (frames.at(-1)?.end !== bytes.length) throw new Error('bounded Session read exceeded frame budget')
       const header = frames[0] as (typeof frames)[number]
       const headerBytes = consume(zstdDecompressSync(bytes.subarray(header.start, header.end), {
         maxOutputLength: maxDecodedBytes,
