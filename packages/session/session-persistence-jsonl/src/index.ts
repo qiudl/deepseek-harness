@@ -569,8 +569,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     if (this.compression === 'zstd') {
       const { frames, tornStart } = scanZstdFrames(bytes)
       if (tornStart !== undefined || frames.length === 0) throw new Error('bounded Session read refuses incomplete Zstandard log')
-      const header = frames[0]
-      if (header === undefined) throw new Error('bounded Session read refuses empty Zstandard log')
+      const header = frames[0] as (typeof frames)[number]
       const headerBytes = consume(zstdDecompressSync(bytes.subarray(header.start, header.end), {
         maxOutputLength: maxDecodedBytes,
       }))

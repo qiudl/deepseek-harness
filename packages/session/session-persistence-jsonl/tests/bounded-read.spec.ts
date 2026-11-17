@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { appendFile, mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -55,7 +55,8 @@ for (const compression of ['none', 'zstd'] as const) {
     })).rejects.toThrow(/revision changed/)
 
     if (compression === 'zstd') {
-      await appendFile(logPath(root, header.cwd, header.id, compression), await compressZstdFrame(Buffer.alloc(200_000, 0x20)))
+      const path = logPath(root, header.cwd, header.id, compression)
+      await appendFile(path, await compressZstdFrame(Buffer.alloc(200_000, 0x20)))
       const compressed = await ctx.sessionPersistence.stat(header.id)
       expect(compressed!.sizeBytes).toBeLessThan(2048)
       await expect(ctx.sessionPersistence.inspectBounded(header.id, {
@@ -64,6 +65,10 @@ for (const compression of ['none', 'zstd'] as const) {
         maxEvents: events.length + 1,
         expectedRevision: compressed!.revision,
       })).rejects.toThrow(/Cannot create a Buffer larger than \d+ bytes/)
+      await writeFile(path, Buffer.from([0x28, 0xB5, 0x2F]))
+      await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+        maxPhysicalBytes: 1024, maxDecodedBytes: 1024, maxEvents: 1,
+      })).rejects.toThrow(/incomplete Zstandard log/)
     }
   })
 }
@@ -112,7 +117,7 @@ it('rejects invalid limits, missing logs, and incomplete plaintext records', asy
   await expect(ctx.sessionPersistence.inspectBounded(header.id, limits)).rejects.toThrow(/incomplete record/)
 })
 
-it('refuses a source that grows while the opened descriptor is being read', async () => {
+it('refuses a source that grows or is replaced while the opened descriptor is being read', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-bounded-race-'))
   roots.push(root)
   const ctx = new Context()
@@ -130,6 +135,23 @@ it('refuses a source that grows while the opened descriptor is being read', asyn
   prototype.read = (async function (this: unknown, ...args: unknown[]) {
     const result = await Reflect.apply(originalRead, this, args) as { bytesRead: number }
     if (args[3] === 0) await appendFile(path, '\n')
+    return result
+  }) as typeof probe.read
+  try {
+    await expect(ctx.sessionPersistence.inspectBounded(header.id, {
+      maxPhysicalBytes: 1024 * 1024, maxDecodedBytes: 1024 * 1024, maxEvents: 100,
+    })).rejects.toThrow(/source changed during read/)
+  } finally {
+    prototype.read = originalRead
+  }
+
+  const originalBytes = await readFile(path)
+  prototype.read = (async function (this: unknown, ...args: unknown[]) {
+    const result = await Reflect.apply(originalRead, this, args) as { bytesRead: number }
+    if (args[3] === 0) {
+      await rename(path, `${path}.replaced`)
+      await writeFile(path, originalBytes)
+    }
     return result
   }) as typeof probe.read
   try {

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
+  SessionPersistence,
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
   SessionFormatUnsupportedError,
@@ -27,6 +28,21 @@ import type { SessionLocation } from '../src/index.ts'
 import { meta } from './contract.ts'
 
 const LOCATION: SessionLocation = { kind: 'jsonl', path: '/store/session.jsonl' }
+
+describe('default bounded inspection', () => {
+  it('refuses unsupported backends and preserves an existing cancellation', async () => {
+    const id = SessionId('unsupported-bounded')
+    const options = { maxPhysicalBytes: 1, maxDecodedBytes: 1, maxEvents: 1 }
+    await expect(SessionPersistence.prototype.inspectBounded(id, options))
+      .rejects.toThrow(/unsupported by this persistence backend/)
+    const controller = new AbortController()
+    const reason = new Error('cancelled before bounded inspection')
+    controller.abort(reason)
+    expect(() => SessionPersistence.prototype.inspectBounded(id, {
+      ...options, signal: controller.signal,
+    })).toThrow(reason)
+  })
+})
 
 /** A stored user/message event with a well-formed identified message. */
 function userMessage(seq: number): SessionEvent {
