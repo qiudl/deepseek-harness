@@ -10,7 +10,13 @@ describe('REQ-20261110-0015 fixed native Bot settings read', () => {
       workDir: '/team', isMain: true, isPrimary: true, pinned: true, hidden: false,
       capabilityChoices: [{ name: 'helper', kind: 'skill', description: 'Team helper', attached: true }] }
     expect(parseHostBotSettings(value, request)).toEqual(value)
+    expect(parseHostBotSettings({ ...value, capabilityChoices: [
+      { name: 'pack-helper', kind: 'pack', description: 'Team pack', attached: false },
+    ] }, request)?.capabilityChoices[0]?.kind).toBe('pack')
     expect(parseHostBotSettings(null, request)).toBeNull()
+    expect(() => parseHostBotSettings({ ...value, capabilityChoices: [
+      value.capabilityChoices[0], value.capabilityChoices[0],
+    ] }, request)).toThrow('invalid_bot_settings_result')
     for (const invalid of [{ botId: '../other' }, { botId: 'main', account: 'other' }, {}])
       expect(() => parseHostBotSettingsRequest(invalid)).toThrow()
     for (const patch of [{ botId: 'other' }, { secret: 'hidden' }, { isMain: false },

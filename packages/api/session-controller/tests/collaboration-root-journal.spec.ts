@@ -228,5 +228,7 @@ it('rejects invalid Source captures and lookups before writing and reports absen
   const entry = await journal.capture(h.input, signal())
   const missing = 'ffffffff-ffff-4fff-8fff-ffffffffffff' as typeof entry.command_id
   expect(journal.read(missing)).toBeUndefined()
+  expect(journal.findCanonical({ namespace_id: entry.namespace_id,
+    root_task_id: entry.root_task_id, root_trace_id: 'f'.repeat(32) as typeof entry.root_trace_id })).toBeUndefined()
   await expect(journal.accept(missing, receipt(entry), signal())).rejects.toThrow('receipt_invalid')
 })

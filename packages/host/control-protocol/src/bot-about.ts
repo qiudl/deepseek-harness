@@ -85,7 +85,5 @@ export function parseHostBotAbout(value: unknown): HostBotAbout | null {
       checkedAt: value.dsh.checkedAt, phase: value.dsh.phase, installed: value.dsh.installed,
       error: value.dsh.error, available: value.dsh.available }
   }
-  const result = { bot, dsh }
-  if (Buffer.byteLength(JSON.stringify(result), 'utf8') > 4_096) throw Error('invalid_bot_about_result')
-  return result
+  return { bot, dsh }
 }

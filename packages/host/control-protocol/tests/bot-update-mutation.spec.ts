@@ -22,6 +22,7 @@ describe('controlled Bot About update', () => {
     const receipt = { requestId: start.requestId, target: 'bot', version: start.version,
       state: 'pending' }
     expect(parseHostBotUpdateMutationReceipt(receipt, start)?.state).toBe('pending')
+    expect(parseHostBotUpdateMutationReceipt(null, start)).toBeNull()
     for (const forged of [{ ...receipt, requestId: 'other' }, { ...receipt, target: 'dsh' },
       { ...receipt, version: '0.2.26' }, { ...receipt, privateToken: 'secret' }])
       expect(() => parseHostBotUpdateMutationReceipt(forged, start))
