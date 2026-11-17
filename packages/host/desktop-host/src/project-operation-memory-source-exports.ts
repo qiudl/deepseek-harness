@@ -28,7 +28,7 @@ import type {
 import { ProjectOperationMemoryDatabase, projectMemoryRecordBytes } from './project-operation-memory-database.ts'
 import type { ProjectOperationMemoryMetadata } from './project-operation-memory-metadata.ts'
 import { projectOperationMemoryEventsDigest } from './project-operation-memory-metadata.ts'
-import { HostAuthorityError } from './types.ts'
+import { same, fail, conflict, revisionsDigest, row, text } from './project-operation-memory-source-common.ts'
 
 type Record = Readonly<{
   ownerUserId: string
@@ -42,34 +42,6 @@ type Record = Readonly<{
   cloudReceipt: HostProjectMemoryReceipt | null
   activatedAt: number | null
 }>
-const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
-const fail = (): never => {
-  throw new HostAuthorityError('unavailable')
-}
-const conflict = (): never => {
-  throw new HostAuthorityError('idempotency_conflict')
-}
-const revisionsDigest = (items: readonly { sourceEventId: string; sourceRevision: string }[]): string =>
-  createHash('sha256')
-    .update(
-      'dsh.project-operation-memory-source-revisions/v1\0' +
-        JSON.stringify(items.map(e => JSON.stringify([e.sourceEventId, e.sourceRevision])).sort()),
-    )
-    .digest('hex')
-function row(value: unknown, keys: readonly string[]): { [key: string]: unknown } {
-  if (
-    !value ||
-    typeof value !== 'object' ||
-    Object.getPrototypeOf(value) !== Object.prototype ||
-    Object.keys(value).sort().join(',') !== [...keys].sort().join(',')
-  )
-    return fail()
-  return value as { [key: string]: unknown }
-}
-function text(value: unknown): string {
-  if (typeof value !== 'string' || !/^[!-~]{1,256}$/u.test(value)) return fail()
-  return value
-}
 /** Durable original Ack and exact committed intervals; no exported event or material body is stored. */
 export class ProjectOperationMemorySourceExports {
   private readonly key

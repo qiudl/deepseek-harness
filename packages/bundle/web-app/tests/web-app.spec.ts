@@ -145,6 +145,8 @@ describe('web-app runtime glue', () => {
       readCollaborationSourceSnapshot: readSource,
       captureCollaborationGroupRoot: captureGroupRoot,
     } as never)
+    ctx.provide('sessions', {} as never)
+    ctx.provide('tools', {} as never)
     apply(ctx, new Config({ openBrowser: false, printUrl: false, surfaceContext: false }))
     await ctx.fiber.await()
     expect(routes.has('/internal/desktop-collaboration-analysis')).toBe(true)

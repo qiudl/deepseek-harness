@@ -38,10 +38,10 @@ describe('SessionController facade', () => {
     const entered = Promise.withResolvers<undefined>()
     const gate = Promise.withResolvers<undefined>()
     const original = ctx.sessionProjections.register.bind(ctx.sessionProjections)
-    let first = true
+    let registrations = 0
     vi.spyOn(ctx.sessionProjections, 'register').mockImplementation(async (...args: Parameters<typeof original>) => {
-      if (first) {
-        first = false
+      // The list's second registration runs after assistant observation is installed.
+      if (++registrations === 3) {
         entered.resolve(undefined)
         await gate.promise
       }

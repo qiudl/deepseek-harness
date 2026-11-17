@@ -1,17 +1,12 @@
-import { createPublicKey, verify, type KeyObject } from 'node:crypto'
+import { createPublicKey, type KeyObject } from 'node:crypto'
 /** Incremental body-free source memory persistence; its released v1 schema remains exact. */
-import type { SQLOutputValue } from 'node:sqlite'
 import type { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
-import { HostAuthorityError } from './types.ts'
 import { ProjectOperationMemorySqlite, PROJECT_MEMORY_DATABASE_LIMITS, projectMemoryStoredBytes } from './project-operation-memory-sqlite.ts'
 import type { ProjectMemoryDatabaseLimits } from './project-operation-memory-sqlite.ts'
 export type { ProjectMemoryDatabaseLimits } from './project-operation-memory-sqlite.ts'
 /** Closed source families; recipient records never enter this database. */
 export type ProjectMemoryRecordKind = 'confirmation' | 'plan' | 'nonce' | 'published' | 'delivery' | 'frontier'
-type SqlRow = Record<string, SQLOutputValue>
 const APP_ID = 0x44534d31
-const RANGE_BYTES = 320
-const fail = (): never => { throw new HostAuthorityError('unavailable') }
 const schemas = [
   [
     'table',
@@ -115,94 +110,6 @@ export class ProjectOperationMemoryDatabase extends ProjectOperationMemorySqlite
     guard: () => void,
     sign: (payload: Buffer) => string,
   ): bigint {
-    return this.transaction(guard, () => {
-      const db = this.connection()
-      if (
-        !/^[a-f0-9]{64}$/u.test(scope) ||
-        before < 0n ||
-        target < before ||
-        target > 9223372036854775807n ||
-        frontier < 0n ||
-        frontier > 9223372036854775807n
-      )
-        return fail()
-      if (before === target || target <= frontier) return frontier
-      // Disjoint ranges permit one indexed predecessor plus only the ranges actually covered by this interval.
-      // A finish>=before filter over all prior starts would turn ordinary ascending gaps into a historical scan.
-      const predecessor = db.prepare(
-        'SELECT start,finish,signature FROM memory_ranges WHERE scope=? AND start<=? ORDER BY start DESC LIMIT 1',
-      )
-      predecessor.setReadBigInts(true)
-      const prior = predecessor.get(scope, before),
-        lower = prior && typeof prior.finish === 'bigint' && prior.finish >= before ? (prior.start as bigint) : before
-      const statement = db.prepare(
-        'SELECT min(start) start,max(finish) finish,count(*) n FROM memory_ranges WHERE scope=? AND start>=? AND start<=?',
-      )
-      statement.setReadBigInts(true)
-      const row = statement.get(scope, lower, target) as SqlRow // Aggregate returns one row; COUNT is bigint.
-      const start = row.start === null ? before : (row.start as bigint),
-        finish = row.finish === null ? target : (row.finish as bigint),
-        mergedStart = start < before ? start : before,
-        mergedFinish = finish > target ? finish : target,
-        consumed = mergedStart <= frontier,
-        count = Number(row.n),
-        nextRows = consumed ? 0 : 1
-      // The new committed receipt itself covers [before,target]. Only an authenticated predecessor can
-      // bridge a prior gap, and only an authenticated extending range can justify passing target.
-      // Fully covered ranges cannot enlarge the prefix, so no historical signature scan is needed.
-      if (prior && lower < before) this.verifyRange(scope, prior)
-      if (mergedFinish > target) {
-        const extending = db.prepare(
-          'SELECT start,finish,signature FROM memory_ranges WHERE scope=? AND start>=? AND start<=? AND finish=? LIMIT 1',
-        )
-        extending.setReadBigInts(true)
-        // The aggregate MAX proves this row exists in the same writer transaction.
-        const original = extending.get(scope, lower, target, mergedFinish) as SqlRow
-        this.verifyRange(scope, original)
-      }
-      this.adjust('permanent', {
-        actual_rows: nextRows - count,
-        actual_bytes: (nextRows - count) * RANGE_BYTES,
-        charged_rows: nextRows - count,
-        charged_bytes: (nextRows - count) * RANGE_BYTES,
-      })
-      db.prepare('DELETE FROM memory_ranges WHERE scope=? AND start>=? AND start<=?').run(scope, lower, target)
-      if (!consumed) {
-        guard()
-        const bytes = this.rangeBytes(scope, mergedStart, mergedFinish),
-          signature = sign(bytes)
-        if (!verify(null, bytes, this.verificationKey as KeyObject, Buffer.from(signature, 'base64url'))) return fail()
-        guard()
-        db.prepare('INSERT INTO memory_ranges VALUES(?,?,?,?)').run(scope, mergedStart, mergedFinish, signature)
-      }
-      return consumed ? mergedFinish : frontier
-    })
-  }
-  private verifyRange(scope: string, row: { [key: string]: import('node:sqlite').SQLOutputValue }): void {
-    if (
-      typeof row.start !== 'bigint' ||
-      typeof row.finish !== 'bigint' ||
-      typeof row.signature !== 'string' ||
-      !verify(
-        null,
-        this.rangeBytes(scope, row.start, row.finish),
-        this.verificationKey as KeyObject,
-        Buffer.from(row.signature, 'base64url'),
-      )
-    )
-      return fail()
-  }
-  private rangeBytes(scope: string, start: bigint, finish: bigint): Buffer {
-    return Buffer.from(
-      'dsh.project-operation-memory-private-range/v1\0' +
-        JSON.stringify([
-          this.identity.profileId,
-          this.identity.installationId,
-          this.identity.publicKeyDigest,
-          scope,
-          start.toString(),
-          finish.toString(),
-        ]),
-    )
+    return this.mergeRangeDelta(scope, before, target, frontier, guard, sign, 'private', this.verificationKey as KeyObject)
   }
 }
