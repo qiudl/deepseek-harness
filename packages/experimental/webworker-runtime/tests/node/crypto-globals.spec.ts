@@ -5,10 +5,22 @@
  * a platform that already has it untouched.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createHash as nodeCreateHash } from 'node:crypto'
 import { installCryptoGlobals } from '../../src/node/globals/crypto.ts'
-import { randomUUID } from '../../src/node/builtin_modules/implemented/crypto.ts'
+import { createHash, randomUUID } from '../../src/node/builtin_modules/implemented/crypto.ts'
 
 const V4_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+it('copies a SHA-256 prefix independently and consumes mutable input at update time', () => {
+  const bytes = Uint8Array.from([1, 2, 3])
+  const prefix = createHash('sha256').update(bytes)
+  const next = prefix.copy().update('next')
+  bytes[0] = 9
+  expect(prefix.copy().update(']').digest('hex'))
+    .toBe(nodeCreateHash('sha256').update(Uint8Array.from([1, 2, 3])).update(']').digest('hex'))
+  expect(next.digest('hex'))
+    .toBe(nodeCreateHash('sha256').update(Uint8Array.from([1, 2, 3])).update('next').digest('hex'))
+})
 
 describe('the shim randomUUID', () => {
   it('emits RFC 9562 v4 ids without touching the platform method', () => {
