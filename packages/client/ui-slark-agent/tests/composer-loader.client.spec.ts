@@ -27,7 +27,7 @@ import { expect, it, onTestFinished, vi } from 'vitest'
 import { createElement, useSyncExternalStore } from 'react'
 import { fireEvent, render, within } from '@testing-library/react'
 import { NativeDuetButton } from '../src/client/NativeDuetButton.tsx'
-import { DraftPersistence } from '../src/client/DraftPersistence.tsx'
+import { DraftPersistence, type DraftPersistenceInjected } from '../src/client/DraftPersistence.tsx'
 import type { DraftBridge } from '../src/client/draft-persistence.ts'
 import { ProjectScopePanel } from '../src/client/ProjectScopeDock.tsx'
 import { panelRuntime, dockRuntime, dockTranslate } from './fixture-state.client.ts'
@@ -2679,7 +2679,7 @@ it('refuses history for absent or closed Session Controllers and replaces a reta
 })
 
 
-it('YAML-loaded draft slot restores plain text, persists editor changes and disposes without sending', async () => {
+it('YAML-loaded draft slot restores text and keeps Session persistence when the dock is hidden', async () => {
   let stored = { revision: 1, text: '@Guide · 项目空间 待发送' }
   const bridge = vi.fn<DraftBridge>(async (request) => {
     expect(request.sessionId).toBe('session-1')
@@ -2693,11 +2693,11 @@ it('YAML-loaded draft slot restores plain text, persists editor changes and disp
   const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
   if (!entry?.inject) throw Error('missing draft slot')
   expect(entry.component).toBe(DraftPersistence)
-  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as { sessionId: SessionId; bridge: DraftBridge }
-  const props: Parameters<typeof DraftPersistence>[0] = { ...dockRuntime('session-1'), ...bindings,
-    useInput: selector => selector(useSyncExternalStore(
-      listener => f.composer.state.subscribe(listener), () => f.composer.state.getSnapshot())),
-    inputActions: f.composer.actions, t: dockTranslate }
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as DraftPersistenceInjected
+  const props: Parameters<typeof DraftPersistence>[0] = { ...dockRuntime('session-1'),
+    useDraftPersistence: selector => selector(useSyncExternalStore(
+      listener => bindings.hooks.draftPersistence.subscribe(listener), () => bindings.hooks.draftPersistence.getSnapshot())),
+    retryDraft: () => bindings.retryDraft(), inputActions: f.composer.actions, t: dockTranslate }
   const view = render(createElement(DraftPersistence, props))
   onTestFinished(() => { view.unmount() })
   await vi.waitFor(() => { expect(f.composer.snapshot.draft).toBe(stored.text) })
@@ -2707,10 +2707,8 @@ it('YAML-loaded draft slot restores plain text, persists editor changes and disp
   f.composer.setDraft('')
   await vi.waitFor(() => { expect(stored.text).toBe('') })
   view.unmount()
-  const calls = bridge.mock.calls.length
   f.composer.setDraft('unmounted')
-  await Promise.resolve()
-  expect(bridge.mock.calls).toHaveLength(calls)
+  await vi.waitFor(() => { expect(stored.text).toBe('unmounted') })
   expect(f.submit).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.prompt).not.toHaveBeenCalled()
   const slots = f.ctx.slots
   await f.ctx.fiber.dispose()
@@ -2774,7 +2772,9 @@ it('YAML-loaded native composer keeps the original Session target and removes co
   const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as { start(sessionId: string): Promise<void> }
   const draft = slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
   if (!draft?.inject) throw Error('missing native draft')
-  expect(Reflect.apply(draft.inject, undefined, [SessionId('session-1')])).toMatchObject({ bridge: nativeDraft })
+  expect(Reflect.apply(draft.inject, undefined, [SessionId('session-1')])).toHaveProperty('retryDraft')
+  await vi.waitFor(() => { expect(nativeDraft).toHaveBeenCalledWith({ action: 'read', sessionId: 'session-1' }) })
+  expect(desktopDraft).not.toHaveBeenCalled()
   const view = render(createElement(NativeDuetButton, { ...dockRuntime('session-1'), t: dockTranslate, ...bindings }))
   onTestFinished(() => { view.unmount(); pending.resolve(undefined) })
   fireEvent.click(view.getByRole('button', { name: 'Duet 语音对话' }))
@@ -2798,12 +2798,77 @@ it('YAML-loaded browser composer exposes no native call without a native capabil
 
 for (const withCall of [false, true]) {
   it(`YAML-loaded composer binds advertised dictation ${withCall ? 'with' : 'without'} native calls`, async () => {
+    let prepare: (() => Promise<boolean>) | undefined
     const start = vi.fn(async () => {}), dictate = vi.fn(async () => 'native draft')
     const f = await bench(false, true, false, false, true, false, undefined, undefined,
-      { dictate, ...(withCall ? { duetStart: start } : {}) })
+      { dictate, conversationDraftLifecycle: { onPrepare(handler) { prepare = handler; return () => {} } },
+        ...(withCall ? { duetStart: start } : {}) })
     const entry = f.ctx.slots.entries('conversation.input.right').find(item => item.options.id === 'slark-native-duet')
     if (!entry?.inject) throw Error('missing native dictation action')
-    expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toEqual({ dictate, ...(withCall ? { start } : {}) })
+    const injected = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as { holdDraft: () => () => void }
+    expect(typeof injected.holdDraft).toBe('function')
+    expect(injected).toEqual({ dictate, holdDraft: injected.holdDraft, ...(withCall ? { start } : {}) })
+    const release = injected.holdDraft()
+    if (!prepare) throw Error('missing draft lifecycle')
+    expect(await prepare()).toBe(false); release(); expect(await prepare()).toBe(true)
     expect(f.prompt).not.toHaveBeenCalled()
   })
 }
+
+
+it('retries the semantic draft through the visible button and prepares without a React draft commit', async () => {
+  let stored = { revision: 0, text: '' }, writable = false
+  let prepare: (() => Promise<boolean>) | undefined
+  const release = vi.fn()
+  const bridge: DraftBridge = async (request) => {
+    if (request.action === 'read') return { ok: true, value: stored }
+    if (!writable) return { ok: false }
+    stored = { revision: stored.revision + 1, text: request.text }
+    return { ok: true, value: stored }
+  }
+  const f = await bench(false, true, false, false, true, false, undefined, undefined, {
+    conversationDraft: bridge, conversationDraftLifecycle: { onPrepare(handler) { prepare = handler; return release } },
+  })
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
+  if (!entry?.inject || !prepare) throw Error('missing draft preparation')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as DraftPersistenceInjected
+  expect(Reflect.apply(entry.inject, undefined, [SessionId('session-1')])).toBe(bindings)
+  expect(() => { Reflect.apply(entry.inject!, undefined, [SessionId('missing-session')]) }).toThrow('draft_unavailable')
+  const view = render(createElement(DraftPersistence, { ...dockRuntime('session-1'), t: dockTranslate,
+    useDraftPersistence: selector => selector(useSyncExternalStore(
+      listener => bindings.hooks.draftPersistence.subscribe(listener), () => bindings.hooks.draftPersistence.getSnapshot())),
+    retryDraft: () => bindings.retryDraft(),
+  }))
+  onTestFinished(() => { view.unmount() })
+  f.composer.setDraft('original editable draft')
+  await vi.waitFor(() => { expect(view.getByTestId('slark-draft-unsaved')).toBeTruthy() })
+  expect(await prepare()).toBe(false)
+  writable = true; f.composer.setDraft('latest semantic text')
+  fireEvent.click(view.getByTestId('slark-draft-retry'))
+  await bindings.retryDraft() // a second action cannot start another retry
+  await vi.waitFor(() => { expect(view.queryByTestId('slark-draft-unsaved')).toBeNull() })
+  expect(stored.text).toBe('latest semantic text')
+  f.composer.setDraft('typed immediately before a native Profile click')
+  expect(await prepare()).toBe(true)
+  expect(stored.text).toBe('typed immediately before a native Profile click')
+  await f.ctx.fiber.dispose(); expect(release).toHaveBeenCalledOnce()
+  await bindings.retryDraft()
+})
+
+
+it('does not publish a late retry result into a disposed Session dock', async () => {
+  const pending = Promise.withResolvers<unknown>()
+  let reads = 0
+  const bridge: DraftBridge = () => ++reads === 1 ? Promise.resolve({ ok: false }) : pending.promise
+  const f = await bench(false, true, false, false, true, false, undefined, undefined, { conversationDraft: bridge })
+  const entry = f.ctx.slots.entries('conversation.input.dock').find(item => item.options.id === 'slark-draft-persistence')
+  if (!entry?.inject) throw Error('missing draft dock')
+  const bindings = Reflect.apply(entry.inject, undefined, [SessionId('session-1')]) as DraftPersistenceInjected
+  await vi.waitFor(() => { expect(bindings.hooks.draftPersistence.getSnapshot().failed).toBe(true) })
+  const retrying = bindings.retryDraft()
+  expect(bindings.hooks.draftPersistence.getSnapshot().retrying).toBe(true)
+  await f.ctx.fiber.dispose()
+  pending.resolve({ ok: true, value: { revision: 0, text: '' } }); await retrying
+  expect(bindings.hooks.draftPersistence.getSnapshot().failed).toBe(true)
+  await bindings.retryDraft()
+})
