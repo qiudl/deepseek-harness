@@ -14,8 +14,11 @@ describe('native group memory projection', () => {
     expect(parseHostBotRoomMemory(null, request)).toBeNull()
     expect(parseHostBotRoomMemory({ roomId: 'room-1', available: false }, request))
       .toEqual({ roomId: 'room-1', available: false })
+    expect(() => parseHostBotRoomMemory({ roomId: 'room-1', available: false,
+      entries: [] }, request)).toThrow('invalid_bot_room_memory_result')
     for (const bad of [{ ...page, roomId: 'other' },
       { ...page, entries: [{ ...entry, scope: 'team' }] },
+      { ...page, total: -1 },
       { ...page, sizes: { group: 4, team: 0 } },
       { ...page, entries: [{ ...entry, secret: 'private' }] }])
       expect(() => parseHostBotRoomMemory(bad, request)).toThrow()
