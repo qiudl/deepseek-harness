@@ -39,6 +39,6 @@ const nullableReplies = [
 
 it('preserves explicit unavailability across Bot remote replies', () => {
   for (const parse of nullableReplies) {
-    expect(Reflect.apply(parse, undefined, [null, undefined]) as unknown, parse.name).toBeNull()
+    expect(Reflect.apply(parse, undefined, [null, undefined]), parse.name).toBeNull()
   }
 })
