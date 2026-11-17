@@ -20,6 +20,8 @@ describe('native Bot About', () => {
     expect(() => parseHostBotAbout({ ...page, secret: 'hidden' })).toThrow()
     expect(() => parseHostBotAbout({ ...page, dsh: { ...page.dsh,
       error: '/private/user/.config' } })).toThrow()
+    expect(() => parseHostBotAbout({ ...page, dsh: { ...page.dsh,
+      kind: 'archive' } })).toThrow()
     expect(() => parseHostBotAbout({ ...page, bot: { ...page.bot,
       notesUrl: 'file:///private/config' } })).toThrow()
   })
