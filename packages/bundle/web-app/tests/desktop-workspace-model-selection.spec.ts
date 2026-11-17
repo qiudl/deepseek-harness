@@ -100,6 +100,8 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   const chat = { revision: 4, defaultBotId: 'bot_1', bot: { botId: 'bot_1', actorRef: 'deepseek-bot:bot_1',
     displayName: 'My Bot', sessionId: target.session_id } }
   const readLocalBotChat = vi.fn(async (_botId: string | null): Promise<unknown> => chat)
+  const readLocalBotWork = vi.fn(async (_request: { cursor: string | null; limit: number }): Promise<unknown> =>
+    ({ schemaVersion: 1, state: 'loading' }))
   const botService = {
     resolveLocalBot: async (botId: string) => botId === 'bot_1'
       ? { botId, actorRef: `deepseek-bot:${botId}`, displayName: 'My Bot' } : null,
@@ -108,6 +110,7 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       : null,
     ...groupOperations,
     readLocalBotChat,
+    readLocalBotWork,
     sendLocalBotChat: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
       botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'accepted',
     })),
@@ -214,6 +217,16 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   Object.assign(botService, { readLocalBotChat })
   expect(await (await postChat({ botId: 'bot_1' })).json()).toEqual({ value: chat })
+  const postWork = (args: object) => fetch(chatUrl, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint: 'bot/work', payload: { args } }),
+  })
+  expect(await (await postWork({ cursor: null, limit: 20 })).json())
+    .toEqual({ value: { schemaVersion: 1, state: 'loading' } })
+  expect(readLocalBotWork).toHaveBeenCalledWith({ cursor: null, limit: 20 })
+  Reflect.deleteProperty(botService, 'readLocalBotWork')
+  expect(await (await postWork({ cursor: null, limit: 20 })).json()).toEqual({ value: null })
+  Object.assign(botService, { readLocalBotWork })
   const remoteUrl = chatUrl.replace('desktop-remote-ui', 'desktop-remote-session')
   const postRemote = (command: object, auth = `Bearer ${token}`) => fetch(remoteUrl, { method: 'POST',
     headers: { authorization: auth }, body: JSON.stringify(command) })
