@@ -110,6 +110,22 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
   private manifest(profileId: string): Record<string, unknown> {
     return record(JSON.parse(this.read(this.root(profileId), 'profiles/web/package.json') ?? 'null'))
   }
+
+  /**
+   * REQ-20261118-0010: the installed package's own manifest is the only trustworthy version source.
+   * The read goes through the same guarded state-file reader as the Profile manifest, so reparse
+   * points, foreign owners and oversized files are rejected rather than followed. Anything that is
+   * not an exact shipped version is omitted instead of being reported as an installed version.
+   */
+  private installedVersion(profileId: string, name: string): string | undefined {
+    const exact = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
+    try {
+      const manifest = record(JSON.parse(
+        this.read(this.root(profileId), `profiles/web/node_modules/${name}/package.json`) ?? 'null'))
+      const version = manifest.version
+      return typeof version === 'string' && exact.test(version) ? version : undefined
+    } catch { return undefined }
+  }
   private needsUpgradePlan(profileId: string, parsed: PluginUpdateInput, patch: string): boolean {
     if (!parseBundledPluginSpec(parsed.spec) || !this.options.upgradePlan || !this.options.togglePlan || this.options.windows) return false
     try { this.options.togglePlan(profileId, parsed.packageName, true, patch); return false } catch (error) {
@@ -194,7 +210,7 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
     return createHash('sha256').update(JSON.stringify(values)).digest('hex')
   }
   /** @param profileId Selected Profile. @returns Declared bundle names with opaque IDs, without filesystem paths. */
-  inventory(profileId: string): Promise<{ id: string; name: string; transport: string; plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported' }[]> {
+  inventory(profileId: string): Promise<{ id: string; name: string; version?: string; transport: string; plugin_state?: 'enabled' | 'disabled' | 'mixed' | 'unsupported' }[]> {
     return Promise.resolve().then(() => {
       const manifest = this.manifest(profileId)
       const bundles: unknown = record(record(manifest.dsh).profile).bundles
@@ -212,7 +228,10 @@ export class ProfilePluginExecutor implements ExtensionExecutor {
             state = !plan.previousDisabled.length ? 'enabled' : !plan.previousExpected.length ? 'disabled' : 'mixed'
           } catch { /* Unsupported composition is visible but cannot be toggled. */ }
         }
-        return { id: createHash('sha256').update(name).digest('hex'), name, transport: 'bundle',
+        // REQ-20261118-0010: report the installed version when it can be proven, never a target.
+        const version = this.installedVersion(profileId, name)
+        return { id: createHash('sha256').update(name).digest('hex'), name,
+          ...(version === undefined ? {} : { version }), transport: 'bundle',
           ...(state === undefined ? {} : { plugin_state: state }) }
       })
     })
