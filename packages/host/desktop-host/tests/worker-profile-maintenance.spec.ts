@@ -146,3 +146,26 @@ it('awaits admitted writers before final supervisor shutdown settles', async () 
   release()
   await Promise.all([closing, cancelled])
 })
+
+it('invalidates a captured coordination receiver before upgrade maintenance can expose a replacement', async () => {
+  let generation = 0
+  const workers = new ProfileWorkerSupervisor(async () => {
+    const id = ++generation
+    return { workerId: `worker-${id}`, closeNotifications() {}, abort() {}, done: Promise.resolve(),
+      collaborationAnalysis: async () => ({ generation: id }) }
+  })
+  onTestFinished(() => workers.disposeAll())
+  await workers.start(input)
+  const original = workers.taskCoordinationReceiver(input.profileId)
+  expect(() => { original.assertCurrent() }).not.toThrow()
+  await workers.withProfileMaintenance(input.profileId, async (permit) => {
+    expect(() => { original.assertCurrent() }).toThrow(expect.objectContaining({ code: 'unavailable' }))
+    await expect(original.execute({}, new AbortController().signal)).rejects.toMatchObject({ code: 'unavailable' })
+    await permit.ensure(input)
+    expect(() => workers.taskCoordinationReceiver(input.profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
+  })
+  expect(() => { original.assertCurrent() }).toThrow(expect.objectContaining({ code: 'stale' }))
+  const replacement = workers.taskCoordinationReceiver(input.profileId)
+  expect(replacement.workerId).toBe('worker-2')
+  await expect(replacement.execute({}, new AbortController().signal)).resolves.toEqual({ generation: 2 })
+})

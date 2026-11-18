@@ -133,7 +133,7 @@ function accountToken(key: KeyObject, subject: string): string {
 
 const BUNDLED_ARCHIVE = Buffer.from('bundled duet archive')
 const BUNDLED_DIGEST = createHash('sha256').update(BUNDLED_ARCHIVE).digest('hex')
-function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject } {
+function fixture(options: { packageManager?: boolean } = {}): { config: Config; root: string; accountPrivateKey: KeyObject } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-startup-composition-'))
   const artifact = join(root, 'runtime-artifact')
   const deviceKey = join(root, 'device-index.key')
@@ -174,7 +174,7 @@ function fixture(): { config: Config; root: string; accountPrivateKey: KeyObject
       registrationRoot: join(root, 'registration'),
       nodeExecutablePath: artifact,
       dshEntrypointPath: artifact,
-      pnpmEntrypointPath: artifact,
+      pnpmEntrypointPath: options.packageManager === false ? undefined : artifact,
       bundledPluginsRoot,
       deviceIndexKeyPath: deviceKey,
       accountKeyringPath,
@@ -388,6 +388,8 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     layers: [{ packageName: 'fixture', patches: [{ insert: [{ id: 'bot', name: 'ds-bot', config: { home: join(profileRoot, 'bot') } }] }] }],
     patches: [],
   } as never)
+  expect(upgradeOptions.home(profile.profileId)).toBe('bot')
+  mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [] })
   expect(upgradeOptions.home(profile.profileId)).toBe('bot')
   mocks.loadProfileDirectory.mockReturnValueOnce({ layers: [], patches: [], skippedBundles: [] } as never)
   mocks.pluginEntries.mockReturnValueOnce([]).mockReturnValueOnce([
@@ -791,6 +793,31 @@ it.skipIf(process.platform === 'win32')('keeps Host startup available when the g
   expect(serverOptions?.inspectModelClaimSource).toBeUndefined()
   expect(() => { serverOptions?.modelClaimRecovery?.status({ candidateId: 'llm-deepseek:deepseek',
     authorizeAccountProfile: () => randomUUID() }) }).toThrow(/unavailable/u)
+})
+
+it.skipIf(process.platform === 'win32')('refuses governed package recovery when this Host has no package manager', async () => {
+  const { config, root } = fixture({ packageManager: false })
+  const cleanup: { close?: () => Promise<void> } = {}
+  onTestFinished(async () => { await cleanup.close?.(); rmSync(root, { recursive: true, force: true }) })
+  const { startDesktopHostApplication } = await import('../src/startup.ts')
+  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+    platform: 'darwin',
+    createServer: () => ({ start: async () => undefined, close: async () => undefined }) as unknown as UnixHostServer,
+  })
+  cleanup.close = () => application.close()
+  const owner = mocks.upgradeOptions
+  if (!owner) throw Error('missing governed recovery owner')
+  const noDataAccess = vi.fn(() => { throw Error('must reject before accessing Profile data') })
+  const participant: Parameters<typeof owner.recoverPackage>[3] = {
+    recovery: { digest: 'a'.repeat(64), beforeRootDigest: 'b'.repeat(64), afterRootDigest: 'c'.repeat(64) },
+    rewritePatch: noDataAccess, prepare: noDataAccess, selectData: noDataAccess, restart: noDataAccess,
+    rollbackAllowed: noDataAccess, restoreData: noDataAccess,
+  }
+  expect(() => owner.recoverPackage(randomUUID(), {
+    action: 'update', packageName: 'ds-bot', spec: 'bundled:ds-bot@0.3.8-slark.1',
+    originalSpecDigest: 'd'.repeat(64), scopeDigest: 'e'.repeat(64), removedIds: [], stage: 'prepared',
+  }, { kind: 'plugin', signal: new AbortController().signal, guard: noDataAccess }, participant)).toThrow('upgrade_required')
+  expect(noDataAccess).not.toHaveBeenCalled()
 })
 
 it.skipIf(process.platform === 'win32')('restores a partially written Account claim through production Host composition', async () => {
