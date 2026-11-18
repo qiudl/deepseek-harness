@@ -24,6 +24,18 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
   return { controller_id, generation: state.claim.generation, epoch: state.claim.epoch }
 }
 
+async function expectUnsupportedBotWrite(control: DesktopSessionControl,
+  command: HostRemoteSessionCommand): Promise<void> {
+  const invoke = vi.fn()
+  const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control)
+  const signal = new AbortController().signal
+  await expect(executor.execute(command, signal)).resolves.toBeNull()
+  await expect(executor.execute({ ...command, session_id: 'foreign',
+    control: remoteProof(control, 'foreign') } as HostRemoteSessionCommand, signal))
+    .rejects.toThrow()
+  expect(invoke).not.toHaveBeenCalled()
+}
+
 describe('Desktop remote Session bridge', () => {
   it('keeps sensitive Bot writes on their controlled readers and rejects private results', async () => {
     const control = new DesktopSessionControl()
@@ -89,6 +101,7 @@ describe('Desktop remote Session bridge', () => {
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledWith(request, signal)
     mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
     await expect(executor.execute(command, signal)).rejects.toThrow()
@@ -109,6 +122,7 @@ describe('Desktop remote Session bridge', () => {
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledWith(request, signal)
     mutate.mockResolvedValueOnce({ ...result, apiKey: 'private' })
     await expect(executor.execute(command, signal)).rejects.toThrow()
@@ -131,10 +145,13 @@ describe('Desktop remote Session bridge', () => {
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(update).toHaveBeenCalledWith(request, signal)
     update.mockResolvedValueOnce({ ...result, settings: { ...result.settings, secret: 'private' } })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_general_result')
     await expect(executor.execute({ ...command, session_id: 'other' }, signal)).rejects.toThrow()
+    update.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('runs a native Channel mirror mutation under room control and rejects substituted receipts', async () => {
     const roomId = 'session-11111111-1111-4111-8111-111111111111'
@@ -154,9 +171,12 @@ describe('Desktop remote Session bridge', () => {
       command_id: randomUUID() as never, session_id: roomId, control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledWith(request, signal)
     mutate.mockResolvedValueOnce({ ...result, credential: 'secret' })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_channel_mirror_mutation_receipt')
+    mutate.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('runs a memory question under the controlled Bot Session and validates its receipt', async () => {
     const control = new DesktopSessionControl()
@@ -174,10 +194,13 @@ describe('Desktop remote Session bridge', () => {
     const command = { operation: 'bot.memory.mutate' as const,
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledTimes(1)
     mutate.mockResolvedValueOnce({ ...result, targetId: 'other' })
     await expect(executor.execute(command, new AbortController().signal))
       .rejects.toThrow('invalid_bot_memory_mutation_receipt')
+    mutate.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toBeNull()
   })
   it('starts a controlled native About update and rejects an unrelated receipt', async () => {
     const control = new DesktopSessionControl()
@@ -192,10 +215,13 @@ describe('Desktop remote Session bridge', () => {
     const command = { operation: 'bot.update.mutate' as const,
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     await expect(executor.execute(command, new AbortController().signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledTimes(1)
     mutate.mockResolvedValueOnce({ ...result, target: 'dsh' })
     await expect(executor.execute(command, new AbortController().signal))
       .rejects.toThrow('invalid_bot_update_mutation_receipt')
+    mutate.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, new AbortController().signal)).resolves.toBeNull()
   })
   it('controls a Bot profile edit through its Session and validates the saved result', async () => {
     const request = parseHostBotSettingsUpdateRequest({ botId: 'main', sessionId: 'chat-1',
@@ -215,10 +241,16 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(update).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     update.mockResolvedValueOnce({ ...result, settings: { ...settings, secret: 'leak' } })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_settings_update_receipt')
+    update.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
+    update.mockResolvedValueOnce({ botId: 'main', state: 'stale', revision: 8, settings: null })
+    await expect(executor.execute(command, signal)).resolves.toEqual({
+      botId: 'main', state: 'stale', revision: 8, settings: null })
   })
   it('deletes a Bot only through the fixed controlled service', async () => {
     const control = new DesktopSessionControl()
@@ -234,10 +266,13 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(deleteBot).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     deleteBot.mockResolvedValueOnce({ ...result, botId: 'other' })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_delete_receipt')
+    deleteBot.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('checks an uncertain Bot copy using the same durable request ID', async () => {
     const control = new DesktopSessionControl()
@@ -255,10 +290,13 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(duplicateBot).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     duplicateBot.mockResolvedValueOnce({ ...result, copyRequestId: randomUUID() })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_duplicate_receipt')
+    duplicateBot.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('creates a Bot only through the fixed owner service and validates its receipt', async () => {
     const control = new DesktopSessionControl()
@@ -277,10 +315,13 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(createBot).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     createBot.mockResolvedValueOnce({ ...result, botId: 'main' })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_create_receipt')
+    createBot.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('runs a schedule mutation only under the controlled Bot Session', async () => {
     const control = new DesktopSessionControl()
@@ -300,10 +341,13 @@ describe('Desktop remote Session bridge', () => {
       command_id: randomUUID() as never, session_id: 'chat-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(mutate).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     mutate.mockResolvedValueOnce({ ...result, requestId: randomUUID() })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_schedule_mutation_receipt')
+    mutate.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
   })
   it('uses separate controlled create/delete services and rejects hidden fields', async () => {
     const control = new DesktopSessionControl()
@@ -315,6 +359,7 @@ describe('Desktop remote Session bridge', () => {
     const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
       replyMode: 'admin', relayLimit: null, permissionPreset: 'admin',
       permissionChoices: { options: [{ value: 'admin', name: 'Admin only' }], defaultPreset: 'admin' },
+      channelMirror: null,
       adminBotId: 'main', members: [{ botId: 'main', displayName: 'Main' },
         { botId: 'design', displayName: 'Design' }] }
     const createResult = { state: 'created', revision: 8, details }
@@ -324,18 +369,29 @@ describe('Desktop remote Session bridge', () => {
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
       undefined, control, undefined, undefined, undefined, undefined, createBotRoom, deleteBotRoom)
     const signal = new AbortController().signal
-    await expect(executor.execute({ operation: 'bot.room.create', command_id: randomUUID() as never,
-      session_id: 'chat-1', control: createProof, request: create }, signal)).resolves.toEqual(createResult)
-    await expect(executor.execute({ operation: 'bot.room.delete', command_id: randomUUID() as never,
+    const createCommand = { operation: 'bot.room.create' as const, command_id: randomUUID() as never,
+      session_id: 'chat-1', control: createProof, request: create }
+    const deleteCommand = { operation: 'bot.room.delete' as const, command_id: randomUUID() as never,
       session_id: 'room-1', control: deleteProof,
-      request: { roomId: 'room-1' as never, expectedRevision: 8 } }, signal))
+      request: { roomId: 'room-1' as never, expectedRevision: 8 } }
+    await expect(executor.execute(createCommand, signal)).resolves.toEqual(createResult)
+    await expect(executor.execute(deleteCommand, signal))
       .resolves.toEqual({ roomId: 'room-1', state: 'deleted', revision: 9 })
+    await expectUnsupportedBotWrite(control, createCommand)
+    await expectUnsupportedBotWrite(control, deleteCommand)
     expect(createBotRoom).toHaveBeenCalledOnce()
     expect(deleteBotRoom).toHaveBeenCalledOnce()
     createBotRoom.mockResolvedValueOnce({ ...createResult, details: { ...details, workDir: '/private' } })
     await expect(executor.execute({ operation: 'bot.room.create', command_id: randomUUID() as never,
       session_id: 'chat-1', control: createProof, request: create }, signal))
       .rejects.toThrow('invalid_bot_room_create_receipt')
+    createBotRoom.mockResolvedValueOnce(null)
+    await expect(executor.execute(createCommand, signal)).resolves.toBeNull()
+    createBotRoom.mockResolvedValueOnce({ state: 'stale', revision: 8, details: null })
+    await expect(executor.execute(createCommand, signal)).resolves.toEqual({
+      state: 'stale', revision: 8, details: null })
+    deleteBotRoom.mockResolvedValueOnce(null)
+    await expect(executor.execute(deleteCommand, signal)).resolves.toBeNull()
   })
   it('uses the fixed room update service under live room control and verifies the saved projection', async () => {
     const request = parseHostBotRoomUpdateRequest({ roomId: 'room-1', expectedRevision: 7,
@@ -354,10 +410,16 @@ describe('Desktop remote Session bridge', () => {
       session_id: 'room-1', control: proof, request }
     const signal = new AbortController().signal
     await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, command)
     expect(update).toHaveBeenCalledWith(request, signal)
     expect(invoke).not.toHaveBeenCalled()
     update.mockResolvedValueOnce({ ...result, details: { ...details, workDir: '/private' } })
     await expect(executor.execute(command, signal)).rejects.toThrow('invalid_bot_room_update_receipt')
+    update.mockResolvedValueOnce(null)
+    await expect(executor.execute(command, signal)).resolves.toBeNull()
+    update.mockResolvedValueOnce({ roomId: 'room-1', revision: 8, state: 'stale', details: null })
+    await expect(executor.execute(command, signal)).resolves.toEqual({
+      roomId: 'room-1', revision: 8, state: 'stale', details: null })
   })
   it('uses the fixed room provider under original room control and rejects substituted receipts', async () => {
     const request = parseHostBotRoomSubmission({ roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' })
@@ -373,6 +435,7 @@ describe('Desktop remote Session bridge', () => {
     const receipt = { operation: 'bot.room.receipt' as const, command_id: randomUUID() as never, request }
     const signal = new AbortController().signal
     await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, send)
     await expect(executor.execute({ ...send, session_id: 'other',
       control: remoteProof(control, 'other') }, signal)).rejects.toThrow('Session mismatch')
     await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
@@ -380,6 +443,8 @@ describe('Desktop remote Session bridge', () => {
     expect(invoke).not.toHaveBeenCalled()
     botRoom.mockResolvedValueOnce({ ...result, roomId: 'other' })
     await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_room_receipt')
+    botRoom.mockResolvedValueOnce(null)
+    await expect(executor.execute(receipt, signal)).resolves.toBeNull()
   })
   it('routes terminal writes and resizes through the stream under the live control claim', async () => {
     const control = new DesktopSessionControl()
@@ -415,6 +480,7 @@ describe('Desktop remote Session bridge', () => {
     const receipt = { operation: 'bot.chat.receipt' as const, command_id: randomUUID() as never, request }
     const signal = new AbortController().signal
     await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, send)
     await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
     await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
     const otherProof = remoteProof(control, 'other')
@@ -453,6 +519,7 @@ describe('Desktop remote Session bridge', () => {
     const receipt = { operation: 'bot.attachment.receipt' as const, command_id: randomUUID() as never, request }
     const signal = new AbortController().signal
     await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expectUnsupportedBotWrite(control, send)
     await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
     await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
     await expect(executor.execute({ ...send, session_id: 'other',
@@ -464,6 +531,8 @@ describe('Desktop remote Session bridge', () => {
     expect(invoke).not.toHaveBeenCalled()
     botAttachment.mockResolvedValueOnce({ ...result, sessionId: 'foreign' })
     await expect(executor.execute(receipt, signal)).rejects.toThrow('invalid_bot_attachment_receipt')
+    botAttachment.mockResolvedValueOnce(null)
+    await expect(executor.execute(receipt, signal)).resolves.toBeNull()
   })
   it('binds terminal calls to live control and preserves only typed terminal failures', async () => {
     const control = new DesktopSessionControl()
