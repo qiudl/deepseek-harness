@@ -38,4 +38,39 @@ describe('fixed owner Bot room update contract', () => {
       state: 'applied', details: { ...details, revision: 7 } },
     parseHostBotRoomUpdateRequest(request))).toThrow('invalid_bot_room_update_receipt')
   })
+  it('accepts each bounded owner edit with its exact value type', () => {
+    for (const change of [
+      { kind: 'name', value: 'Planning' }, { kind: 'notice', value: '' },
+      { kind: 'reply-mode', value: 'admin' }, { kind: 'reply-mode', value: 'everyone' },
+      { kind: 'relay-limit', value: null }, { kind: 'relay-limit', value: 1 },
+      { kind: 'relay-limit', value: 200 }, { kind: 'permission', value: null },
+      { kind: 'permission', value: 'allow-read' }, { kind: 'admin', value: null },
+      { kind: 'admin', value: 'owner_1' }, { kind: 'member-add', value: 'owner_1' },
+      { kind: 'member-remove', value: 'owner_1' }, { kind: 'member-stop', value: 'owner_1' },
+    ]) expect(parseHostBotRoomUpdateRequest({ ...request, change }).change).toEqual(change)
+  })
+  it('rejects wrong value types, bounds and forged saved-state receipts', () => {
+    for (const change of [
+      { kind: 'name', value: '  ' }, { kind: 'name', value: 'x'.repeat(513) },
+      { kind: 'notice', value: 'x'.repeat(8193) }, { kind: 'reply-mode', value: 'owner' },
+      { kind: 'relay-limit', value: 0 }, { kind: 'relay-limit', value: 1.5 },
+      { kind: 'permission', value: '' }, { kind: 'permission', value: 'x'.repeat(201) },
+      { kind: 'admin', value: '../owner' }, { kind: 'member-remove', value: null },
+      { kind: 'member-stop', value: 'bad/id' }, { kind: 'unknown', value: 'x' },
+    ]) expect(() => parseHostBotRoomUpdateRequest({ ...request, change })).toThrow('invalid_bot_room_update')
+    for (const value of [null, {}, { ...request, expectedRevision: -1 },
+      { ...request, expectedRevision: 1.5 }, { ...request, change: null },
+      { ...request, change: { kind: 'notice' } }])
+      expect(() => parseHostBotRoomUpdateRequest(value)).toThrow('invalid_bot_room_update')
+    const parsed = parseHostBotRoomUpdateRequest(request)
+    expect(parseHostBotRoomUpdateReceipt(null, parsed)).toBeNull()
+    for (const value of [undefined, {}, { roomId: 'room-1', revision: 8, state: 'applied', details: null },
+      { roomId: 'room-1', revision: 8, state: 'applied', details: { ...details, revision: 9 } },
+      { roomId: 'room-1', revision: 8, state: 'stale', details },
+      { roomId: 'room-1', revision: 6, state: 'stale', details: null },
+      { roomId: 'room-1', revision: 8.5, state: 'stale', details: null },
+      { roomId: 'room-1', revision: 8, state: 'unknown', details: null },
+      { roomId: 'room-1', revision: 8, state: 'applied', details, extra: true }])
+      expect(() => parseHostBotRoomUpdateReceipt(value, parsed)).toThrow('invalid_bot_room_update_receipt')
+  })
 })

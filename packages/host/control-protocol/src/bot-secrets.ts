@@ -4,7 +4,7 @@ const NAME = /^[A-Z][A-Z0-9_]{0,63}$/u
 const BOT_ID = /^[A-Za-z0-9_-]{1,200}$/u
 const clean = (value: unknown, max: number): value is string =>
   typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max &&
-  Array.from(value).every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
+  Array.from(value).every((char) => { const code = char.codePointAt(0) as number; return code > 31 && code !== 127 })
 const validScope = (value: unknown): value is 'all' | string[] =>
   value === 'all' || Array.isArray(value) && value.length <= 200 &&
   value.every(id => typeof id === 'string' && BOT_ID.test(id)) && new Set(value).size === value.length
