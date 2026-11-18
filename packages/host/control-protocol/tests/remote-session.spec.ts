@@ -28,6 +28,14 @@ describe('Profile remote Session wire commands', () => {
         kind: 'connect', id: 'github', token: 'synthetic-token' } },
       { operation: 'bot.providers.mutate', request: { botId: 'main', sessionId: 'chat-1',
         kind: 'key-set', provider: 'deepseek-official', value: 'synthetic-key' } },
+      { operation: 'bot.general.update', request: { botId: 'main', sessionId: 'chat-1',
+        expectedRevision: 4, change: { kind: 'width', value: 50 } } },
+      { operation: 'bot.schedule.mutate', request: { ownerBotId: 'main', sessionId: 'chat-1',
+        requestId: randomUUID(), mode: 'status' } },
+      { operation: 'bot.memory.mutate', request: { ownerBotId: 'main', sessionId: 'chat-1',
+        requestId: randomUUID(), mode: 'status', targetKind: 'bot', targetId: 'main' } },
+      { operation: 'bot.update.mutate', request: { ownerBotId: 'main', sessionId: 'chat-1',
+        requestId: randomUUID(), mode: 'status', target: 'bot' } },
     ]
     for (const { operation, request } of requests) {
       const command = { operation, command_id: randomUUID(), session_id: request.sessionId,
@@ -38,6 +46,33 @@ describe('Profile remote Session wire commands', () => {
       expect(() => decode(frame({ ...command, control: undefined }))).toThrow()
       expect(() => decode(frame({ ...command, request: { ...request, profileId: 'other' } }))).toThrow()
     }
+  })
+
+  it('binds mirror and attachment commands to their target Session without adding authority to receipts', () => {
+    const roomId = 'session-11111111-1111-4111-8111-111111111111'
+    const mirrorRequest = { kind: 'start', roomId, requestId: randomUUID(),
+      endpoint: 'https://slark.test', ticket: 't'.repeat(43) }
+    const attachmentRequest = { botId: 'main', sessionId: 'chat-1',
+      submissionId: randomUUID(), receiptId: randomUUID(), kind: 'file',
+      attachmentId: `sha256:${'a'.repeat(64)}` }
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    for (const command of [
+      { operation: 'bot.channel-mirror.mutate', command_id: randomUUID(),
+        session_id: roomId, control, request: mirrorRequest },
+      { operation: 'bot.attachment.send', command_id: randomUUID(),
+        session_id: attachmentRequest.sessionId, control, request: attachmentRequest },
+    ]) {
+      const input = frame(command)
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+      expect(() => decode(frame({ ...command, session_id: 'other' }))).toThrow()
+      expect(() => decode(frame({ ...command, control: undefined }))).toThrow()
+      expect(() => decode(frame({ ...command, request: { ...command.request, profileId: 'other' } }))).toThrow()
+    }
+    const receipt = { operation: 'bot.attachment.receipt', command_id: randomUUID(),
+      request: attachmentRequest }
+    const input = frame(receipt)
+    expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    expect(() => decode(frame({ ...receipt, session_id: attachmentRequest.sessionId }))).toThrow()
   })
 
   it('round trips fixed Bot profile edits under the claimed Bot Session', () => {
