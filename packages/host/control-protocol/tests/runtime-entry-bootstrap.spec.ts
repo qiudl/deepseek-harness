@@ -1,14 +1,18 @@
+import { tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parseHostRuntimeEntryOriginsConfiguration, parseHostRuntimeEntryOriginsJson } from '../src/runtime-entry-bootstrap.ts'
 
 const digest = 'a'.repeat(64)
+const installRoot = join(tmpdir(), 'dsh')
+const pin = (name: string) => join(installRoot, name)
 const config = {
   schemaVersion: 1,
   implementationDigest: digest,
   compositionDigest: digest,
   artifactPins: [
-    { path: '/opt/dsh/project-operation-native-entry.js', sha256: digest },
-    { path: '/opt/dsh/project-operation-journal.js', sha256: digest },
+    { path: pin('project-operation-native-entry.js'), sha256: digest },
+    { path: pin('project-operation-journal.js'), sha256: digest },
   ],
 }
 
@@ -30,13 +34,13 @@ describe('native runtime entry startup projection', () => {
       { ...config, implementationDigest: 'bad' }, { ...config, compositionDigest: 'bad' },
       { ...config, artifactPins: [] }, { ...config, artifactPins: [config.artifactPins[0]] },
       { ...config, artifactPins: [config.artifactPins[0], config.artifactPins[0]] },
-      { ...config, artifactPins: [{ ...config.artifactPins[0], path: '/opt/dsh/other.js' }, config.artifactPins[1]] },
-      { ...config, artifactPins: [config.artifactPins[0], { ...config.artifactPins[1], path: '/opt/dsh/other.js' }] },
-      { ...config, artifactPins: [config.artifactPins[0], { path: '/opt/dsh/../project-operation-journal.js', sha256: digest }] },
+      { ...config, artifactPins: [{ ...config.artifactPins[0], path: pin('other.js') }, config.artifactPins[1]] },
+      { ...config, artifactPins: [config.artifactPins[0], { ...config.artifactPins[1], path: pin('other.js') }] },
+      { ...config, artifactPins: [config.artifactPins[0], { path: `${installRoot}${sep}..${sep}dsh${sep}project-operation-journal.js`, sha256: digest }] },
       { ...config, artifactPins: [config.artifactPins[0], { path: 'relative/project-operation-journal.js', sha256: digest }] },
-      { ...config, artifactPins: [config.artifactPins[0], { path: '/opt/dsh/\nproject-operation-journal.js', sha256: digest }] },
-      { ...config, artifactPins: [config.artifactPins[0], { path: '/opt/dsh/\ud800project-operation-journal.js', sha256: digest }] },
-      { ...config, artifactPins: [config.artifactPins[0], { path: '/opt/' + 'x'.repeat(2049) + '/project-operation-journal.js', sha256: digest }] },
+      { ...config, artifactPins: [config.artifactPins[0], { path: pin('\nproject-operation-journal.js'), sha256: digest }] },
+      { ...config, artifactPins: [config.artifactPins[0], { path: pin('\ud800project-operation-journal.js'), sha256: digest }] },
+      { ...config, artifactPins: [config.artifactPins[0], { path: pin('x'.repeat(2049) + '-project-operation-journal.js'), sha256: digest }] },
       { ...config, artifactPins: [config.artifactPins[0], { ...config.artifactPins[1], sha256: 'bad' }] },
       { ...config, artifactPins: [config.artifactPins[0], { ...config.artifactPins[1], token: 'secret' }] },
       { ...config, extra: true },
@@ -45,7 +49,7 @@ describe('native runtime entry startup projection', () => {
 
   it('bounds both the parsed projection and raw parent JSON', () => {
     const extraPins = Array.from({ length: 62 }, (_, index) => ({
-      path: `/opt/dsh/${String(index).padStart(2, '0')}-${'x'.repeat(1100)}.js`, sha256: digest,
+      path: pin(`${String(index).padStart(2, '0')}-${'x'.repeat(1100)}.js`), sha256: digest,
     }))
     expect(() => parseHostRuntimeEntryOriginsConfiguration({ ...config,
       artifactPins: [...config.artifactPins, ...extraPins] })).toThrow('invalid_runtime_entry_bootstrap')
