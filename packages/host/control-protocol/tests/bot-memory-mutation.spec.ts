@@ -40,4 +40,44 @@ describe('controlled native Bot memory writes', () => {
       expect(() => parseHostBotMemoryMutationReceipt(forged, ask))
         .toThrow('invalid_bot_memory_mutation_receipt')
   })
+  it('keeps durable ask, forget, and status outcomes distinct', () => {
+    const status = { mode: 'status' as const, ownerBotId: 'main', sessionId: 'chat-1',
+      requestId: ask.requestId, targetKind: 'bot' as const, targetId: 'main' }
+    const forget = { ...ask, mode: 'forget' as const, scope: 'own' as const, topic: 'tea', text: 'Old fact' }
+    expect(parseHostBotMemoryMutationRequest(forget)).toEqual(forget)
+    for (const state of ['pending', 'missing', 'unavailable']) {
+      const receipt = { ...applied, state, reply: null, changes: [] }
+      expect(parseHostBotMemoryMutationReceipt(receipt, status)?.state).toBe(state)
+    }
+    const forgotten = { ...applied, operation: 'forget', state: 'applied', reply: null, changes: [] }
+    expect(parseHostBotMemoryMutationReceipt(forgotten, forget)?.operation).toBe('forget')
+    const changes = [
+      { op: 'edit', scope: 'team', text: 'Prefers coffee', before: 'Prefers tea', ok: true, error: null },
+      { op: 'remove', scope: 'group', text: 'Old fact', before: 'Old fact', ok: false, error: 'not found' },
+    ]
+    expect(parseHostBotMemoryMutationReceipt({ ...applied, changes }, ask)?.changes).toEqual(changes)
+    expect(parseHostBotMemoryMutationReceipt(null, ask)).toBeNull()
+  })
+
+  it('rejects forged memory outcomes and cross-target edits', () => {
+    for (const bad of [null, {}, { ...ask, requestId: 'bad' }, { ...ask, ownerBotId: '../other' },
+      { ...ask, mode: 'status', text: 'hidden' }, { ...ask, mode: 'forget', scope: 'group', topic: null },
+      { ...ask, mode: 'forget', scope: 'own', topic: '', text: 'Old fact' },
+      { ...ask, mode: 'forget', scope: 'own', topic: null, text: '' },
+      { ...ask, text: 'x'.repeat(8001) }, { ...ask, mode: 'unknown' }])
+      expect(() => parseHostBotMemoryMutationRequest(bad)).toThrow('invalid_bot_memory_mutation')
+    const malformed = [undefined, {}, { ...applied, operation: 'forget' },
+      { ...applied, targetKind: 'room' }, { ...applied, state: 'unknown' },
+      { ...applied, changes: Array(21).fill(applied.changes[0]) },
+      { ...applied, truncated: 'no' }, { ...applied, state: 'missing', reply: null },
+      { ...applied, changes: [{ ...applied.changes[0], op: 'unknown' }] },
+      { ...applied, changes: [{ ...applied.changes[0], scope: 'unknown' }] },
+      { ...applied, changes: [{ ...applied.changes[0], text: 'x'.repeat(801) }] },
+      { ...applied, changes: [{ ...applied.changes[0], before: 1 }] },
+      { ...applied, changes: [{ ...applied.changes[0], ok: 'yes' }] },
+      { ...applied, changes: [{ ...applied.changes[0], error: 'x'.repeat(257) }] },
+    ]
+    for (const value of malformed)
+      expect(() => parseHostBotMemoryMutationReceipt(value, ask)).toThrow('invalid_bot_memory_mutation_receipt')
+  })
 })
