@@ -24,4 +24,17 @@ describe('native Channel mirror mutation contract', () => {
     { kind: 'start', roomId, requestId, state: 'awaiting_confirmation', confirmationCode: 'wrong' }])
       expect(() => receipt(bad, input)).toThrow('invalid_bot_channel_mirror_mutation_receipt')
   })
+  it('finishes or unbinds without a ticket and rejects command field leakage', () => {
+    for (const kind of ['finish', 'unbind'] as const) {
+      const input = request({ kind, roomId, requestId })
+      expect(input).toEqual({ kind, roomId, requestId })
+      expect(receipt(null, input)).toBeNull()
+      expect(receipt({ kind, roomId, requestId, state: 'unbound' }, input))
+        .toEqual({ kind, roomId, requestId, state: 'unbound' })
+      expect(() => request({ kind, roomId, requestId, ticket: start.ticket }))
+        .toThrow('invalid_bot_channel_mirror_mutation')
+    }
+    expect(() => request({ ...start, endpoint: 'not a URL' }))
+      .toThrow('invalid_bot_channel_mirror_mutation')
+  })
 })
