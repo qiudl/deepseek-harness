@@ -154,3 +154,57 @@ it('preserves ordinary delivery commits when the independently retained header i
   expect(await readFile(path)).toEqual(before)
   await reopened.close()
 }, 30000)
+
+it('refuses a miskeyed or overfull retained header index without rewriting it', async () => {
+  const h = await harness(), metadata = await openRuntimeEntryFeedbackMetadata(h.facility)
+  await (await metadata.openDeliveryJournal()).persist(h.input, h.source, h.signal)
+  const head = metadata.read(h.input.namespace_id, 'delivery')!
+  await metadata.close()
+  const path = join(h.directory, 'runtime_entry_feedback_metadata_v1.json')
+  const original = JSON.parse(await readFile(path, 'utf8')) as { tables: { headers: Record<string, typeof head> } }
+  for (const kind of ['miskeyed', 'overfull'] as const) {
+    const changed = structuredClone(original)
+    if (kind === 'miskeyed') {
+      const value = Object.values(changed.tables.headers)[0]!
+      changed.tables.headers = { wrong: value }
+    } else {
+      for (let index = 0; index < 4096; index++) {
+        const delivery_id = 'extra-' + String(index)
+        changed.tables.headers[hash([head.namespace_id, delivery_id])] = { ...head, delivery_id }
+      }
+    }
+    const bytes = JSON.stringify(changed)
+    await writeFile(path, bytes)
+    await expect(openRuntimeEntryFeedbackMetadata(h.facility)).rejects.toThrow(
+      kind === 'miskeyed' ? 'corrupt' : 'capacity')
+    expect(await readFile(path, 'utf8')).toBe(bytes)
+    await writeFile(path, JSON.stringify(original))
+  }
+})
+
+it('rejects metadata reads and writer opens after close', async () => {
+  const h = await harness(), metadata = await openRuntimeEntryFeedbackMetadata(h.facility)
+  await metadata.close()
+  expect(() => metadata.read(h.input.namespace_id, 'delivery')).toThrow('closed')
+  expect(() => metadata.openDeliveryJournal()).toThrow('closed')
+  await metadata.close()
+})
+
+it('keeps the first retained header when a later durable reply claims its identity', async () => {
+  const h = await harness(), metadata = await openRuntimeEntryFeedbackMetadata(h.facility)
+  await (await metadata.openDeliveryJournal()).persist(h.input, h.source, h.signal)
+  const head = metadata.read(h.input.namespace_id, 'delivery')!
+  await metadata.close()
+  const path = join(h.directory, 'runtime_entry_feedback_metadata_v1.json')
+  const retained = JSON.parse(await readFile(path, 'utf8')) as { tables: { headers: Record<string, typeof head> } }
+  const delivery_id = 'shadowed'
+  const shadow = { ...head, delivery_id }
+  retained.tables.headers[hash([head.namespace_id, delivery_id])] = shadow
+  await writeFile(path, JSON.stringify(retained))
+  const reopened = await openRuntimeEntryFeedbackMetadata(h.facility)
+  const saved = await (await reopened.openDeliveryJournal()).persist({ ...h.input,
+    projection: { ...h.input.projection, delivery_id } }, h.source, h.signal)
+  expect(saved.delivery_id).toBe(delivery_id)
+  expect(reopened.read(head.namespace_id, delivery_id)).toEqual(shadow)
+  await reopened.close()
+})
