@@ -15,6 +15,31 @@ const frame = (command: object) => ({
 const decode = (value: object) => decodeHostControlFrame(`${JSON.stringify(value)}\n`)
 
 describe('Profile remote Session wire commands', () => {
+  it('binds sensitive Bot mutations to their Session and control proof at the wire boundary', () => {
+    const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
+    const requests = [
+      { operation: 'bot.capability-library.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'save', expectedRevision: 4, name: null,
+        item: { name: 'research-tool', kind: 'skill', description: '', content: 'Instructions' } } },
+      { operation: 'bot.secrets.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'set', name: 'API_KEY', value: 'synthetic-value', purpose: null, scope: 'all' } },
+      { operation: 'bot.feedback.clear', request: { botId: 'main', sessionId: 'chat-1' } },
+      { operation: 'bot.connectors.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'connect', id: 'github', token: 'synthetic-token' } },
+      { operation: 'bot.providers.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'key-set', provider: 'deepseek-official', value: 'synthetic-key' } },
+    ]
+    for (const { operation, request } of requests) {
+      const command = { operation, command_id: randomUUID(), session_id: request.sessionId,
+        control, request }
+      const input = frame(command)
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+      expect(() => decode(frame({ ...command, session_id: 'other' }))).toThrow()
+      expect(() => decode(frame({ ...command, control: undefined }))).toThrow()
+      expect(() => decode(frame({ ...command, request: { ...request, profileId: 'other' } }))).toThrow()
+    }
+  })
+
   it('round trips fixed Bot profile edits under the claimed Bot Session', () => {
     const request = { botId: 'main', sessionId: 'chat-1', expectedRevision: 7,
       change: { kind: 'pinned', value: true } }
