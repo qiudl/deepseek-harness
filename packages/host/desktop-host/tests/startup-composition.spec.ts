@@ -802,7 +802,11 @@ it.skipIf(process.platform === 'win32')('refuses governed package recovery when 
   const { startDesktopHostApplication } = await import('../src/startup.ts')
   const application = await startDesktopHostApplication(config, { now: () => NOW }, {
     platform: 'darwin',
-    createServer: () => ({ start: async () => undefined, close: async () => undefined }) as unknown as UnixHostServer,
+    createServer: (options) => {
+      const server = new UnixHostServer(options)
+      vi.spyOn(server, 'start').mockResolvedValue()
+      return server
+    },
   })
   cleanup.close = () => application.close()
   const owner = mocks.upgradeOptions
