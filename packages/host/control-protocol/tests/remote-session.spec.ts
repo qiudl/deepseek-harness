@@ -401,6 +401,30 @@ describe('Profile remote UI read wire commands', () => {
     expect(encodeHostControlFrame(decode(frame))).toBe(`${JSON.stringify(frame)}\n`)
     expect(() => decode(readFrame('bot/about', { args: { fresh: true, profileId: 'other' } }))).toThrow()
   })
+  it('keeps Bot settings, feedback and attachment selectors inside signed read frames', () => {
+    const attachmentId = `sha256:${'a'.repeat(64)}`
+    const selectors: [string, Record<string, unknown>][] = [
+      ['bot/usage', { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 20 }],
+      ['bot/general', {}],
+      ['bot/providers', {}],
+      ['bot/connectors', {}],
+      ['bot/secrets', { after: '', limit: 50 }],
+      ['bot/capability-library', { after: '', limit: 20 }],
+      ['bot/feedback', {}],
+      ['bot/feedback-log', { offset: 0, digest: null }],
+      ['bot/avatar', { botId: 'main', offset: 0 }],
+      ['bot/attachment-preview', { botId: 'main', sessionId: 'own-main', eventSeq: 7,
+        attachmentId, offset: 0 }],
+      ['bot/attachment-download-open', { botId: 'main', sessionId: 'chat-main', eventSeq: 7,
+        attachmentId }],
+      ['bot/attachment-download-read', { transferId: randomUUID(), offset: 0 }],
+    ]
+    for (const [endpoint, args] of selectors) {
+      const input = readFrame(endpoint, { args })
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+      expect(() => decode(readFrame(endpoint, { args: { ...args, profileId: 'other' } }))).toThrow()
+    }
+  })
   it('round-trips only an exact native Bot folder selector', () => {
     const input = readFrame('bot/folders', { args: { botId: 'main', path: null } })
     expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
