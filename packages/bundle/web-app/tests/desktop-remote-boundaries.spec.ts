@@ -146,10 +146,19 @@ describe('Desktop Session command boundaries', () => {
       epoch: acquired.claim.epoch }
     const executor = new DesktopRemoteSessionExecutor(host, undefined, control)
     const signal = new AbortController().signal
-    await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 10 }, signal)
-    await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 10 }, signal)
-    const next = await executor.execute({ operation: 'approval.poll', command_id, cursor: 'client-1', wait_ms: 10 }, signal)
-    expect(next).toMatchObject({ cursor: 'client-1', frames: [{ payload: { toolName: 'unknown', action: 'unknown', reason: null } }] })
+    await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 100 }, signal)
+    await executor.execute({ operation: 'approval.poll', command_id, wait_ms: 100 }, signal)
+    const frames: unknown[] = []
+    for (let attempt = 0; attempt < 5 && frames.length < 2; attempt++) {
+      const next = (await executor.execute({ operation: 'approval.poll', command_id,
+        cursor: 'client-1', wait_ms: 100 }, signal)) as { cursor: string; frames: unknown[] }
+      expect(next.cursor).toBe('client-1')
+      frames.push(...next.frames)
+    }
+    expect(frames).toMatchObject([
+      { payload: { type: 'approval/cancelled', approvalId: 'client-1:first', sessionId: 'session-1' } },
+      { payload: { type: 'approval/requested', toolName: 'unknown', action: 'unknown', reason: null } },
+    ])
     const response = { operation: 'approval.respond' as const, command_id, session_id: 'session-1',
       control: proof, outcome: 'rejected' as const }
     await expect(executor.execute({ ...response, approval_id: 'client-1:first' }, signal)).rejects.toThrow('unknown approval')
