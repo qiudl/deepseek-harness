@@ -151,6 +151,9 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
         theme: 'paper', accent: null, motion: 'normal', width: request.change.value,
         teamWorkspace: '/team' },
     })),
+    mutateLocalBotProviders: vi.fn(async () => ({
+      available: true, providers: [], addable: [], protocols: [],
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -362,6 +365,19 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(generalCommand)).json()).toEqual({ value: null })
   expect(botService.updateLocalBotGeneralSettings).toHaveBeenCalledOnce()
+  const providerRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'key-set', provider: 'deepseek-official', value: 'sk-fixture-only' }
+  const providerCommand = { operation: 'bot.providers.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: providerRequest }
+  expect(await (await postRemote(providerCommand)).json()).toEqual({ value: {
+    available: true, providers: [], addable: [], protocols: [],
+  } })
+  expect(botService.mutateLocalBotProviders).toHaveBeenCalledWith({
+    kind: 'key-set', provider: 'deepseek-official', value: 'sk-fixture-only',
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(providerCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotProviders).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
