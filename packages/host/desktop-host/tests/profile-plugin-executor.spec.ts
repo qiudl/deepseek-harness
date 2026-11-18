@@ -303,6 +303,20 @@ it('rejects malformed and oversized plugin inventory entries', async () => {
   }
 })
 
+it('REQ-20261118-0010 reports the installed package version and omits unproven ones', async () => {
+  const f = fixture()
+  writeFileSync(f.manifest, JSON.stringify({ dsh: { profile: { bundles: ['fixture', 'absent', 'invalid'] } } }), { mode: 0o600 })
+  mkdirSync(join(f.web, 'node_modules/fixture'), { recursive: true, mode: 0o700 })
+  writeFileSync(join(f.web, 'node_modules/fixture/package.json'), JSON.stringify({ version: '0.3.8-slark.1' }), { mode: 0o600 })
+  mkdirSync(join(f.web, 'node_modules/invalid'), { recursive: true, mode: 0o700 })
+  writeFileSync(join(f.web, 'node_modules/invalid/package.json'), JSON.stringify({ version: 'not a version' }), { mode: 0o600 })
+  const entries = await f.executor.inventory(f.authority())
+  // The installed package manifest is the only version source; a target version is never invented.
+  expect(entries.find(entry => entry.name === 'fixture')?.version).toBe('0.3.8-slark.1')
+  expect(entries.find(entry => entry.name === 'absent')?.version).toBeUndefined()
+  expect(entries.find(entry => entry.name === 'invalid')?.version).toBeUndefined()
+})
+
 it('enforces managed bundle uniqueness and required action capabilities', () => {
   const f = fixture()
   const action = (value: object) => JSON.stringify({ packageName: 'fixture', ...value })
