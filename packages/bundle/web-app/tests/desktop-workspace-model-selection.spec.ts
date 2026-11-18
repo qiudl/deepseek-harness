@@ -154,6 +154,9 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     mutateLocalBotProviders: vi.fn(async () => ({
       available: true, providers: [], addable: [], protocols: [],
     })),
+    mutateLocalBotConnectors: vi.fn(async () => ({ connectors: [{
+      id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false,
+    }] })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -378,6 +381,19 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(providerCommand)).json()).toEqual({ value: null })
   expect(botService.mutateLocalBotProviders).toHaveBeenCalledOnce()
+  const connectorRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'connect', id: 'github', token: 'ghp_fixture_only' }
+  const connectorCommand = { operation: 'bot.connectors.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: connectorRequest }
+  expect(await (await postRemote(connectorCommand)).json()).toEqual({ value: {
+    connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }],
+  } })
+  expect(botService.mutateLocalBotConnectors).toHaveBeenCalledWith({
+    kind: 'connect', id: 'github', token: 'ghp_fixture_only',
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(connectorCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotConnectors).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
