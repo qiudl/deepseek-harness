@@ -59,4 +59,39 @@ describe('native Bot profile edit', () => {
       { botId: 'main', state: 'stale', revision: 8, settings: {} }])
       expect(() => parseHostBotSettingsUpdateReceipt(value, parsed)).toThrow()
   })
+  it('accepts every remaining bounded profile field and rejects malformed values', () => {
+    for (const change of [
+      { kind: 'instructions', value: '' }, { kind: 'instructions', value: 'Be concise' },
+      { kind: 'color', value: '#A0b1C2' }, { kind: 'color', value: 'ocean-blue' },
+      { kind: 'color', value: null }, { kind: 'avatar-shape', value: 'circle' },
+      { kind: 'avatar-shape', value: null }, { kind: 'pinned', value: true },
+      { kind: 'hidden', value: false },
+    ]) expect(parseHostBotSettingsUpdateRequest({ ...request, change }).change).toEqual(change)
+    for (const change of [
+      { kind: 'instructions', value: ' padded ' },
+      { kind: 'color', value: 'bad/color' }, { kind: 'color', value: '#12345' },
+      { kind: 'avatar-shape', value: 'bad/shape' },
+      { kind: 'pinned', value: null }, { kind: 'hidden', value: 'yes' },
+      { kind: 'capability', value: { name: 'github', attached: true } },
+      { kind: 'capability', value: { name: 'helper', attached: 'yes' } },
+      { kind: 'unknown', value: 'x' },
+    ]) expect(() => parseHostBotSettingsUpdateRequest({ ...request, change }))
+      .toThrow('invalid_bot_settings_update')
+  })
+  it('rejects missing, corrupt, and revision-drifted plugin receipts', () => {
+    const parsed = parseHostBotSettingsUpdateRequest(request)
+    const settings = { botId: 'main', revision: 8, name: 'Main', role: 'Coordinator',
+      instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+      model: null, appliedModel: null, effort: null, workDir: null,
+      isMain: true, isPrimary: true, pinned: false, hidden: false, capabilityChoices: [] }
+    expect(parseHostBotSettingsUpdateReceipt(null, parsed)).toBeNull()
+    for (const value of [undefined, {}, { botId: 'main', state: 'applied', revision: 8, settings: null },
+      { botId: 'main', state: 'applied', revision: 8, settings: { ...settings, revision: 9 } },
+      { botId: 'main', state: 'applied', revision: 8, settings: { ...settings, token: 'private' } },
+      { botId: 'main', state: 'stale', revision: 6, settings: null },
+      { botId: 'main', state: 'stale', revision: 8.5, settings: null },
+      { botId: 'main', state: 'unknown', revision: 8, settings: null },
+      { botId: 'main', state: 'stale', revision: 8, settings: null, extra: true }])
+      expect(() => parseHostBotSettingsUpdateReceipt(value, parsed)).toThrow('invalid_bot_settings_update_receipt')
+  })
 })
