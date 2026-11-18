@@ -145,6 +145,12 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       ownerBotId: request.ownerBotId, createRequestId: request.createRequestId,
       state: 'created', botId: 'bot_new', revision: 11,
     })),
+    updateLocalBotGeneralSettings: vi.fn(async (request: { expectedRevision: number
+      change: { kind: string; value: number } }) => ({
+      state: 'applied', settings: { revision: request.expectedRevision + 1,
+        theme: 'paper', accent: null, motion: 'normal', width: request.change.value,
+        teamWorkspace: '/team' },
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -342,6 +348,20 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(createCommand)).json()).toEqual({ value: null })
   expect(botService.createLocalBot).toHaveBeenCalledOnce()
+  const generalRequest = { botId: 'bot_1', sessionId: target.session_id,
+    expectedRevision: 4, change: { kind: 'width', value: 50 } }
+  const generalCommand = { operation: 'bot.general.update', command_id: randomUUID(),
+    session_id: target.session_id, control, request: generalRequest }
+  const generalReceipt = { state: 'applied', settings: {
+    revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50, teamWorkspace: '/team',
+  } }
+  expect(await (await postRemote(generalCommand)).json()).toEqual({ value: generalReceipt })
+  expect(botService.updateLocalBotGeneralSettings).toHaveBeenCalledWith({
+    expectedRevision: 4, change: generalRequest.change,
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(generalCommand)).json()).toEqual({ value: null })
+  expect(botService.updateLocalBotGeneralSettings).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
