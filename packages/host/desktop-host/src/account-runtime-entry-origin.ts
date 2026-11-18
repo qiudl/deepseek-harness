@@ -306,18 +306,22 @@ export class AccountRuntimeEntryOrigin {
       entryReceiptDigest: runtimeEntryReceiptDigest(witness.receipt), manifestDigest: witness.receipt.manifestDigest })
     return { lease, witness, candidate, current: () => { current(); if (!original.isCurrent()) unavailable() } }
   }
-  /** Read historical entry through the actual current private Profile route, without waking its driver.
-   * @param entryId - Original entry identity.
-   * @param signal - Current authenticated request cancellation.
-   * @returns Fresh installation observation of a verified published source mapping.
-   */
-  async observe(entryId: string, signal: AbortSignal): Promise<RuntimeEntryObservation> {
+  private originalWitness(entryId: string, signal: AbortSignal) {
     signal.throwIfAborted()
     const lease = this.options.captureCurrentLease()
     lease.assertCurrent(); this.artifacts()
     ownedPath(this.options.profileRoot, this.options.entryJournalPath)
     const original = readRuntimeEntryWitness(this.options.entryJournalPath, entryId)
     if (original === undefined) unavailable()
+    return { lease, original }
+  }
+  /** Read historical entry through the actual current private Profile route, without waking its driver.
+   * @param entryId - Original entry identity.
+   * @param signal - Current authenticated request cancellation.
+   * @returns Fresh installation observation of a verified published source mapping.
+   */
+  async observe(entryId: string, signal: AbortSignal): Promise<RuntimeEntryObservation> {
+    const { lease, original } = this.originalWitness(entryId, signal)
     lease.assertCurrent()
     const captured = await this.capture(original.receipt.binding.consumerCommandId, entryId, signal)
     lease.assertCurrent()
@@ -366,12 +370,7 @@ export class AccountRuntimeEntryOrigin {
    * @returns Fresh installation observation containing the complete independently read original mapping.
    */
   async observeCandidate(entryId: string, signal: AbortSignal): Promise<RuntimeEntryObservation> {
-    signal.throwIfAborted()
-    const lease = this.options.captureCurrentLease()
-    lease.assertCurrent(); this.artifacts()
-    ownedPath(this.options.profileRoot, this.options.entryJournalPath)
-    const original = readRuntimeEntryWitness(this.options.entryJournalPath, entryId)
-    if (!original) unavailable()
+    const { lease, original } = this.originalWitness(entryId, signal)
     const captured = await this.capture(original.receipt.binding.consumerCommandId, entryId, signal)
     lease.assertCurrent()
     const first = this.mapping(captured.candidate, false)

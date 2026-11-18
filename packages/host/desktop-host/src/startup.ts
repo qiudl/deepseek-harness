@@ -1,9 +1,10 @@
-import { ProjectOperationMemoryNativeDatabase } from './project-operation-memory-native-database.ts'
+import { projectMemoryDatabaseLayout } from './project-operation-memory-layout.ts'
+
 import { assertRuntimeEntryOriginArtifacts } from './account-runtime-entry-origin.ts'
 import { parseHostRuntimeEntryOriginsJson } from '@deepseek-ai/dsh-host-control-protocol'
-import { ProjectOperationMemoryRecipientDatabase } from './project-operation-memory-recipient-database.ts'
+
 import { ProjectOperationMemoryDatabases } from './project-operation-memory-databases.ts'
-import { ProjectOperationMemoryDatabase } from './project-operation-memory-database.ts'
+
 import { ProjectOperationMemoryDatabaseFiles } from './project-operation-memory-database-files.ts'
 import { parseHostTaskCoordinationEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostProjectMemoryEnvironments } from '@deepseek-ai/dsh-host-control-protocol'
@@ -520,20 +521,12 @@ export async function startDesktopHostApplication(
       const profileRoot = join(root, 'profiles', profileId)
       ownerDirectory(profileRoot, uid)
       return ProjectOperationMemoryDatabaseFiles.posix({
-        root: join(profileRoot, role === 'source' ? 'project-operation-memory-sqlite-v1' : role === 'recipient'
-          ? 'project-operation-memory-recipient-sqlite-v1' : 'project-operation-memory-native-source-sqlite-v1'),
-        ...(role === 'recipient' ? { storePurpose: 'recipient_import' as const }
-          : role === 'native' ? { storePurpose: 'native_source_export' as const } : {}),
-        legacyRoots: role === 'source' ? [join(profileRoot, 'project-operation-memory'), join(profileRoot, 'project-operation-memory-source-exports')] : [],
+        ...projectMemoryDatabaseLayout(profileRoot, role, join),
         profileId, installationId: config.installationId, publicKey: config.installationPublicKey,
         uid, pid: process.pid, processNonce: config.processNonce,
       })
     }
-    const databases = new ProjectOperationMemoryDatabases(
-      async profileId => ProjectOperationMemoryDatabase.open(await memoryFiles(profileId, 'source')),
-      async profileId => ProjectOperationMemoryRecipientDatabase.open(await memoryFiles(profileId, 'recipient')),
-      async profileId => ProjectOperationMemoryNativeDatabase.open(await memoryFiles(profileId, 'native')),
-    )
+    const databases = ProjectOperationMemoryDatabases.forFiles(memoryFiles)
     memoryDatabases = databases
     const migrationRoot = join(root, 'migration')
     ownerDirectory(migrationRoot, uid)

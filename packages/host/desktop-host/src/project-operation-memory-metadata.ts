@@ -1,3 +1,4 @@
+import { readProjectMemoryPublished, retainProjectMemoryPublished } from './project-operation-memory-published.ts'
 import {
   parseHostProjectMemorySourceProof,
   hostProjectMemorySourceProofDigest,
@@ -326,16 +327,7 @@ export class ProjectOperationMemoryMetadata {
       const next = this.parsePublished(value),
         key = hostProjectMemorySourceProofDigest(next.proof)
       if (next.proof.issuedAt > now || next.proof.expiresAt <= now) return fail()
-      this.options.database.removeTransient('published', { expiredAt: now }, guard)
-      const old = this.publishedRead(key)
-      if (old && !same(old, next)) return conflict()
-      this.options.database.put(
-        'published',
-        key,
-        next,
-        { rows: 1, bytes: projectMemoryRecordBytes('published', key, next), expiresAt: next.proof.expiresAt },
-        guard,
-      )
+      retainProjectMemoryPublished(this.options.database, next, key, now, guard, digest => this.publishedRead(digest))
     })
   }
   /** Read only the exact original content-free signed page manifest.
@@ -343,11 +335,7 @@ export class ProjectOperationMemoryMetadata {
    * @returns Original before/target metadata, or absence.
    */
   publishedRead(proofDigest: string): Published | null {
-    const value = this.options.database.get('published', proofDigest)
-    if (value === null) return null
-    const result = this.parsePublished(value)
-    if (hostProjectMemorySourceProofDigest(result.proof) !== proofDigest) return fail()
-    return result
+    return readProjectMemoryPublished(this.options.database, proofDigest, value => this.parsePublished(value))
   }
   /** Remove a transient manifest inside the same transaction that retained its permanent original Ack.
    * @param proofDigest - Original source proof identity.

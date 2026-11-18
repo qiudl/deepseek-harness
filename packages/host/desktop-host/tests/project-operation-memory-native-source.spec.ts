@@ -1,5 +1,5 @@
 /** Real private stores and signatures; source-page inputs are controlled. No whole-chain or Right activation positive. */
-import { generateKeyPairSync, randomUUID, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -39,6 +39,7 @@ import {
   projectOperationMemoryEventsDigest,
 } from '../src/project-operation-memory-metadata.ts'
 import { memoryDatabaseFixture } from './project-operation-memory.test-support.ts'
+import { projectMemoryReceiptReservation } from '../src/project-operation-memory-signatures.ts'
 
 const data = JSON.parse(
   readFileSync(
@@ -302,6 +303,35 @@ describe.skipIf(process.platform === 'win32')('native source cut and original me
       cloudMaterialReceipt: receipt,
     })
     expect(f.source.committedCheckpoint(f.d, f.checkpoint('0')).sequence).toBe('1')
+  })
+  it('reserves native-format receipt growth for a nonempty reference-only page', async () => {
+    const f = await fixture()
+    f.capture()
+    const original = f.acknowledge()
+    const event = createHostProjectOperationEvent({
+      originSide: 'dsh', originActorRef: f.d.scope.sourceRef.actorRef,
+      sourceEventId: 'reference-event', sourceRevision: '2', sourceSequence: '1',
+      projectId: f.d.scope.projectId, occurredAt: 150, kind: 'operation',
+      taskRef: 'original-task', stepRef: null, invocationRef: 'original-invocation', evidenceRef: null,
+      sourcePolicy: 'live_reference_v1', sourceLocator: { providerId: 'dsh-project-operation-v1',
+        sourceEventId: 'reference-event', sourceRevision: '2', sourceDigest: 'a'.repeat(64) },
+      materialDependencies: [], content: null,
+    })
+    const selected = f.page([event]), before = f.database.usage().permanent
+    const ack = f.source.stage(f.d, selected.command, original, 2000, f.signer, () => {})
+    const key = createHash('sha256').update('dsh.project-operation-memory-native-delivery/v1\0' +
+      JSON.stringify([f.d.authorityEnvironmentId, f.d.ownerUserId, ack.deliveryId])).digest('hex')
+    const stored = f.database.get('delivery', key)
+    expect(stored).toMatchObject({ manifest: { policies: [{ sourcePolicy: 'live_reference_v1' }] }, cloudReceipt: null })
+    const reserved = projectMemoryReceiptReservation(f.d, ack, [event])
+    for (const disposition of reserved.dispositions) {
+      Object.assign(disposition, { rightId: '"'.repeat(256), rightGeneration: '9'.repeat(19) })
+    }
+    const expected = Buffer.byteLength(JSON.stringify(Object.assign({}, stored,
+      { cloudReceipt: reserved, activatedAt: Number.MAX_SAFE_INTEGER }))) + Buffer.byteLength(key) + 'delivery'.length + 128 + 320
+    // The delta also reserves the original signed frontier's fixed 4096-byte allocation.
+    expect(f.database.usage().permanent.charged_bytes - before.charged_bytes).toBe(expected + 4096)
+    expect(f.source.stage(f.d, selected.command, original, 2100, f.signer, () => {})).toEqual(ack)
   })
   it('rejects a caller-selected native Event before publication without the actual qualification pin', async () => {
     const f = await fixture()
