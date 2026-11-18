@@ -174,7 +174,7 @@ function fixture(options: { packageManager?: boolean } = {}): { config: Config; 
       registrationRoot: join(root, 'registration'),
       nodeExecutablePath: artifact,
       dshEntrypointPath: artifact,
-      pnpmEntrypointPath: options.packageManager === false ? undefined : artifact,
+      ...(options.packageManager === false ? {} : { pnpmEntrypointPath: artifact }),
       bundledPluginsRoot,
       deviceIndexKeyPath: deviceKey,
       accountKeyringPath,
