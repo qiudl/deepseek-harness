@@ -125,6 +125,16 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     deleteLocalBot: vi.fn(async (request: { botId: string; expectedRevision: number }) => ({
       botId: request.botId, state: 'deleted', revision: request.expectedRevision + 1,
     })),
+    duplicateLocalBot: vi.fn(async (request: { sourceBotId: string
+      copyRequestId: string
+      expectedRevision: number }) => ({
+      sourceBotId: request.sourceBotId, copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'bot_copy', revision: request.expectedRevision + 1,
+    })),
+    readLocalBotDuplicate: vi.fn(async (request: { sourceBotId: string; copyRequestId: string }) => ({
+      sourceBotId: request.sourceBotId, copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'bot_copy', revision: 10,
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -287,6 +297,22 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'deleteLocalBot')
   expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { deleteLocalBot: deleteWriter })
+  const copyRequest = { sourceBotId: 'bot_1', sessionId: target.session_id,
+    copyRequestId: randomUUID(), expectedRevision: 9, mode: 'create' }
+  const copyCommand = { operation: 'bot.duplicate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: copyRequest }
+  const copyReceipt = { sourceBotId: 'bot_1', copyRequestId: copyRequest.copyRequestId,
+    state: 'created', botId: 'bot_copy', revision: 10 }
+  expect(await (await postRemote(copyCommand)).json()).toEqual({ value: copyReceipt })
+  expect(botService.duplicateLocalBot).toHaveBeenCalledWith({ sourceBotId: 'bot_1',
+    copyRequestId: copyRequest.copyRequestId, expectedRevision: 9 }, expect.any(AbortSignal))
+  expect(await (await postRemote({ ...copyCommand, request: { ...copyRequest, mode: 'status' } })).json())
+    .toEqual({ value: copyReceipt })
+  expect(botService.readLocalBotDuplicate).toHaveBeenCalledWith({ sourceBotId: 'bot_1',
+    copyRequestId: copyRequest.copyRequestId }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(copyCommand)).json()).toEqual({ value: null })
+  expect(botService.duplicateLocalBot).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
