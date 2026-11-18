@@ -22,6 +22,39 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 }
 
 describe('Desktop remote UI read-only bridge', () => {
+  it('rejects unavailable Bot readers without using the generic gateway', async () => {
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    const attachmentId = `sha256:${'a'.repeat(64)}`
+    const source = { botId: 'main', sessionId: 'own-main', eventSeq: 7, attachmentId }
+    const cases = [
+      ['bot/chat', { botId: null }],
+      ['bot/rooms', { afterRoomId: '', limit: 1 }],
+      ['bot/room-history', { roomId: 'room-1', afterSeq: 0, limit: 1 }],
+      ['bot/room-details', { roomId: 'room-1' }],
+      ['bot/settings', { botId: 'main' }],
+      ['bot/memory', { botId: 'main', cursor: null, limit: 20, summarize: true }],
+      ['bot/room-memory', { roomId: 'room-1', cursor: null, limit: 12, summarize: true }],
+      ['bot/schedules', { cursor: null, limit: 20 }],
+      ['bot/schedule-history', { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }],
+      ['bot/about', { fresh: true }],
+      ['bot/usage', { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 20 }],
+      ['bot/general', {}],
+      ['bot/providers', {}],
+      ['bot/connectors', {}],
+      ['bot/feedback', {}],
+      ['bot/folders', { botId: 'main', path: null }],
+      ['bot/avatar', { botId: 'main', offset: 0 }],
+      ['bot/attachment-preview', { ...source, offset: 0 }],
+      ['bot/attachment-download-open', source],
+      ['bot/attachment-download-read', { transferId: '11111111-1111-4111-8111-111111111111', offset: 0 }],
+    ] as const
+    for (const [endpoint, args] of cases) {
+      await expect(executor.execute(endpoint, { args }, signal)).rejects.toThrow('unavailable')
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
   it('reads only an existing Bot own-chat selection and never invokes the generic gateway', async () => {
     const invoke = vi.fn(), read = vi.fn(async () => ({ revision: 4, defaultBotId: 'z',
       bot: { botId: 'z', actorRef: 'deepseek-bot:z', displayName: 'Main Bot', sessionId: 'current-part' } }))
