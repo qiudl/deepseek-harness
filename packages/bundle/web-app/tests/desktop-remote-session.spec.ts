@@ -59,9 +59,18 @@ describe('Desktop remote Session bridge', () => {
       expect(mutate).toHaveBeenCalledWith(request, signal)
       mutate.mockResolvedValueOnce({ ...result, privateDetail: 'host path' })
       await expect(executor.execute(command as HostRemoteSessionCommand, signal)).rejects.toThrow()
+      const cancelled = new AbortController()
+      mutate.mockImplementationOnce(async (): Promise<unknown> => { cancelled.abort(); return result })
+      await expect(executor.execute(command as HostRemoteSessionCommand, cancelled.signal)).rejects.toThrow()
       await expect(executor.execute({ ...command, session_id: 'other',
         control: remoteProof(control, 'other') } as HostRemoteSessionCommand, signal))
         .rejects.toThrow('Session mismatch')
+    }
+    const unsupported = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control)
+    for (const { operation, request } of commands) {
+      await expect(unsupported.execute({ operation, command_id: randomUUID() as never,
+        session_id: 'chat-1', control: proof, request } as HostRemoteSessionCommand, signal))
+        .resolves.toBeNull()
     }
     expect(invoke).not.toHaveBeenCalled()
   })
