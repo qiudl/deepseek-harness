@@ -5,6 +5,7 @@ import {
   parseHostProjectMemoryJson,
   parseHostRemoteSessionJson,
   parseHostCollaborationAnalysisCommand,
+  parseHostCollaborationAnalysisResult,
   createHostProjectOperationEvent,
   parseHostProjectMemoryRequest,
   hostProjectMemoryBatchDigest,
@@ -74,6 +75,15 @@ it('admits the actual nested confirmation envelope and fifty bounded reference e
     request,
   })
   expect(() => parseHostRemoteSessionJson(request)).toThrow()
+})
+
+it('keeps project memory errors closed at the collaboration result boundary', () => {
+  const record = { status: 'error', code: 'capability_unavailable',
+    requestId: '11111111-1111-4111-8111-111111111111', retryable: true }
+  expect(parseHostCollaborationAnalysisResult({ kind: 'project_operation_memory', record }))
+    .toEqual({ kind: 'project_operation_memory', record })
+  expect(() => parseHostCollaborationAnalysisResult({ kind: 'project_operation_memory',
+    record: { ...record, privateDetail: 'internal host path' } })).toThrow()
 })
 
 it('rejects unsafe values and property access without executing getters', () => {
