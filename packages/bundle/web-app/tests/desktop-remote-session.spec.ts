@@ -25,6 +25,45 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('keeps sensitive Bot writes on their controlled readers and rejects private results', async () => {
+    const control = new DesktopSessionControl()
+    const proof = remoteProof(control, 'chat-1')
+    const invoke = vi.fn()
+    const feedback = { total: 0, entries: [], markdown: '', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }
+    const secrets = { entries: [], nextCursor: null }
+    const capabilities = { revision: 4, entries: [], nextCursor: null }
+    const clearFeedback = vi.fn(async (): Promise<unknown> => feedback)
+    const mutateSecrets = vi.fn(async (): Promise<unknown> => secrets)
+    const mutateCapabilities = vi.fn(async (): Promise<unknown> => capabilities)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke }), undefined, control,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, clearFeedback, mutateSecrets, mutateCapabilities)
+    const commands = [
+      { operation: 'bot.feedback.clear', request: { botId: 'main', sessionId: 'chat-1' },
+        result: feedback, mutate: clearFeedback },
+      { operation: 'bot.secrets.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'set', name: 'API_KEY', value: 'synthetic-value', purpose: null, scope: 'all' },
+      result: secrets, mutate: mutateSecrets },
+      { operation: 'bot.capability-library.mutate', request: { botId: 'main', sessionId: 'chat-1',
+        kind: 'save', expectedRevision: 4, name: null,
+        item: { name: 'research-tool', kind: 'skill', description: '', content: 'Instructions' } },
+      result: capabilities, mutate: mutateCapabilities },
+    ] as const
+    const signal = new AbortController().signal
+    for (const { operation, request, result, mutate } of commands) {
+      const command = { operation, command_id: randomUUID() as never,
+        session_id: 'chat-1', control: proof, request }
+      await expect(executor.execute(command, signal)).resolves.toEqual(result)
+      expect(mutate).toHaveBeenCalledWith(request, signal)
+      mutate.mockResolvedValueOnce({ ...result, privateDetail: 'host path' })
+      await expect(executor.execute(command, signal)).rejects.toThrow()
+      await expect(executor.execute({ ...command, session_id: 'other',
+        control: remoteProof(control, 'other') }, signal)).rejects.toThrow('Session mismatch')
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
   it('edits model provider credentials only under the controlled Bot Session', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')
