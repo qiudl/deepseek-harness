@@ -122,6 +122,9 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
         model: null, appliedModel: null, effort: null, workDir: null, isMain: true,
         isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] },
     })),
+    deleteLocalBot: vi.fn(async (request: { botId: string; expectedRevision: number }) => ({
+      botId: request.botId, state: 'deleted', revision: request.expectedRevision + 1,
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -269,6 +272,21 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'updateLocalBotSettings')
   expect(await (await postRemote(settingsCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { updateLocalBotSettings: settingsWriter })
+  const deleteRequest = { botId: 'bot_1', sessionId: target.session_id, expectedRevision: 8 }
+  const deleteCommand = { operation: 'bot.delete', command_id: randomUUID(),
+    session_id: target.session_id, control, request: deleteRequest }
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: {
+    botId: 'bot_1', state: 'deleted', revision: 9,
+  } })
+  expect(botService.deleteLocalBot).toHaveBeenCalledWith({ botId: 'bot_1', expectedRevision: 8 },
+    expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: null })
+  expect(botService.deleteLocalBot).toHaveBeenCalledOnce()
+  const deleteWriter = botService.deleteLocalBot
+  Reflect.deleteProperty(botService, 'deleteLocalBot')
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { deleteLocalBot: deleteWriter })
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
