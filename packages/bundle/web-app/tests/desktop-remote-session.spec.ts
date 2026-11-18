@@ -164,7 +164,9 @@ describe('Desktop remote Session bridge', () => {
     const request = { mode: 'ask' as const, ownerBotId: 'main', sessionId: 'chat-1',
       requestId: randomUUID(), targetKind: 'bot' as const, targetId: 'main', text: 'Remember tea' }
     const result = { requestId: request.requestId, operation: 'ask', targetKind: 'bot',
-      targetId: 'main', state: 'applied', reply: 'Done', changes: [], truncated: false }
+      targetId: 'main', state: 'applied', reply: 'Done', truncated: false,
+      changes: [{ op: 'add', scope: 'own', text: 'Prefers tea', before: null,
+        ok: true, error: null }] }
     const mutate = vi.fn(async (): Promise<unknown> => result)
     const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
       undefined, control, undefined, undefined, undefined, undefined, undefined,
@@ -311,7 +313,8 @@ describe('Desktop remote Session bridge', () => {
       members: ['main', 'design'], name: 'Planning', notice: 'Review',
       replyMode: 'admin' as const, adminBotId: 'main' }
     const details = { roomId: 'room-1', revision: 8, displayName: 'Planning', notice: 'Review',
-      replyMode: 'admin', relayLimit: null, permissionPreset: null, permissionChoices: null,
+      replyMode: 'admin', relayLimit: null, permissionPreset: 'admin',
+      permissionChoices: { options: [{ value: 'admin', name: 'Admin only' }], defaultPreset: 'admin' },
       adminBotId: 'main', members: [{ botId: 'main', displayName: 'Main' },
         { botId: 'design', displayName: 'Design' }] }
     const createResult = { state: 'created', revision: 8, details }
@@ -370,6 +373,8 @@ describe('Desktop remote Session bridge', () => {
     const receipt = { operation: 'bot.room.receipt' as const, command_id: randomUUID() as never, request }
     const signal = new AbortController().signal
     await expect(executor.execute(send, signal)).resolves.toEqual(result)
+    await expect(executor.execute({ ...send, session_id: 'other',
+      control: remoteProof(control, 'other') }, signal)).rejects.toThrow('Session mismatch')
     await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
     expect(botRoom).toHaveBeenCalledTimes(2)
     expect(invoke).not.toHaveBeenCalled()
@@ -450,6 +455,8 @@ describe('Desktop remote Session bridge', () => {
     await expect(executor.execute(send, signal)).resolves.toEqual(result)
     await expect(executor.execute({ ...send, control: { ...proof, epoch: proof.epoch + 1 } }, signal)).rejects.toThrow()
     await expect(executor.execute({ ...send, session_id: 'other' }, signal)).rejects.toThrow()
+    await expect(executor.execute({ ...send, session_id: 'other',
+      control: remoteProof(control, 'other') }, signal)).rejects.toThrow('Session mismatch')
     await expect(executor.execute(receipt, signal)).resolves.toEqual(result)
     expect(botAttachment).toHaveBeenCalledTimes(2)
     expect(botAttachment).toHaveBeenNthCalledWith(1, 'bot.attachment.send', request, signal)
