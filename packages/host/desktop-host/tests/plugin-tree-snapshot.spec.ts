@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished } from 'vitest'
-import { capturePluginTree, findInterruptedPluginTree, restorePluginTree, returnInterruptedPluginTree } from '../src/plugin-tree-snapshot.ts'
+import { capturePluginTree, findInterruptedPluginTree, restorePluginTree, returnInterruptedPluginTree, materializePrivateTreeSnapshot } from '../src/plugin-tree-snapshot.ts'
 
 function fixture() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'plugin-tree-')))
@@ -178,4 +178,20 @@ it('rejects invalid restore destinations and ownership before changing files', (
   onTestFinished(() => { rmSync(base, { recursive: true, force: true }) })
   const target = join(base, 'node_modules', 'ds-bot'); mkdirSync(target, { recursive: true, mode: 0o700 })
   expect(() => { restorePluginTree(target, randomUUID(), saved.bytes, saved.digest, saved.digest, uid + 1, () => {}) }).toThrow('unsafe_plugin_tree')
+})
+
+
+it('refuses unsafe materialization parents and detects candidate writes before verification', () => {
+  const source = fixture(), snapshot = capturePluginTree(source, process.getuid!())
+  const parent = fixture(), candidate = join(parent, 'candidate')
+  expect(() =>{  materializePrivateTreeSnapshot('../relative', snapshot.bytes, snapshot.digest, process.getuid!(), () => {}) })
+    .toThrow('unsafe_snapshot_target')
+  chmodSync(parent, 0o755)
+  expect(() =>{  materializePrivateTreeSnapshot(candidate, snapshot.bytes, snapshot.digest, process.getuid!(), () => {}) })
+    .toThrow('unsafe_snapshot_target')
+  chmodSync(parent, 0o700)
+  expect(() =>{  materializePrivateTreeSnapshot(candidate, snapshot.bytes, snapshot.digest, process.getuid!(), () => {
+    if (existsSync(join(candidate, 'nested/file'))) writeFileSync(join(candidate, 'client.js'), 'changed after copy')
+  }) }).toThrow('snapshot_materialization_failed')
+  expect(readFileSync(join(source, 'client.js'), 'utf8')).toBe('local content')
 })

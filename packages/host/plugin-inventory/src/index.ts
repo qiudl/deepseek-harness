@@ -86,6 +86,12 @@ export async function readPluginInventory(ctx: Context): Promise<PluginInventory
     if (entry.options.group) continue
     const base = entry.parent.tree.ctx.baseUrl
     const meta = base === undefined ? undefined : packages?.metaOf(entry.options.name, base)
+    let packageVersion: string | undefined
+    try {
+      const version = base === undefined ? undefined : packages?.packageOf(entry.options.name, base)?.version
+      if (typeof version === 'string' && version.length <= 64
+        && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.test(version)) packageVersion = version
+    } catch { /* Broken package metadata remains unknown; it must not hide the management inventory. */ }
     const fiber = entry.fiber
     const fiberPhase = fiber === undefined ? null : FIBER_PHASE[fiber.state]
     let diagnostic: string | undefined
@@ -95,6 +101,7 @@ export async function readPluginInventory(ctx: Context): Promise<PluginInventory
     entries.push({
       entryId: pluginEntryId(entry.id),
       moduleName: entry.options.name,
+      ...packageVersion === undefined ? {} : { packageVersion },
       enabled: !entry.disabled,
       fiberPhase,
       ...diagnostic === undefined ? {} : { diagnostic },

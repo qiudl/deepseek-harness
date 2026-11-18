@@ -70,7 +70,7 @@ describe('PluginInventoryGateway', () => {
     const { dir, baseUrl, resolution, expectUnlinked } = metadataFixture(mode)
     mkdirSync(join(dir, 'locale'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({
-      name: 'local-plugin', exports: { './feature': './index.js', './feature/locale/*.json': './locale/*.json' },
+      name: 'local-plugin', version: '0.3.8-slark.1', exports: { './feature': './index.js', './feature/locale/*.json': './locale/*.json' },
     }))
     writeFileSync(join(dir, 'index.js'), 'throw new Error("metadata must not execute the plugin")\n')
     writeFileSync(join(dir, 'locale', 'en.json'), '{"meta":{"title":"Local plugin","description":"Local description"}}')
@@ -82,7 +82,7 @@ describe('PluginInventoryGateway', () => {
     await ctx.plugin(PluginPackages, mode === 'runtime' ? { resolution } : {})
     await ctx.loader.create({ name: 'local-plugin/feature', disabled: true })
     expect((await inventory.list()).entries).toMatchObject([{
-      enabled: false, fiberPhase: null, meta: { title: { en: 'Local plugin' }, description: { en: 'Local description' } },
+      enabled: false, fiberPhase: null, packageVersion: '0.3.8-slark.1', meta: { title: { en: 'Local plugin' }, description: { en: 'Local description' } },
     }])
     if (mode === 'runtime') {
       expectUnlinked()

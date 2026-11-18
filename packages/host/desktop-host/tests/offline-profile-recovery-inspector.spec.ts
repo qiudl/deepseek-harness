@@ -208,6 +208,8 @@ it('plans preservation from the verified target archive before changing the Prof
   ]
   const before = await readFile(join(value.web, 'package.json'), 'utf8')
   const result = await prepareBundledPluginUpgrade(value.catalog, plugin, layers, '[]\n', [])
+  await expect(prepareBundledPluginUpgrade(value.catalog, plugin, layers, '[]\n', [], 'ds-bot-settings-seat-v1'))
+    .rejects.toThrow('invalid_patch')
   expect(result.patch).toContain('searchProvider: auto')
   const nextLayers = layers.map(layer => layer.packageName === plugin.name ? { ...layer, patches: result.patches } : layer)
   const parsedPatch = parseDocument(result.patch).toJSON() as Parameters<typeof pluginBundleEntries>[1]

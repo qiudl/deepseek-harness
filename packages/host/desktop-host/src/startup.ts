@@ -17,9 +17,9 @@ import {
   constants, closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, writeSync,
 } from 'node:fs'
 import { existsSync } from 'node:fs'
-import { loadProfileDirectory, loadOverlayPatches, type ProfileLayer } from '@deepseek-ai/dsh-app-boot'
+import { composeEntries, loadProfileDirectory, loadOverlayPatches, type ProfileLayer } from '@deepseek-ai/dsh-app-boot'
 import { homedir } from 'node:os'
-import { isAbsolute, join, win32 } from 'node:path'
+import { isAbsolute, join, relative, sep, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 export { loadWindowsLocalProfileStorage, loadWindowsLegacySourceProbe } from './windows-local-profile-storage-native.ts'
 import type { Context } from '@deepseek-ai/cordis'
@@ -51,6 +51,7 @@ import { prepareBundledPluginUpgrade } from './plugin-upgrade-plan.ts'
 import { parseDocument } from 'yaml'
 import { capturePluginTree } from './plugin-tree-snapshot.ts'
 import { waitForPluginRuntime } from './plugin-runtime-ack.ts'
+import { readExtensionStateFile } from './posix-extension-files.ts'
 import { ProfileExtensionExecutor } from './profile-extension-executor.ts'
 import { readProfileSkillCatalog, readProfileSkillRuntime } from './skill-worker-client.ts'
 import { reloadProfileMcpRuntime } from './mcp-runtime-ack.ts'
@@ -84,7 +85,10 @@ import {
   type UnixHostServerOptions,
   type UnixPeerAttestor,
 } from './unix-transport.ts'
-import { ProfileWorkerSupervisor, collaborationWorkerReaders } from './worker-supervisor.ts'
+import { ProfileWorkerSupervisor, collaborationWorkerReaders, type ProfileWorkerMaintenancePermit } from './worker-supervisor.ts'
+import { BotProfileUpgrades } from './slark-bot-profile-upgrades.ts'
+import { BotUpgradePolicies } from './slark-bot-upgrade-policy.ts'
+import { ProfileUpgradeJournal } from './profile-upgrade-journal.ts'
 import {
   startWindowsDesktopHostApplicationFromPrivateFiles,
   type WindowsDesktopHostApplication,
@@ -551,7 +555,9 @@ export async function startDesktopHostApplication(
       targets.set(profileId, target)
       return target
     }
-    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+    const materializeWorker = async (profile: PersonProfileRecord, claimRestart: boolean,
+      guard: () => void, permit?: ProfileWorkerMaintenancePermit): Promise<void> => {
+      guard()
       const profilesRoot = join(root, 'profiles')
       ownerDirectory(profilesRoot, uid)
       const profileRoot = join(profilesRoot, profile.profileId)
@@ -562,13 +568,16 @@ export async function startDesktopHostApplication(
       } else claimWorkerGate.assertOpen(profile.profileId)
       const target = targetFor(profile.profileId)
       const persistence = await target.activePersistenceConfig()
+      guard()
       let ownerState: MigrationOwnerStateBundle
       try {
         ownerState = await target.activeOwnerState()
+        guard()
       } catch (error) {
         /* v8 ignore next -- non-ENOENT persistence faults are injected and verified by the generation target's owning tests. */
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
         try {
+          guard()
           await target.importOwnerState(persistence.generation, EMPTY_OWNER_STATE)
         } catch (publishError) {
           /* v8 ignore next -- only a concurrent first-owner publication can enter this EEXIST recovery race. */
@@ -577,13 +586,26 @@ export async function startDesktopHostApplication(
         ownerState = await target.activeOwnerState()
       }
       const ownerPaths = await ownerStateApplicator.apply(profileRoot, persistence.generation, ownerState)
+      guard()
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
-      await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+      const input = {
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
         pluginRoots: [join(profileRoot, 'plugins')],
-      }),
+      }
+      if (permit) { await permit.ensure(input); guard(); return }
+      await claimWorkerGate.start(profile.profileId, () => workers.ensure(input),
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
-      () => workers.dispose(profile.profileId), claimRestart)
+        () => workers.dispose(profile.profileId), claimRestart)
+    }
+    const ensureWorker = async (profile: PersonProfileRecord, claimRestart = false): Promise<void> => {
+      workers.assertProfileAvailable(profile.profileId)
+      // Existing Account/Local unlock verifies ownership before this callback, independently of a worker/view lease.
+      await botUpgrades.recover(profile.profileId)
+      await workers.withProfileAdmission(profile.profileId, async (guard) => {
+        await botUpgrades.assertCompatible(profile.profileId)
+        guard()
+        await materializeWorker(profile, claimRestart, guard)
+      })
     }
     const currentRuntimeAppRoot = packagedRuntimeAppRoot(config.dshEntrypointPath)
     const bundledCatalog = BundledPluginCatalog.tryLoad(config.bundledPluginsRoot, uid)
@@ -596,37 +618,47 @@ export async function startDesktopHostApplication(
       targetFor,
       ownerStateApplicator,
     })
-    const inspectOfflineAccountProfile = (
+    const inspectOfflineAccountProfile = async (
       profile: PersonProfileRecord,
       expected: { readonly runtimeGeneration: number; readonly schemaGeneration: number },
-    ) => recoveryInspector.inspect(profile, expected)
+    ) => {
+      await botUpgrades.recover(profile.profileId)
+      await botUpgrades.assertCompatible(profile.profileId)
+      return recoveryInspector.inspect(profile, expected)
+    }
     const ensureRecoveredProfileWorker = async (
       profile: PersonProfileRecord,
       preflight: Awaited<ReturnType<typeof inspectOfflineAccountProfile>>,
     ): Promise<void> => {
-      claimWorkerGate.assertOpen(profile.profileId)
-      await recoveryInspector.prepareConfirmedProfile(profile, preflight)
-      try {
-        await claimWorkerGate.start(profile.profileId, () => workers.ensure({
-          profileId: profile.profileId,
-          profileRoot: join(root, 'profiles', profile.profileId),
-          credentialHandle: profile.keyHandle,
-          pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
-        }),
-        /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
-        () => workers.dispose(profile.profileId))
-        // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
-        // Reinspect and pin those generated links into the Profile-owned content-addressed closure
-        // before returning an offline grant, so replacing the App cannot break the next launch.
-        const stabilized = await recoveryInspector.inspect(profile, {
-          runtimeGeneration: config.runtimeGeneration,
-          schemaGeneration: config.schemaGeneration,
-        })
-        await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
-      } catch (error) {
-        await workers.dispose(profile.profileId).catch(() => undefined)
-        throw error
-      }
+      await workers.withProfileAdmission(profile.profileId, async (guard) => {
+        guard()
+        claimWorkerGate.assertOpen(profile.profileId)
+        await recoveryInspector.prepareConfirmedProfile(profile, preflight)
+        guard()
+        try {
+          await claimWorkerGate.start(profile.profileId, () => workers.ensure({
+            profileId: profile.profileId,
+            profileRoot: join(root, 'profiles', profile.profileId),
+            credentialHandle: profile.keyHandle,
+            pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
+          }),
+          /* v8 ignore next -- the claim gate's startup-race test covers disposal; offline recovery needs packaged artifacts. */
+          () => workers.dispose(profile.profileId))
+          // `dsh --profile web` may refresh pnpm links to the packaged App while booting.
+          // Reinspect and pin those generated links into the Profile-owned content-addressed closure
+          // before returning an offline grant, so replacing the App cannot break the next launch.
+          const stabilized = await recoveryInspector.inspect(profile, {
+            runtimeGeneration: config.runtimeGeneration,
+            schemaGeneration: config.schemaGeneration,
+          })
+          guard()
+          await recoveryInspector.prepareConfirmedProfile(profile, stabilized)
+          guard()
+        } catch (error) {
+          await workers.dispose(profile.profileId).catch(() => undefined)
+          throw error
+        }
+      })
     }
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: config.runtimeGeneration,
@@ -678,6 +710,37 @@ export async function startDesktopHostApplication(
       },
     })
     const pnpmEntrypointPath = config.pnpmEntrypointPath
+    const extensionReceipts = new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid)
+    let botPolicies: BotUpgradePolicies | undefined
+    if (bundledCatalog && config.bundledPluginsRoot) {
+      try { botPolicies = BotUpgradePolicies.load(config.bundledPluginsRoot, uid, bundledCatalog) }
+      catch (_error) { /* Missing/damaged declarations disable governed upgrades with an actionable policy-unavailable result. */ }
+    }
+    const botUpgrades: BotProfileUpgrades = new BotProfileUpgrades({
+      uid, journal: new ProfileUpgradeJournal(join(root, 'control', 'profile-upgrades'), uid),
+      ...(bundledCatalog ? { catalog: bundledCatalog } : {}), ...(botPolicies ? { policies: botPolicies } : {}),
+      installationId: config.installationId, profile: profileId => requiredProfile(registry, profileId),
+      profileRoot: profileId => join(root, 'profiles', requiredProfile(registry, profileId).profileId),
+      home: (profileId) => {
+        const profileRoot = join(root, 'profiles', requiredProfile(registry, profileId).profileId)
+        const loaded = loadProfileDirectory('dsh', join(profileRoot, 'profiles/web'), config.dshEntrypointPath)
+        const patch = join(profileRoot, 'cordis.patch.yml')
+        const entries = composeEntries([...loaded.layers.map(layer => layer.patches), loaded.patches,
+          ...(existsSync(patch) ? [loadOverlayPatches('dsh', patch)] : [])])
+        const bot = entries.find(entry => entry.id === 'bot')
+        if (!bot || bot.config === undefined) return 'bot'
+        if (!bot.config || typeof bot.config !== 'object' || Array.isArray(bot.config)) return undefined
+        const home = (bot.config as Record<string, unknown>).home
+        if (home === undefined) return 'bot'
+        return typeof home === 'string' && isAbsolute(home) ? relative(profileRoot, home).split(sep).join('/') : undefined
+      },
+      target: targetFor, workers, receipts: extensionReceipts,
+      materialize: (profile, permit) => materializeWorker(profile, false, () => { permit.assertCurrent() }, permit),
+      recoverPackage: (profileId, evidence, context, participant) => {
+        if (!pluginExecutor) throw Error('upgrade_required')
+        return pluginExecutor.recoverDataUpgrade(profileId, evidence, context, participant)
+      },
+    })
     const verifyRollbackSnapshot = async (profileRoot: string, upgrade: import('./plugin-package-recovery.ts').PluginUpgradeRecovery,
       context: Parameters<ProfilePluginExecutor['execute']>[2], retained?: string) => {
       const requested = parseBundledPluginSpec(upgrade.rollbackSpec)
@@ -692,8 +755,8 @@ export async function startDesktopHostApplication(
       await verify(); context.guard(); context.signal.throwIfAborted()
       return digest
     }
-    const pluginExecutor = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
-      uid,
+    const pluginExecutor: ProfilePluginExecutor | undefined = pnpmEntrypointPath === undefined ? undefined : new ProfilePluginExecutor({
+      uid, dataUpgrade: botUpgrades,
       inspectScripts: (packageName, spec) => inspectPluginScripts({ packageName, spec }),
       togglePlan: (profileId, packageName, enabled, patch) => {
         requiredProfile(registry, profileId)
@@ -736,7 +799,8 @@ export async function startDesktopHostApplication(
       ...(bundledCatalog === undefined ? {} : {
         upgradePlan: async (profileId: string, packageName: string, spec: string, patch: string, originalDependency: string) => {
           const requested = parseBundledPluginSpec(spec)
-          if (packageName !== 'ds-bot' || requested?.name !== packageName || requested.version !== '0.2.16') throw Error('upgrade_required')
+          const policy = botPolicies?.target(spec)
+          if (packageName !== 'ds-bot' || requested?.name !== packageName || !policy) throw Error('profile_upgrade_policy_unavailable')
           const plugin = bundledCatalog.get(requested.name, requested.version)
           if (!plugin) throw Error('bundled_plugin_unavailable')
           requiredProfile(registry, profileId)
@@ -746,15 +810,17 @@ export async function startDesktopHostApplication(
           if (loaded.skippedBundles.length) throw Error('plugin_bundle_missing')
           const homePatch = join(profileRoot, 'cordis.patch.yml')
           const overrides = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []
-          pluginBundleEntries(loaded.layers, [...loaded.patches, ...overrides], packageName)
-          const rollback = await verifyProfileRollbackArchive(webRoot, originalDependency, packageName, uid)
+          const sharedDisabled = new Set(['ui-settings-general'])
+          pluginBundleEntries(loaded.layers, [...loaded.patches, ...overrides], packageName, sharedDisabled)
+          const rollback = await verifyProfileRollbackArchive(webRoot, originalDependency, packageName, uid, true)
+          if (!botPolicies?.allows(policy, rollback.spec, rollback.digest)) throw Error('profile_upgrade_source_unsupported')
           capturePluginTree(join(webRoot, 'node_modules', packageName), uid)
-          const plan = await prepareBundledPluginUpgrade(bundledCatalog, plugin, loaded.layers, patch, overrides)
+          const plan = await prepareBundledPluginUpgrade(bundledCatalog, plugin, loaded.layers, patch, overrides, 'ds-bot-settings-seat-v1')
           const document = parseDocument(plan.patch)
           if (document.errors.length || document.warnings.length) throw Error('invalid_patch')
           const local = document.toJSON() as ProfileLayer['patches']
           const layers = loaded.layers.map(layer => layer.packageName === packageName ? { ...layer, patches: plan.patches } : layer)
-          const actual = pluginBundleEntries(layers, [...local, ...overrides], packageName).map(row => row.entryId.slice('include:'.length)).sort()
+          const actual = pluginBundleEntries(layers, [...local, ...overrides], packageName, sharedDisabled).map(row => row.entryId.slice('include:'.length)).sort()
           if (JSON.stringify(actual) !== JSON.stringify([...plugin.entryIds].sort())) throw Error('plugin_entry_conflict')
           return { patch: plan.patch, rollback }
         },
@@ -817,7 +883,7 @@ export async function startDesktopHostApplication(
           ...(context.buildApproval ? { allowBuild: context.buildApproval.buildKey } : {}),
         })
       },
-      acknowledge: async (profileId, packageName, context) => {
+      acknowledge: async (profileId, packageName, context, participant) => {
         context.guard(); context.signal.throwIfAborted()
         const profile = requiredProfile(registry, profileId)
         const profileRoot = join(root, 'profiles', profileId)
@@ -825,17 +891,39 @@ export async function startDesktopHostApplication(
         const homePatch = join(profileRoot, 'cordis.patch.yml')
         /* v8 ignore next -- ensureWorker materializes homePatch before plugin acknowledgement. */
         const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
-        const expected = pluginBundleEntries(loaded.layers, overrides, packageName)
-        await workers.dispose(profileId)
+        const webRoot = join(profileRoot, 'profiles/web')
+        const manifest = JSON.parse(readExtensionStateFile(join(webRoot, 'package.json'), uid, 16_777_216, 'unsafe_plugin_state') ?? 'null') as { dependencies?: Record<string, unknown> } | null
+        const dependency = manifest?.dependencies?.[packageName]
+        let packageVersion: string | undefined
+        const verifyInstalledPackage = async (): Promise<void> => {
+          if (typeof dependency !== 'string' || !/^file:\.bundled-plugins\/[0-9a-f]{64}\.tgz$/u.test(dependency)) return
+          const verified = await verifyProfileRollbackArchive(webRoot, dependency, packageName, uid, true)
+          const identity = parseBundledPluginSpec(verified.spec)
+          if (!identity || packageVersion !== undefined && packageVersion !== identity.version) throw Error('plugin_version_mismatch')
+          packageVersion = identity.version
+        }
+        await verifyInstalledPackage()
+        const entries = pluginBundleEntries(loaded.layers, overrides, packageName,
+          packageName === 'ds-bot' && packageVersion ? new Set(['ui-settings-general']) : undefined)
+        const expected = entries.map(entry => ({ ...entry, ...(packageVersion ? { packageVersion } : {}) }))
         context.guard(); context.signal.throwIfAborted()
-        await ensureWorker(profile)
+        let view: Awaited<ReturnType<ProfileWorkerSupervisor['activate']>>
+        if (participant) view = await participant.restart()
+        else {
+          await workers.dispose(profileId)
+          context.guard(); context.signal.throwIfAborted()
+          await ensureWorker(profile)
+          context.guard(); context.signal.throwIfAborted()
+          view = await workers.activate(profileId)
+        }
+        await waitForPluginRuntime(view, expected, context.signal)
         context.guard(); context.signal.throwIfAborted()
-        await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
+        await verifyInstalledPackage()
       },
     })
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
     const extensionOperations = new ProfileExtensionOperations(
-      new FileExtensionReceipts(join(root, 'control', 'extension-receipts'), uid), executor, clock,
+      extensionReceipts, executor, clock,
     )
     const socketPath = join(root, 'host.sock')
     let modelClaimCoordinator: LegacyClaimCoordinator | undefined
@@ -866,6 +954,23 @@ export async function startDesktopHostApplication(
         startWorker: profileId => ensureWorker(requiredProfile(registry, profileId), true),
       })
       return modelClaimCoordinator
+    }
+    const withProfileMutation = async <T>(profileId: string, operation: () => Promise<T>): Promise<T> => {
+      await botUpgrades.recover(profileId)
+      return workers.withProfileAdmission(profileId, async (guard) => {
+        await botUpgrades.assertCompatible(profileId)
+        guard()
+        return operation()
+      }, 'mutation')
+    }
+    const withClaimAdmission = <T>(authorize: () => string,
+      operation: (capturedAuthorize: () => string) => Promise<T>): Promise<T> => {
+      const profileId = authorize()
+      return withProfileMutation(profileId, () => operation(() => {
+        workers.assertProfileAvailable(profileId)
+        if (authorize() !== profileId) throw new HostAuthorityError('profile_mismatch')
+        return profileId
+      }))
     }
     const serverOptions: UnixHostServerOptions = {
       socketPath, ownership, expectedUid: uid,
@@ -986,7 +1091,7 @@ export async function startDesktopHostApplication(
         pluginRemove: pluginExecutor !== undefined, pluginUpdate: pluginExecutor !== undefined, pluginToggle: pluginExecutor !== undefined,
         skillArchives: true, skillRemove: true, skillReplace: true, skillFiles: true, skillInvocation: true,
         mcpRemove: true, mcpUpdate: true,
-        inventory: (profileId, kind, signal) => executor.inventory(profileId, kind, signal) },
+        inventory: (profileId, kind, signal, versions) => executor.inventory(profileId, kind, signal, versions) },
       recoveryMaterialsPersistenceGeneration: async (profileId, signal) => {
         signal.throwIfAborted()
         const existing = await targetFor(profileId).inspectExistingPersistence()
@@ -998,14 +1103,20 @@ export async function startDesktopHostApplication(
         pendingReceipts: (input: Parameters<LegacyClaimCoordinator['pendingReceipts']>[0]) =>
           claims().pendingReceipts(input),
         status: (input: Parameters<LegacyClaimCoordinator['status']>[0]) => claims().status(input),
-        restore: (input: Parameters<LegacyClaimCoordinator['restore']>[0]) => claims().restore(input),
+        restore: (input: Parameters<LegacyClaimCoordinator['restore']>[0]) =>
+          withClaimAdmission(() => input.authorizeAccountProfile(), authorizeAccountProfile =>
+            claims().restore({ ...input, authorizeAccountProfile })),
       },
       ...(config.legacySourceQuiescent === true ? {
         modelClaimTransaction: {
           /* v8 ignore next -- production source home is fixed; coordinator and control authority are tested separately. */
-          claim: (input: Parameters<LegacyClaimCoordinator['claim']>[0]) => claims().claim(input),
+          claim: (input: Parameters<LegacyClaimCoordinator['claim']>[0]) =>
+            withClaimAdmission(() => input.authorizeAccountProfile(), authorizeAccountProfile =>
+              claims().claim({ ...input, authorizeAccountProfile })),
           /* v8 ignore next -- retry reads the fixed production source; coordinator and authority tests cover it. */
-          retry: (input: Parameters<LegacyClaimCoordinator['retry']>[0]) => claims().retry(input),
+          retry: (input: Parameters<LegacyClaimCoordinator['retry']>[0]) =>
+            withClaimAdmission(() => input.authorizeAccountProfile(), authorizeAccountProfile =>
+              claims().retry({ ...input, authorizeAccountProfile })),
         },
         inspectModelClaimSource: (signal?: AbortSignal) => inspectLegacyModelClaimSource({
           expectedUid: uid, assertSourceQuiescent: () => Promise.resolve(),
@@ -1048,11 +1159,11 @@ export async function startDesktopHostApplication(
             },
           })
         }
-        const quiesced = async <T>(operation: () => Promise<T>): Promise<T> => {
+        const quiesced = <T>(operation: () => Promise<T>): Promise<T> => withProfileMutation(profileId, async () => {
           host.revokeProfile(profile.profileId)
           await workers.dispose(profileId)
           try { return await operation() } finally { await ensureWorker(profile) }
-        }
+        })
         return new CurrentMigrationExportService(currentExporter, quiesced)
       },
       createMigrationImport: (_ownerId, profileId) => {
@@ -1072,7 +1183,7 @@ export async function startDesktopHostApplication(
           imports.set(profileId, migrationImport)
         }
         return {
-          stage: input => migrationImport.stage({
+          stage: input => withProfileMutation(profileId, () => migrationImport.stage({
             transferId: input.transferId, transferDigest: input.transferDigest,
             sourceInstallationId: input.sourceInstallationId,
             sourceInventoryDigest: input.sourceInventoryDigest,
@@ -1080,13 +1191,13 @@ export async function startDesktopHostApplication(
             sourceGeneration: input.sourceGeneration, sourceSchemaVersion: input.sourceSchemaVersion,
             targetGeneration: input.targetGeneration, recordCount: input.recordCount,
             semanticDigest: input.semanticDigest,
-          }),
+          })),
           status: input => migrationImport.status(input),
-          verify: (importId, expectedVersion) => migrationImport.verify(importId, expectedVersion),
-          commit: (importId, expectedVersion, expectedCurrentGeneration) => migrationImport.commit(
+          verify: (importId, expectedVersion) => withProfileMutation(profileId, () => migrationImport.verify(importId, expectedVersion)),
+          commit: (importId, expectedVersion, expectedCurrentGeneration) => withProfileMutation(profileId, () => migrationImport.commit(
             importId, expectedVersion, expectedCurrentGeneration,
-          ),
-          abort: (importId, expectedVersion) => migrationImport.abort(importId, expectedVersion),
+          )),
+          abort: (importId, expectedVersion) => withProfileMutation(profileId, () => migrationImport.abort(importId, expectedVersion)),
         }
       },
     }

@@ -639,6 +639,17 @@ export class OwnerMigrationImportService {
     sourceInstallationId: string
     targetProfileSelectorHash: string
   }): Promise<MigrationImportStage> {
+    const current = await this.find(input)
+    if (!current) throw new Error('migration_import_not_found')
+    return current
+  }
+
+  /**
+   * Find original import progress without interpreting an absent receipt as an error.
+   * @param input Transfer, generation, installation and Profile coordinates of the original import.
+   * @returns Existing scoped stage after terminal cleanup, or undefined without staging a new import.
+   */
+  async find(input: Parameters<OwnerMigrationImportService['status']>[0]): Promise<MigrationImportStage | undefined> {
     if (!OPAQUE_ID.test(input.transferId) || !Number.isSafeInteger(input.targetGeneration) || input.targetGeneration < 1
       || !INSTALLATION_ID.test(input.sourceInstallationId) || !HEX_256.test(input.targetProfileSelectorHash)) {
       throw new Error('migration_import_invalid')
@@ -647,7 +658,7 @@ export class OwnerMigrationImportService {
       .update(`${input.transferId}\0${input.targetGeneration}\0${input.sourceInstallationId}\0${input.targetProfileSelectorHash}`)
       .digest('hex').slice(0, 48)
     const current = await this.journal.load(importId)
-    if (!current) throw new Error('migration_import_not_found')
+    if (!current) return undefined
     await this.cleanupTerminal(current)
     return current
   }
