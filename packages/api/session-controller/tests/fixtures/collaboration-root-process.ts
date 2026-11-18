@@ -15,7 +15,7 @@ const backend = new JsonStorageBackend(directory), original = backend.kv.open.bi
 let writes = 0
 async function stop(event: string) {
   process.send?.({ event })
-  await new Promise<void>(() => {})
+  await new Promise<void>(() => { setInterval(() => {}, 60_000) })
 }
 backend.kv.open = async (descriptor) => {
   const unit = await original(descriptor), put = unit.putRecord.bind(unit)
