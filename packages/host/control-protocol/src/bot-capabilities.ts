@@ -6,7 +6,7 @@ const name = (value: unknown): value is string => typeof value === 'string' &&
   value.length <= 32 && NAME.test(value) && value !== 'github'
 const clean = (value: unknown, max: number): value is string =>
   typeof value === 'string' && Buffer.byteLength(value, 'utf8') <= max &&
-  Array.from(value).every((char) => { const code = char.codePointAt(0) ?? 0; return code > 31 && code !== 127 })
+  Array.from(value).every((char) => { const code = char.codePointAt(0) as number; return code > 31 && code !== 127 })
 const stamp = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
 const stringList = (value: unknown, max: number, size: number): value is string[] =>
   Array.isArray(value) && value.length <= size && value.every(item => clean(item, max))
