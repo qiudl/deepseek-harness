@@ -6,7 +6,7 @@ import type { TypertGateway } from '@deepseek-ai/dsh-api-gateway'
 
 import { parseHostBotChatSubmission, parseHostBotAttachmentSubmission, parseHostBotRoomSubmission,
   encodeHostControlFrame, HOST_CONTROL_MAX_FRAME_BYTES,
-  type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
+  type HostRemoteSessionCommand, type HostRemoteSessionControlProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotSettingsUpdateRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from '../src/desktop-remote-session.ts'
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
@@ -55,12 +55,13 @@ describe('Desktop remote Session bridge', () => {
     for (const { operation, request, result, mutate } of commands) {
       const command = { operation, command_id: randomUUID() as never,
         session_id: 'chat-1', control: proof, request }
-      await expect(executor.execute(command, signal)).resolves.toEqual(result)
+      await expect(executor.execute(command as HostRemoteSessionCommand, signal)).resolves.toEqual(result)
       expect(mutate).toHaveBeenCalledWith(request, signal)
       mutate.mockResolvedValueOnce({ ...result, privateDetail: 'host path' })
-      await expect(executor.execute(command, signal)).rejects.toThrow()
+      await expect(executor.execute(command as HostRemoteSessionCommand, signal)).rejects.toThrow()
       await expect(executor.execute({ ...command, session_id: 'other',
-        control: remoteProof(control, 'other') }, signal)).rejects.toThrow('Session mismatch')
+        control: remoteProof(control, 'other') } as HostRemoteSessionCommand, signal))
+        .rejects.toThrow('Session mismatch')
     }
     expect(invoke).not.toHaveBeenCalled()
   })
