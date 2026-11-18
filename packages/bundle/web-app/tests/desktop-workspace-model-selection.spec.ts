@@ -114,6 +114,14 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     readLocalBotChatReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
       botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
     })),
+    resolveLocalBotSession: vi.fn(async (request: { botId: string; sessionId: string }) => ({ ...request })),
+    updateLocalBotSettings: vi.fn(async (request: { botId: string; expectedRevision: number }) => ({
+      botId: request.botId, state: 'applied', revision: request.expectedRevision + 1,
+      settings: { botId: request.botId, revision: request.expectedRevision + 1, name: 'My Bot',
+        role: '', instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+        model: null, appliedModel: null, effort: null, workDir: null, isMain: true,
+        isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] },
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -243,6 +251,24 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'sendLocalBotChat')
   expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { sendLocalBotChat: sender })
+  const settingsRequest = { botId: 'bot_1', sessionId: target.session_id, expectedRevision: 7,
+    change: { kind: 'pinned', value: true } }
+  const settingsCommand = { operation: 'bot.settings.update', command_id: randomUUID(),
+    session_id: target.session_id, control, request: settingsRequest }
+  const settingsResponse = await postRemote(settingsCommand)
+  expect(settingsResponse.status).toBe(200)
+  expect(await settingsResponse.json()).toMatchObject({ value: { botId: 'bot_1', state: 'applied', revision: 8,
+    settings: { botId: 'bot_1', pinned: true } } })
+  expect(botService.resolveLocalBotSession).toHaveBeenCalledWith({ botId: 'bot_1', sessionId: target.session_id })
+  expect(botService.updateLocalBotSettings).toHaveBeenCalledWith({ botId: 'bot_1',
+    expectedRevision: 7, change: settingsRequest.change }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(settingsCommand)).json()).toEqual({ value: null })
+  expect(botService.updateLocalBotSettings).toHaveBeenCalledOnce()
+  const settingsWriter = botService.updateLocalBotSettings
+  Reflect.deleteProperty(botService, 'updateLocalBotSettings')
+  expect(await (await postRemote(settingsCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { updateLocalBotSettings: settingsWriter })
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
