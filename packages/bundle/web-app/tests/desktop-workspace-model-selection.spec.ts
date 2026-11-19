@@ -200,6 +200,21 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     readLocalBotAttachmentPreview: vi.fn(async () => null),
     openLocalBotAttachmentDownload: vi.fn(async () => null),
     readLocalBotAttachmentDownload: vi.fn(async () => null),
+    sendLocalBotRoom: vi.fn(async (request: { roomId: string; submissionId: string }) => ({
+      roomId: request.roomId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotRoomReceipt: vi.fn(async (request: { roomId: string; submissionId: string }) => ({
+      roomId: request.roomId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    updateLocalBotRoom: vi.fn(async (request: { roomId: string; expectedRevision: number }) => ({
+      roomId: request.roomId, revision: request.expectedRevision, state: 'stale', details: null,
+    })),
+    deleteLocalBotRoom: vi.fn(async (request: { roomId: string; expectedRevision: number }) => ({
+      roomId: request.roomId, revision: request.expectedRevision + 1, state: 'deleted',
+    })),
+    createLocalBotRoom: vi.fn(async (request: { expectedRevision: number }) => ({
+      state: 'stale', revision: request.expectedRevision, details: null,
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -550,6 +565,48 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(capabilityCommand)).json()).toEqual({ value: null })
   expect(botService.mutateLocalBotCapabilities).toHaveBeenCalledOnce()
+  const roomControllerId = randomUUID()
+  const roomAcquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: 'room_1', controller_id: roomControllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const roomControl = { controller_id: roomControllerId,
+    generation: roomAcquired.value.claim.generation, epoch: roomAcquired.value.claim.epoch }
+  const roomSubmission = { roomId: 'room_1', submissionId: randomUUID(), text: 'Plan' }
+  const roomReceipt = { roomId: 'room_1', submissionId: roomSubmission.submissionId, state: 'accepted' }
+  const roomSend = { operation: 'bot.room.send', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomSubmission }
+  expect(await (await postRemote(roomSend)).json()).toEqual({ value: roomReceipt })
+  expect(botService.sendLocalBotRoom).toHaveBeenCalledWith(roomSubmission, expect.any(AbortSignal))
+  expect(await (await postRemote({ operation: 'bot.room.receipt', command_id: randomUUID(),
+    request: roomSubmission })).json()).toEqual({ value: roomReceipt })
+  expect(botService.readLocalBotRoomReceipt).toHaveBeenCalledWith(roomSubmission, expect.any(AbortSignal))
+  const roomUpdate = { roomId: 'room_1', expectedRevision: 7,
+    change: { kind: 'notice', value: 'Review' } }
+  expect(await (await postRemote({ operation: 'bot.room.update', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomUpdate })).json()).toEqual({ value: {
+    roomId: 'room_1', revision: 7, state: 'stale', details: null,
+  } })
+  expect(botService.updateLocalBotRoom).toHaveBeenCalledWith(roomUpdate, expect.any(AbortSignal))
+  const roomDelete = { roomId: 'room_1', expectedRevision: 7 }
+  expect(await (await postRemote({ operation: 'bot.room.delete', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomDelete })).json()).toEqual({ value: {
+    roomId: 'room_1', revision: 8, state: 'deleted',
+  } })
+  expect(botService.deleteLocalBotRoom).toHaveBeenCalledWith(roomDelete, expect.any(AbortSignal))
+  const roomCreate = { ownerBotId: 'bot_1', sessionId: target.session_id, expectedRevision: 7,
+    members: ['bot_1', 'bot_2'], name: 'Planning', notice: '', replyMode: 'admin', adminBotId: 'bot_1' }
+  const roomCreateCommand = { operation: 'bot.room.create', command_id: randomUUID(),
+    session_id: target.session_id, control, request: roomCreate }
+  expect(await (await postRemote(roomCreateCommand)).json()).toEqual({ value: {
+    state: 'stale', revision: 7, details: null,
+  } })
+  expect(botService.createLocalBotRoom).toHaveBeenCalledWith({ expectedRevision: 7,
+    members: ['bot_1', 'bot_2'], name: 'Planning', notice: '', replyMode: 'admin',
+    adminBotId: 'bot_1' }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(roomCreateCommand)).json()).toEqual({ value: null })
+  expect(botService.createLocalBotRoom).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
