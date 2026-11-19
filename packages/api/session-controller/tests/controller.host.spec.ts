@@ -65,6 +65,66 @@ describe('SessionController facade', () => {
     await frames.return?.(undefined)
   })
 
+  it.each(['ready', 'projection-failed'] as const)('releases assistant observers after %s and remounts without an old baseline', async (mode) => {
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestHarness(ctx)
+    const gateway: Partial<TypertGatewayService> = { getPendingRemoteEvents: () => [] }
+    ctx.provide('typertGateway', gateway as TypertGatewayService)
+    const session = ctx.sessions.create(SessionId('assistant-remount'), { meta: { cwd: '/workspace' } })
+    const agent = { id: session.id, session, status: 'running', ctx } as Agent
+    const listeners = () => ctx.events._hooks['agent/assistant-stream']?.length ?? 0
+    const before = listeners()
+    const registrationError = Error('projection registration failed')
+    const register = vi.spyOn(ctx.sessionProjections, 'register')
+    onTestFinished(() => { register.mockRestore() })
+    if (mode === 'projection-failed') register.mockRejectedValueOnce(registrationError)
+    const logged = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    onTestFinished(() => { logged.mockRestore() })
+    const inject = SessionController.inject.filter(name => ctx.get(name) !== undefined)
+    const original = ctx.plugin({
+      inject,
+      async apply(mounted: Context) {
+        await createSessionTestController(mounted, defaults)
+      },
+    })
+    onTestFinished(() => original.dispose())
+    if (mode === 'projection-failed') {
+      await expect(original.await()).rejects.toBe(registrationError)
+      expect(listeners()).toBe(before)
+    } else {
+      await original.await()
+      expect(listeners()).toBe(before + 1)
+      ctx.emit('agent/assistant-stream', {
+        agent, frame: { type: 'start', attemptId: LlmAttemptId('original-attempt'), revision: 1, turn: 1, step: 1 },
+      })
+    }
+    await original.dispose()
+    expect(listeners()).toBe(before)
+    ctx.emit('agent/assistant-stream', {
+      agent, frame: { type: 'start', attemptId: LlmAttemptId('disposed-attempt'), revision: 1, turn: 1, step: 1 },
+    })
+    let replacement: SessionController | undefined
+    const remounted = ctx.plugin({
+      inject,
+      async apply(mounted: Context) {
+        replacement = await createSessionTestController(mounted, defaults)
+      },
+    })
+    onTestFinished(() => remounted.dispose())
+    await remounted.await()
+    expect(listeners()).toBe(before + 1)
+    if (!replacement) throw Error('replacement controller did not initialize')
+    const frames = replacement.follow({ address: { kind: 'session', sessionId: session.id }, assistantStream: true },
+      new AbortController().signal)[Symbol.asyncIterator]()
+    onTestFinished(async () => { await frames.return?.(undefined) })
+    await expect(frames.next()).resolves.toMatchObject({ value: { type: 'snapshot', assistantStream: { revision: 0 } } })
+    await frames.return?.(undefined)
+    await remounted.dispose()
+    expect(listeners()).toBe(before)
+  })
+
   it('serves passive reads, subscriptions and waits through its plain controllers', async () => {
     const ctx = new Context()
     onTestFinished(() => ctx.fiber.dispose())

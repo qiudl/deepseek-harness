@@ -17,6 +17,9 @@ import { bindUrlHost, WebServer, type WebRoute } from '@deepseek-ai/dsh-host-web
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { TypertGatewayService } from '@deepseek-ai/dsh-api-gateway'
 import AgentDefaultModel from '@deepseek-ai/dsh-agent-default-model'
+import SessionStore from '@deepseek-ai/dsh-session'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import Tools from '@deepseek-ai/dsh-tools'
 import { liveConfig } from '../../../settings/settings/tests/live-config.ts'
 import { apply, Config, internals } from '../src/index.ts'
 
@@ -140,6 +143,9 @@ describe('web-app runtime glue', () => {
     onTestFinished(() => ctx.fiber.dispose())
     const readSource = vi.fn(async () => { throw Error('membership') })
     const captureGroupRoot = vi.fn(async () => { throw Error('group_session_inactive') })
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SystemPrompt)
+    await ctx.plugin(Tools)
     ctx.provide('webServer', server)
     ctx.provide('sessionController', {
       readCollaborationSourceSnapshot: readSource,
