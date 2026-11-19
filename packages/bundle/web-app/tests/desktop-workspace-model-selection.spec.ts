@@ -215,6 +215,46 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     createLocalBotRoom: vi.fn(async (request: { expectedRevision: number }) => ({
       state: 'stale', revision: request.expectedRevision, details: null,
     })),
+    createLocalBotSchedule: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: 'create', state: 'pending', taskId: null, sessionId: null,
+    })),
+    deleteLocalBotSchedule: vi.fn(async (request: { requestId: string; id: string; sessionId: string }) => ({
+      requestId: request.requestId, operation: 'delete', state: 'deleted',
+      taskId: request.id, sessionId: request.sessionId,
+    })),
+    readLocalBotScheduleResult: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: null, state: 'unknown', taskId: null, sessionId: null,
+    })),
+    startLocalBotUpdate: vi.fn(async (request: { requestId: string; target: string; version: string }) => ({
+      requestId: request.requestId, target: request.target, version: request.version, state: 'pending',
+    })),
+    readLocalBotUpdateResult: vi.fn(async (request: { requestId: string; target: string }) => ({
+      requestId: request.requestId, target: request.target, version: '0.3.8', state: 'pending',
+    })),
+    askLocalBotMemory: vi.fn(async (request: { requestId: string; targetKind: string; targetId: string }) => ({
+      requestId: request.requestId, operation: 'ask', targetKind: request.targetKind,
+      targetId: request.targetId, state: 'pending', reply: null, changes: [], truncated: false,
+    })),
+    forgetLocalBotMemory: vi.fn(async (request: { requestId: string; targetKind: string; targetId: string }) => ({
+      requestId: request.requestId, operation: 'forget', targetKind: request.targetKind,
+      targetId: request.targetId, state: 'pending', reply: null, changes: [], truncated: false,
+    })),
+    readLocalBotMemoryMutationResult: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: null, targetKind: null,
+      targetId: null, state: 'unknown', reply: null, changes: [], truncated: false,
+    })),
+    mutateLocalBotChannelMirror: vi.fn(async (request: { kind: string; roomId: string; requestId: string }) => ({
+      kind: request.kind, roomId: request.roomId, requestId: request.requestId,
+      state: 'awaiting_confirmation', confirmationCode: `${randomUUID()}.${randomUUID()}`,
+    })),
+    sendLocalBotAttachment: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string }) => ({
+      botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotAttachmentReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string }) => ({
+      botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted',
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -607,6 +647,128 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(roomCreateCommand)).json()).toEqual({ value: null })
   expect(botService.createLocalBotRoom).toHaveBeenCalledOnce()
+  const ownedCommand = (operation: string, request: object) => ({ operation, command_id: randomUUID(),
+    session_id: target.session_id, control, request })
+  const scheduleId = randomUUID()
+  const scheduleBase = { ownerBotId: 'bot_1', sessionId: target.session_id, requestId: scheduleId }
+  const scheduleCreate = { ...scheduleBase, mode: 'create', targetKind: 'bot', targetId: 'bot_1',
+    title: 'Briefing', prompt: 'Report progress', when: { kind: 'daily', time: '09:00', timeZone: 'UTC' } }
+  const scheduleCommand = ownedCommand('bot.schedule.mutate', scheduleCreate)
+  expect(await (await postRemote(scheduleCommand)).json()).toEqual({ value: {
+    requestId: scheduleId, operation: 'create', state: 'pending', taskId: null, sessionId: null,
+  } })
+  expect(botService.createLocalBotSchedule).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: scheduleId, targetKind: 'bot', targetId: 'bot_1', title: 'Briefing',
+    prompt: 'Report progress', when: scheduleCreate.when }, expect.any(AbortSignal))
+  const scheduleDelete = { ...scheduleBase, mode: 'delete', taskSessionId: 'room_1', taskId: 'task_1' }
+  expect(await (await postRemote(ownedCommand('bot.schedule.mutate', scheduleDelete))).json())
+    .toEqual({ value: { requestId: scheduleId, operation: 'delete', state: 'deleted',
+      taskId: 'task_1', sessionId: 'room_1' } })
+  expect(botService.deleteLocalBotSchedule).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: scheduleId, sessionId: 'room_1', id: 'task_1' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.schedule.mutate', { ...scheduleBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: scheduleId, operation: null, state: 'unknown',
+      taskId: null, sessionId: null } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(scheduleCommand)).json()).toEqual({ value: null })
+  expect(botService.createLocalBotSchedule).toHaveBeenCalledOnce()
+  const updateId = randomUUID()
+  const updateBase = { ownerBotId: 'bot_1', sessionId: target.session_id,
+    requestId: updateId, target: 'bot' }
+  const updateStart = { ...updateBase, mode: 'start', version: '0.3.8' }
+  const updateCommand = ownedCommand('bot.update.mutate', updateStart)
+  expect(await (await postRemote(updateCommand)).json()).toEqual({ value: {
+    requestId: updateId, target: 'bot', version: '0.3.8', state: 'pending',
+  } })
+  expect(botService.startLocalBotUpdate).toHaveBeenCalledWith({ requestId: updateId,
+    target: 'bot', version: '0.3.8' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.update.mutate', { ...updateBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: updateId, target: 'bot', version: '0.3.8', state: 'pending' } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(updateCommand)).json()).toEqual({ value: null })
+  expect(botService.startLocalBotUpdate).toHaveBeenCalledOnce()
+  const memoryId = randomUUID()
+  const memoryBase = { ownerBotId: 'bot_1', sessionId: target.session_id,
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1' }
+  const memoryAsk = { ...memoryBase, mode: 'ask', text: 'Remember tea' }
+  const memoryCommand = ownedCommand('bot.memory.mutate', memoryAsk)
+  expect(await (await postRemote(memoryCommand)).json()).toEqual({ value: {
+    requestId: memoryId, operation: 'ask', targetKind: 'bot', targetId: 'bot_1',
+    state: 'pending', reply: null, changes: [], truncated: false,
+  } })
+  expect(botService.askLocalBotMemory).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1', text: 'Remember tea' },
+  expect.any(AbortSignal))
+  const memoryForget = { ...memoryBase, mode: 'forget', scope: 'own', topic: null, text: 'tea' }
+  expect(await (await postRemote(ownedCommand('bot.memory.mutate', memoryForget))).json())
+    .toEqual({ value: { requestId: memoryId, operation: 'forget', targetKind: 'bot',
+      targetId: 'bot_1', state: 'pending', reply: null, changes: [], truncated: false } })
+  expect(botService.forgetLocalBotMemory).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1', scope: 'own',
+    topic: null, text: 'tea' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.memory.mutate', { ...memoryBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: memoryId, operation: null, targetKind: null,
+      targetId: null, state: 'unknown', reply: null, changes: [], truncated: false } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(memoryCommand)).json()).toEqual({ value: null })
+  expect(botService.askLocalBotMemory).toHaveBeenCalledOnce()
+  const mirrorRoomId = 'session-11111111-1111-4111-8111-111111111111'
+  const mirrorControllerId = randomUUID()
+  const mirrorAcquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: mirrorRoomId, controller_id: mirrorControllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const mirrorControl = { controller_id: mirrorControllerId,
+    generation: mirrorAcquired.value.claim.generation, epoch: mirrorAcquired.value.claim.epoch }
+  const mirrorRequest = { kind: 'start', roomId: mirrorRoomId, requestId: randomUUID(),
+    endpoint: 'https://slark.test', ticket: 't'.repeat(43) }
+  const mirrorCommand = { operation: 'bot.channel-mirror.mutate', command_id: randomUUID(),
+    session_id: mirrorRoomId, control: mirrorControl, request: mirrorRequest }
+  const mirrorResponse = await postRemote(mirrorCommand)
+  expect(mirrorResponse.status).toBe(200)
+  expect(await mirrorResponse.json()).toMatchObject({ value: { kind: 'start', roomId: mirrorRoomId,
+    requestId: mirrorRequest.requestId, state: 'awaiting_confirmation' } })
+  expect(botService.mutateLocalBotChannelMirror).toHaveBeenCalledWith(mirrorRequest, expect.any(AbortSignal))
+  const attachmentRequest = { botId: 'bot_1', sessionId: target.session_id,
+    submissionId: randomUUID(), receiptId: randomUUID(), kind: 'file', attachmentId }
+  const attachmentReceipt = { botId: 'bot_1', sessionId: target.session_id,
+    submissionId: attachmentRequest.submissionId, state: 'accepted' }
+  expect(await (await postRemote(ownedCommand('bot.attachment.send', attachmentRequest))).json())
+    .toEqual({ value: attachmentReceipt })
+  expect(botService.sendLocalBotAttachment).toHaveBeenCalledWith(attachmentRequest, expect.any(AbortSignal))
+  expect(await (await postRemote({ operation: 'bot.attachment.receipt',
+    command_id: randomUUID(), request: attachmentRequest })).json()).toEqual({ value: attachmentReceipt })
+  expect(botService.readLocalBotAttachmentReceipt).toHaveBeenCalledWith(attachmentRequest, expect.any(AbortSignal))
+  const absentWriters = [
+    ['sendLocalBotRoom', roomSend],
+    ['readLocalBotRoomReceipt', { operation: 'bot.room.receipt', command_id: randomUUID(), request: roomSubmission }],
+    ['updateLocalBotRoom', { operation: 'bot.room.update', command_id: randomUUID(),
+      session_id: 'room_1', control: roomControl, request: roomUpdate }],
+    ['createLocalBotRoom', roomCreateCommand],
+    ['deleteLocalBotRoom', { operation: 'bot.room.delete', command_id: randomUUID(),
+      session_id: 'room_1', control: roomControl, request: roomDelete }],
+    ['duplicateLocalBot', copyCommand],
+    ['createLocalBot', createCommand],
+    ['createLocalBotSchedule', scheduleCommand],
+    ['startLocalBotUpdate', updateCommand],
+    ['askLocalBotMemory', memoryCommand],
+    ['mutateLocalBotChannelMirror', mirrorCommand],
+    ['updateLocalBotGeneralSettings', generalCommand],
+    ['mutateLocalBotProviders', providerCommand],
+    ['mutateLocalBotConnectors', connectorCommand],
+    ['clearLocalBotFeedback', feedbackCommand],
+    ['mutateLocalBotSecrets', secretsCommand],
+    ['mutateLocalBotCapabilities', capabilityCommand],
+    ['sendLocalBotAttachment', ownedCommand('bot.attachment.send', attachmentRequest)],
+    ['readLocalBotAttachmentReceipt', { operation: 'bot.attachment.receipt',
+      command_id: randomUUID(), request: attachmentRequest }],
+  ] as const
+  for (const [writer, command] of absentWriters) {
+    const method = botService[writer]
+    Reflect.deleteProperty(botService, writer)
+    expect(await (await postRemote(command)).json()).toEqual({ value: null })
+    Object.assign(botService, { [writer]: method })
+  }
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
