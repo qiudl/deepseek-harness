@@ -161,6 +161,45 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
       issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' })),
     mutateLocalBotSecrets: vi.fn(async () => ({ entries: [], nextCursor: null })),
     mutateLocalBotCapabilities: vi.fn(async () => ({ revision: 5, entries: [], nextCursor: null })),
+    readLocalBotFeedback: vi.fn(async () => ({ total: 0, entries: [], markdown: '', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' })),
+    readLocalBotSecrets: vi.fn(async () => ({ entries: [], nextCursor: null })),
+    readLocalBotCapabilities: vi.fn(async () => ({ revision: 4, entries: [], nextCursor: null })),
+    readLocalBotGeneralSettings: vi.fn(async () => ({ revision: 4, theme: 'paper', accent: null,
+      motion: 'normal', width: 50, teamWorkspace: '/team' })),
+    readLocalBotProviders: vi.fn(async () => ({ available: true, providers: [], addable: [], protocols: [] })),
+    readLocalBotConnectors: vi.fn(async () => ({ connectors: [{ id: 'github', name: 'GitHub', state: 'ready',
+      account: 'alice', hasError: false }] })),
+    listLocalBotRooms: vi.fn(async () => ({ revision: 1, rooms: [], nextCursor: null })),
+    readLocalBotRoomHistory: vi.fn(async () => ({ roomId: 'room_1', revision: 1,
+      oldestSeq: 1, latestSeq: 0, truncatedBefore: false, messages: [], nextCursor: null })),
+    readLocalBotSettings: vi.fn(async () => ({ botId: 'bot_1', revision: 8, name: 'My Bot',
+      role: '', instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+      model: null, appliedModel: null, effort: null, workDir: null, isMain: true,
+      isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] })),
+    readLocalBotAbout: vi.fn(async () => ({ bot: { name: 'DeepSeek Bot', current: '0.3.8', latest: null,
+      source: 'local', notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0,
+      phase: 'idle', installed: null, error: null, available: true }, dsh: null })),
+    readLocalBotUsage: vi.fn(async () => ({ rangeDays: 7, timeZone: 'UTC', now: '2026-11-19 00',
+      scanning: false, totals: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 },
+      rows: [], nextCursor: null })),
+    readLocalBotMemory: vi.fn(async () => ({ botId: 'bot_1', available: false })),
+    readLocalBotRoomMemory: vi.fn(async () => ({ roomId: 'room_1', available: false })),
+    readLocalBotSchedules: vi.fn(async () => ({ available: false, total: 0, tasks: [], nextCursor: null })),
+    readLocalBotScheduleHistory: vi.fn(async () => ({ available: false, sessionId: target.session_id,
+      id: 'task_1', code: null, records: [], nextBefore: null, earlierRecordsUnavailable: false,
+      earlierRecordsPruned: false, retention: null })),
+    readLocalBotFeedbackLog: vi.fn(async () => ({ digest: 'a'.repeat(64), total: 0,
+      chunk: '', nextOffset: null })),
+    readLocalBotRoomDetails: vi.fn(async () => ({ roomId: 'room_1', revision: 1,
+      displayName: 'Team Room', notice: '', replyMode: 'admin', relayLimit: null,
+      permissionPreset: null, permissionChoices: null, adminBotId: null, members: [] })),
+    readLocalBotFolders: vi.fn(async () => ({ botId: 'bot_1', kind: 'places', team: '/team',
+      canBrowse: true, folders: [], truncated: false })),
+    readLocalBotAvatar: vi.fn(async () => null),
+    readLocalBotAttachmentPreview: vi.fn(async () => null),
+    openLocalBotAttachmentDownload: vi.fn(async () => null),
+    readLocalBotAttachmentDownload: vi.fn(async () => null),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -248,6 +287,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     method: 'POST', headers: { authorization, 'content-type': 'application/json' },
     body: JSON.stringify({ endpoint: 'bot/chat', payload: { args } }),
   })
+  const postBotRead = (endpoint: string, args: object) => fetch(chatUrl, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint, payload: { args } }),
+  })
   const chatResponse = await postChat({ botId: null })
   expect(chatResponse.status).toBe(200)
   expect(await chatResponse.json()).toEqual({ value: chat })
@@ -261,6 +304,75 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   Object.assign(botService, { readLocalBotChat })
   expect(await (await postChat({ botId: 'bot_1' })).json()).toEqual({ value: chat })
+  const attachmentId = `sha256:${'a'.repeat(64)}`
+  const transferId = randomUUID()
+  for (const [endpoint, args, reader, value] of [
+    ['bot/feedback', {}, 'readLocalBotFeedback', { total: 0, entries: [], markdown: '',
+      markdownTruncated: false, issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }],
+    ['bot/secrets', { after: '', limit: 10 }, 'readLocalBotSecrets', { entries: [], nextCursor: null }],
+    ['bot/capability-library', { after: '', limit: 10 }, 'readLocalBotCapabilities',
+      { revision: 4, entries: [], nextCursor: null }],
+    ['bot/general', {}, 'readLocalBotGeneralSettings',
+      { revision: 4, theme: 'paper', accent: null, motion: 'normal', width: 50, teamWorkspace: '/team' }],
+    ['bot/providers', {}, 'readLocalBotProviders',
+      { available: true, providers: [], addable: [], protocols: [] }],
+    ['bot/connectors', {}, 'readLocalBotConnectors',
+      { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }],
+    ['bot/rooms', { afterRoomId: '', limit: 10 }, 'listLocalBotRooms',
+      { revision: 1, rooms: [], nextCursor: null }],
+    ['bot/room-history', { roomId: 'room_1', afterSeq: 0, limit: 10 }, 'readLocalBotRoomHistory',
+      { roomId: 'room_1', revision: 1, oldestSeq: 1, latestSeq: 0,
+        truncatedBefore: false, messages: [], nextCursor: null }],
+    ['bot/settings', { botId: 'bot_1' }, 'readLocalBotSettings',
+      { botId: 'bot_1', revision: 8, name: 'My Bot', role: '', instructions: '',
+        color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
+        effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true,
+        hidden: false, capabilityChoices: [] }],
+    ['bot/about', { fresh: false }, 'readLocalBotAbout',
+      { bot: { name: 'DeepSeek Bot', current: '0.3.8', latest: null, source: 'local',
+        notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0, phase: 'idle',
+        installed: null, error: null, available: true }, dsh: null }],
+    ['bot/usage', { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 10 }, 'readLocalBotUsage',
+      { rangeDays: 7, timeZone: 'UTC', now: '2026-11-19 00', scanning: false,
+        totals: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 },
+        rows: [], nextCursor: null }],
+    ['bot/memory', { botId: 'bot_1', cursor: null, limit: 10, summarize: false },
+      'readLocalBotMemory', { botId: 'bot_1', available: false }],
+    ['bot/room-memory', { roomId: 'room_1', cursor: null, limit: 10, summarize: false },
+      'readLocalBotRoomMemory', { roomId: 'room_1', available: false }],
+    ['bot/schedules', { cursor: null, limit: 10 }, 'readLocalBotSchedules',
+      { available: false, total: 0, tasks: [], nextCursor: null }],
+    ['bot/schedule-history', { sessionId: target.session_id, id: 'task_1', limit: 10, before: null },
+      'readLocalBotScheduleHistory', { available: false, sessionId: target.session_id,
+        id: 'task_1', code: null, records: [], nextBefore: null, earlierRecordsUnavailable: false,
+        earlierRecordsPruned: false, retention: null }],
+    ['bot/feedback-log', { offset: 0, digest: null }, 'readLocalBotFeedbackLog',
+      { digest: 'a'.repeat(64), total: 0, chunk: '', nextOffset: null }],
+    ['bot/room-details', { roomId: 'room_1' }, 'readLocalBotRoomDetails',
+      { roomId: 'room_1', revision: 1, displayName: 'Team Room', notice: '', replyMode: 'admin',
+        relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: null, members: [] }],
+    ['bot/folders', { botId: 'bot_1', path: null }, 'readLocalBotFolders',
+      { botId: 'bot_1', kind: 'places', team: '/team', canBrowse: true, folders: [], truncated: false }],
+    ['bot/avatar', { botId: 'bot_1', offset: 0 }, 'readLocalBotAvatar', null],
+    ['bot/attachment-preview', { botId: 'bot_1', sessionId: target.session_id,
+      eventSeq: 1, attachmentId, offset: 0 }, 'readLocalBotAttachmentPreview', null],
+    ['bot/attachment-download-open', { botId: 'bot_1', sessionId: target.session_id,
+      eventSeq: 1, attachmentId }, 'openLocalBotAttachmentDownload', null],
+    ['bot/attachment-download-read', { transferId, offset: 0 }, 'readLocalBotAttachmentDownload', null],
+  ] as const) {
+    const readResponse = await postBotRead(endpoint, args)
+    expect(readResponse.status).toBe(200)
+    expect(await readResponse.json()).toEqual({ value })
+    if (reader === 'readLocalBotFolders' || reader === 'readLocalBotAvatar' ||
+      reader === 'readLocalBotAttachmentPreview' || reader === 'openLocalBotAttachmentDownload' ||
+      reader === 'readLocalBotAttachmentDownload')
+      expect(botService[reader]).toHaveBeenCalledWith(args, expect.any(AbortSignal))
+    else expect(botService[reader]).toHaveBeenCalledWith(args)
+    const read = botService[reader]
+    Reflect.deleteProperty(botService, reader)
+    expect(await (await postBotRead(endpoint, args)).json()).toEqual({ value: null })
+    Object.assign(botService, { [reader]: read })
+  }
   const remoteUrl = chatUrl.replace('desktop-remote-ui', 'desktop-remote-session')
   const postRemote = (command: object, auth = `Bearer ${token}`) => fetch(remoteUrl, { method: 'POST',
     headers: { authorization: auth }, body: JSON.stringify(command) })
