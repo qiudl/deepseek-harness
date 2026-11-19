@@ -157,6 +157,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     mutateLocalBotConnectors: vi.fn(async () => ({ connectors: [{
       id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false,
     }] })),
+    clearLocalBotFeedback: vi.fn(async () => ({ total: 0, entries: [], markdown: '', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' })),
+    mutateLocalBotSecrets: vi.fn(async () => ({ entries: [], nextCursor: null })),
+    mutateLocalBotCapabilities: vi.fn(async () => ({ revision: 5, entries: [], nextCursor: null })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -394,6 +398,46 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
   expect(await (await postRemote(connectorCommand)).json()).toEqual({ value: null })
   expect(botService.mutateLocalBotConnectors).toHaveBeenCalledOnce()
+  const feedbackCommand = { operation: 'bot.feedback.clear', command_id: randomUUID(),
+    session_id: target.session_id, control, request: { botId: 'bot_1', sessionId: target.session_id } }
+  const feedbackResponse = await postRemote(feedbackCommand)
+  expect(feedbackResponse.status).toBe(200)
+  expect(await feedbackResponse.json()).toEqual({ value: {
+    total: 0, entries: [], markdown: '', markdownTruncated: false,
+    issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new',
+  } })
+  expect(botService.clearLocalBotFeedback).toHaveBeenCalledWith({}, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(feedbackCommand)).json()).toEqual({ value: null })
+  expect(botService.clearLocalBotFeedback).toHaveBeenCalledOnce()
+  const secretsRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'set', name: 'API_KEY', value: 'synthetic-value', purpose: null, scope: 'all' }
+  const secretsCommand = { operation: 'bot.secrets.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: secretsRequest }
+  const secretsResponse = await postRemote(secretsCommand)
+  expect(secretsResponse.status).toBe(200)
+  expect(await secretsResponse.json()).toEqual({ value: { entries: [], nextCursor: null } })
+  expect(botService.mutateLocalBotSecrets).toHaveBeenCalledWith({ kind: 'set', name: 'API_KEY',
+    value: 'synthetic-value', purpose: null, scope: 'all' }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(secretsCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotSecrets).toHaveBeenCalledOnce()
+  const capabilityRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'save', expectedRevision: 4, name: null,
+    item: { name: 'research-tool', kind: 'skill', description: '', content: 'Instructions' } }
+  const capabilityCommand = { operation: 'bot.capability-library.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: capabilityRequest }
+  const capabilityResponse = await postRemote(capabilityCommand)
+  expect(capabilityResponse.status).toBe(200)
+  expect(await capabilityResponse.json()).toEqual({ value: {
+    revision: 5, entries: [], nextCursor: null,
+  } })
+  expect(botService.mutateLocalBotCapabilities).toHaveBeenCalledWith({
+    kind: 'save', expectedRevision: 4, name: null, item: capabilityRequest.item,
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(capabilityCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotCapabilities).toHaveBeenCalledOnce()
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {
