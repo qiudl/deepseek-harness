@@ -114,6 +114,147 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     readLocalBotChatReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string; text: string }) => ({
       botId: request.botId, sessionId: request.sessionId, submissionId: request.submissionId, state: 'unobserved',
     })),
+    resolveLocalBotSession: vi.fn(async (request: { botId: string; sessionId: string }) => ({ ...request })),
+    updateLocalBotSettings: vi.fn(async (request: { botId: string; expectedRevision: number }) => ({
+      botId: request.botId, state: 'applied', revision: request.expectedRevision + 1,
+      settings: { botId: request.botId, revision: request.expectedRevision + 1, name: 'My Bot',
+        role: '', instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+        model: null, appliedModel: null, effort: null, workDir: null, isMain: true,
+        isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] },
+    })),
+    deleteLocalBot: vi.fn(async (request: { botId: string; expectedRevision: number }) => ({
+      botId: request.botId, state: 'deleted', revision: request.expectedRevision + 1,
+    })),
+    duplicateLocalBot: vi.fn(async (request: { sourceBotId: string
+      copyRequestId: string
+      expectedRevision: number }) => ({
+      sourceBotId: request.sourceBotId, copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'bot_copy', revision: request.expectedRevision + 1,
+    })),
+    readLocalBotDuplicate: vi.fn(async (request: { sourceBotId: string; copyRequestId: string }) => ({
+      sourceBotId: request.sourceBotId, copyRequestId: request.copyRequestId,
+      state: 'created', botId: 'bot_copy', revision: 10,
+    })),
+    createLocalBot: vi.fn(async (request: { ownerBotId: string
+      createRequestId: string
+      expectedRevision: number }) => ({
+      ownerBotId: request.ownerBotId, createRequestId: request.createRequestId,
+      state: 'created', botId: 'bot_new', revision: request.expectedRevision + 1,
+    })),
+    readLocalBotCreate: vi.fn(async (request: { ownerBotId: string; createRequestId: string }) => ({
+      ownerBotId: request.ownerBotId, createRequestId: request.createRequestId,
+      state: 'created', botId: 'bot_new', revision: 11,
+    })),
+    updateLocalBotGeneralSettings: vi.fn(async (request: { expectedRevision: number
+      change: { kind: string; value: number } }) => ({
+      state: 'applied', settings: { revision: request.expectedRevision + 1,
+        theme: 'paper', accent: null, motion: 'normal', width: request.change.value,
+        teamWorkspace: '/team' },
+    })),
+    mutateLocalBotProviders: vi.fn(async () => ({
+      available: true, providers: [], addable: [], protocols: [],
+    })),
+    mutateLocalBotConnectors: vi.fn(async () => ({ connectors: [{
+      id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false,
+    }] })),
+    clearLocalBotFeedback: vi.fn(async () => ({ total: 0, entries: [], markdown: '', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' })),
+    mutateLocalBotSecrets: vi.fn(async () => ({ entries: [], nextCursor: null })),
+    mutateLocalBotCapabilities: vi.fn(async () => ({ revision: 5, entries: [], nextCursor: null })),
+    readLocalBotFeedback: vi.fn(async () => ({ total: 0, entries: [], markdown: '', markdownTruncated: false,
+      issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' })),
+    readLocalBotSecrets: vi.fn(async () => ({ entries: [], nextCursor: null })),
+    readLocalBotCapabilities: vi.fn(async () => ({ revision: 4, entries: [], nextCursor: null })),
+    readLocalBotGeneralSettings: vi.fn(async () => ({ revision: 4, theme: 'paper', accent: null,
+      motion: 'normal', width: 50, teamWorkspace: '/team' })),
+    readLocalBotProviders: vi.fn(async () => ({ available: true, providers: [], addable: [], protocols: [] })),
+    readLocalBotConnectors: vi.fn(async () => ({ connectors: [{ id: 'github', name: 'GitHub', state: 'ready',
+      account: 'alice', hasError: false }] })),
+    listLocalBotRooms: vi.fn(async () => ({ revision: 1, rooms: [], nextCursor: null })),
+    readLocalBotRoomHistory: vi.fn(async () => ({ roomId: 'room_1', revision: 1,
+      oldestSeq: 1, latestSeq: 0, truncatedBefore: false, messages: [], nextCursor: null })),
+    readLocalBotSettings: vi.fn(async () => ({ botId: 'bot_1', revision: 8, name: 'My Bot',
+      role: '', instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+      model: null, appliedModel: null, effort: null, workDir: null, isMain: true,
+      isPrimary: true, pinned: true, hidden: false, capabilityChoices: [] })),
+    readLocalBotAbout: vi.fn(async () => ({ bot: { name: 'DeepSeek Bot', current: '0.3.8', latest: null,
+      source: 'local', notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0,
+      phase: 'idle', installed: null, error: null, available: true }, dsh: null })),
+    readLocalBotUsage: vi.fn(async () => ({ rangeDays: 7, timeZone: 'UTC', now: '2026-11-19 00',
+      scanning: false, totals: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 },
+      rows: [], nextCursor: null })),
+    readLocalBotMemory: vi.fn(async () => ({ botId: 'bot_1', available: false })),
+    readLocalBotRoomMemory: vi.fn(async () => ({ roomId: 'room_1', available: false })),
+    readLocalBotSchedules: vi.fn(async () => ({ available: false, total: 0, tasks: [], nextCursor: null })),
+    readLocalBotScheduleHistory: vi.fn(async () => ({ available: false, sessionId: target.session_id,
+      id: 'task_1', code: null, records: [], nextBefore: null, earlierRecordsUnavailable: false,
+      earlierRecordsPruned: false, retention: null })),
+    readLocalBotFeedbackLog: vi.fn(async () => ({ digest: 'a'.repeat(64), total: 0,
+      chunk: '', nextOffset: null })),
+    readLocalBotRoomDetails: vi.fn(async () => ({ roomId: 'room_1', revision: 1,
+      displayName: 'Team Room', notice: '', replyMode: 'admin', relayLimit: null,
+      permissionPreset: null, permissionChoices: null, adminBotId: null, members: [] })),
+    readLocalBotFolders: vi.fn(async () => ({ botId: 'bot_1', kind: 'places', team: '/team',
+      canBrowse: true, folders: [], truncated: false })),
+    readLocalBotAvatar: vi.fn(async () => null),
+    readLocalBotAttachmentPreview: vi.fn(async () => null),
+    openLocalBotAttachmentDownload: vi.fn(async () => null),
+    readLocalBotAttachmentDownload: vi.fn(async () => null),
+    sendLocalBotRoom: vi.fn(async (request: { roomId: string; submissionId: string }) => ({
+      roomId: request.roomId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotRoomReceipt: vi.fn(async (request: { roomId: string; submissionId: string }) => ({
+      roomId: request.roomId, submissionId: request.submissionId, state: 'accepted',
+    })),
+    updateLocalBotRoom: vi.fn(async (request: { roomId: string; expectedRevision: number }) => ({
+      roomId: request.roomId, revision: request.expectedRevision, state: 'stale', details: null,
+    })),
+    deleteLocalBotRoom: vi.fn(async (request: { roomId: string; expectedRevision: number }) => ({
+      roomId: request.roomId, revision: request.expectedRevision + 1, state: 'deleted',
+    })),
+    createLocalBotRoom: vi.fn(async (request: { expectedRevision: number }) => ({
+      state: 'stale', revision: request.expectedRevision, details: null,
+    })),
+    createLocalBotSchedule: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: 'create', state: 'pending', taskId: null, sessionId: null,
+    })),
+    deleteLocalBotSchedule: vi.fn(async (request: { requestId: string; id: string; sessionId: string }) => ({
+      requestId: request.requestId, operation: 'delete', state: 'deleted',
+      taskId: request.id, sessionId: request.sessionId,
+    })),
+    readLocalBotScheduleResult: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: null, state: 'unknown', taskId: null, sessionId: null,
+    })),
+    startLocalBotUpdate: vi.fn(async (request: { requestId: string; target: string; version: string }) => ({
+      requestId: request.requestId, target: request.target, version: request.version, state: 'pending',
+    })),
+    readLocalBotUpdateResult: vi.fn(async (request: { requestId: string; target: string }) => ({
+      requestId: request.requestId, target: request.target, version: '0.3.8', state: 'pending',
+    })),
+    askLocalBotMemory: vi.fn(async (request: { requestId: string; targetKind: string; targetId: string }) => ({
+      requestId: request.requestId, operation: 'ask', targetKind: request.targetKind,
+      targetId: request.targetId, state: 'pending', reply: null, changes: [], truncated: false,
+    })),
+    forgetLocalBotMemory: vi.fn(async (request: { requestId: string; targetKind: string; targetId: string }) => ({
+      requestId: request.requestId, operation: 'forget', targetKind: request.targetKind,
+      targetId: request.targetId, state: 'pending', reply: null, changes: [], truncated: false,
+    })),
+    readLocalBotMemoryMutationResult: vi.fn(async (request: { requestId: string }) => ({
+      requestId: request.requestId, operation: null, targetKind: null,
+      targetId: null, state: 'unknown', reply: null, changes: [], truncated: false,
+    })),
+    mutateLocalBotChannelMirror: vi.fn(async (request: { kind: string; roomId: string; requestId: string }) => ({
+      kind: request.kind, roomId: request.roomId, requestId: request.requestId,
+      state: 'awaiting_confirmation', confirmationCode: `${randomUUID()}.${randomUUID()}`,
+    })),
+    sendLocalBotAttachment: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string }) => ({
+      botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted',
+    })),
+    readLocalBotAttachmentReceipt: vi.fn(async (request: { botId: string; sessionId: string; submissionId: string }) => ({
+      botId: request.botId, sessionId: request.sessionId,
+      submissionId: request.submissionId, state: 'accepted',
+    })),
   }
   const disposeBotService = ctx.provide('dsBotSlarkExternalGroup' as never, botService as never)
   const inventoryPage = { state: 'page', bot_id: 'operator', workspace_id: target.workspace_id,
@@ -201,6 +342,10 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
     method: 'POST', headers: { authorization, 'content-type': 'application/json' },
     body: JSON.stringify({ endpoint: 'bot/chat', payload: { args } }),
   })
+  const postBotRead = (endpoint: string, args: object) => fetch(chatUrl, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ endpoint, payload: { args } }),
+  })
   const chatResponse = await postChat({ botId: null })
   expect(chatResponse.status).toBe(200)
   expect(await chatResponse.json()).toEqual({ value: chat })
@@ -214,6 +359,75 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   expect(await (await postChat({ botId: null })).json()).toEqual({ value: null })
   Object.assign(botService, { readLocalBotChat })
   expect(await (await postChat({ botId: 'bot_1' })).json()).toEqual({ value: chat })
+  const attachmentId = `sha256:${'a'.repeat(64)}`
+  const transferId = randomUUID()
+  for (const [endpoint, args, reader, value] of [
+    ['bot/feedback', {}, 'readLocalBotFeedback', { total: 0, entries: [], markdown: '',
+      markdownTruncated: false, issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new' }],
+    ['bot/secrets', { after: '', limit: 10 }, 'readLocalBotSecrets', { entries: [], nextCursor: null }],
+    ['bot/capability-library', { after: '', limit: 10 }, 'readLocalBotCapabilities',
+      { revision: 4, entries: [], nextCursor: null }],
+    ['bot/general', {}, 'readLocalBotGeneralSettings',
+      { revision: 4, theme: 'paper', accent: null, motion: 'normal', width: 50, teamWorkspace: '/team' }],
+    ['bot/providers', {}, 'readLocalBotProviders',
+      { available: true, providers: [], addable: [], protocols: [] }],
+    ['bot/connectors', {}, 'readLocalBotConnectors',
+      { connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }] }],
+    ['bot/rooms', { afterRoomId: '', limit: 10 }, 'listLocalBotRooms',
+      { revision: 1, rooms: [], nextCursor: null }],
+    ['bot/room-history', { roomId: 'room_1', afterSeq: 0, limit: 10 }, 'readLocalBotRoomHistory',
+      { roomId: 'room_1', revision: 1, oldestSeq: 1, latestSeq: 0,
+        truncatedBefore: false, messages: [], nextCursor: null }],
+    ['bot/settings', { botId: 'bot_1' }, 'readLocalBotSettings',
+      { botId: 'bot_1', revision: 8, name: 'My Bot', role: '', instructions: '',
+        color: null, avatarShape: null, hasAvatarImage: false, model: null, appliedModel: null,
+        effort: null, workDir: null, isMain: true, isPrimary: true, pinned: true,
+        hidden: false, capabilityChoices: [] }],
+    ['bot/about', { fresh: false }, 'readLocalBotAbout',
+      { bot: { name: 'DeepSeek Bot', current: '0.3.8', latest: null, source: 'local',
+        notesUrl: null, repoUrl: null, enabled: true, checkedAt: 0, phase: 'idle',
+        installed: null, error: null, available: true }, dsh: null }],
+    ['bot/usage', { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 10 }, 'readLocalBotUsage',
+      { rangeDays: 7, timeZone: 'UTC', now: '2026-11-19 00', scanning: false,
+        totals: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, calls: 0 },
+        rows: [], nextCursor: null }],
+    ['bot/memory', { botId: 'bot_1', cursor: null, limit: 10, summarize: false },
+      'readLocalBotMemory', { botId: 'bot_1', available: false }],
+    ['bot/room-memory', { roomId: 'room_1', cursor: null, limit: 10, summarize: false },
+      'readLocalBotRoomMemory', { roomId: 'room_1', available: false }],
+    ['bot/schedules', { cursor: null, limit: 10 }, 'readLocalBotSchedules',
+      { available: false, total: 0, tasks: [], nextCursor: null }],
+    ['bot/schedule-history', { sessionId: target.session_id, id: 'task_1', limit: 10, before: null },
+      'readLocalBotScheduleHistory', { available: false, sessionId: target.session_id,
+        id: 'task_1', code: null, records: [], nextBefore: null, earlierRecordsUnavailable: false,
+        earlierRecordsPruned: false, retention: null }],
+    ['bot/feedback-log', { offset: 0, digest: null }, 'readLocalBotFeedbackLog',
+      { digest: 'a'.repeat(64), total: 0, chunk: '', nextOffset: null }],
+    ['bot/room-details', { roomId: 'room_1' }, 'readLocalBotRoomDetails',
+      { roomId: 'room_1', revision: 1, displayName: 'Team Room', notice: '', replyMode: 'admin',
+        relayLimit: null, permissionPreset: null, permissionChoices: null, adminBotId: null, members: [] }],
+    ['bot/folders', { botId: 'bot_1', path: null }, 'readLocalBotFolders',
+      { botId: 'bot_1', kind: 'places', team: '/team', canBrowse: true, folders: [], truncated: false }],
+    ['bot/avatar', { botId: 'bot_1', offset: 0 }, 'readLocalBotAvatar', null],
+    ['bot/attachment-preview', { botId: 'bot_1', sessionId: target.session_id,
+      eventSeq: 1, attachmentId, offset: 0 }, 'readLocalBotAttachmentPreview', null],
+    ['bot/attachment-download-open', { botId: 'bot_1', sessionId: target.session_id,
+      eventSeq: 1, attachmentId }, 'openLocalBotAttachmentDownload', null],
+    ['bot/attachment-download-read', { transferId, offset: 0 }, 'readLocalBotAttachmentDownload', null],
+  ] as const) {
+    const readResponse = await postBotRead(endpoint, args)
+    expect(readResponse.status).toBe(200)
+    expect(await readResponse.json()).toEqual({ value })
+    if (reader === 'readLocalBotFolders' || reader === 'readLocalBotAvatar' ||
+      reader === 'readLocalBotAttachmentPreview' || reader === 'openLocalBotAttachmentDownload' ||
+      reader === 'readLocalBotAttachmentDownload')
+      expect(botService[reader]).toHaveBeenCalledWith(args, expect.any(AbortSignal))
+    else expect(botService[reader]).toHaveBeenCalledWith(args)
+    const read = botService[reader]
+    Reflect.deleteProperty(botService, reader)
+    expect(await (await postBotRead(endpoint, args)).json()).toEqual({ value: null })
+    Object.assign(botService, { [reader]: read })
+  }
   const remoteUrl = chatUrl.replace('desktop-remote-ui', 'desktop-remote-session')
   const postRemote = (command: object, auth = `Bearer ${token}`) => fetch(remoteUrl, { method: 'POST',
     headers: { authorization: auth }, body: JSON.stringify(command) })
@@ -243,6 +457,318 @@ it('loads the Web plugin from cordis.yml and reads an actual Session without act
   Reflect.deleteProperty(botService, 'sendLocalBotChat')
   expect(await (await postRemote(sendCommand)).json()).toEqual({ value: null })
   Object.assign(botService, { sendLocalBotChat: sender })
+  const settingsRequest = { botId: 'bot_1', sessionId: target.session_id, expectedRevision: 7,
+    change: { kind: 'pinned', value: true } }
+  const settingsCommand = { operation: 'bot.settings.update', command_id: randomUUID(),
+    session_id: target.session_id, control, request: settingsRequest }
+  const settingsResponse = await postRemote(settingsCommand)
+  expect(settingsResponse.status).toBe(200)
+  expect(await settingsResponse.json()).toMatchObject({ value: { botId: 'bot_1', state: 'applied', revision: 8,
+    settings: { botId: 'bot_1', pinned: true } } })
+  expect(botService.resolveLocalBotSession).toHaveBeenCalledWith({ botId: 'bot_1', sessionId: target.session_id })
+  expect(botService.updateLocalBotSettings).toHaveBeenCalledWith({ botId: 'bot_1',
+    expectedRevision: 7, change: settingsRequest.change }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(settingsCommand)).json()).toEqual({ value: null })
+  expect(botService.updateLocalBotSettings).toHaveBeenCalledOnce()
+  const settingsWriter = botService.updateLocalBotSettings
+  Reflect.deleteProperty(botService, 'updateLocalBotSettings')
+  expect(await (await postRemote(settingsCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { updateLocalBotSettings: settingsWriter })
+  const deleteRequest = { botId: 'bot_1', sessionId: target.session_id, expectedRevision: 8 }
+  const deleteCommand = { operation: 'bot.delete', command_id: randomUUID(),
+    session_id: target.session_id, control, request: deleteRequest }
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: {
+    botId: 'bot_1', state: 'deleted', revision: 9,
+  } })
+  expect(botService.deleteLocalBot).toHaveBeenCalledWith({ botId: 'bot_1', expectedRevision: 8 },
+    expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: null })
+  expect(botService.deleteLocalBot).toHaveBeenCalledOnce()
+  const deleteWriter = botService.deleteLocalBot
+  Reflect.deleteProperty(botService, 'deleteLocalBot')
+  expect(await (await postRemote(deleteCommand)).json()).toEqual({ value: null })
+  Object.assign(botService, { deleteLocalBot: deleteWriter })
+  const copyRequest = { sourceBotId: 'bot_1', sessionId: target.session_id,
+    copyRequestId: randomUUID(), expectedRevision: 9, mode: 'create' }
+  const copyCommand = { operation: 'bot.duplicate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: copyRequest }
+  const copyReceipt = { sourceBotId: 'bot_1', copyRequestId: copyRequest.copyRequestId,
+    state: 'created', botId: 'bot_copy', revision: 10 }
+  expect(await (await postRemote(copyCommand)).json()).toEqual({ value: copyReceipt })
+  expect(botService.duplicateLocalBot).toHaveBeenCalledWith({ sourceBotId: 'bot_1',
+    copyRequestId: copyRequest.copyRequestId, expectedRevision: 9 }, expect.any(AbortSignal))
+  expect(await (await postRemote({ ...copyCommand, request: { ...copyRequest, mode: 'status' } })).json())
+    .toEqual({ value: copyReceipt })
+  expect(botService.readLocalBotDuplicate).toHaveBeenCalledWith({ sourceBotId: 'bot_1',
+    copyRequestId: copyRequest.copyRequestId }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(copyCommand)).json()).toEqual({ value: null })
+  expect(botService.duplicateLocalBot).toHaveBeenCalledOnce()
+  const createRequest = { ownerBotId: 'bot_1', sessionId: target.session_id,
+    createRequestId: randomUUID(), expectedRevision: 10, mode: 'create',
+    bot: { name: 'Research', color: null, avatarShape: null, avatarImage: null,
+      model: null, effort: null, brief: '' } }
+  const createCommand = { operation: 'bot.create', command_id: randomUUID(),
+    session_id: target.session_id, control, request: createRequest }
+  const createReceipt = { ownerBotId: 'bot_1', createRequestId: createRequest.createRequestId,
+    state: 'created', botId: 'bot_new', revision: 11 }
+  expect(await (await postRemote(createCommand)).json()).toEqual({ value: createReceipt })
+  expect(botService.createLocalBot).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    createRequestId: createRequest.createRequestId, expectedRevision: 10, bot: createRequest.bot },
+  expect.any(AbortSignal))
+  expect(await (await postRemote({ ...createCommand, request: { ...createRequest, mode: 'status' } })).json())
+    .toEqual({ value: createReceipt })
+  expect(botService.readLocalBotCreate).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    createRequestId: createRequest.createRequestId }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(createCommand)).json()).toEqual({ value: null })
+  expect(botService.createLocalBot).toHaveBeenCalledOnce()
+  const generalRequest = { botId: 'bot_1', sessionId: target.session_id,
+    expectedRevision: 4, change: { kind: 'width', value: 50 } }
+  const generalCommand = { operation: 'bot.general.update', command_id: randomUUID(),
+    session_id: target.session_id, control, request: generalRequest }
+  const generalReceipt = { state: 'applied', settings: {
+    revision: 5, theme: 'paper', accent: null, motion: 'normal', width: 50, teamWorkspace: '/team',
+  } }
+  expect(await (await postRemote(generalCommand)).json()).toEqual({ value: generalReceipt })
+  expect(botService.updateLocalBotGeneralSettings).toHaveBeenCalledWith({
+    expectedRevision: 4, change: generalRequest.change,
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(generalCommand)).json()).toEqual({ value: null })
+  expect(botService.updateLocalBotGeneralSettings).toHaveBeenCalledOnce()
+  const providerRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'key-set', provider: 'deepseek-official', value: 'sk-fixture-only' }
+  const providerCommand = { operation: 'bot.providers.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: providerRequest }
+  expect(await (await postRemote(providerCommand)).json()).toEqual({ value: {
+    available: true, providers: [], addable: [], protocols: [],
+  } })
+  expect(botService.mutateLocalBotProviders).toHaveBeenCalledWith({
+    kind: 'key-set', provider: 'deepseek-official', value: 'sk-fixture-only',
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(providerCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotProviders).toHaveBeenCalledOnce()
+  const connectorRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'connect', id: 'github', token: 'ghp_fixture_only' }
+  const connectorCommand = { operation: 'bot.connectors.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: connectorRequest }
+  expect(await (await postRemote(connectorCommand)).json()).toEqual({ value: {
+    connectors: [{ id: 'github', name: 'GitHub', state: 'ready', account: 'alice', hasError: false }],
+  } })
+  expect(botService.mutateLocalBotConnectors).toHaveBeenCalledWith({
+    kind: 'connect', id: 'github', token: 'ghp_fixture_only',
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(connectorCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotConnectors).toHaveBeenCalledOnce()
+  const feedbackCommand = { operation: 'bot.feedback.clear', command_id: randomUUID(),
+    session_id: target.session_id, control, request: { botId: 'bot_1', sessionId: target.session_id } }
+  const feedbackResponse = await postRemote(feedbackCommand)
+  expect(feedbackResponse.status).toBe(200)
+  expect(await feedbackResponse.json()).toEqual({ value: {
+    total: 0, entries: [], markdown: '', markdownTruncated: false,
+    issuesUrl: 'https://github.com/Fei2411/DeepSeek-Bot/issues/new',
+  } })
+  expect(botService.clearLocalBotFeedback).toHaveBeenCalledWith({}, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(feedbackCommand)).json()).toEqual({ value: null })
+  expect(botService.clearLocalBotFeedback).toHaveBeenCalledOnce()
+  const secretsRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'set', name: 'API_KEY', value: 'synthetic-value', purpose: null, scope: 'all' }
+  const secretsCommand = { operation: 'bot.secrets.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: secretsRequest }
+  const secretsResponse = await postRemote(secretsCommand)
+  expect(secretsResponse.status).toBe(200)
+  expect(await secretsResponse.json()).toEqual({ value: { entries: [], nextCursor: null } })
+  expect(botService.mutateLocalBotSecrets).toHaveBeenCalledWith({ kind: 'set', name: 'API_KEY',
+    value: 'synthetic-value', purpose: null, scope: 'all' }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(secretsCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotSecrets).toHaveBeenCalledOnce()
+  const capabilityRequest = { botId: 'bot_1', sessionId: target.session_id,
+    kind: 'save', expectedRevision: 4, name: null,
+    item: { name: 'research-tool', kind: 'skill', description: '', content: 'Instructions' } }
+  const capabilityCommand = { operation: 'bot.capability-library.mutate', command_id: randomUUID(),
+    session_id: target.session_id, control, request: capabilityRequest }
+  const capabilityResponse = await postRemote(capabilityCommand)
+  expect(capabilityResponse.status).toBe(200)
+  expect(await capabilityResponse.json()).toEqual({ value: {
+    revision: 5, entries: [], nextCursor: null,
+  } })
+  expect(botService.mutateLocalBotCapabilities).toHaveBeenCalledWith({
+    kind: 'save', expectedRevision: 4, name: null, item: capabilityRequest.item,
+  }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(capabilityCommand)).json()).toEqual({ value: null })
+  expect(botService.mutateLocalBotCapabilities).toHaveBeenCalledOnce()
+  const roomControllerId = randomUUID()
+  const roomAcquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: 'room_1', controller_id: roomControllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const roomControl = { controller_id: roomControllerId,
+    generation: roomAcquired.value.claim.generation, epoch: roomAcquired.value.claim.epoch }
+  const roomSubmission = { roomId: 'room_1', submissionId: randomUUID(), text: 'Plan' }
+  const roomReceipt = { roomId: 'room_1', submissionId: roomSubmission.submissionId, state: 'accepted' }
+  const roomSend = { operation: 'bot.room.send', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomSubmission }
+  expect(await (await postRemote(roomSend)).json()).toEqual({ value: roomReceipt })
+  expect(botService.sendLocalBotRoom).toHaveBeenCalledWith(roomSubmission, expect.any(AbortSignal))
+  expect(await (await postRemote({ operation: 'bot.room.receipt', command_id: randomUUID(),
+    request: roomSubmission })).json()).toEqual({ value: roomReceipt })
+  expect(botService.readLocalBotRoomReceipt).toHaveBeenCalledWith(roomSubmission, expect.any(AbortSignal))
+  const roomUpdate = { roomId: 'room_1', expectedRevision: 7,
+    change: { kind: 'notice', value: 'Review' } }
+  expect(await (await postRemote({ operation: 'bot.room.update', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomUpdate })).json()).toEqual({ value: {
+    roomId: 'room_1', revision: 7, state: 'stale', details: null,
+  } })
+  expect(botService.updateLocalBotRoom).toHaveBeenCalledWith(roomUpdate, expect.any(AbortSignal))
+  const roomDelete = { roomId: 'room_1', expectedRevision: 7 }
+  expect(await (await postRemote({ operation: 'bot.room.delete', command_id: randomUUID(),
+    session_id: 'room_1', control: roomControl, request: roomDelete })).json()).toEqual({ value: {
+    roomId: 'room_1', revision: 8, state: 'deleted',
+  } })
+  expect(botService.deleteLocalBotRoom).toHaveBeenCalledWith(roomDelete, expect.any(AbortSignal))
+  const roomCreate = { ownerBotId: 'bot_1', sessionId: target.session_id, expectedRevision: 7,
+    members: ['bot_1', 'bot_2'], name: 'Planning', notice: '', replyMode: 'admin', adminBotId: 'bot_1' }
+  const roomCreateCommand = { operation: 'bot.room.create', command_id: randomUUID(),
+    session_id: target.session_id, control, request: roomCreate }
+  expect(await (await postRemote(roomCreateCommand)).json()).toEqual({ value: {
+    state: 'stale', revision: 7, details: null,
+  } })
+  expect(botService.createLocalBotRoom).toHaveBeenCalledWith({ expectedRevision: 7,
+    members: ['bot_1', 'bot_2'], name: 'Planning', notice: '', replyMode: 'admin',
+    adminBotId: 'bot_1' }, expect.any(AbortSignal))
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(roomCreateCommand)).json()).toEqual({ value: null })
+  expect(botService.createLocalBotRoom).toHaveBeenCalledOnce()
+  const ownedCommand = (operation: string, request: object) => ({ operation, command_id: randomUUID(),
+    session_id: target.session_id, control, request })
+  const scheduleId = randomUUID()
+  const scheduleBase = { ownerBotId: 'bot_1', sessionId: target.session_id, requestId: scheduleId }
+  const scheduleCreate = { ...scheduleBase, mode: 'create', targetKind: 'bot', targetId: 'bot_1',
+    title: 'Briefing', prompt: 'Report progress', when: { kind: 'daily', time: '09:00', timeZone: 'UTC' } }
+  const scheduleCommand = ownedCommand('bot.schedule.mutate', scheduleCreate)
+  expect(await (await postRemote(scheduleCommand)).json()).toEqual({ value: {
+    requestId: scheduleId, operation: 'create', state: 'pending', taskId: null, sessionId: null,
+  } })
+  expect(botService.createLocalBotSchedule).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: scheduleId, targetKind: 'bot', targetId: 'bot_1', title: 'Briefing',
+    prompt: 'Report progress', when: scheduleCreate.when }, expect.any(AbortSignal))
+  const scheduleDelete = { ...scheduleBase, mode: 'delete', taskSessionId: 'room_1', taskId: 'task_1' }
+  expect(await (await postRemote(ownedCommand('bot.schedule.mutate', scheduleDelete))).json())
+    .toEqual({ value: { requestId: scheduleId, operation: 'delete', state: 'deleted',
+      taskId: 'task_1', sessionId: 'room_1' } })
+  expect(botService.deleteLocalBotSchedule).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: scheduleId, sessionId: 'room_1', id: 'task_1' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.schedule.mutate', { ...scheduleBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: scheduleId, operation: null, state: 'unknown',
+      taskId: null, sessionId: null } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(scheduleCommand)).json()).toEqual({ value: null })
+  expect(botService.createLocalBotSchedule).toHaveBeenCalledOnce()
+  const updateId = randomUUID()
+  const updateBase = { ownerBotId: 'bot_1', sessionId: target.session_id,
+    requestId: updateId, target: 'bot' }
+  const updateStart = { ...updateBase, mode: 'start', version: '0.3.8' }
+  const updateCommand = ownedCommand('bot.update.mutate', updateStart)
+  expect(await (await postRemote(updateCommand)).json()).toEqual({ value: {
+    requestId: updateId, target: 'bot', version: '0.3.8', state: 'pending',
+  } })
+  expect(botService.startLocalBotUpdate).toHaveBeenCalledWith({ requestId: updateId,
+    target: 'bot', version: '0.3.8' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.update.mutate', { ...updateBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: updateId, target: 'bot', version: '0.3.8', state: 'pending' } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(updateCommand)).json()).toEqual({ value: null })
+  expect(botService.startLocalBotUpdate).toHaveBeenCalledOnce()
+  const memoryId = randomUUID()
+  const memoryBase = { ownerBotId: 'bot_1', sessionId: target.session_id,
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1' }
+  const memoryAsk = { ...memoryBase, mode: 'ask', text: 'Remember tea' }
+  const memoryCommand = ownedCommand('bot.memory.mutate', memoryAsk)
+  expect(await (await postRemote(memoryCommand)).json()).toEqual({ value: {
+    requestId: memoryId, operation: 'ask', targetKind: 'bot', targetId: 'bot_1',
+    state: 'pending', reply: null, changes: [], truncated: false,
+  } })
+  expect(botService.askLocalBotMemory).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1', text: 'Remember tea' },
+  expect.any(AbortSignal))
+  const memoryForget = { ...memoryBase, mode: 'forget', scope: 'own', topic: null, text: 'tea' }
+  expect(await (await postRemote(ownedCommand('bot.memory.mutate', memoryForget))).json())
+    .toEqual({ value: { requestId: memoryId, operation: 'forget', targetKind: 'bot',
+      targetId: 'bot_1', state: 'pending', reply: null, changes: [], truncated: false } })
+  expect(botService.forgetLocalBotMemory).toHaveBeenCalledWith({ ownerBotId: 'bot_1',
+    requestId: memoryId, targetKind: 'bot', targetId: 'bot_1', scope: 'own',
+    topic: null, text: 'tea' }, expect.any(AbortSignal))
+  expect(await (await postRemote(ownedCommand('bot.memory.mutate', { ...memoryBase, mode: 'status' }))).json())
+    .toEqual({ value: { requestId: memoryId, operation: null, targetKind: null,
+      targetId: null, state: 'unknown', reply: null, changes: [], truncated: false } })
+  botService.resolveLocalBotSession.mockResolvedValueOnce({ botId: 'other', sessionId: target.session_id })
+  expect(await (await postRemote(memoryCommand)).json()).toEqual({ value: null })
+  expect(botService.askLocalBotMemory).toHaveBeenCalledOnce()
+  const mirrorRoomId = 'session-11111111-1111-4111-8111-111111111111'
+  const mirrorControllerId = randomUUID()
+  const mirrorAcquired = await (await postRemote({ operation: 'control.acquire', command_id: randomUUID(),
+    session_id: mirrorRoomId, controller_id: mirrorControllerId, takeover: false })).json() as {
+    value: { claim: { generation: string; epoch: number } }
+  }
+  const mirrorControl = { controller_id: mirrorControllerId,
+    generation: mirrorAcquired.value.claim.generation, epoch: mirrorAcquired.value.claim.epoch }
+  const mirrorRequest = { kind: 'start', roomId: mirrorRoomId, requestId: randomUUID(),
+    endpoint: 'https://slark.test', ticket: 't'.repeat(43) }
+  const mirrorCommand = { operation: 'bot.channel-mirror.mutate', command_id: randomUUID(),
+    session_id: mirrorRoomId, control: mirrorControl, request: mirrorRequest }
+  const mirrorResponse = await postRemote(mirrorCommand)
+  expect(mirrorResponse.status).toBe(200)
+  expect(await mirrorResponse.json()).toMatchObject({ value: { kind: 'start', roomId: mirrorRoomId,
+    requestId: mirrorRequest.requestId, state: 'awaiting_confirmation' } })
+  expect(botService.mutateLocalBotChannelMirror).toHaveBeenCalledWith(mirrorRequest, expect.any(AbortSignal))
+  const attachmentRequest = { botId: 'bot_1', sessionId: target.session_id,
+    submissionId: randomUUID(), receiptId: randomUUID(), kind: 'file', attachmentId }
+  const attachmentReceipt = { botId: 'bot_1', sessionId: target.session_id,
+    submissionId: attachmentRequest.submissionId, state: 'accepted' }
+  expect(await (await postRemote(ownedCommand('bot.attachment.send', attachmentRequest))).json())
+    .toEqual({ value: attachmentReceipt })
+  expect(botService.sendLocalBotAttachment).toHaveBeenCalledWith(attachmentRequest, expect.any(AbortSignal))
+  expect(await (await postRemote({ operation: 'bot.attachment.receipt',
+    command_id: randomUUID(), request: attachmentRequest })).json()).toEqual({ value: attachmentReceipt })
+  expect(botService.readLocalBotAttachmentReceipt).toHaveBeenCalledWith(attachmentRequest, expect.any(AbortSignal))
+  const absentWriters = [
+    ['sendLocalBotRoom', roomSend],
+    ['readLocalBotRoomReceipt', { operation: 'bot.room.receipt', command_id: randomUUID(), request: roomSubmission }],
+    ['updateLocalBotRoom', { operation: 'bot.room.update', command_id: randomUUID(),
+      session_id: 'room_1', control: roomControl, request: roomUpdate }],
+    ['createLocalBotRoom', roomCreateCommand],
+    ['deleteLocalBotRoom', { operation: 'bot.room.delete', command_id: randomUUID(),
+      session_id: 'room_1', control: roomControl, request: roomDelete }],
+    ['duplicateLocalBot', copyCommand],
+    ['createLocalBot', createCommand],
+    ['createLocalBotSchedule', scheduleCommand],
+    ['startLocalBotUpdate', updateCommand],
+    ['askLocalBotMemory', memoryCommand],
+    ['mutateLocalBotChannelMirror', mirrorCommand],
+    ['updateLocalBotGeneralSettings', generalCommand],
+    ['mutateLocalBotProviders', providerCommand],
+    ['mutateLocalBotConnectors', connectorCommand],
+    ['clearLocalBotFeedback', feedbackCommand],
+    ['mutateLocalBotSecrets', secretsCommand],
+    ['mutateLocalBotCapabilities', capabilityCommand],
+    ['sendLocalBotAttachment', ownedCommand('bot.attachment.send', attachmentRequest)],
+    ['readLocalBotAttachmentReceipt', { operation: 'bot.attachment.receipt',
+      command_id: randomUUID(), request: attachmentRequest }],
+  ] as const
+  for (const [writer, command] of absentWriters) {
+    const method = botService[writer]
+    Reflect.deleteProperty(botService, writer)
+    expect(await (await postRemote(command)).json()).toEqual({ value: null })
+    Object.assign(botService, { [writer]: method })
+  }
   const legacyIdentity = vi.spyOn(botService, 'resolveLocalBot')
   try {
     const absentSessionIdentity = await fetch(`http://127.0.0.1:${String((server.address() as AddressInfo).port)}/internal/desktop-bot-session-identity`, {

@@ -1,6 +1,7 @@
 import { DesktopRemoteTerminalStreams } from '../src/desktop-remote-terminal-stream.ts'
 import { DesktopSessionControl } from '../src/desktop-session-control.ts'
 import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -21,6 +22,39 @@ function responseFixture<T extends object>(value: T): T & ServerResponse {
 }
 
 describe('Desktop remote UI read-only bridge', () => {
+  it('rejects unavailable Bot readers without using the generic gateway', async () => {
+    const invoke = vi.fn()
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    const signal = new AbortController().signal
+    const attachmentId = `sha256:${'a'.repeat(64)}`
+    const source = { botId: 'main', sessionId: 'own-main', eventSeq: 7, attachmentId }
+    const cases = [
+      ['bot/chat', { botId: null }],
+      ['bot/rooms', { afterRoomId: '', limit: 1 }],
+      ['bot/room-history', { roomId: 'room-1', afterSeq: 0, limit: 1 }],
+      ['bot/room-details', { roomId: 'room-1' }],
+      ['bot/settings', { botId: 'main' }],
+      ['bot/memory', { botId: 'main', cursor: null, limit: 20, summarize: true }],
+      ['bot/room-memory', { roomId: 'room-1', cursor: null, limit: 12, summarize: true }],
+      ['bot/schedules', { cursor: null, limit: 20 }],
+      ['bot/schedule-history', { sessionId: 'bot-session', id: 'task-1', limit: 20, before: null }],
+      ['bot/about', { fresh: true }],
+      ['bot/usage', { rangeDays: 7, timeZone: 'UTC', cursor: null, limit: 20 }],
+      ['bot/general', {}],
+      ['bot/providers', {}],
+      ['bot/connectors', {}],
+      ['bot/feedback', {}],
+      ['bot/folders', { botId: 'main', path: null }],
+      ['bot/avatar', { botId: 'main', offset: 0 }],
+      ['bot/attachment-preview', { ...source, offset: 0 }],
+      ['bot/attachment-download-open', source],
+      ['bot/attachment-download-read', { transferId: '11111111-1111-4111-8111-111111111111', offset: 0 }],
+    ] as const
+    for (const [endpoint, args] of cases) {
+      await expect(executor.execute(endpoint, { args }, signal)).rejects.toThrow('unavailable')
+    }
+    expect(invoke).not.toHaveBeenCalled()
+  })
   it('reads only an existing Bot own-chat selection and never invokes the generic gateway', async () => {
     const invoke = vi.fn(), read = vi.fn(async () => ({ revision: 4, defaultBotId: 'z',
       bot: { botId: 'z', actorRef: 'deepseek-bot:z', displayName: 'Main Bot', sessionId: 'current-part' } }))
@@ -270,6 +304,53 @@ describe('Desktop remote UI read-only bridge', () => {
       .rejects.toThrow('invalid_bot_feedback_request')
     read.mockResolvedValueOnce({ ...directory, token: 'private' } as never)
     await expect(executor.execute('bot/feedback', { args: {} }, signal)).rejects.toThrow()
+  })
+  it('keeps Bot log, secret metadata and capability pages on their bounded readers', async () => {
+    const invoke = vi.fn()
+    const bytes = Buffer.from('redacted log')
+    const log = { digest: createHash('sha256').update(bytes).digest('hex'), total: bytes.length,
+      chunk: bytes.toString('base64'), nextOffset: null }
+    const secrets = { entries: [], nextCursor: null }
+    const library = { revision: 0, entries: [], nextCursor: null }
+    const readLog = vi.fn(async (): Promise<unknown> => log)
+    const readSecrets = vi.fn(async (): Promise<unknown> => secrets)
+    const readLibrary = vi.fn(async (): Promise<unknown> => library)
+    const executor = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [],
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, readLog, readSecrets, readLibrary)
+    const signal = new AbortController().signal
+    const logArgs = { offset: 0, digest: null }
+    const secretArgs = { after: '', limit: 1 }
+    const libraryArgs = { after: '', limit: 1 }
+    await expect(executor.execute('bot/feedback-log', { args: logArgs }, signal)).resolves.toEqual(log)
+    await expect(executor.execute('bot/secrets', { args: secretArgs }, signal)).resolves.toEqual(secrets)
+    await expect(executor.execute('bot/capability-library', { args: libraryArgs }, signal)).resolves.toEqual(library)
+    expect(readLog).toHaveBeenCalledWith(logArgs, signal)
+    expect(readSecrets).toHaveBeenCalledWith(secretArgs, signal)
+    expect(readLibrary).toHaveBeenCalledWith(libraryArgs, signal)
+    expect(invoke).not.toHaveBeenCalled()
+    for (const [endpoint, args] of [
+      ['bot/feedback-log', logArgs], ['bot/secrets', secretArgs],
+      ['bot/capability-library', libraryArgs],
+    ] as const) {
+      await expect(executor.execute(endpoint, { args: { ...args, profileId: 'other' } }, signal))
+        .rejects.toThrow()
+    }
+    readLog.mockResolvedValueOnce({ ...log, privateDetail: 'host path' })
+    readSecrets.mockResolvedValueOnce({ entries: [{ name: 'API_KEY', value: 'secret' }], nextCursor: null })
+    readLibrary.mockResolvedValueOnce({ ...library, privateDetail: 'host path' })
+    await expect(executor.execute('bot/feedback-log', { args: logArgs }, signal)).rejects.toThrow()
+    await expect(executor.execute('bot/secrets', { args: secretArgs }, signal)).rejects.toThrow()
+    await expect(executor.execute('bot/capability-library', { args: libraryArgs }, signal)).rejects.toThrow()
+    const unavailable = new DesktopRemoteUiExecutor(gatewayFixture({ invoke }), () => [])
+    for (const [endpoint, args] of [
+      ['bot/feedback-log', logArgs], ['bot/secrets', secretArgs],
+      ['bot/capability-library', libraryArgs],
+    ] as const) {
+      await expect(unavailable.execute(endpoint, { args }, signal)).rejects.toThrow('reader unavailable')
+    }
+    expect(invoke).not.toHaveBeenCalled()
   })
   it('reads bounded owner Bot folders without invoking the generic Profile gateway', async () => {
     const invoke = vi.fn()

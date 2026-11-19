@@ -22,4 +22,25 @@ describe('controlled Bot creation', () => {
     expect(() => parseHostBotCreateReceipt({ ownerBotId: 'main', createRequestId: request.createRequestId,
       state: 'created', botId: 'main', revision: 8 }, request)).toThrow('invalid_bot_create_receipt')
   })
+
+  it('accepts bounded visual and model choices and rejects invalid combinations', () => {
+    const rich = { ...request, bot: { ...request.bot, color: '#123456', avatarShape: 'circle',
+      avatarImage: 'data:image/png;base64,YQ==', model: 'provider/model', effort: 'medium', brief: 'Plan' } }
+    expect(parseHostBotCreateRequest(rich)).toEqual(rich)
+    expect(parseHostBotCreateRequest({ ...rich, mode: 'status' }).mode).toBe('status')
+    expect(() => parseHostBotCreateRequest({ ...rich, mode: 'retry' })).toThrow('invalid_bot_create')
+    expect(parseHostBotCreateReceipt(null, request)).toBeNull()
+    for (const bot of [
+      { ...rich.bot, color: 'x'.repeat(65) },
+      { ...rich.bot, avatarShape: 5 },
+      { ...rich.bot, avatarShape: '../circle' },
+      { ...rich.bot, avatarImage: 'data:image/svg+xml;base64,YQ==' },
+      { ...rich.bot, avatarImage: `data:image/png;base64,${'A'.repeat(30_001)}` },
+      { ...rich.bot, model: 'unknown' },
+      { ...rich.bot, model: `${'x'.repeat(512)}/model` },
+      { ...rich.bot, effort: 'x'.repeat(129) },
+      { ...rich.bot, model: null },
+      { ...rich.bot, brief: 'x'.repeat(4097) },
+    ]) expect(() => parseHostBotCreateRequest({ ...request, bot })).toThrow('invalid_bot_create')
+  })
 })

@@ -41,7 +41,21 @@ describe('fixed owner Bot room details', () => {
     const mirror = { state: 'active', target: { projectId: 'project-1', channelId: 'channel-1',
       defaultAgentId: 'agent-1' }, groupGap: 2, channelGap: 0, pauseReason: null }
     expect(parseHostBotRoomDetails({ ...value, channelMirror: mirror }, request)?.channelMirror).toEqual(mirror)
+    expect(parseHostBotRoomDetails({ ...value, replyMode: 'everyone', channelMirror: null }, request))
+      .toMatchObject({ replyMode: 'everyone', channelMirror: null })
     expect(() => parseHostBotRoomDetails({ ...value,
       channelMirror: { ...mirror, credential: 'secret' } }, request)).toThrow('invalid_bot_room_details_result')
+    expect(parseHostBotRoomDetails({ ...value,
+      channelMirror: { ...mirror, target: null, groupGap: null, channelGap: null,
+        pauseReason: 'authority_revoked' } }, request)?.channelMirror?.target).toBeNull()
+    for (const invalid of [
+      { ...mirror, pauseReason: 'private_reason' },
+      { ...mirror, pauseReason: 1 },
+      { ...mirror, target: { ...mirror.target, privateId: 'secret' } },
+      { ...mirror, target: { ...mirror.target, projectId: '' } },
+      { ...mirror, target: { ...mirror.target, channelId: 'x'.repeat(257) } },
+      { ...mirror, target: { ...mirror.target, defaultAgentId: 'agent\n1' } },
+    ]) expect(() => parseHostBotRoomDetails({ ...value, channelMirror: invalid }, request))
+      .toThrow('invalid_bot_room_details_result')
   })
 })

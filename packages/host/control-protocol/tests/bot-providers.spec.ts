@@ -48,4 +48,33 @@ describe('native provider directory boundary', () => {
     expect(() => parseHostBotProviderDiscovery({ models: [{ id: 'm1', name: 'One' },
       { id: 'm1', name: 'Two' }] })).toThrow()
   })
+
+  it('rejects malformed provider URLs and ambiguous credential-free directories', () => {
+    const known = { botId: 'main', sessionId: 'chat-1', kind: 'add-known',
+      provider: 'deepseek', value: null }
+    expect(parseHostBotProvidersMutationRequest(known)).toEqual(known)
+    expect(parseHostBotProvidersMutationRequest({ ...known, value: 'sk-fixture-only' }).value)
+      .toBe('sk-fixture-only')
+    const request = { botId: 'main', sessionId: 'chat-1', kind: 'add-custom',
+      provider: 'my-gateway', value: { name: 'Gateway', baseURL: 'not a URL',
+        api: 'openai-completions', key: null, models: ['m1'] } }
+    expect(() => parseHostBotProvidersMutationRequest(request)).toThrow('invalid_bot_providers_mutation')
+    expect(parseHostBotProviderDiscovery(null)).toBeNull()
+    expect(() => parseHostBotProviderDiscovery({ models: 'm1' })).toThrow('invalid_bot_provider_discovery')
+    expect(parseHostBotProviders(null)).toBeNull()
+    const noKey = { ...view, providers: [{ ...view.providers[0], key: null }] }
+    expect(parseHostBotProviders(noKey)).toEqual(noKey)
+    for (const invalid of [
+      { ...view, addable: [{ id: 'deepseek', name: 'Duplicate' }] },
+      { ...view, protocols: ['openai-responses', 'openai-responses'] },
+      { ...view, protocols: ['private-protocol'] },
+      { ...view, available: false },
+    ]) expect(() => parseHostBotProviders(invalid)).toThrow('invalid_bot_providers_result')
+    const models = Array.from({ length: 500 }, () => ({ ref: 'm', name: 'M' }))
+    const overBudget = { available: true, addable: [], protocols: [], providers: Array.from({ length: 5 },
+      (_, index) => ({ ...view.providers[0], id: `provider-${index}`, key: null,
+        models: index === 4 ? models.slice(0, 1) : models })) }
+    expect(Buffer.byteLength(JSON.stringify(overBudget), 'utf8')).toBeLessThan(60_000)
+    expect(() => parseHostBotProviders(overBudget)).toThrow('invalid_bot_providers_result')
+  })
 })

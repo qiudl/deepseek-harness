@@ -198,6 +198,21 @@ function assertEnvelope(
   return e
 }
 
+it('requires one matching proof when parsing a memory read response', () => {
+  const sourceEnvelope = envelope('prepare_snapshot', result(0)).value
+  const projectionEnvelope = envelope('search', result(3), 'projection').value
+  expect(results.parseHostProjectMemoryResponse(sourceEnvelope)).toEqual(sourceEnvelope)
+  expect(results.parseHostProjectMemoryResponse(projectionEnvelope)).toEqual(projectionEnvelope)
+
+  for (const response of [
+    { ...sourceEnvelope, sourceProof: null },
+    { ...sourceEnvelope, projectionProof: projectionEnvelope.projectionProof },
+    { ...sourceEnvelope, sourceProof: null, projectionProof: projectionEnvelope.projectionProof },
+    { ...sourceEnvelope, sourceProof: { ...sourceEnvelope.sourceProof, operation: 'search' } },
+    { ...sourceEnvelope, sourceProof: { ...sourceEnvelope.sourceProof, resultDigest: badDigest } },
+  ]) expect(() => results.parseHostProjectMemoryResponse(response)).toThrow()
+})
+
 it('accepts both confirmed directions and explicit null peers without granting authority', () => {
   const offer = JSON.parse(readFileSync(new URL('./fixtures/twin-binding-offer-v1.json', import.meta.url), 'utf8')) as {
     offer: { directions: [{ scope: unknown }, { scope: wire.HostProjectMemoryDirective['scope'] }] }
