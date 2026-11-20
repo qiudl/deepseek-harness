@@ -140,6 +140,8 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 响应里的公钥本身不构成信任。Desktop Broker 必须将其与已认证安装记录匹配，并独立比对对端可执行文件的代码签名摘要后才接受签名。迁移流程只能依据其显式同意和校验策略建立该记录；普通连接绝不能静默信任新密钥。
 
+离线 Account 恢复请求 `profile.recovery_inspect`、`profile.recover_offline_account` 和 `profile.open_offline_account` 必须携带 `expected_environment_id`（环境权威 UUID）。客户端在发送这些请求前必须确认 Host 声明 `profile.offline_environment_guard` 能力。Host 可返回 `profile_environment_mismatch` 或 `profile_environment_unproven`，且不打开视图。
+
 <a id="api"></a>
 
 `profile.source_authority` 接受精确服务器挑战，包含 Account/environment、原始 Source 坐标、完整快照摘要与已登记 Host epoch。专用 UTF-8 签名正文由 `dsh-collaboration-source-authority/v1`、NUL 和固定顺序 JSON 元组组成。授权 Profile 必须确认匹配的持久 journal 记录后才能签名；归属或登记签名不能替代。响应不含消息、凭据或可执行调用。云端必须在核验当前 Account/Host 的同一事务中认证并消费 nonce 和快照；签名不授予目标执行权限。

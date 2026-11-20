@@ -1026,7 +1026,9 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
-    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle], expectedEnvironmentId: stagingEnvironmentId })
+    const inspected = await client.inspectOfflineAccountProfiles({
+      profileKeyHandles: [recoveryKeyHandle], expectedEnvironmentId: stagingEnvironmentId,
+    })
     expect(inspected.candidates).toEqual([expect.objectContaining({
       state: 'recoverable', bindingCount: 1, sessionCount: 86, pluginCount: 6,
       preflightDigest: recoveryPreflightDigest,
@@ -1044,7 +1046,9 @@ describe('authenticated Unix transport', () => {
     })
     await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
       .resolves.toEqual({ state: 'offline_ready' })
-    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector, expectedEnvironmentId: stagingEnvironmentId }))
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: recovered.profileSelector, expectedEnvironmentId: stagingEnvironmentId,
+    }))
       .resolves.toMatchObject({ accessScope: 'offline_local' })
     await expect(client.openLocalProfile({ profileSelector: recovered.profileSelector }))
       .rejects.toMatchObject({ code: 'unauthorized' })
@@ -1054,7 +1058,9 @@ describe('authenticated Unix transport', () => {
       accountAccessToken: accountToken(slarkIssuer, 'u1'), accountBindingHandle: 'binding:opaque',
       authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
-    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector, expectedEnvironmentId: stagingEnvironmentId }))
+    await expect(client.openOfflineAccountProfile({
+      profileSelector: connected.profileSelector, expectedEnvironmentId: stagingEnvironmentId,
+    }))
       .rejects.toMatchObject({ code: 'unauthorized' })
     client.close()
     await server.close()
