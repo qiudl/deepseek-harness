@@ -228,7 +228,7 @@ export abstract class ProjectOperationMemorySourceDeliveries<
       anchorCheckpoint,
       eventsDigest: text(r.eventsDigest),
       revisionsDigest: text(r.revisionsDigest),
-    } as unknown as Original<R>
+    } as Original<R>
     if (
       proof.authorityEnvironmentId !== original.authorityEnvironmentId ||
       !/^[a-f0-9]{64}$/u.test(original.eventsDigest) ||
@@ -242,7 +242,7 @@ export abstract class ProjectOperationMemorySourceDeliveries<
       (cloudReceipt?.stage === 'delivery_committed') !== (r.activatedAt !== null)
     )
       return fail()
-    return { ...original, cloudReceipt, activatedAt: r.activatedAt } as unknown as R
+    return { ...original, cloudReceipt, activatedAt: r.activatedAt } as R
   }
   private recordKey(d: HostProjectMemoryDirective, deliveryId: string): string {
     return createHash('sha256')
