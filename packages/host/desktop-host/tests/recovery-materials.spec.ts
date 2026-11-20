@@ -87,7 +87,8 @@ describe.skipIf(process.platform === 'win32')('read-only original Host recovery 
       descriptorDigest: createHash('sha256').update(encodeRecoveryDescriptorPayload(signed.descriptor)).digest('hex') })
     expect(readFileSync(join(f.root, 'profiles.json'))).toEqual(f.before)
     expect(f.worker).not.toHaveBeenCalled()
-    await expect(f.host.openOfflineAccountProfile({ profileId: f.profile.profileId, bindingGeneration: 0,
+    await expect(f.host.openOfflineAccountProfile({ profileId: f.profile.profileId,
+      expectedEnvironmentId: f.identity.installationId, bindingGeneration: 0,
       ownerId: 'different-owner' })).rejects.toMatchObject({ code: 'profile_locked' })
   })
   it('rejects cached recovery capability when its read-only persistence provider is no longer available', async () => {
