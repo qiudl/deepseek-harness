@@ -69,6 +69,9 @@ describe('offline Account Profile recovery', () => {
       expectedEnvironmentId: otherEnvironmentId })).rejects.toMatchObject({ code: 'profile_environment_mismatch' })
     await expect(host.openOfflineAccountProfile({ profileId: recovered.profileId,
       bindingGeneration: recovered.bindingGeneration, ownerId: 'connection-1',
+      expectedEnvironmentId: 'invalid' })).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(host.openOfflineAccountProfile({ profileId: recovered.profileId,
+      bindingGeneration: recovered.bindingGeneration, ownerId: 'connection-1',
       expectedEnvironmentId: environmentId })).resolves.toMatchObject({ profileId: recovered.profileId })
   })
 
@@ -218,6 +221,42 @@ describe('offline Account Profile recovery', () => {
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
+  })
+
+  it('refuses a recovery if the Profile binding changes while its worker starts', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const original = await account(registry, {
+      subject: 'original', keyHandle: 'keychain:original', bindingHandle: 'binding:original',
+    })
+    const host = new DesktopHost({
+      registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: async () => ({
+        state: 'recoverable', compatibility: 'current', persistenceGeneration: 11,
+        sessionCount: 1, pluginCount: 0, preflightDigest,
+      }),
+      ensureRecoveredProfileWorker: async () => {
+        await registry.registerAccount({
+          issuer: 'https://accounts.dsh.colorbuyai.com', subject: 'original',
+          keyHandle: 'keychain:original', unlockMaterial,
+          authorityEnvironmentId: otherEnvironmentId,
+          accountBindingHandle: 'binding:rotated', authorityBindingVersion: 2,
+        })
+      },
+    })
+    const candidate = (await host.inspectOfflineAccountProfiles({
+      expectedEnvironmentId: environmentId, keyHandles: ['keychain:original'],
+      expectedRuntimeGeneration: 5, expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })).candidates[0]!
+    await expect(host.recoverOfflineAccountProfile({
+      expectedEnvironmentId: environmentId, candidateId: candidate.candidateId,
+      preflightDigest, keyHandle: 'keychain:original', unlockMaterial,
+      operationId: randomUUID(), ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
+    await expect(host.openOfflineAccountProfile({
+      expectedEnvironmentId: environmentId, profileId: original.profileId,
+      bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
+    })).rejects.toMatchObject({ code: 'profile_locked' })
   })
 
   it('rejects invalid, unavailable, missing, ambiguous, and expired inspection candidates', async () => {
