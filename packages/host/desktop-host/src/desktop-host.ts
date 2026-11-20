@@ -67,6 +67,7 @@ interface ProfileAccessGrant {
 
 interface RecoveryCandidateState {
   readonly ownerId: string
+  readonly expectedEnvironmentId: string
   readonly profile: AccountProfileRecord
   readonly keyHandle: string
   readonly preflight: OfflineProfileRecoveryPreflight
@@ -78,6 +79,7 @@ interface RecoveryCandidateState {
 
 type RecoveryOperationState = {
   readonly ownerId: string
+  readonly expectedEnvironmentId: string
   readonly candidateId: OfflineProfileRecoveryCandidateId
   readonly profileId: PersonProfileId
   readonly keyHandle: string
@@ -378,11 +380,13 @@ export class DesktopHost {
    */
   async inspectOfflineAccountProfiles(input: {
     readonly keyHandles: readonly string[]
+    readonly expectedEnvironmentId: string
     readonly expectedRuntimeGeneration: number
     readonly expectedSchemaGeneration: number
     readonly ownerId: string
   }): Promise<{ readonly candidates: readonly OfflineProfileRecoveryCandidate[] }> {
-    if (input.keyHandles.length < 1 || input.keyHandles.length > 128
+    if (!UUID.test(input.expectedEnvironmentId)
+      || input.keyHandles.length < 1 || input.keyHandles.length > 128
       || new Set(input.keyHandles).size !== input.keyHandles.length
       || !Number.isSafeInteger(input.expectedRuntimeGeneration) || input.expectedRuntimeGeneration <= 0
       || input.expectedRuntimeGeneration !== this.options.runtimeGeneration
@@ -401,6 +405,7 @@ export class DesktopHost {
         if (error instanceof HostAuthorityError && error.code === 'profile_not_found') continue
         throw error
       }
+      this.assertOfflineProfileEnvironment(profile, input.expectedEnvironmentId)
       const preflight = await inspect(profile, {
         runtimeGeneration: input.expectedRuntimeGeneration,
         schemaGeneration: input.expectedSchemaGeneration,
@@ -408,7 +413,7 @@ export class DesktopHost {
       this.validateRecoveryPreflight(preflight)
       const candidateId = randomUUID() as OfflineProfileRecoveryCandidateId
       this.recoveryCandidates.set(candidateId, {
-        ownerId: input.ownerId, profile, keyHandle, preflight,
+        ownerId: input.ownerId, expectedEnvironmentId: input.expectedEnvironmentId, profile, keyHandle, preflight,
         expectedRuntimeGeneration: input.expectedRuntimeGeneration,
         expectedSchemaGeneration: input.expectedSchemaGeneration, inspect,
         expiresAt: this.options.clock.now() + RECOVERY_CANDIDATE_TTL_MS,
@@ -429,6 +434,7 @@ export class DesktopHost {
    * @returns an offline-only grant after the recovered worker reports ready.
    */
   async recoverOfflineAccountProfile(input: {
+    readonly expectedEnvironmentId: string
     readonly candidateId: OfflineProfileRecoveryCandidateId
     readonly preflightDigest: string
     readonly keyHandle: string
@@ -436,13 +442,15 @@ export class DesktopHost {
     readonly operationId: string
     readonly ownerId: string
   }): Promise<OfflineProfileRecoveryResult> {
-    if (!UUID.test(input.operationId) || !SHA256.test(input.preflightDigest)) {
+    if (!UUID.test(input.operationId) || !UUID.test(input.expectedEnvironmentId)
+      || !SHA256.test(input.preflightDigest)) {
       throw new HostAuthorityError('invalid_input')
     }
     const operationId = input.operationId as OfflineProfileRecoveryOperationId
     const existing = this.recoveryOperations.get(operationId)
     if (existing) {
-      if (existing.ownerId !== input.ownerId || existing.candidateId !== input.candidateId
+      if (existing.ownerId !== input.ownerId || existing.expectedEnvironmentId !== input.expectedEnvironmentId
+        || existing.candidateId !== input.candidateId
         || existing.keyHandle !== input.keyHandle || existing.preflightDigest !== input.preflightDigest) {
         throw new HostAuthorityError('idempotency_conflict')
       }
@@ -452,11 +460,15 @@ export class DesktopHost {
     if (!candidate || candidate.ownerId !== input.ownerId || candidate.expiresAt <= this.options.clock.now()) {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
+    if (candidate.expectedEnvironmentId !== input.expectedEnvironmentId) {
+      throw new HostAuthorityError('profile_environment_mismatch')
+    }
     if (candidate.keyHandle !== input.keyHandle || candidate.preflight.preflightDigest !== input.preflightDigest) {
       throw new HostAuthorityError('recovery_preflight_stale')
     }
     const current = this.options.registry.resolveProfile(candidate.profile.profileId)
     if (current !== candidate.profile) throw new HostAuthorityError('recovery_preflight_stale')
+    this.assertOfflineProfileEnvironment(current, input.expectedEnvironmentId)
     try { this.options.registry.verifyUnlock(current, input.keyHandle, input.unlockMaterial) } catch (error) {
       if (error instanceof HostAuthorityError && error.code === 'invalid_input') throw error
       throw new HostAuthorityError('recovery_proof_mismatch')
@@ -470,12 +482,14 @@ export class DesktopHost {
     if (this.profileRecoveries.has(current.profileId)) throw new HostAuthorityError('recovery_in_progress')
 
     const operation: RecoveryOperationState = {
-      ownerId: input.ownerId, candidateId: input.candidateId, profileId: current.profileId,
+      ownerId: input.ownerId, expectedEnvironmentId: input.expectedEnvironmentId,
+      candidateId: input.candidateId, profileId: current.profileId,
       keyHandle: input.keyHandle, preflightDigest: input.preflightDigest,
     }
     const promise = (async (): Promise<OfflineProfileRecoveryResult> => {
       try {
         await Promise.resolve()
+        this.assertOfflineProfileEnvironment(current, input.expectedEnvironmentId)
         const refreshed = await inspect(current, {
           runtimeGeneration: candidate.expectedRuntimeGeneration,
           schemaGeneration: candidate.expectedSchemaGeneration,
@@ -491,6 +505,9 @@ export class DesktopHost {
           throw new HostAuthorityError('recovery_preflight_stale')
         }
         await ensureWorker(current, refreshed)
+        const afterWorker = this.options.registry.resolveProfile(current.profileId)
+        if (afterWorker !== current) throw new HostAuthorityError('recovery_preflight_stale')
+        this.assertOfflineProfileEnvironment(afterWorker, input.expectedEnvironmentId)
         if (operation.revoked) throw new HostAuthorityError('recovery_worker_failed')
         const result: OfflineProfileRecoveryResult = {
           state: 'offline_ready', profileId: current.profileId, accessScope: 'offline_local',
@@ -503,7 +520,8 @@ export class DesktopHost {
         return result
       } catch (error) {
         if (error instanceof HostAuthorityError
-          && ['recovery_preflight_stale', 'runtime_incompatible', 'profile_integrity_failed'].includes(error.code)) {
+          && ['recovery_preflight_stale', 'runtime_incompatible', 'profile_integrity_failed',
+            'profile_environment_mismatch', 'profile_environment_unproven'].includes(error.code)) {
           this.recoveryOperations.delete(operationId)
           throw error
         }
@@ -546,15 +564,25 @@ export class DesktopHost {
     readonly profileId: PersonProfileId
     readonly bindingGeneration: number
     readonly ownerId: string
+    readonly expectedEnvironmentId: string
   }): Promise<OfflineProfileOpenResult> {
     const profile = this.options.registry.resolveProfile(input.profileId)
+    if (!UUID.test(input.expectedEnvironmentId)) throw new HostAuthorityError('invalid_input')
     if (!profile || profile.kind !== 'account' || profile.bindingGeneration !== input.bindingGeneration
       || !this.hasGrant(input.ownerId, profile.profileId, 'offline_local')) {
       throw new HostAuthorityError('profile_locked')
     }
+    this.assertOfflineProfileEnvironment(profile, input.expectedEnvironmentId)
     return await Promise.resolve({
       ...this.openUnlockedProfile(profile.profileId, input.ownerId), accessScope: 'offline_local' as const,
     })
+  }
+
+  private assertOfflineProfileEnvironment(profile: PersonProfileRecord, expectedEnvironmentId: string): void {
+    if (profile.kind !== 'account') throw new HostAuthorityError('profile_environment_unproven')
+    const environments = new Set((profile.accountBindings ?? []).map(binding => binding.authorityEnvironmentId))
+    if (environments.size !== 1) throw new HostAuthorityError('profile_environment_unproven')
+    if (!environments.has(expectedEnvironmentId)) throw new HostAuthorityError('profile_environment_mismatch')
   }
 
   private openUnlockedProfile(profileId: PersonProfileId, ownerId: string): ProfileOpenResult {
