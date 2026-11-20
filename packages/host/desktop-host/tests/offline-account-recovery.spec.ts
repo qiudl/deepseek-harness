@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it, onTestFinished } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DesktopHost, ProfileRegistry } from '../src/index.ts'
 
 const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
@@ -105,6 +105,26 @@ describe('offline Account Profile recovery', () => {
       keyHandles: ['keychain:unbound'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'profile_environment_unproven' })
+  })
+
+  it('fails closed if the registry yields a malformed Profile during offline inspection', async () => {
+    const clock = { now: () => 1_000 }
+    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
+    const original = await account(registry, { subject: 'original', keyHandle: 'keychain:original' })
+    const inspectWorker = vi.fn()
+    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
+      inspectOfflineAccountProfile: inspectWorker,
+    })
+    const inspect = () => host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+      keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
+      expectedSchemaGeneration: 3, ownerId: 'connection-1',
+    })
+    const resolve = vi.spyOn(registry, 'resolveUniqueAccountByKeyHandle')
+    resolve.mockReturnValueOnce({ ...original, kind: 'local' } as unknown as ReturnType<typeof resolve>)
+    await expect(inspect()).rejects.toMatchObject({ code: 'profile_environment_unproven' })
+    resolve.mockReturnValueOnce({ ...original, accountBindings: undefined } as unknown as ReturnType<typeof resolve>)
+    await expect(inspect()).rejects.toMatchObject({ code: 'profile_environment_unproven' })
+    expect(inspectWorker).not.toHaveBeenCalled()
   })
 
   it('inspects without starting plugins, then grants only offline_local after proof and worker readiness', async () => {
