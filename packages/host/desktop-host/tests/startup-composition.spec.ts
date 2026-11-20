@@ -656,24 +656,21 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(importer.abort(staged.importId, staged.version)).rejects.toThrow()
 
   const accountSubject = randomUUID()
-  const accountEnvironmentId = randomUUID()
   const accountUnlock = Buffer.alloc(32, 10).toString('base64url')
   const accountProfile = await application.host.ensureAccountProfile({
     issuer: 'https://accounts.dsh.colorbuyai.com', subject: accountSubject,
-    authorityEnvironmentId: accountEnvironmentId, accountBindingHandle: 'binding:startup', authorityBindingVersion: 1,
+    authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:startup', authorityBindingVersion: 1,
     accountAccessToken: accountToken(accountPrivateKey, accountSubject),
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock, ownerId: 'connected-owner',
   })
   application.host.revokeOwner('connected-owner')
   const inspected = await application.host.inspectOfflineAccountProfiles({
-    expectedEnvironmentId: accountEnvironmentId,
     keyHandles: ['keychain:account-startup'], expectedRuntimeGeneration: 3,
     expectedSchemaGeneration: 1, ownerId: 'offline-owner',
   })
   expect(inspected.candidates).toHaveLength(1)
   const candidate = inspected.candidates[0]!
   expect(await application.host.recoverOfflineAccountProfile({
-    expectedEnvironmentId: accountEnvironmentId,
     candidateId: candidate.candidateId,
     preflightDigest: candidate.preflightDigest,
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock,
@@ -682,7 +679,6 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
 
   application.host.revokeOwner('offline-owner')
   const failedInspection = await application.host.inspectOfflineAccountProfiles({
-    expectedEnvironmentId: accountEnvironmentId,
     keyHandles: ['keychain:account-startup'], expectedRuntimeGeneration: 3,
     expectedSchemaGeneration: 1, ownerId: 'retry-owner',
   })
@@ -693,7 +689,6 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     })
     .mockRejectedValueOnce(new Error('stabilization failed'))
   await expect(application.host.recoverOfflineAccountProfile({
-    expectedEnvironmentId: accountEnvironmentId,
     candidateId: failedInspection.candidates[0]!.candidateId,
     preflightDigest: failedInspection.candidates[0]!.preflightDigest,
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock,

@@ -8,7 +8,6 @@ import { DesktopHost, ProfileRegistry } from '../src/index.ts'
 const unlockMaterial = Buffer.alloc(32, 9).toString('base64url')
 const otherUnlockMaterial = Buffer.alloc(32, 8).toString('base64url')
 const environmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3181'
-const otherEnvironmentId = '018f0f4c-87f8-7e2d-a2f8-7b93d34e3182'
 const preflightDigest = 'a'.repeat(64)
 
 function fixtureRoot(): string {
@@ -21,57 +20,21 @@ async function account(registry: ProfileRegistry, input: {
   readonly subject: string
   readonly keyHandle: string
   readonly bindingHandle?: string
-  readonly bindingEnvironmentId?: string
-  readonly unbound?: boolean
 }) {
   return await registry.registerAccount({
     issuer: 'https://accounts.dsh.colorbuyai.com',
     subject: input.subject,
     keyHandle: input.keyHandle,
     unlockMaterial,
-    ...(input.unbound ? {} : {
-      authorityEnvironmentId: input.bindingEnvironmentId ?? environmentId,
-      accountBindingHandle: input.bindingHandle ?? `binding:${input.subject}`,
+    ...(input.bindingHandle === undefined ? {} : {
+      authorityEnvironmentId: environmentId,
+      accountBindingHandle: input.bindingHandle,
       authorityBindingVersion: 1,
     }),
   })
 }
 
 describe('offline Account Profile recovery', () => {
-  it('refuses cross-environment and unbound profiles before recovery or lease activation', async () => {
-    const clock = { now: () => 1_000 }
-    const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
-    await account(registry, { subject: 'production', keyHandle: 'keychain:production', bindingHandle: 'binding:production' })
-    await account(registry, { subject: 'staging', keyHandle: 'keychain:staging', bindingHandle: 'binding:staging',
-      bindingEnvironmentId: otherEnvironmentId })
-    await account(registry, { subject: 'unbound', keyHandle: 'keychain:unbound', unbound: true })
-    let starts = 0
-    const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
-      inspectOfflineAccountProfile: async () => ({ state: 'recoverable', compatibility: 'current',
-        persistenceGeneration: 11, sessionCount: 1, pluginCount: 0, preflightDigest }),
-      ensureRecoveredProfileWorker: async () => { starts += 1 },
-    })
-    const inspect = (handle: string) => host.inspectOfflineAccountProfiles({ keyHandles: [handle],
-      expectedEnvironmentId: environmentId, expectedRuntimeGeneration: 5,
-      expectedSchemaGeneration: 3, ownerId: 'connection-1' })
-    await expect(inspect('keychain:staging')).rejects.toMatchObject({ code: 'profile_environment_mismatch' })
-    await expect(inspect('keychain:unbound')).rejects.toMatchObject({ code: 'profile_environment_unproven' })
-    const candidate = (await inspect('keychain:production')).candidates[0]!
-    await expect(host.recoverOfflineAccountProfile({ candidateId: candidate.candidateId, preflightDigest,
-      keyHandle: 'keychain:production', unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
-      expectedEnvironmentId: otherEnvironmentId })).rejects.toMatchObject({ code: 'profile_environment_mismatch' })
-    expect(starts).toBe(0)
-    const recovered = await host.recoverOfflineAccountProfile({ candidateId: candidate.candidateId, preflightDigest,
-      keyHandle: 'keychain:production', unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
-      expectedEnvironmentId: environmentId })
-    await expect(host.openOfflineAccountProfile({ profileId: recovered.profileId,
-      bindingGeneration: recovered.bindingGeneration, ownerId: 'connection-1',
-      expectedEnvironmentId: otherEnvironmentId })).rejects.toMatchObject({ code: 'profile_environment_mismatch' })
-    await expect(host.openOfflineAccountProfile({ profileId: recovered.profileId,
-      bindingGeneration: recovered.bindingGeneration, ownerId: 'connection-1',
-      expectedEnvironmentId: environmentId })).resolves.toMatchObject({ profileId: recovered.profileId })
-  })
-
   it('resolves an account Profile by a unique opaque key handle and fails closed on ambiguity', async () => {
     const registry = new ProfileRegistry({
       root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock: { now: () => 1_000 },
@@ -90,7 +53,7 @@ describe('offline Account Profile recovery', () => {
   it('reports zero bindings for an unbound historical Account Profile', async () => {
     const clock = { now: () => 1_000 }
     const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
-    await account(registry, { subject: 'unbound', keyHandle: 'keychain:unbound', unbound: true })
+    await account(registry, { subject: 'unbound', keyHandle: 'keychain:unbound' })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
       inspectOfflineAccountProfile: async () => ({
@@ -98,10 +61,10 @@ describe('offline Account Profile recovery', () => {
         sessionCount: 0, pluginCount: 0, preflightDigest,
       }),
     })
-    await expect(host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    await expect(host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:unbound'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
-    })).rejects.toMatchObject({ code: 'profile_environment_unproven' })
+    })).resolves.toEqual({ candidates: [expect.objectContaining({ bindingCount: 0 })] })
   })
 
   it('inspects without starting plugins, then grants only offline_local after proof and worker readiness', async () => {
@@ -130,7 +93,7 @@ describe('offline Account Profile recovery', () => {
       },
     })
 
-    const inspected = await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const inspected = await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })
@@ -145,7 +108,7 @@ describe('offline Account Profile recovery', () => {
     expect(JSON.stringify(inspected)).not.toContain('keychain:original')
 
     const candidate = inspected.candidates[0]!
-    const recovered = await host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    const recovered = await host.recoverOfflineAccountProfile({
       candidateId: candidate.candidateId, preflightDigest,
       keyHandle: 'keychain:original', unlockMaterial,
       operationId: randomUUID(), ownerId: 'connection-1',
@@ -156,7 +119,7 @@ describe('offline Account Profile recovery', () => {
     })
     expect(workerStarts).toBe(1)
 
-    const opened = await host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    const opened = await host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     })
     expect(opened).toMatchObject({ profileId: original.profileId, accessScope: 'offline_local' })
@@ -189,13 +152,13 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => { workerStarts += 1 },
     })
-    const inspect = async () => (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const inspect = async () => (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
 
     const proofCandidate = await inspect()
-    await expect(host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.recoverOfflineAccountProfile({
       candidateId: proofCandidate.candidateId, preflightDigest,
       keyHandle: 'keychain:original', unlockMaterial: otherUnlockMaterial,
       operationId: randomUUID(), ownerId: 'connection-1',
@@ -208,13 +171,13 @@ describe('offline Account Profile recovery', () => {
       authorityEnvironmentId: environmentId, accountBindingHandle: 'binding:rotated',
       authorityBindingVersion: 2,
     })
-    await expect(host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.recoverOfflineAccountProfile({
       candidateId: staleCandidate.candidateId, preflightDigest,
       keyHandle: 'keychain:original', unlockMaterial,
       operationId: randomUUID(), ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
     expect(workerStarts).toBe(0)
-    await expect(host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
@@ -236,7 +199,7 @@ describe('offline Account Profile recovery', () => {
       ensureRecoveredProfileWorker: async () => undefined,
     })
     const inspect = (overrides: Partial<Parameters<typeof host.inspectOfflineAccountProfiles>[0]> = {}) =>
-      host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+      host.inspectOfflineAccountProfiles({
         keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
         expectedSchemaGeneration: 3, ownerId: 'connection-1', ...overrides,
       })
@@ -254,14 +217,14 @@ describe('offline Account Profile recovery', () => {
     const candidate = (await inspect()).candidates[0]!
     now += 5 * 60_000
     await inspect()
-    await expect(host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.recoverOfflineAccountProfile({
       candidateId: candidate.candidateId, preflightDigest,
       keyHandle: 'keychain:original', unlockMaterial,
       operationId: randomUUID(), ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'recovery_preflight_stale' })
 
     const unavailable = new DesktopHost({ registry, clock, runtimeGeneration: 5 })
-    await expect(unavailable.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    await expect(unavailable.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'unavailable' })
@@ -291,7 +254,7 @@ describe('offline Account Profile recovery', () => {
         inspectOfflineAccountProfile: async () => preflight as never,
         ensureRecoveredProfileWorker: async () => undefined,
       })
-      await expect(host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+      await expect(host.inspectOfflineAccountProfiles({
         keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
         expectedSchemaGeneration: 3, ownerId: 'connection-1',
       })).rejects.toMatchObject({ code: 'profile_integrity_failed' })
@@ -316,11 +279,11 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => { workerStarts += 1 },
     })
-    const candidate = (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const candidate = (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
-    await expect(host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.recoverOfflineAccountProfile({
       candidateId: candidate.candidateId, preflightDigest,
       keyHandle: 'keychain:original', unlockMaterial,
       operationId: randomUUID(), ownerId: 'connection-1',
@@ -341,7 +304,7 @@ describe('offline Account Profile recovery', () => {
       authorityBindingVersion: 1, keyHandle: 'keychain:original', unlockMaterial,
       ownerId: 'connected-owner',
     })
-    await expect(host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connected-owner',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
@@ -349,7 +312,7 @@ describe('offline Account Profile recovery', () => {
     const local = await host.bootstrapLocalProfile({
       keyHandle: 'keychain:local', unlockMaterial, ownerId: 'local-owner',
     })
-    await expect(host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.openOfflineAccountProfile({
       profileId: local.profileId, bindingGeneration: local.bindingGeneration, ownerId: 'local-owner',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
@@ -370,13 +333,12 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => { workerStarts += 1; await workerReady },
     })
-    const candidate = (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const candidate = (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
     const operationId = randomUUID()
     const input = {
-      expectedEnvironmentId: environmentId,
       candidateId: candidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
       unlockMaterial, operationId, ownerId: 'connection-1',
     }
@@ -399,7 +361,7 @@ describe('offline Account Profile recovery', () => {
     host.revokeOwner('connection-1')
     expect(host.getOfflineAccountRecoveryStatus({ operationId, ownerId: 'connection-1' }))
       .toEqual({ state: 'unknown' })
-    await expect(host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })
@@ -422,13 +384,12 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => { await workerReady },
     })
-    const candidate = (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const candidate = (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
     const operationId = randomUUID()
     const input = {
-      expectedEnvironmentId: environmentId,
       candidateId: candidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
       unlockMaterial, operationId, ownerId: 'connection-1',
     }
@@ -465,11 +426,11 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => undefined,
     })
-    const blocked = (await incompatible.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const blocked = (await incompatible.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
-    await expect(incompatible.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(incompatible.recoverOfflineAccountProfile({
       candidateId: blocked.candidateId, preflightDigest, keyHandle: 'keychain:original',
       unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'runtime_incompatible' })
@@ -481,11 +442,11 @@ describe('offline Account Profile recovery', () => {
         sessionCount: 86, pluginCount: 6, preflightDigest,
       }),
     })
-    const unsupportedCandidate = (await unsupported.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const unsupportedCandidate = (await unsupported.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
-    await expect(unsupported.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(unsupported.recoverOfflineAccountProfile({
       candidateId: unsupportedCandidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
       unlockMaterial, operationId: randomUUID(), ownerId: 'connection-1',
     })).rejects.toMatchObject({ code: 'unavailable' })
@@ -496,11 +457,11 @@ describe('offline Account Profile recovery', () => {
       authorityBindingVersion: 1, keyHandle: 'keychain:original', unlockMaterial,
       ownerId: 'connected-owner',
     })
-    const connectedCandidate = (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const connectedCandidate = (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connected-owner',
     })).candidates[0]!
-    await expect(host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.recoverOfflineAccountProfile({
       candidateId: connectedCandidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
       unlockMaterial, operationId: randomUUID(), ownerId: 'connected-owner',
     })).rejects.toMatchObject({ code: 'scope_mismatch' })
@@ -518,14 +479,14 @@ describe('offline Account Profile recovery', () => {
       }),
       ensureRecoveredProfileWorker: async () => { throw new Error(`secret path ${fixtureRoot()}`) },
     })
-    const candidate = (await host.inspectOfflineAccountProfiles({ expectedEnvironmentId: environmentId,
+    const candidate = (await host.inspectOfflineAccountProfiles({
       keyHandles: ['keychain:original'], expectedRuntimeGeneration: 5,
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })).candidates[0]!
     const operationId = randomUUID()
     let failure: unknown
     try {
-      await host.recoverOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+      await host.recoverOfflineAccountProfile({
         candidateId: candidate.candidateId, preflightDigest, keyHandle: 'keychain:original',
         unlockMaterial, operationId, ownerId: 'connection-1',
       })
@@ -536,7 +497,7 @@ describe('offline Account Profile recovery', () => {
     expect(String(failure)).not.toContain('secret path')
     expect(host.getOfflineAccountRecoveryStatus({ operationId, ownerId: 'connection-1' }))
       .toEqual({ state: 'failed', reasonCode: 'recovery_worker_failed' })
-    await expect(host.openOfflineAccountProfile({ expectedEnvironmentId: environmentId,
+    await expect(host.openOfflineAccountProfile({
       profileId: original.profileId, bindingGeneration: original.bindingGeneration, ownerId: 'connection-1',
     }))
       .rejects.toMatchObject({ code: 'profile_locked' })

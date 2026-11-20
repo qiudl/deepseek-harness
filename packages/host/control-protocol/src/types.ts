@@ -108,8 +108,6 @@ export type HostControlErrorCode =
   | 'profile_not_found'
   | 'profile_ambiguous'
   | 'profile_integrity_failed'
-  | 'profile_environment_mismatch'
-  | 'profile_environment_unproven'
   | 'runtime_incompatible'
   | 'recovery_proof_mismatch'
   | 'recovery_preflight_stale'
@@ -368,7 +366,6 @@ export interface ProfileRecoveryInspectRequest {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.recovery_inspect'
   readonly params: HostAuthorizedParams & {
-    readonly expected_environment_id: string
     readonly profile_key_handles: readonly string[]
     readonly expected_runtime_generation: number
     readonly expected_schema_generation: number
@@ -404,7 +401,6 @@ export interface ProfileRecoverOfflineAccountRequest {
   readonly request_id: HostControlRequestId
   readonly method: 'profile.recover_offline_account'
   readonly params: HostAuthorizedParams & {
-    readonly expected_environment_id: string
     readonly profile_key_handle: string
     readonly profile_unlock_material: string
     readonly recovery_operation_id: HostRecoveryOperationId
@@ -434,7 +430,7 @@ export interface ProfileOpenOfflineAccountRequest {
   readonly type: 'request'
   readonly request_id: HostControlRequestId
   readonly method: 'profile.open_offline_account'
-  readonly params: HostAuthorizedParams & { readonly profile_selector: string; readonly expected_environment_id: string }
+  readonly params: HostAuthorizedParams & { readonly profile_selector: string }
 }
 
 /** Offline-only view lease; access scope is explicit on the wire. */

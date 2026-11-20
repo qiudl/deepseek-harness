@@ -146,8 +146,6 @@ The public key in an answer is not trust by itself. The Desktop broker must matc
 
 `parseHostCollaborationReferenceTarget` validates a private worker lookup containing only original Source coordinates and the complete reference request digest. It cannot supply selected bytes, a snapshot digest or a grant. `parseHostCollaborationReferenceGrant` independently validates the returned committed descriptor and request digest.
 
-Offline Account recovery requests `profile.recovery_inspect`, `profile.recover_offline_account`, and `profile.open_offline_account` require `expected_environment_id` (authority UUID). Clients require the `profile.offline_environment_guard` capability before sending these requests. The Host may return `profile_environment_mismatch` or `profile_environment_unproven` without opening a view.
-
 ## API
 
 `createHostProjectOperationEvent` validates the exact v3 source fields and computes the event digest; `parseHostProjectOperationEvent` verifies the complete event, and `encodeHostProjectOperationEventPayload` returns its domain-separated canonical digest preimage. Events are limited to 8192 UTF-8 bytes, with three summaries of at most 2000 bytes each and at most 20 material dependencies. Revisions and sequences preserve int64 decimal strings; dependencies sort by right ID and then numeric generation/revision. Live references contain only their locator, version and original digest, including during staging. Parsing establishes neither source attribution nor a right to export or retain material.

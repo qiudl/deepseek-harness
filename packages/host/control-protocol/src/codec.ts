@@ -275,8 +275,6 @@ const ERROR_CODES: ReadonlySet<string> = new Set<HostControlErrorCode>([
   'profile_not_found',
   'profile_ambiguous',
   'profile_integrity_failed',
-  'profile_environment_mismatch',
-  'profile_environment_unproven',
   'runtime_incompatible',
   'recovery_proof_mismatch',
   'recovery_preflight_stale',
@@ -2636,8 +2634,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.recovery_inspect') {
     exactKeys(params, [
-      ...AUTHORIZED_KEYS, 'profile_key_handles', 'expected_environment_id',
-      'expected_runtime_generation', 'expected_schema_generation',
+      ...AUTHORIZED_KEYS, 'profile_key_handles', 'expected_runtime_generation', 'expected_schema_generation',
     ])
     if (!Array.isArray(params.profile_key_handles) || params.profile_key_handles.length < 1
       || params.profile_key_handles.length > 128) reject()
@@ -2646,7 +2643,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.recovery_inspect',
       params: {
-        ...authorized(params), profile_key_handles, expected_environment_id: uuid(params.expected_environment_id),
+        ...authorized(params), profile_key_handles,
         expected_runtime_generation: generation(params.expected_runtime_generation),
         expected_schema_generation: generation(params.expected_schema_generation),
       },
@@ -2654,14 +2651,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   }
   if (frame.method === 'profile.recover_offline_account') {
     exactKeys(params, [
-      ...AUTHORIZED_KEYS, 'expected_environment_id', 'profile_key_handle', 'profile_unlock_material',
-      'recovery_operation_id', 'candidate_id', 'preflight_digest',
+      ...AUTHORIZED_KEYS, 'profile_key_handle', 'profile_unlock_material', 'recovery_operation_id',
+      'candidate_id', 'preflight_digest',
     ])
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.recover_offline_account',
       params: {
-        ...authorized(params), expected_environment_id: uuid(params.expected_environment_id),
-        profile_key_handle: unlockMaterial(params.profile_key_handle),
+        ...authorized(params), profile_key_handle: unlockMaterial(params.profile_key_handle),
         profile_unlock_material: unlockMaterial(params.profile_unlock_material),
         recovery_operation_id: uuid(params.recovery_operation_id) as HostRecoveryOperationId,
         candidate_id: uuid(params.candidate_id) as HostRecoveryCandidateId,
@@ -2670,11 +2666,10 @@ function decodeProfileRequest(frame: Record<string, unknown>):
     }
   }
   if (frame.method === 'profile.open_offline_account') {
-    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector', 'expected_environment_id'])
+    exactKeys(params, [...AUTHORIZED_KEYS, 'profile_selector'])
     return {
       version: 1, type: 'request', request_id: requestId, method: 'profile.open_offline_account',
-      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector),
-        expected_environment_id: uuid(params.expected_environment_id) },
+      params: { ...authorized(params), profile_selector: profileSelector(params.profile_selector) },
     }
   }
   if (frame.method === 'profile.recovery_status') {
