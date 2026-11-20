@@ -1250,7 +1250,7 @@ describe('Unix transport authority failures', () => {
     const client = await UnixHostClient.connectAuthenticatedTransport({ trustedInstallationId: installationId,
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: identity.executableSignatureDigest }, transport)
     const selector = await localSelector(client)
-    await expect(client.inspectOfflineAccountProfiles({ profileKeyHandles: ['key'] }))
+    await expect(client.inspectOfflineAccountProfiles({ expectedEnvironmentId: installationId, profileKeyHandles: ['key'] }))
       .resolves.toMatchObject({ candidates: [{ candidateId: 'candidate-1', reasonCode: 'legacy_runtime_required' }] })
     await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
       .resolves.toEqual({ state: 'failed', reasonCode: 'recovery_worker_failed' })
