@@ -111,6 +111,7 @@ describe('offline Account Profile recovery', () => {
     const clock = { now: () => 1_000 }
     const registry = new ProfileRegistry({ root: fixtureRoot(), deviceIndexKey: Buffer.alloc(32, 7), clock })
     const original = await account(registry, { subject: 'original', keyHandle: 'keychain:original' })
+    if (original.kind !== 'account' || original.accountBindings === undefined) throw new Error('expected bound account fixture')
     const inspectWorker = vi.fn()
     const host = new DesktopHost({ registry, clock, runtimeGeneration: 5,
       inspectOfflineAccountProfile: inspectWorker,
@@ -120,9 +121,13 @@ describe('offline Account Profile recovery', () => {
       expectedSchemaGeneration: 3, ownerId: 'connection-1',
     })
     const resolve = vi.spyOn(registry, 'resolveUniqueAccountByKeyHandle')
-    resolve.mockReturnValueOnce({ ...original, kind: 'local' } as unknown as ReturnType<typeof resolve>)
+    const malformedKind = { ...original, kind: 'account' as const, accountBindings: original.accountBindings }
+    Reflect.set(malformedKind, 'kind', 'local')
+    resolve.mockReturnValueOnce(malformedKind)
     await expect(inspect()).rejects.toMatchObject({ code: 'profile_environment_unproven' })
-    resolve.mockReturnValueOnce({ ...original, accountBindings: undefined } as unknown as ReturnType<typeof resolve>)
+    const missingBindings = { ...original, kind: 'account' as const, accountBindings: original.accountBindings }
+    Reflect.deleteProperty(missingBindings, 'accountBindings')
+    resolve.mockReturnValueOnce(missingBindings)
     await expect(inspect()).rejects.toMatchObject({ code: 'profile_environment_unproven' })
     expect(inspectWorker).not.toHaveBeenCalled()
   })
