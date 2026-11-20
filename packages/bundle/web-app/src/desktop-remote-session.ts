@@ -11,6 +11,7 @@ import { parseHostBotChatSubmission, parseHostBotChatReceipt,
   type HostBotChatSubmission } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotAttachmentSubmission, parseHostBotAttachmentReceipt,
   type HostBotAttachmentSubmission } from '@deepseek-ai/dsh-host-control-protocol'
+import { parseHostBotRoomReplyRequest, parseHostBotRoomReplyReceipt, type HostBotRoomReplyRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomSubmission, parseHostBotRoomReceipt,
   type HostBotRoomSubmission } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt,
@@ -166,7 +167,8 @@ export class DesktopRemoteSessionExecutor {
     private readonly mutateBotCapabilityLibrary?: (request: HostBotCapabilitiesMutationRequest,
       signal: AbortSignal) => Promise<unknown>,
     private readonly botAttachment?: (operation: 'bot.attachment.send' | 'bot.attachment.receipt',
-      request: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>) {}
+      request: HostBotAttachmentSubmission, signal: AbortSignal) => Promise<unknown>,
+    private readonly sendBotRoomReply?: (request: HostBotRoomReplyRequest, signal: AbortSignal) => Promise<unknown>) {}
 
   /**
    * Execute one bounded Session command using the Session Remote method parameter names.
@@ -176,7 +178,7 @@ export class DesktopRemoteSessionExecutor {
    */
   async execute(command: HostRemoteSessionCommand, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     let release: (() => void) | undefined
-    if (command.operation === 'bot.capability-library.mutate' || command.operation === 'bot.secrets.mutate' || command.operation === 'bot.feedback.clear' || command.operation === 'bot.connectors.mutate' || command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.attachment.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
+    if (command.operation === 'bot.capability-library.mutate' || command.operation === 'bot.secrets.mutate' || command.operation === 'bot.feedback.clear' || command.operation === 'bot.connectors.mutate' || command.operation === 'bot.providers.mutate' || command.operation === 'bot.general.update' || command.operation === 'bot.channel-mirror.mutate' || command.operation === 'bot.memory.mutate' || command.operation === 'bot.update.mutate' || command.operation === 'bot.schedule.mutate' || command.operation === 'bot.create' || command.operation === 'bot.duplicate' || command.operation === 'bot.delete' || command.operation === 'bot.settings.update' || command.operation === 'bot.chat.send' || command.operation === 'bot.attachment.send' || command.operation === 'bot.room.send' || command.operation === 'bot.room.reply.send' || command.operation === 'bot.room.update' || command.operation === 'bot.room.create' || command.operation === 'bot.room.delete' || command.operation === 'terminal.apply' || command.operation === 'session.prompt' || command.operation === 'session.cancel' ||
       command.operation === 'session.rename' || command.operation === 'session.delete' ||
       command.operation === 'session.select_model' || command.operation === 'session.select_agent' ||
       command.operation === 'approval.respond' || command.operation === 'remote.event.respond') {
@@ -368,6 +370,16 @@ export class DesktopRemoteSessionExecutor {
         const value = await this.mutateBotChannelMirror(request, signal)
         signal.throwIfAborted()
         const receipt = parseHostBotChannelMirrorMutationReceipt(value, request)
+        return receipt === null ? null : { ...receipt }
+      }
+      case 'bot.room.reply.send': {
+        signal.throwIfAborted()
+        const request = parseHostBotRoomReplyRequest(command.request)
+        if (command.session_id !== request.roomId) throw Error('desktop Bot room reply: Session mismatch')
+        if (!this.sendBotRoomReply) return null
+        const value = await this.sendBotRoomReply(request, signal)
+        signal.throwIfAborted()
+        const receipt = parseHostBotRoomReplyReceipt(value, request)
         return receipt === null ? null : { ...receipt }
       }
       case 'bot.room.send':

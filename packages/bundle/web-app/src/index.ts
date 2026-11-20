@@ -67,6 +67,7 @@ import { DesktopRemoteSessionExecutor, handleDesktopRemoteSessionRequest } from 
 import { DesktopSessionControl } from './desktop-session-control.ts'
 import { DesktopRemoteUiExecutor, handleDesktopRemoteUiRequest } from './desktop-remote-ui.ts'
 import type { HostBotRoomListRequest, HostBotRoomHistoryRequest, HostBotRoomDetailsRequest,
+  HostBotRoomReplyRequest, HostBotRoomReplyReceiptRequest, HostBotRoomReplyTargetsRequest,
   HostBotSettingsRequest, HostBotMemoryRequest, HostBotRoomMemoryRequest, HostBotSchedulesRequest,
   HostBotScheduleHistoryRequest, HostBotAboutRequest, HostBotUsageRequest, HostBotGeneralSettingsRequest,
   HostBotGeneralSettingsUpdateRequest, HostBotProvidersRequest, HostBotProvidersMutationRequest,
@@ -979,6 +980,11 @@ export function apply(ctx: Context, config: Config): void {
             ? service?.sendLocalBotAttachment : service?.readLocalBotAttachmentReceipt
           if (!method) return null
           return method.call(service, request, signal)
+        }, async (request: HostBotRoomReplyRequest, signal) => {
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            sendLocalBotRoomReply?: (input: HostBotRoomReplyRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          return service?.sendLocalBotRoomReply?.(request, signal) ?? null
         })
       remoteCtx.effect(() => remoteCtx.webServer.register({
         kind: 'exact', path: '/internal/desktop-remote-session',
@@ -1199,6 +1205,16 @@ export function apply(ctx: Context, config: Config): void {
           const value = await service.readLocalBotAttachmentDownload(request, signal)
           signal.throwIfAborted()
           return value
+        }, async (request: HostBotRoomReplyTargetsRequest, signal) => {
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotRoomReplyTargets?: (input: HostBotRoomReplyTargetsRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          return service?.readLocalBotRoomReplyTargets?.(request, signal) ?? null
+        }, async (request: HostBotRoomReplyReceiptRequest, signal) => {
+          const service = remoteCtx.get('dsBotSlarkExternalGroup') as undefined | {
+            readLocalBotRoomReplyReceipt?: (input: HostBotRoomReplyReceiptRequest, signal: AbortSignal) => Promise<unknown>
+          }
+          return service?.readLocalBotRoomReplyReceipt?.(request, signal) ?? null
         })
       const streamExecutor = new DesktopRemoteUiStreamExecutor(
         bindDesktopRemoteGateway(remoteCtx.typertGateway, desktopPeer), remoteApprovalEvents,

@@ -3,6 +3,7 @@ import type { WorkbenchTerminalRequest, WorkbenchTerminalStreamPayload } from '.
 import type { HostTaskCoordinationInput, HostTaskCoordinationReply } from './task-coordination.ts'
 import type { HostBotChatSubmission } from './bot-chat-submission.ts'
 import type { HostBotAttachmentSubmission } from './bot-attachment-submission.ts'
+import type { HostBotRoomReplyRequest } from './bot-room-reply.ts'
 import type { HostBotRoomSubmission } from './bot-room-submission.ts'
 import type { HostBotRoomUpdateRequest } from './bot-room-update.ts'
 import type { HostBotChannelMirrorMutationRequest } from './bot-channel-mirror-mutation.ts'
@@ -2152,6 +2153,11 @@ export type HostRemoteSessionCommand =
     readonly session_id: string
     readonly control: HostRemoteSessionControlProof
     readonly request: HostBotChannelMirrorMutationRequest }
+  | { readonly operation: 'bot.room.reply.send'
+    readonly command_id: HostControlRequestId
+    readonly session_id: string
+    readonly control: HostRemoteSessionControlProof
+    readonly request: HostBotRoomReplyRequest }
   | { readonly operation: 'bot.room.send'
     readonly command_id: HostControlRequestId
     readonly session_id: string
@@ -2316,7 +2322,7 @@ export interface ProfileRemoteUiReadRequest {
     readonly view_lease_id: HostViewLeaseId
     readonly lease_generation: number
     readonly runtime_generation: number
-    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/providers' | 'bot/connectors' | 'bot/secrets' | 'bot/capability-library' | 'bot/feedback' | 'bot/feedback-log' | 'bot/folders' | 'bot/avatar' | 'bot/attachment-preview' | 'bot/attachment-download-open' | 'bot/attachment-download-read' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
+    readonly endpoint: 'bot/chat' | 'bot/rooms' | 'bot/room-history' | 'bot/room-reply-targets' | 'bot/room-reply-receipt' | 'bot/room-details' | 'bot/settings' | 'bot/memory' | 'bot/room-memory' | 'bot/schedules' | 'bot/schedule-history' | 'bot/about' | 'bot/usage' | 'bot/general' | 'bot/providers' | 'bot/connectors' | 'bot/secrets' | 'bot/capability-library' | 'bot/feedback' | 'bot/feedback-log' | 'bot/folders' | 'bot/avatar' | 'bot/attachment-preview' | 'bot/attachment-download-open' | 'bot/attachment-download-read' | 'boot/injections' | 'asset/read' | 'asset/read-gzip-chunk' | 'asset/describe' | 'session/list' | 'session/page' | 'session/modelCatalog' | 'session/collaborationSources' | 'session/collaborationMembership'
       | 'commands/list' | 'skills/list' | 'llm/listProviders' | 'llm/listConfigurableProviders'
       | 'settings/describe' | 'agentPresets/list' | 'dynamicCordisRunner/inventory'
       | 'credentials/describe' | 'permissionPresets/catalog' | 'cotTranslation/limits'

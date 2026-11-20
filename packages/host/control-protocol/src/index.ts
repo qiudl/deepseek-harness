@@ -153,6 +153,10 @@ export type { HostBotRoomCreateRequest, HostBotRoomDeleteRequest,
 export { parseHostBotRoomUpdateRequest, parseHostBotRoomUpdateReceipt } from './bot-room-update.ts'
 export type { HostBotRoomUpdateRequest, HostBotRoomUpdateReceipt, HostBotRoomUpdateChange } from './bot-room-update.ts'
 export { parseHostBotRoomSubmission, parseHostBotRoomReceipt } from './bot-room-submission.ts'
+export { parseHostBotRoomReplyRequest, parseHostBotRoomReplyReceiptRequest, parseHostBotRoomReplyTargetsRequest,
+  parseHostBotRoomReplyReceipt, parseHostBotRoomReplyTargets } from './bot-room-reply.ts'
+export type { HostBotRoomReplyRequest, HostBotRoomReplyReceiptRequest, HostBotRoomReplyTargetsRequest,
+  HostBotRoomReplyReceipt, HostBotRoomReplyTargets } from './bot-room-reply.ts'
 export type { HostBotRoomSubmission, HostBotRoomAttachment, HostBotRoomReceipt, HostBotRoomSubmissionId } from './bot-room-submission.ts'
 export type { HostBotChatRequest, HostBotChat, HostBotChatId, HostBotChatSessionId } from './bot-chat.ts'
 export { parseHostBotChatSubmission, parseHostBotChatReceipt } from './bot-chat-submission.ts'
