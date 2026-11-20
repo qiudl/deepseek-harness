@@ -19,6 +19,8 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
+import Tools from '@deepseek-ai/dsh-tools'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Storage from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
@@ -94,7 +96,9 @@ it.each(['root-capture', 'root-analysis-budget', 'root-analysis-failure', 'root-
   installSessionReadTestServices(ctx)
   const plugins = {
     ...(sourceOnly ? { commands: CommandRuntime, uploads: FileUploads } : {}),
+    // #190 made the analysis owner inject 'tools' (which needs 'systemPrompt'); shipped bundles provide both.
     storage: Storage, sessions: SessionStore, agents: AgentRegistry, llm: LlmRuntime, workspace: WorkspaceRegistry,
+    prompt: SystemPrompt, tools: Tools,
     controller: SessionController, web: WebApp,
     extensions: DeepSeekLlmApiExtensions, inventory: PluginInventory,
     domain: { name: 'source-test-domain', inject: ['storage'], apply(domainCtx: Context) {
