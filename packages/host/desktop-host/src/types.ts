@@ -70,6 +70,8 @@ export type HostAuthorityErrorCode =
   | 'profile_not_found'
   | 'profile_ambiguous'
   | 'profile_integrity_failed'
+  | 'profile_environment_mismatch'
+  | 'profile_environment_unproven'
   | 'runtime_incompatible'
   | 'recovery_proof_mismatch'
   | 'recovery_preflight_stale'

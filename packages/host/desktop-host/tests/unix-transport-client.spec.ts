@@ -36,6 +36,7 @@ const baseCapabilities = [
 ] as HostControlCapability[]
 const allCapabilities = [
   ...baseCapabilities,
+  'profile.offline_environment_guard',
   'profile.recovery_inspect',
   'profile.recover_offline_account',
   'profile.recovery_status',
@@ -413,17 +414,17 @@ describe('Unix Host client protocol projections', () => {
     expect(client.isConnected()).toBe(true)
     await expect(client.getProfileStatus(binding)).resolves.toEqual({ state: 'ready', profileId: 'profile-1', persistenceGeneration: 3 })
     await expect(client.getProfileStatus(binding)).resolves.toEqual({ state: 'locked' })
-    await expect(client.inspectOfflineAccountProfiles({ profileKeyHandles: ['keychain:one'] })).resolves.toMatchObject({
+    await expect(client.inspectOfflineAccountProfiles({ expectedEnvironmentId: installationId, profileKeyHandles: ['keychain:one'] })).resolves.toMatchObject({
       candidates: [{ candidateId: 'candidate-1' }, { candidateId: 'candidate-2', reasonCode: 'legacy' }],
     })
-    await expect(client.recoverOfflineAccountProfile({ profileKeyHandle: 'keychain:one', profileUnlockMaterial: 'material',
+    await expect(client.recoverOfflineAccountProfile({ expectedEnvironmentId: installationId, profileKeyHandle: 'keychain:one', profileUnlockMaterial: 'material',
       recoveryOperationId: 'operation-1', candidateId: 'candidate-1', preflightDigest: '3'.repeat(64) }))
       .resolves.toMatchObject({ state: 'offline_ready', profileSelector })
     await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: 'operation-1' }))
       .resolves.toEqual({ state: 'failed', reasonCode: 'recovery_worker_failed' })
     await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: 'operation-1' }))
       .resolves.toEqual({ state: 'offline_ready' })
-    await expect(client.openOfflineAccountProfile({ profileSelector })).resolves.toMatchObject({ ...lease, accessScope: 'offline_local' })
+    await expect(client.openOfflineAccountProfile({ expectedEnvironmentId: installationId, profileSelector })).resolves.toMatchObject({ ...lease, accessScope: 'offline_local' })
     await expect(client.ensureAccountProfile({ ...binding, issuer: 'issuer', subject: 'subject', accountAccessToken: 'token',
       keyHandle: 'keychain:one', unlockMaterial: 'material' })).resolves.toEqual({ profileId: lease.profileId, profileSelector })
     await expect(client.restoreProfile({ ...binding, profileSelector, keyHandle: 'keychain:one', unlockMaterial: 'material' }))
@@ -476,17 +477,33 @@ describe('Unix Host client protocol projections', () => {
     const { client } = await makeClient((frame) => { sent(frame); return result(frame, {}) })
     ;(client.inspection.capabilities as HostControlCapability[]).splice(0)
     const calls = [
-      () => client.inspectOfflineAccountProfiles({ profileKeyHandles: [] }),
-      () => client.recoverOfflineAccountProfile({ profileKeyHandle: 'key', profileUnlockMaterial: 'material',
+      () => client.inspectOfflineAccountProfiles({ expectedEnvironmentId: installationId, profileKeyHandles: [] }),
+      () => client.recoverOfflineAccountProfile({ expectedEnvironmentId: installationId, profileKeyHandle: 'key', profileUnlockMaterial: 'material',
         recoveryOperationId: 'operation', candidateId: 'candidate', preflightDigest: '3'.repeat(64) }),
       () => client.getOfflineAccountRecoveryStatus({ recoveryOperationId: 'operation' }),
-      () => client.openOfflineAccountProfile({ profileSelector }),
+      () => client.openOfflineAccountProfile({ expectedEnvironmentId: installationId, profileSelector }),
       () => client.ensureAccountProfile({ ...binding, issuer: 'issuer', subject: 'subject', accountAccessToken: 'token',
         keyHandle: 'key', unlockMaterial: 'material' }),
       () => client.bootstrapLocalProfile({ keyHandle: 'key', unlockMaterial: 'material' }),
       () => client.extensions({ ...lease, command: { action: 'inventory', kind: 'skill' } }),
     ]
     for (const call of calls) await expect(call()).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(sent).not.toHaveBeenCalled()
+  })
+
+  it('refuses every offline Account operation against an older Host without the environment guard', async () => {
+    const sent = vi.fn()
+    const { client } = await makeClient((frame) => { sent(frame); return result(frame, {}) })
+    const inspection = client.inspection as { capabilities: typeof client.inspection.capabilities }
+    inspection.capabilities = inspection.capabilities.filter(value => value !== 'profile.offline_environment_guard')
+    await expect(client.inspectOfflineAccountProfiles({ expectedEnvironmentId: installationId,
+      profileKeyHandles: ['keychain:one'] })).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.recoverOfflineAccountProfile({ expectedEnvironmentId: installationId,
+      profileKeyHandle: 'keychain:one', profileUnlockMaterial: 'material',
+      recoveryOperationId: 'operation', candidateId: 'candidate', preflightDigest: '3'.repeat(64) }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(client.openOfflineAccountProfile({ expectedEnvironmentId: installationId, profileSelector }))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
     expect(sent).not.toHaveBeenCalled()
   })
 
@@ -517,11 +534,11 @@ describe('Unix Host client protocol projections', () => {
       targetGeneration: 4, recordCount: 2, semanticDigest: '6'.repeat(64), targetProfileSelector: profileSelector }
     const calls = [
       () => client.getProfileStatus(binding),
-      () => client.inspectOfflineAccountProfiles({ profileKeyHandles: [] }),
-      () => client.recoverOfflineAccountProfile({ profileKeyHandle: 'key', profileUnlockMaterial: 'material',
+      () => client.inspectOfflineAccountProfiles({ expectedEnvironmentId: installationId, profileKeyHandles: [] }),
+      () => client.recoverOfflineAccountProfile({ expectedEnvironmentId: installationId, profileKeyHandle: 'key', profileUnlockMaterial: 'material',
         recoveryOperationId: 'operation', candidateId: 'candidate', preflightDigest: '3'.repeat(64) }),
       () => client.getOfflineAccountRecoveryStatus({ recoveryOperationId: 'operation' }),
-      () => client.openOfflineAccountProfile({ profileSelector }),
+      () => client.openOfflineAccountProfile({ expectedEnvironmentId: installationId, profileSelector }),
       () => client.ensureAccountProfile({ ...binding, issuer: 'issuer', subject: 'subject', accountAccessToken: 'token',
         keyHandle: 'key', unlockMaterial: 'material' }),
       () => client.restoreProfile({ ...binding, profileSelector, keyHandle: 'key', unlockMaterial: 'material' }),

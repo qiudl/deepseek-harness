@@ -247,6 +247,7 @@ describe('authenticated Unix transport', () => {
     })
     await registry.registerAccount({
       issuer: slarkIssuer, subject: 'offline-recovery', keyHandle: recoveryKeyHandle, unlockMaterial,
+      authorityEnvironmentId: stagingEnvironmentId, accountBindingHandle: 'binding:offline-recovery', authorityBindingVersion: 1,
     })
     const host = new DesktopHost({
       registry, clock, runtimeGeneration: 5,
@@ -1025,9 +1026,9 @@ describe('authenticated Unix transport', () => {
       trustedInstallationPublicKey: publicKey, trustedExecutableSignatureDigest: executableDigest,
       attestPeer: async () => ({ uid, executableSignatureDigest: executableDigest }), now: clock.now,
     })
-    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle] })
+    const inspected = await client.inspectOfflineAccountProfiles({ profileKeyHandles: [recoveryKeyHandle], expectedEnvironmentId: stagingEnvironmentId })
     expect(inspected.candidates).toEqual([expect.objectContaining({
-      state: 'recoverable', bindingCount: 0, sessionCount: 86, pluginCount: 6,
+      state: 'recoverable', bindingCount: 1, sessionCount: 86, pluginCount: 6,
       preflightDigest: recoveryPreflightDigest,
     })])
     const candidate = inspected.candidates[0]!
@@ -1036,13 +1037,14 @@ describe('authenticated Unix transport', () => {
       profileKeyHandle: recoveryKeyHandle, profileUnlockMaterial: unlockMaterial,
       recoveryOperationId: operationId, candidateId: candidate.candidateId,
       preflightDigest: candidate.preflightDigest,
+      expectedEnvironmentId: stagingEnvironmentId,
     })
     expect(recovered).toMatchObject({
       state: 'offline_ready', accessScope: 'offline_local', persistenceGeneration: 11,
     })
     await expect(client.getOfflineAccountRecoveryStatus({ recoveryOperationId: operationId }))
       .resolves.toEqual({ state: 'offline_ready' })
-    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector }))
+    await expect(client.openOfflineAccountProfile({ profileSelector: recovered.profileSelector, expectedEnvironmentId: stagingEnvironmentId }))
       .resolves.toMatchObject({ accessScope: 'offline_local' })
     await expect(client.openLocalProfile({ profileSelector: recovered.profileSelector }))
       .rejects.toMatchObject({ code: 'unauthorized' })
@@ -1052,7 +1054,7 @@ describe('authenticated Unix transport', () => {
       accountAccessToken: accountToken(slarkIssuer, 'u1'), accountBindingHandle: 'binding:opaque',
       authorityBindingVersion: 1, keyHandle: 'keychain:u1', unlockMaterial,
     })
-    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector }))
+    await expect(client.openOfflineAccountProfile({ profileSelector: connected.profileSelector, expectedEnvironmentId: stagingEnvironmentId }))
       .rejects.toMatchObject({ code: 'unauthorized' })
     client.close()
     await server.close()
@@ -1271,7 +1273,7 @@ describe('authenticated Unix transport', () => {
       profileSelector: signedEncodedSelector('dsh-profile-selector/v1', encoded),
     })).rejects.toMatchObject({ code: 'unauthorized' })
     await expect(client.openOfflineAccountProfile({
-      profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
+      expectedEnvironmentId: stagingEnvironmentId, profileSelector: signedSelector('dsh-profile-offline-selector/v1', { ...valid, access_scope: 'connected' }),
     })).rejects.toMatchObject({ code: 'stale' })
     client.close(); await server.close()
   })
