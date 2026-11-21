@@ -446,7 +446,6 @@ export class SessionController extends TypertRemoteService {
 
   protected async [Service.init](): Promise<void> {
     const ctx = this.ctx
-    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     ctx.typert.resources.register('session', { resolve: resolveSessionResource })
     this.agents = new ApiSessionAgentController(ctx)
     this.agents.initialize()
@@ -489,9 +488,9 @@ export class SessionController extends TypertRemoteService {
       ]
     })
     if (ctx.get('connection') !== undefined) installAttachmentExport(ctx)
-    // Assistant-stream observation must be live before the list read yields: an Agent's
-    // opening frame arriving during that await would otherwise have no listener.
+    // Assistant-stream observation precedes every asynchronous initialization step.
     this.historyController = new HistoryController(ctx)
+    this.collaborationTaskDurability = await ctx.sessionProjections.register(collaborationTaskDurabilityProjection)
     this.stateController = new StateController(ctx, this.historyController)
     this.webController = new WebController(ctx, this.historyController, (observation) => { this.promote(observation) })
     this.listState = new ApiSessionList(ctx, this.listWorkSliceMs)

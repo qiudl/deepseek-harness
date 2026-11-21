@@ -16,6 +16,8 @@ import type { CollaborationRootPlanningRecord } from '@deepseek-ai/dsh-api-sessi
 import SessionStore, { SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import Tools from '@deepseek-ai/dsh-tools'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import FileUploads from '@deepseek-ai/dsh-client-file-upload'
 import WorkspaceRegistry from '@deepseek-ai/dsh-workspace'
