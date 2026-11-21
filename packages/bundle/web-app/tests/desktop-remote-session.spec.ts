@@ -25,6 +25,29 @@ function remoteProof(control: DesktopSessionControl, sessionId: string): HostRem
 }
 
 describe('Desktop remote Session bridge', () => {
+  it('dispatches a group reply only with the current room write proof', async () => {
+    const control = new DesktopSessionControl()
+    const roomId = 'room-1'
+    const requestId = randomUUID()
+    const proof = remoteProof(control, roomId)
+    const request = { roomId: roomId as never, requestId, text: 'Reply', replyToMessageId: 'origin' }
+    const result = { roomId, requestId, state: 'pending' }
+    const send = vi.fn(async (): Promise<unknown> => result)
+    const executor = new DesktopRemoteSessionExecutor(gatewayFixture({ invoke: vi.fn() }),
+      undefined, control, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, send)
+    const command = { operation: 'bot.room.reply.send' as const,
+      command_id: randomUUID() as never, session_id: roomId, control: proof, request }
+    const signal = new AbortController().signal
+    await expect(executor.execute({ ...command, control: { ...proof, generation: randomUUID() } }, signal))
+      .rejects.toThrow()
+    expect(send).not.toHaveBeenCalled()
+    await expect(executor.execute(command, signal)).resolves.toEqual(result)
+    expect(send).toHaveBeenCalledWith(request, signal)
+    send.mockResolvedValueOnce({ ...result, roomId: 'other' })
+    await expect(executor.execute(command, signal)).rejects.toThrow()
+  })
   it('edits model provider credentials only under the controlled Bot Session', async () => {
     const control = new DesktopSessionControl()
     const proof = remoteProof(control, 'chat-1')

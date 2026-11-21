@@ -356,6 +356,25 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
     enabled.client.close()
   })
+  it('gates group replies separately and rejects a substituted receipt', async () => {
+    const request = { roomId: 'room-1', requestId: randomUUID(), replyToMessageId: 'origin', text: 'Reply' }
+    const command = { operation: 'bot.room.reply.send' as const, command_id: randomUUID() as never,
+      session_id: request.roomId, control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 },
+      request: request as never }
+    const result = { roomId: request.roomId, requestId: request.requestId, state: 'recorded', messageId: 'saved' }
+    const execute = vi.fn(async () => result)
+    const old = await authorityClient({ remoteSession: execute, remoteBotRoomSupported: true })
+    await expect(old.client.remoteSession({ ...opened, command })).rejects.toMatchObject({ code: 'upgrade_required' })
+    expect(execute).not.toHaveBeenCalled()
+    old.client.close()
+    const enabled = await authorityClient({ remoteSession: execute, remoteBotRoomReplySupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_session.bot_room_reply')
+    await expect(enabled.client.remoteSession({ ...opened, command })).resolves.toEqual(result)
+    expect(execute).toHaveBeenCalledWith(profileId, command, expect.any(AbortSignal))
+    execute.mockResolvedValueOnce({ ...result, requestId: randomUUID() })
+    await expect(enabled.client.remoteSession({ ...opened, command })).rejects.toThrow()
+    enabled.client.close()
+  })
   it('negotiates fixed Bot room edits separately and rejects a hidden result field', async () => {
     const request = { roomId: 'room-1', expectedRevision: 7,
       change: { kind: 'notice', value: 'Review' } } as never
@@ -544,6 +563,27 @@ describe('Unix transport authority failures', () => {
     await expect(enabled.client.remoteUiRead(input)).resolves.toEqual(page)
     execute.mockResolvedValueOnce({ ...page, messages: [{ ...page.messages[0], authorRef: null }] })
     await expect(enabled.client.remoteUiRead(input)).rejects.toThrow()
+    enabled.client.close()
+  })
+  it('gates both reply reads and correlates their room and request', async () => {
+    const roomId = 'room-1'
+    const requestId = randomUUID()
+    const targets = { ...opened, endpoint: 'bot/room-reply-targets' as const, payload: { args: { roomId } } }
+    const receipt = { ...opened, endpoint: 'bot/room-reply-receipt' as const, payload: { args: { roomId, requestId } } }
+    const page = { roomId, targets: [{ messageId: 'origin', who: 'User', text: 'Question' }] }
+    const pending = { roomId, requestId, state: 'pending' }
+    const execute = vi.fn(async (): Promise<unknown> => page)
+    const old = await authorityClient({ remoteUiRead: execute, remoteUiBotRoomHistorySupported: true })
+    for (const input of [targets, receipt])
+      await expect(old.client.remoteUiRead(input)).rejects.toMatchObject({ code: 'upgrade_required' })
+    old.client.close()
+    const enabled = await authorityClient({ remoteUiRead: execute, remoteUiBotRoomReplySupported: true })
+    expect(enabled.client.inspection.capabilities).toContain('profile.remote_ui_read.bot_room_reply')
+    await expect(enabled.client.remoteUiRead(targets)).resolves.toEqual(page)
+    execute.mockResolvedValueOnce(pending)
+    await expect(enabled.client.remoteUiRead(receipt)).resolves.toEqual(pending)
+    execute.mockResolvedValueOnce({ ...pending, roomId: 'other' })
+    await expect(enabled.client.remoteUiRead(receipt)).rejects.toThrow()
     enabled.client.close()
   })
   it('negotiates fixed owner room details and rejects hidden plugin state', async () => {

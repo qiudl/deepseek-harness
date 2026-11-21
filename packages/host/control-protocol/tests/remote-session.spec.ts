@@ -88,6 +88,15 @@ describe('Profile remote Session wire commands', () => {
       { ...command, request: { ...request, change: { kind: 'notice', value: 'ok', workDir: '/private' } } }])
       expect(() => decode(frame(bad))).toThrow()
   })
+  it('binds a group reply send to the claimed room', () => {
+    const request = { roomId: 'room-1', requestId: randomUUID(), replyToMessageId: 'origin', text: 'Reply' }
+    const command = { operation: 'bot.room.reply.send', command_id: randomUUID(),
+      session_id: request.roomId, control: { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }, request }
+    const sent = frame(command)
+    expect(encodeHostControlFrame(decode(sent))).toBe(`${JSON.stringify(sent)}\n`)
+    for (const bad of [{ ...command, session_id: 'other' }, { ...command, control: undefined },
+      { ...command, request: { ...request, profileId: 'other' } }]) expect(() => decode(frame(bad))).toThrow()
+  })
   it('round trips only fixed Bot room commands bound to the claimed room Session', () => {
     const request = { roomId: 'room-1', submissionId: randomUUID(), text: 'Plan' }
     const control = { controller_id: randomUUID(), generation: randomUUID(), epoch: 1 }
@@ -280,6 +289,14 @@ describe('Profile remote UI read wire commands', () => {
     for (const args of [{}, { botId: 'bot\n' }, { botId: null, profile: 'other' }, { botId: null, sessionId: 's' }])
       expect(() => decode(readFrame('bot/chat', { args }))).toThrow()
     expect(() => decode(readFrame('bot', { args: { endpoint: 'state' } }))).toThrow()
+  })
+  it('admits exact group reply reads without a control claim', () => {
+    const request = { roomId: 'room-1', requestId: randomUUID(), replyToMessageId: 'origin', text: 'Reply' }
+    const targets = readFrame('bot/room-reply-targets', { args: { roomId: request.roomId } })
+    const receipt = readFrame('bot/room-reply-receipt', { args: { roomId: request.roomId, requestId: request.requestId } })
+    for (const input of [targets, receipt])
+      expect(encodeHostControlFrame(decode(input))).toBe(`${JSON.stringify(input)}\n`)
+    expect(() => decode(readFrame('bot/room-reply-receipt', { args: request }))).toThrow()
   })
   it('round-trips only bounded Bot room paging arguments', () => {
     const input = readFrame('bot/rooms', { args: { afterRoomId: '', limit: 50 } })
