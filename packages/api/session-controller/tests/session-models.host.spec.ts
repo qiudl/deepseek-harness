@@ -541,6 +541,29 @@ describe('Web session model selection', () => {
     await ctx.fiber.dispose()
   })
 
+  it('selects a Session model without changing the Profile default when requested', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    onTestFinished(() => ctx.fiber.dispose())
+    let stored = { provider: 'deepseek-official', model: 'deepseek-chat' }
+    const saves: string[] = []
+    const remote = await createSessionTestRemote(ctx, {
+      defaultModelSelection: () => stored,
+      saveDefaultModelSelection: (selection) => {
+        saves.push(`${selection.provider}/${selection.model}`)
+        stored = selection
+      },
+      cwd: '/tmp',
+    })
+
+    const selected = expectValue(await remote.selectModel({
+      sessionId, provider: 'deepseek-official', model: 'deepseek-reasoner', saveAsDefault: false,
+    }))
+    expect(selected.selected).toEqual({ provider: 'deepseek-official', model: 'deepseek-reasoner' })
+    expect(agent.model.current()).toEqual(selected.selected)
+    expect(stored).toEqual({ provider: 'deepseek-official', model: 'deepseek-chat' })
+    expect(saves).toEqual([])
+  })
+
   it('follows default changes until an explicit selection through the Web create entrypoint', async () => {
     const { ctx, agent: template } = await harness()
     onTestFinished(() => ctx.fiber.dispose())
