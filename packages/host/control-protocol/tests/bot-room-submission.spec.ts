@@ -33,4 +33,17 @@ describe('fixed owner Bot room submission', () => {
       [{ ...input.files[0], extra: true }], Array(6).fill(input.files[0])])
       expect(() => parseHostBotRoomSubmission({ ...input, files })).toThrow('invalid_bot_room_submission')
   })
+
+  it('preserves reconciliation outcomes without treating an absent receipt as accepted', () => {
+    const request = parseHostBotRoomSubmission({ roomId: 'room-1',
+      submissionId: '11111111-1111-4111-8111-111111111111', text: 'Plan' })
+    const identity = { roomId: request.roomId, submissionId: request.submissionId }
+    expect(parseHostBotRoomReceipt(null, request)).toBeNull()
+    for (const state of ['unobserved', 'conflict', 'stale']) {
+      const receipt = { ...identity, state }
+      expect(parseHostBotRoomReceipt(receipt, request)).toEqual(receipt)
+    }
+    expect(() => parseHostBotRoomReceipt({ ...identity, state: 'queued' }, request))
+      .toThrow('invalid_bot_room_receipt')
+  })
 })

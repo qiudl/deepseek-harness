@@ -8,13 +8,17 @@ import { sha256, sha512 } from '@noble/hashes/sha2.js'
 import { randomUUID as mintUUID } from '@deepseek-ai/dsh-util-crypto'
 import { Buffer } from 'buffer'
 
-type Hasher = (input: Uint8Array) => Uint8Array
-
-const HASHERS: Record<string, Hasher> = {
-  sha1,
-  sha256,
-  sha512,
+interface DigestState {
+  update(bytes: Uint8Array): void
+  digest(): Uint8Array
+  clone(): DigestState
 }
+
+const HASHERS = new Map<string, () => DigestState>([
+  ['sha1', () => sha1.create()],
+  ['sha256', () => sha256.create()],
+  ['sha512', () => sha512.create()],
+])
 
 const encoder = new TextEncoder()
 
@@ -24,11 +28,43 @@ const toBytes = (data: string | Uint8Array | ArrayBuffer): Uint8Array => {
   return data
 }
 
-/** Node's streaming Hash face, restricted to the update/digest pair in use. */
+/** The subset of Node's streaming Hash used by the Worker host. */
 export interface Hash {
   update(data: string | Uint8Array | ArrayBuffer, encoding?: string): Hash
+  /** @returns An independent copy of the current digest state. */
+  copy(): Hash
   digest(): Buffer
   digest(encoding: 'hex' | 'base64'): string
+}
+
+function wrapHash(state: DigestState): Hash {
+  let finalized = false
+  const assertActive = () => {
+    if (finalized) throw Object.assign(new Error('Digest already called'), { code: 'ERR_CRYPTO_HASH_FINALIZED' })
+  }
+
+  function digest(): Buffer
+  function digest(encoding: 'hex' | 'base64'): string
+  function digest(encoding?: 'hex' | 'base64'): Buffer | string {
+    assertActive()
+    const bytes = Buffer.from(state.digest())
+    finalized = true
+    return encoding === undefined ? bytes : bytes.toString(encoding)
+  }
+
+  const hash: Hash = {
+    update(data) {
+      assertActive()
+      state.update(toBytes(data))
+      return hash
+    },
+    copy() {
+      assertActive()
+      return wrapHash(state.clone())
+    },
+    digest,
+  }
+  return hash
 }
 
 /**
@@ -37,29 +73,11 @@ export interface Hash {
  * @returns the streaming hash face.
  */
 export function createHash(algorithm: string): Hash {
-  const hasher = HASHERS[algorithm.toLowerCase().replace('-', '')]
+  const hasher = HASHERS.get(algorithm.toLowerCase().replace('-', ''))
   if (hasher === undefined) {
     throw new Error(`web-preview: node:crypto.createHash("${algorithm}") is not available in the worker host`)
   }
-  const chunks: Uint8Array[] = []
-  const hash: Hash = {
-    update(data) {
-      chunks.push(toBytes(data))
-      return hash
-    },
-    digest(encoding?: 'hex' | 'base64') {
-      const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0)
-      const joined = new Uint8Array(total)
-      let at = 0
-      for (const chunk of chunks) {
-        joined.set(chunk, at)
-        at += chunk.byteLength
-      }
-      const digest = Buffer.from(hasher(joined))
-      return (encoding === undefined ? digest : digest.toString(encoding)) as Buffer & string
-    },
-  }
-  return hash
+  return wrapHash(hasher())
 }
 
 /**

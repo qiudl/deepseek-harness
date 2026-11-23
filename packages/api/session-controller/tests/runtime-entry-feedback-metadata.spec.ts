@@ -112,6 +112,8 @@ it('drains accepted first commits before Profile close and rejects later writes'
   const h = await harness(), metadata = await openRuntimeEntryFeedbackMetadata(h.facility), delivery = await metadata.openDeliveryJournal()
   const pending = delivery.persist(h.input, h.source, h.signal), closing = metadata.close()
   await pending; await closing
+  expect(() => metadata.read(h.input.namespace_id, 'delivery')).toThrow('runtime_entry_feedback_metadata_closed')
+  expect(() => metadata.openDeliveryJournal()).toThrow('runtime_entry_feedback_metadata_closed')
   await expect(delivery.persist(h.input, h.source, h.signal)).rejects.toThrow('closed')
 })
 it('does not manufacture metadata after the original durable delivery commit loses its acknowledgment', async () => {
@@ -154,3 +156,35 @@ it('preserves ordinary delivery commits when the independently retained header i
   expect(await readFile(path)).toEqual(before)
   await reopened.close()
 }, 30000)
+
+it.each([
+  ['wrong-key', 'runtime_entry_feedback_metadata_corrupt'],
+  ['oversized', 'runtime_entry_feedback_metadata_capacity'],
+])('refuses a %s retained index without rewriting bytes or holding the domain open', async (fault, error) => {
+  const h = await harness(), metadata = await openRuntimeEntryFeedbackMetadata(h.facility)
+  const delivery = await metadata.openDeliveryJournal()
+  const saved = await delivery.persist(h.input, h.source, h.signal)
+  const header = metadata.read(h.input.namespace_id, saved.delivery_id)!
+  await metadata.close()
+
+  const path = join(h.directory, 'runtime_entry_feedback_metadata_v1.json')
+  const original = await readFile(path)
+  const corrupted = JSON.parse(original.toString('utf8')) as { tables: { headers: Record<string, typeof header> } }
+  if (fault === 'wrong-key') {
+    corrupted.tables.headers = { [hash([header.namespace_id, 'another-delivery'])]: header }
+  } else {
+    for (let index = 0; index < 4096; index++) {
+      const delivery_id = 'capacity-' + String(index)
+      corrupted.tables.headers[hash([header.namespace_id, delivery_id])] = { ...header, delivery_id }
+    }
+  }
+  const invalid = JSON.stringify(corrupted)
+  await writeFile(path, invalid)
+  await expect(openRuntimeEntryFeedbackMetadata(h.facility)).rejects.toThrow(error)
+  expect(await readFile(path, 'utf8')).toBe(invalid)
+
+  await writeFile(path, original)
+  const recovered = await openRuntimeEntryFeedbackMetadata(h.facility)
+  expect(recovered.read(h.input.namespace_id, saved.delivery_id)).toEqual(header)
+  await recovered.close()
+}, 30_000)

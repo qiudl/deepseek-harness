@@ -30,4 +30,20 @@ describe('native DS Bot general settings boundary', () => {
     expect(parseHostBotGeneralSettingsUpdateResult({ state: 'applied', settings })).toEqual({ state: 'applied', settings })
     expect(() => parseHostBotGeneralSettingsUpdateResult({ state: 'applied', settings: null })).toThrow()
   })
+
+  it('keeps appearance edits distinct and returns the current settings for a stale revision', () => {
+    const request = { botId: 'main', sessionId: 'bot-session', expectedRevision: 4 }
+    const changes = [
+      { kind: 'theme', value: 'night' },
+      { kind: 'accent', value: '#203040' },
+      { kind: 'motion', value: 'lively' },
+    ]
+    for (const change of changes)
+      expect(parseHostBotGeneralSettingsUpdateRequest({ ...request, change }).change).toEqual(change)
+    const current = { state: 'stale', settings: { ...settings, revision: 5, motion: 'lively' } }
+    expect(parseHostBotGeneralSettingsUpdateResult(current)).toEqual(current)
+    expect(parseHostBotGeneralSettingsUpdateResult(null)).toBeNull()
+    expect(() => parseHostBotGeneralSettingsUpdateResult({ ...current, state: 'queued' }))
+      .toThrow('invalid_bot_general_update_result')
+  })
 })

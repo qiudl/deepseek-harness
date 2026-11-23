@@ -15,11 +15,11 @@ import { RUNTIME_ENTRY_CONTRACT, parseRuntimeEntryBinding, parseRuntimeEntryRece
 import { createRuntimeEntryManifest, type RuntimeEntryManifestInputs } from './runtime-entry-manifest.ts'
 
 // Native entry is optional: importing the ordinary Web composition must not load SQLite.
-const require = createRequire(import.meta.url)
+const requireSqlite = createRequire(import.meta.url)
 let sqliteConstructor: typeof DatabaseSync | undefined
 function openDatabase(...args: ConstructorParameters<typeof DatabaseSync>): DatabaseSync {
   if (sqliteConstructor === undefined) {
-    const sqlite = require('node:sqlite') as typeof import('node:sqlite')
+    const sqlite = requireSqlite('node:sqlite') as typeof import('node:sqlite')
     sqliteConstructor = sqlite.DatabaseSync
   }
   return new sqliteConstructor(...args)
