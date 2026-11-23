@@ -561,8 +561,17 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
   await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
     .resolves.toEqual(analysisCommand)
-  // REQ-20261117-0005: the owner combines cancellation lifetimes; identity is not the forwarding contract.
+  // The supervisor owns each analysis request (REQ-20261031-0006 #190): the worker receives a
+  // composite signal that still follows the caller and can be aborted on worker disposal.
   expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, expect.any(AbortSignal))
+  const ownedAnalysisSignal = collaborationAnalysis.mock.calls[0]![1]
+  expect(ownedAnalysisSignal).not.toBe(collaborationSignal)
+  expect(ownedAnalysisSignal.aborted).toBe(false)
+  const analysisCaller = new AbortController()
+  await serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, analysisCaller.signal)
+  const followedAnalysisSignal = collaborationAnalysis.mock.calls[1]![1]
+  analysisCaller.abort()
+  expect(followedAnalysisSignal.aborted).toBe(true)
   const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
   if (!deliveryReceiver) throw new Error('missing original delivery receiver')
   expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()
@@ -722,21 +731,24 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   await expect(importer.abort(staged.importId, staged.version)).rejects.toThrow()
 
   const accountSubject = randomUUID()
+  const accountEnvironmentId = randomUUID()
   const accountUnlock = Buffer.alloc(32, 10).toString('base64url')
   const accountProfile = await application.host.ensureAccountProfile({
     issuer: 'https://accounts.dsh.colorbuyai.com', subject: accountSubject,
-    authorityEnvironmentId: randomUUID(), accountBindingHandle: 'binding:startup', authorityBindingVersion: 1,
+    authorityEnvironmentId: accountEnvironmentId, accountBindingHandle: 'binding:startup', authorityBindingVersion: 1,
     accountAccessToken: accountToken(accountPrivateKey, accountSubject),
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock, ownerId: 'connected-owner',
   })
   application.host.revokeOwner('connected-owner')
   const inspected = await application.host.inspectOfflineAccountProfiles({
+    expectedEnvironmentId: accountEnvironmentId,
     keyHandles: ['keychain:account-startup'], expectedRuntimeGeneration: 3,
     expectedSchemaGeneration: 1, ownerId: 'offline-owner',
   })
   expect(inspected.candidates).toHaveLength(1)
   const candidate = inspected.candidates[0]!
   expect(await application.host.recoverOfflineAccountProfile({
+    expectedEnvironmentId: accountEnvironmentId,
     candidateId: candidate.candidateId,
     preflightDigest: candidate.preflightDigest,
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock,
@@ -745,6 +757,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
 
   application.host.revokeOwner('offline-owner')
   const failedInspection = await application.host.inspectOfflineAccountProfiles({
+    expectedEnvironmentId: accountEnvironmentId,
     keyHandles: ['keychain:account-startup'], expectedRuntimeGeneration: 3,
     expectedSchemaGeneration: 1, ownerId: 'retry-owner',
   })
@@ -755,6 +768,7 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     })
     .mockRejectedValueOnce(new Error('stabilization failed'))
   await expect(application.host.recoverOfflineAccountProfile({
+    expectedEnvironmentId: accountEnvironmentId,
     candidateId: failedInspection.candidates[0]!.candidateId,
     preflightDigest: failedInspection.candidates[0]!.preflightDigest,
     keyHandle: 'keychain:account-startup', unlockMaterial: accountUnlock,

@@ -396,6 +396,8 @@ export interface SessionCreateValue {
 /** Session model-selection request. */
 export interface SessionSelectModelRequest extends ModelSelection {
   readonly sessionId: SessionId
+  /** Set false when selecting a Session-owned model must leave the Profile default unchanged. */
+  readonly saveAsDefault?: boolean
 }
 
 /** Accepted model selection after Host resolution. */

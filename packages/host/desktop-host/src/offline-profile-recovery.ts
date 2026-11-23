@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
-  cp, lstat, mkdir, readFile, readdir, readlink, realpath, rename, rm, statfs, symlink, unlink, writeFile,
+  cp, lstat, mkdir, open, readFile, readdir, readlink, realpath, rename, rm, statfs, symlink, unlink, writeFile,
 } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { FileOwnerJsonlMigrationGenerationTarget } from '@deepseek-ai/dsh-session-persistence-jsonl/src/migration-import.ts'
@@ -9,6 +10,7 @@ import { HostAuthorityError } from './types.ts'
 import type { AppliedMigrationOwnerState, MigrationOwnerStateApplicator } from './migration-owner-state-applicator.ts'
 import type { BundledPlugin, BundledPluginCatalog } from './bundled-plugins.ts'
 import { verifyCopiedBundledPlugin } from './bundled-plugin-recovery.ts'
+import { inspectExistingPluginClosure } from './existing-plugin-recovery.ts'
 
 const MAX_PROFILE_TREE_ENTRIES = 100_000
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024
@@ -28,6 +30,12 @@ type RecoveryPlan = Readonly<{
   sourceRuntimeDigest?: string
   links: readonly LinkFact[]
   bundledPlugins: readonly { readonly plugin: BundledPlugin; readonly catalog: BundledPluginCatalog }[]
+  existingPlugins?: Readonly<{
+    names: readonly string[]
+    dependencies: Readonly<Record<string, unknown>>
+    runtimeRoots: readonly string[]
+    digest: string
+  }>
 }>
 
 function contained(root: string, candidate: string): boolean {
@@ -115,11 +123,12 @@ async function runtimeTreeDigest(
   expectedUid: number,
   allowRootOwner: boolean,
   projectedRoot?: string,
-): Promise<{ readonly digest: string; readonly bytes: number }> {
+): Promise<{ readonly digest: string; readonly bytes: number; readonly entries: number }> {
   const facts: Array<readonly [string, 'directory' | 'file' | 'link', number, string]> = []
   let entries = 0
   let bytes = 0
   const visit = async (directory: string): Promise<void> => {
+    const directoryBefore = await lstat(directory)
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       entries += 1
       /* v8 ignore next -- exercising the 100,001-entry denial-of-service ceiling would create excessive test artifacts. */
@@ -159,11 +168,37 @@ async function runtimeTreeDigest(
         bytes += metadata.size
         /* v8 ignore next -- materializing and hashing more than 2 GiB is intentionally excluded from unit tests. */
         if (bytes > 2 * 1024 * 1024 * 1024) throw new HostAuthorityError('runtime_incompatible')
-        facts.push([relativePath, 'file', metadata.mode & 0o777, hash(await readFile(path))])
+        const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+        try {
+          const before = await handle.stat()
+          if (!before.isFile() || before.dev !== metadata.dev || before.ino !== metadata.ino
+            || before.mode !== metadata.mode || before.size !== metadata.size
+            || (!allowRootOwner && before.nlink !== 1)) throw new HostAuthorityError('recovery_preflight_stale')
+          const digest = createHash('sha256')
+          const buffer = Buffer.alloc(64 * 1024)
+          let received = 0
+          while (received < before.size) {
+            const result = await handle.read(buffer, 0, Math.min(buffer.length, before.size - received), received)
+            if (result.bytesRead === 0) throw new HostAuthorityError('recovery_preflight_stale')
+            received += result.bytesRead
+            digest.update(buffer.subarray(0, result.bytesRead))
+          }
+          const after = await handle.stat()
+          const current = await lstat(path)
+          if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
+            || current.dev !== after.dev || current.ino !== after.ino || current.mode !== after.mode) {
+            throw new HostAuthorityError('recovery_preflight_stale')
+          }
+          facts.push([relativePath, 'file', metadata.mode & 0o777, digest.digest('hex')])
+        } finally { await handle.close() }
       } else {
         throw new HostAuthorityError('runtime_incompatible')
       }
     }
+    const directoryAfter = await lstat(directory)
+    if (directoryBefore.dev !== directoryAfter.dev || directoryBefore.ino !== directoryAfter.ino
+      || directoryBefore.mode !== directoryAfter.mode || directoryBefore.mtimeMs !== directoryAfter.mtimeMs
+      || directoryBefore.ctimeMs !== directoryAfter.ctimeMs) throw new HostAuthorityError('recovery_preflight_stale')
   }
   /* v8 ignore start -- the fallback accepts root-owned packaged apps and requires privileged ownership to exercise. */
   await checkedDirectory(root, expectedUid).catch(async (error: unknown) => {
@@ -174,7 +209,7 @@ async function runtimeTreeDigest(
   })
   /* v8 ignore stop */
   await visit(root)
-  return { digest: hash(canonicalJson(facts)), bytes }
+  return { digest: hash(canonicalJson(facts)), bytes, entries }
 }
 
 async function rewriteAbsoluteRuntimeLinks(root: string, sourceRoot: string, targetRoot: string): Promise<void> {
@@ -331,7 +366,19 @@ export class OfflineProfileRecoveryInspector {
           continue
         }
         const runtimeRoot = runtimeRootFor(link.resolved)
-        if (!runtimeRoot) throw new HostAuthorityError('runtime_incompatible')
+        if (!runtimeRoot) {
+          const spec = dependency === undefined ? undefined : (dependencies as Record<string, unknown>)[dependency]
+          // Only the explicitly declared top-level development link may leave the Profile.
+          // Its identity, full closure, and stable digest are checked below before it is verified.
+          let matches = false
+          if (typeof spec === 'string' && spec.startsWith('link:')) {
+            try { matches = await realpath(resolve(webComposition, spec.slice(5))) === link.resolved } catch { /* reject below */ }
+          }
+          if (dependency === undefined || !matches || link.kind !== 'directory') {
+            throw new HostAuthorityError('runtime_incompatible')
+          }
+          continue
+        }
         if (dependency !== undefined) verifiedDependencies.add(dependency)
         runtimeRoots.add(runtimeRoot)
         sourceRuntimeRoots.add(runtimeRoot)
@@ -348,8 +395,15 @@ export class OfflineProfileRecoveryInspector {
         bundledPlugins.push({ plugin, catalog })
         verifiedDependencies.add(name)
       }
-      const hasUnverifiedDependencies = Object.keys(dependencies)
-        .some(dependency => !verifiedDependencies.has(dependency))
+      const existingNames = Object.keys(dependencies).filter(dependency => !verifiedDependencies.has(dependency))
+      const existingRuntimeRoots = [...new Set([...runtimeRoots,
+        ...(this.options.currentRuntimeAppRoot === undefined ? [] : [this.options.currentRuntimeAppRoot])])]
+      const existingDigest = existingNames.length === 0 ? undefined : await inspectExistingPluginClosure({
+        webRoot: webComposition, expectedUid: this.options.expectedUid,
+        dependencies: dependencies as Record<string, unknown>, names: existingNames, runtimeRoots: existingRuntimeRoots,
+        digestTree: (root, runtimeOwned) => runtimeTreeDigest(root, this.options.expectedUid, runtimeOwned),
+      })
+      const hasUnverifiedDependencies = existingNames.length > 0 && existingDigest === undefined
       const compatibility = hasUnverifiedDependencies
         ? 'read_only_export_only'
         : legacyRuntimeRoots.size === 0 ? 'current' : 'legacy_runtime_required'
@@ -387,6 +441,7 @@ export class OfflineProfileRecoveryInspector {
         })),
         runtimeClosures,
         bundledPlugins: bundledPlugins.map(({ plugin }) => ({ name: plugin.name, version: plugin.version, digest: plugin.sha256 })),
+        ...(existingDigest === undefined ? {} : { existingPluginClosureDigest: existingDigest }),
         state,
         compatibility,
       }))
@@ -398,6 +453,10 @@ export class OfflineProfileRecoveryInspector {
         ...(sourceRuntimeDigest === undefined ? {} : { sourceRuntimeDigest }),
         links,
         bundledPlugins,
+        ...(existingDigest === undefined ? {} : { existingPlugins: {
+          names: existingNames, dependencies: dependencies as Record<string, unknown>, runtimeRoots: existingRuntimeRoots,
+          digest: existingDigest,
+        } }),
       })
       this.planDigestByProfile.set(profile.profileId, preflightDigest)
       return {
@@ -425,6 +484,16 @@ export class OfflineProfileRecoveryInspector {
     // lookup only consumes the exact plan produced by that successful call.
     const plan = this.plans.get(preflight.preflightDigest)
     if (!plan || plan.profileId !== profile.profileId) throw new HostAuthorityError('recovery_preflight_stale')
+    if (plan.existingPlugins) {
+      try {
+        const digest = await inspectExistingPluginClosure({
+          webRoot: join(plan.profileRoot, 'profiles', 'web'), expectedUid: this.options.expectedUid,
+          ...plan.existingPlugins,
+          digestTree: (root, runtimeOwned) => runtimeTreeDigest(root, this.options.expectedUid, runtimeOwned),
+        })
+        if (digest !== plan.existingPlugins.digest) throw new HostAuthorityError('recovery_preflight_stale')
+      } catch { throw new HostAuthorityError('recovery_preflight_stale') }
+    }
     for (const { plugin, catalog } of plan.bundledPlugins) {
       try {
         await verifyCopiedBundledPlugin(catalog, plugin, join(plan.profileRoot, 'profiles', 'web'), this.options.expectedUid)

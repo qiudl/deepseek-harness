@@ -25,6 +25,7 @@ import type {
   HostProjectMemoryDirective,
 } from '@deepseek-ai/dsh-host-control-protocol'
 import { ProjectOperationMemoryDatabase, projectMemoryRecordBytes } from './project-operation-memory-database.ts'
+import { readPublished, retainPublished } from './project-operation-memory-source-rows.ts'
 import { HostAuthorityError } from './types.ts'
 
 type Anchor = Readonly<{
@@ -326,16 +327,7 @@ export class ProjectOperationMemoryMetadata {
       const next = this.parsePublished(value),
         key = hostProjectMemorySourceProofDigest(next.proof)
       if (next.proof.issuedAt > now || next.proof.expiresAt <= now) return fail()
-      this.options.database.removeTransient('published', { expiredAt: now }, guard)
-      const old = this.publishedRead(key)
-      if (old && !same(old, next)) return conflict()
-      this.options.database.put(
-        'published',
-        key,
-        next,
-        { rows: 1, bytes: projectMemoryRecordBytes('published', key, next), expiresAt: next.proof.expiresAt },
-        guard,
-      )
+      retainPublished(this.options.database, key, next, now, guard, k => this.publishedRead(k), projectMemoryRecordBytes)
     })
   }
   /** Read only the exact original content-free signed page manifest.
@@ -343,11 +335,7 @@ export class ProjectOperationMemoryMetadata {
    * @returns Original before/target metadata, or absence.
    */
   publishedRead(proofDigest: string): Published | null {
-    const value = this.options.database.get('published', proofDigest)
-    if (value === null) return null
-    const result = this.parsePublished(value)
-    if (hostProjectMemorySourceProofDigest(result.proof) !== proofDigest) return fail()
-    return result
+    return readPublished(this.options.database, proofDigest, value => this.parsePublished(value))
   }
   /** Remove a transient manifest inside the same transaction that retained its permanent original Ack.
    * @param proofDigest - Original source proof identity.

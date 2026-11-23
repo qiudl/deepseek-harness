@@ -795,6 +795,7 @@ const capabilities = [
 ] as const satisfies readonly string[]
 
 const recoveryCapabilities = [
+  'profile.offline_environment_guard',
   'profile.recovery_inspect',
   'profile.recover_offline_account',
   'profile.open_offline_account',
@@ -1081,6 +1082,8 @@ function authorityCodeFromFrame(code: HostControlErrorCode): HostAuthorityErrorC
     case 'profile_not_found':
     case 'profile_ambiguous':
     case 'profile_integrity_failed':
+    case 'profile_environment_mismatch':
+    case 'profile_environment_unproven':
     case 'runtime_incompatible':
     case 'recovery_proof_mismatch':
     case 'recovery_preflight_stale':
@@ -1618,6 +1621,7 @@ export class HostControlAuthority {
         } else if (frame.method === 'profile.recovery_inspect') {
           const inspected = await this.options.host.inspectOfflineAccountProfiles({
             keyHandles: frame.params.profile_key_handles,
+            expectedEnvironmentId: frame.params.expected_environment_id,
             expectedRuntimeGeneration: frame.params.expected_runtime_generation,
             expectedSchemaGeneration: frame.params.expected_schema_generation,
             ownerId,
@@ -1637,6 +1641,7 @@ export class HostControlAuthority {
           })
         } else if (frame.method === 'profile.recover_offline_account') {
           const recovered = await this.options.host.recoverOfflineAccountProfile({
+            expectedEnvironmentId: frame.params.expected_environment_id,
             candidateId: frame.params.candidate_id as never,
             preflightDigest: frame.params.preflight_digest,
             keyHandle: frame.params.profile_key_handle,
@@ -1659,6 +1664,7 @@ export class HostControlAuthority {
           const selector = verifyOfflineProfileSelector(this.options.identity, frame.params.profile_selector)
           const opened = await this.options.host.openOfflineAccountProfile({
             profileId: selector.profile_id as never, bindingGeneration: selector.binding_generation, ownerId,
+            expectedEnvironmentId: frame.params.expected_environment_id,
           })
           channel.send({
             version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
@@ -3834,6 +3840,7 @@ export class UnixHostClient {
    */
   async inspectOfflineAccountProfiles(input: {
     readonly profileKeyHandles: readonly string[]
+    readonly expectedEnvironmentId: string
     readonly signal?: AbortSignal
   }): Promise<{ readonly candidates: readonly {
     readonly state: 'recoverable' | 'compatibility_blocked'
@@ -3847,13 +3854,15 @@ export class UnixHostClient {
     readonly preflightDigest: string
     readonly reasonCode?: string
   }[] }> {
-    if (!this.inspection.capabilities.includes('profile.recovery_inspect' as HostControlCapability)) {
+    if (!this.inspection.capabilities.includes('profile.recovery_inspect' as HostControlCapability)
+      || !this.inspection.capabilities.includes('profile.offline_environment_guard' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
     const request: ProfileRecoveryInspectRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.recovery_inspect',
       params: {
         ...this.auth(), profile_key_handles: input.profileKeyHandles,
+        expected_environment_id: input.expectedEnvironmentId,
         expected_runtime_generation: this.inspection.runtime_generation,
         expected_schema_generation: this.inspection.schema_generation,
       },
@@ -3920,6 +3929,7 @@ export class UnixHostClient {
    * @returns offline selector and generation facts after worker readiness.
    */
   async recoverOfflineAccountProfile(input: {
+    readonly expectedEnvironmentId: string
     readonly profileKeyHandle: string
     readonly profileUnlockMaterial: string
     readonly recoveryOperationId: string
@@ -3933,13 +3943,15 @@ export class UnixHostClient {
     readonly persistenceGeneration: number
     readonly runtimeGeneration: number
   }> {
-    if (!this.inspection.capabilities.includes('profile.recover_offline_account' as HostControlCapability)) {
+    if (!this.inspection.capabilities.includes('profile.recover_offline_account' as HostControlCapability)
+      || !this.inspection.capabilities.includes('profile.offline_environment_guard' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
     const request: ProfileRecoverOfflineAccountRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.recover_offline_account',
       params: {
-        ...this.auth(), profile_key_handle: input.profileKeyHandle,
+        ...this.auth(), expected_environment_id: input.expectedEnvironmentId,
+        profile_key_handle: input.profileKeyHandle,
         profile_unlock_material: input.profileUnlockMaterial,
         recovery_operation_id: input.recoveryOperationId as never,
         candidate_id: input.candidateId as never, preflight_digest: input.preflightDigest as never,
@@ -3987,14 +3999,17 @@ export class UnixHostClient {
    */
   async openOfflineAccountProfile(input: {
     readonly profileSelector: string
+    readonly expectedEnvironmentId: string
     readonly signal?: AbortSignal
   }): Promise<OfflineProfileOpenResult> {
-    if (!this.inspection.capabilities.includes('profile.open_offline_account' as HostControlCapability)) {
+    if (!this.inspection.capabilities.includes('profile.open_offline_account' as HostControlCapability)
+      || !this.inspection.capabilities.includes('profile.offline_environment_guard' as HostControlCapability)) {
       throw new HostAuthorityError('upgrade_required')
     }
     const request: ProfileOpenOfflineAccountRequest = {
       version: 1, type: 'request', request_id: requestId(), method: 'profile.open_offline_account',
-      params: { ...this.auth(), profile_selector: input.profileSelector },
+      params: { ...this.auth(), profile_selector: input.profileSelector,
+        expected_environment_id: input.expectedEnvironmentId },
     }
     const frame = await this.call(request, input.signal)
     if (frame.type !== 'result' || frame.method !== request.method) throw new HostAuthorityError('unavailable')
