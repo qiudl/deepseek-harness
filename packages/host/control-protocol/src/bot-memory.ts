@@ -74,6 +74,17 @@ export function parseHostBotMemory(value: unknown, request: HostBotMemoryRequest
     if (!exact(value, ['botId', 'available'])) throw Error('invalid_bot_memory_result')
     return { botId: request.botId, available: false }
   }
+  return parseHostBotMemoryPage(value, request)
+}
+
+/** Validate shared fields of an already correlated, available memory page.
+ * @internal
+ * @param value - A Bot reply or the room decoder's projection onto the Bot shape.
+ * @param request - The corresponding selector and pagination limit.
+ * @returns A validated available page.
+ */
+export function parseHostBotMemoryPage(value: Record<string, unknown>,
+  request: HostBotMemoryRequest): Extract<HostBotMemory, { available: true }> {
   if (!exact(value, ['botId', 'available', 'total', 'entries', 'nextCursor', 'sizes', 'limits',
     'summary', 'fresh', 'summarizing', 'error']) || !size(value.total) || value.total > 10000 ||
     !Array.isArray(value.entries) || value.entries.length > request.limit ||

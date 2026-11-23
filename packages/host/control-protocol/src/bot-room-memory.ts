@@ -1,6 +1,6 @@
 /** Bounded group memory pages from one verified Desktop Profile. */
 import { botExactKeys as exact, botRecord as record } from './bot-value-shape.js'
-import { parseHostBotMemory, parseHostBotMemoryRequest } from './bot-memory.js'
+import { parseHostBotMemoryPage, parseHostBotMemoryRequest } from './bot-memory.js'
 
 /** A group identity and cursor, without a caller-selected Profile. */
 export interface HostBotRoomMemoryRequest {
@@ -74,14 +74,13 @@ export function parseHostBotRoomMemory(value: unknown,
     return { ...item, scope: 'own' }
   })
   try {
-    const checked = parseHostBotMemory({ botId: request.roomId, available: true,
+    const checked = parseHostBotMemoryPage({ botId: request.roomId, available: true,
       total: value.total, entries, nextCursor: value.nextCursor,
       sizes: { own: value.sizes.group, team: 0 }, limits: value.limits,
       summary: value.summary, fresh: value.fresh, summarizing: value.summarizing,
       error: value.error },
     { botId: request.roomId, cursor: request.cursor, limit: request.limit,
       summarize: request.summarize })
-    if (checked === null || !checked.available) throw Error('invalid_bot_room_memory_result')
     return { roomId: request.roomId, available: true, total: checked.total,
       entries: checked.entries.map(item => ({ ...item, scope: 'group' as const })),
       nextCursor: checked.nextCursor, sizes: { group: checked.sizes.own },
