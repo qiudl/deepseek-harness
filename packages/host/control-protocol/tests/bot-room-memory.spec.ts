@@ -26,4 +26,19 @@ describe('native group memory projection', () => {
       { roomId: 'room-1', cursor: null, limit: 2, summarize: true, profile: 'other' }])
       expect(() => parseHostBotRoomMemoryRequest(bad)).toThrow()
   })
+
+  it('preserves the final group page and maps invalid shared cursor or summary errors to the room boundary', () => {
+    const request = parseHostBotRoomMemoryRequest({ roomId: 'room-1', cursor: `${'a'.repeat(64)}:2`,
+      limit: 2, summarize: false })
+    const page = { roomId: request.roomId, available: true, total: 3,
+      entries: [{ scope: 'group', topic: 'milestone', text: 'Final note', added: null,
+        by: null, source: null }],
+      nextCursor: null, sizes: { group: 10 }, limits: { main: 4000 },
+      summary: { text: 'A group summary', at: 1794444000000 }, fresh: true, summarizing: false, error: null }
+    expect(parseHostBotRoomMemory(page, request)).toEqual(page)
+    for (const patch of [
+      { total: 2 }, { nextCursor: `${'a'.repeat(64)}:3` },
+      { summary: { text: 'A group summary', at: -1 } },
+    ]) expect(() => parseHostBotRoomMemory({ ...page, ...patch }, request)).toThrow('invalid_bot_room_memory_result')
+  })
 })
