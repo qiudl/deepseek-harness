@@ -81,6 +81,33 @@ it('does not backfill old replies through open, read or duplicate delivery', asy
   expect(await readFile(join(h.directory, 'collaboration_delivery_v2.json'))).toEqual(before)
   await metadata.close()
 })
+it('keeps the original header when an older reply snapshot permits a second durable commit', async () => {
+  const h = await harness()
+  const metadata = await openRuntimeEntryFeedbackMetadata(h.facility)
+  const delivery = await metadata.openDeliveryJournal()
+  const replyPath = join(h.directory, 'collaboration_delivery_v2.json')
+  const headerPath = join(h.directory, 'runtime_entry_feedback_metadata_v1.json')
+  const olderInput = { ...h.input, projection: { ...h.input.projection, delivery_id: 'earlier-delivery' } }
+  const earlier = await delivery.persist(olderInput, h.source, h.signal)
+  const olderReplies = await readFile(replyPath)
+  const original = await delivery.persist(h.input, h.source, h.signal)
+  const originalHeader = metadata.read(h.input.namespace_id, original.delivery_id)
+  expect(originalHeader?.host_journal_commit).toEqual(original.host_journal_commit)
+  await metadata.close()
+
+  const retainedHeaders = await readFile(headerPath)
+  await writeFile(replyPath, olderReplies)
+  const reopened = await openRuntimeEntryFeedbackMetadata(h.facility)
+  const writer = await reopened.openDeliveryJournal()
+  expect([...writer.records(h.input.namespace_id, h.input.projection.source_locator)]).toEqual([earlier])
+  const newReply = await writer.persist(h.input, h.source, h.signal)
+  expect(newReply.host_journal_commit).not.toEqual(original.host_journal_commit)
+  expect(newReply.host_journal_commit.content_digest).toBe(original.host_journal_commit.content_digest)
+  expect([...writer.records(h.input.namespace_id, h.input.projection.source_locator)]).toEqual([earlier, newReply])
+  expect(reopened.read(h.input.namespace_id, original.delivery_id)).toEqual(originalHeader)
+  await reopened.close()
+  expect(await readFile(headerPath)).toEqual(retainedHeaders)
+})
 it.each(['collaboration_delivery_v2', 'runtime_entry_feedback_metadata_v1'])('retains a metadata gap after %s failure without manufacturing a header on retry', async (failedDomain) => {
   let enabled = false
   const h = await harness((domain) => { if (enabled && domain === failedDomain) throw Error('disk failure') })
