@@ -300,3 +300,12 @@ it('backs up and validates Windows plugin toggles through private native files',
   })).resolves.toEqual({ state: 'succeeded' })
   expect(f.files.get(patchPath)).toBe('[]\n')
 })
+
+
+it('reads opt-in installed versions only through the scoped Windows metadata channel', async () => {
+  const f = executorFixture()
+  f.files.set(join(f.root, 'profiles/web/node_modules/@fixture/bundle/package.json'),
+    JSON.stringify({ name: '@fixture/bundle', version: '1.2.3' }))
+  expect(await f.executor.inventory('profile', true)).toMatchObject([{ name: '@fixture/bundle', plugin_version: '1.2.3' }])
+  expect(f.bindings.inspectExistingDirectory).toHaveBeenCalledWith(join(f.root, 'profiles/web/node_modules/@fixture/bundle'))
+})

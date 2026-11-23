@@ -28,7 +28,49 @@ function fixture(acknowledged = true) {
   const profileId = randomUUID(); const authority = () => profileId
   return { root, web, manifest, executor, store, operations, authority, calls: () => calls }
 }
+const anyString: unknown = expect.any(String)
 const payload = JSON.stringify({ packageName: 'fixture', spec: 'fixture@1.0.0' })
+
+it('REQ-20261117-0005 reads the installed version only when inventory explicitly requests it', async () => {
+  const f = fixture()
+  mkdirSync(join(f.web, 'node_modules/fixture'), { recursive: true, mode: 0o700 })
+  writeFileSync(join(f.web, 'node_modules/fixture/package.json'), JSON.stringify({ name: 'fixture', version: '0.2.0' }), { mode: 0o600 })
+  writeFileSync(f.manifest, JSON.stringify({ dependencies: { fixture: '0.2.0' }, dsh: { profile: { bundles: ['fixture'] } } }))
+  expect(await f.executor.inventory(f.authority())).toEqual([
+    { id: anyString, name: 'fixture', transport: 'bundle' },
+  ])
+  expect(await f.executor.inventory(f.authority(), true)).toEqual([
+    { id: anyString, name: 'fixture', transport: 'bundle', plugin_version: '0.2.0' },
+  ])
+})
+
+it.each(['missing', 'malformed', 'wrong name', 'invalid version', 'linked package', 'linked manifest', 'writable package'])
+('REQ-20261117-0005 leaves %s metadata unknown without changing Profile files', async (mode) => {
+  const f = fixture()
+  const moduleRoot = join(f.web, 'node_modules/fixture')
+  mkdirSync(moduleRoot, { recursive: true, mode: 0o700 })
+  const packageFile = join(moduleRoot, 'package.json')
+  const contents = mode === 'malformed' ? '{broken' : JSON.stringify({ name: mode === 'wrong name' ? 'other' : 'fixture',
+    version: mode === 'invalid version' ? '../private' : '0.2.0' })
+  if (mode !== 'missing') writeFileSync(packageFile, contents, { mode: 0o600 })
+  if (mode === 'linked package') {
+    renameSync(moduleRoot, `${moduleRoot}-aside`)
+    symlinkSync(`${moduleRoot}-aside`, moduleRoot)
+  }
+  if (mode === 'linked manifest') {
+    renameSync(packageFile, `${packageFile}-aside`)
+    symlinkSync(`${packageFile}-aside`, packageFile)
+  }
+  if (mode === 'writable package') chmodSync(moduleRoot, 0o777)
+  const manifest = JSON.stringify({ dependencies: { fixture: '9.9.9' }, dsh: { profile: { bundles: ['fixture'] } } })
+  writeFileSync(f.manifest, manifest, { mode: 0o600 })
+  expect(await f.executor.inventory(f.authority(), true)).toEqual([
+    { id: anyString, name: 'fixture', transport: 'bundle' },
+  ])
+  expect(readFileSync(f.manifest, 'utf8')).toBe(manifest)
+  if (mode !== 'missing') expect(readFileSync(packageFile, 'utf8')).toBe(contents)
+  else expect(existsSync(packageFile)).toBe(false)
+})
 
 it.each(['restored archive', 'target archive', 'mismatched archive', 'unverified target', 'corrupt restoration',
   'missing after swap', 'missing no verifier', 'missing wrong dependency'])

@@ -558,6 +558,10 @@ describe('owner-only migration import', () => {
       transferId: transfer.transferId, targetGeneration: 5, sourceInstallationId,
       targetProfileSelectorHash: '8'.repeat(64),
     })).rejects.toThrow(/not_found/u)
+    expect(await service.find({ transferId: transfer.transferId, targetGeneration: 5, sourceInstallationId,
+      targetProfileSelectorHash })).toEqual(staged)
+    expect(await service.find({ transferId: transfer.transferId, targetGeneration: 5, sourceInstallationId,
+      targetProfileSelectorHash: '8'.repeat(64) })).toBeUndefined()
     const verified = await service.verify(staged.importId, staged.version)
     await expect(service.verify(staged.importId, staged.version)).rejects.toThrow(/stale/u)
     const committed = await service.commit(verified.importId, verified.version, 4)

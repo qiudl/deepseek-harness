@@ -7,6 +7,27 @@ const base = { packageName: 'base', patches: [{ insert: [{ id: 'web', name: 'web
 const legacy = { packageName: 'ds-bot', patches: [{ insert: [{ id: 'bot', name: 'ds-bot' }] }, { id: 'web', config: { searchProvider: 'auto', fetchProvider: 'http' } }] }
 const next = { packageName: 'ds-bot', patches: [{ insert: [{ id: 'bot', name: 'ds-bot' }] }] }
 
+it('REQ-20261117-0005 supports the declared Bot settings-seat migration without widening other shared mutations', () => {
+  const policy = 'ds-bot-settings-seat-v1' as const
+  const source = '- insert:\n    - id: bot\n      name: ds-bot\n- id: ui-settings-general\n  disabled: true\n'
+  const patches = parseBundledUpgradePatch(source, policy)
+  const settings = { packageName: 'settings', patches: [{ insert: [{ id: 'ui-settings-general', name: 'settings-shell' }] }] }
+  const newer = { packageName: 'ds-bot', patches }
+  const planned = planPluginUpgrade([settings, next], [settings, newer], '# user settings\n[]\n', [], 'ds-bot', policy)
+  expect(planned.patch).toBe('# user settings\n[]\n')
+  expect(() => parseBundledUpgradePatch(source)).toThrow('invalid_patch')
+  for (const patch of ['- id: ui-settings-general\n  disabled: false\n', '- id: unrelated\n  disabled: true\n',
+    '- id: ui-settings-general\n  disabled: true\n  config: {}\n']) {
+    expect(() => parseBundledUpgradePatch(patch, policy)).toThrow('invalid_patch')
+  }
+  const user = '- id: ui-settings-general\n  disabled: false\n'
+  expect(planPluginUpgrade([settings, next], [settings, newer], user, [], 'ds-bot', policy).patch).toBe(user)
+  expect(() => planPluginUpgrade([settings, next], [settings, newer], '[]\n', [], 'ds-bot'))
+    .toThrow('plugin_upgrade_shared_entry_changed')
+  expect(() => planPluginUpgrade([settings, next], [settings, newer], '[]\n', [], 'unrelated', policy))
+    .toThrow('invalid_patch')
+})
+
 it('reads insertion-only bundle patches without executing them', () => {
   const source = '- insert:\n    - id: bot\n      name: ds-bot\n      config:\n        slarkExternalGroup: true\n    - id: web-search-auto\n      name: ds-bot/web-search\n'
   expect(parseBundledUpgradePatch(source)).toEqual([{ insert: [

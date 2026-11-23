@@ -3,6 +3,13 @@ import { bundledDependencySpec, parseBundledPluginSpec } from './bundled-plugins
 import { createHash } from 'node:crypto'
 
 /** Digests of operation-owned private patch backups, never the configuration bodies. */
+export interface PluginUpgradeDataRecovery {
+  readonly digest: string
+  readonly beforeRootDigest: string
+  readonly afterRootDigest: string
+}
+
+/** Immutable package/configuration intent; optional data evidence binds its enclosing transaction. */
 export interface PluginUpgradeRecovery {
   operationId: string
   beforeDigest: string
@@ -10,6 +17,7 @@ export interface PluginUpgradeRecovery {
   rollbackSpec: string
   rollbackDigest: string
   treeDigest: string
+  data?: PluginUpgradeDataRecovery
 }
 
 /** Immutable intent saved before invoking the package manager; contains no configuration bodies. */
@@ -26,13 +34,18 @@ export interface PluginPackageRecovery {
 function validUpgrade(value: unknown): value is PluginUpgradeRecovery {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return Object.keys(row).sort().join(',') === 'afterDigest,beforeDigest,operationId,rollbackDigest,rollbackSpec,treeDigest'
+  return Object.keys(row).sort().join(',') === (row.data === undefined
+    ? 'afterDigest,beforeDigest,operationId,rollbackDigest,rollbackSpec,treeDigest'
+    : 'afterDigest,beforeDigest,data,operationId,rollbackDigest,rollbackSpec,treeDigest')
     && typeof row.operationId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(row.operationId)
     && typeof row.beforeDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.beforeDigest)
     && typeof row.afterDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.afterDigest)
     && typeof row.rollbackSpec === 'string' && parseBundledPluginSpec(row.rollbackSpec) !== undefined
     && typeof row.rollbackDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.rollbackDigest)
     && typeof row.treeDigest === 'string' && /^[0-9a-f]{64}$/u.test(row.treeDigest)
+    && (row.data === undefined || !!row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+      && Object.keys(row.data).sort().join(',') === 'afterRootDigest,beforeRootDigest,digest'
+      && Object.values(row.data).every(value => typeof value === 'string' && /^[0-9a-f]{64}$/u.test(value)))
 }
 /** Verify that a patch is one of the two states recorded by the upgrade.
  * @param patch Current Profile patch. @param upgrade Immutable private backup digests.
@@ -42,6 +55,18 @@ export function upgradePatchScope(patch: string | null, upgrade: PluginUpgradeRe
   const digest = createHash('sha256').update(JSON.stringify(patch)).digest('hex')
   if (digest !== upgrade.beforeDigest && digest !== upgrade.afterDigest) throw Error('plugin_state_changed')
   return { upgrade: true }
+}
+
+/**
+ * Accept only either root configuration bound by the data transaction.
+ * @param patch Current root Profile patch.
+ * @param data Immutable data and root-configuration evidence.
+ * @returns Stable scope marker while unrelated root changes remain forbidden.
+ */
+export function upgradeRootPatchScope(patch: string | null, data: PluginUpgradeDataRecovery): { dataUpgrade: true } {
+  const digest = createHash('sha256').update(JSON.stringify(patch)).digest('hex')
+  if (digest !== data.beforeRootDigest && digest !== data.afterRootDigest) throw Error('plugin_state_changed')
+  return { dataUpgrade: true }
 }
 /** @param input Private receipt evidence. @returns Whether it is a complete bounded package intent. */
 export function validPluginPackageRecovery(input: unknown): input is PluginPackageRecovery {
