@@ -2,6 +2,7 @@ import { memoryDatabaseFixture } from './project-operation-memory.test-support.t
 /** Unit composition of the actual Host request owner, durable metadata and real Ed25519 signing; the source is controlled test metadata. */
 import { createHash, generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { createServer } from 'node:http'
 import { DesktopCollaborationAnalysis, handleDesktopCollaborationAnalysisRequest } from '../../../bundle/web-app/src/desktop-collaboration-analysis.ts'
@@ -36,6 +37,7 @@ import { DesktopProjectOperationMemory } from '../../../bundle/web-app/src/deskt
 import { ProjectOperationMemorySourceExports } from '../src/project-operation-memory-source-exports.ts'
 import { ProjectOperationMemoryMetadata } from '../src/project-operation-memory-metadata.ts'
 import { TwinBindingReceipts } from '../src/twin-binding-receipts.ts'
+import { createPosixTwinBindingReceiptFile } from '../src/twin-binding-receipt-files.ts'
 import { operateAccountTwinBinding } from '../src/account-twin-binding.ts'
 import { operateAccountProjectOperationMemory } from '../src/account-project-operation-memory.ts'
 
@@ -202,7 +204,7 @@ async function fixture(confirm = true, journalEpoch = 'journal_1') {
     })
     await sourceFiber.await()
   }
-  const { database } = await memoryDatabaseFixture({
+  const { database, root } = await memoryDatabaseFixture({
     profileId: v.ack.hostProfileId,
     installationId: peer.installationId,
     publicKey: peer.publicKey,
@@ -367,6 +369,7 @@ async function fixture(confirm = true, journalEpoch = 'journal_1') {
     cloud,
     sourceExports,
     database,
+    root,
     account,
     input,
     twinOptions,
@@ -455,6 +458,64 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
       anchor: { sourceAuthorityVersion: '11' },
     })
   })
+  it.each(['receipt', 'confirm'] as const)('recovers the original durable binding Ack through %s after a failed SQLite acknowledgement', async (operation) => {
+    const f = await fixture(false)
+    const { directive } = f.input
+    const receiptRoot = join(f.root, 'twin-receipts')
+    const receiptPath = join(receiptRoot, 'receipts.v1.json')
+    const openReceipts = () => new TwinBindingReceipts({
+      profileId: f.twinOptions.host.authorizeAccountModelText(),
+      installationId: f.twinOptions.peer.installationId,
+      publicKey: f.twinOptions.peer.publicKey,
+      file: createPosixTwinBindingReceiptFile(receiptRoot, process.getuid!()),
+    })
+    let receipts = openReceipts()
+    const options = { ...f.twinOptions, store: () => receipts }
+    const failure = vi.spyOn(f.metadata, 'acknowledge').mockImplementationOnce(() => {
+      throw Error('SQLite acknowledgement interrupted')
+    })
+    try {
+      await expect(operateAccountTwinBinding(options, f.account, f.input, f.life.signal))
+        .rejects.toThrow('SQLite acknowledgement interrupted')
+    } finally {
+      failure.mockRestore()
+    }
+    const pending = f.metadata.confirmation(directive)
+    expect(pending).toMatchObject({ anchor: expect.any(Object), ack: null })
+    const originalBytes = readFileSync(receiptPath)
+    receipts = openReceipts()
+    const ack = receipts.read(directive)
+    expect(ack).toMatchObject({ requestId: directive.requestId, bindingId: directive.bindingId })
+
+    const { requestId, bindingId, bindingGeneration, scopeDigest, payloadDigest } = directive
+    const lookupDirective = { ...directive, purpose: 'twin_binding_receipt' as const }
+    const receiptInput = {
+      directive: {
+        ...lookupDirective,
+        signature: sign(null, Buffer.from(encodeHostTwinBindingDirective(lookupDirective)), f.cloud.privateKey).toString('base64url'),
+      },
+      command: { operation: 'receipt', requestId, bindingId, bindingGeneration, scopeDigest, payloadDigest },
+    }
+    const replay = operation === 'confirm' ? f.input : receiptInput
+    await expect(operateAccountTwinBinding(options, f.account, replay, f.life.signal))
+      .resolves.toEqual({ state: 'acknowledged', ack })
+    expect(f.metadata.confirmation(directive)).toMatchObject({ anchor: pending?.anchor, ack })
+    expect(readFileSync(receiptPath)).toEqual(originalBytes)
+    expect(f.counts().anchorCalls).toBe(1)
+  })
+
+  it('keeps the binding receipt when the optional memory producer was already closed', async () => {
+    const f = await fixture(false)
+    await f.disposeSource()
+    const result = await operateAccountTwinBinding(f.twinOptions, f.account, f.input, f.life.signal)
+    const ack = f.receipts.read(f.input.directive)
+    expect(ack).toMatchObject({ requestId: f.input.directive.requestId })
+    expect(result).toEqual({ state: 'acknowledged', ack })
+    expect(f.metadata.confirmation(f.input.directive)).toMatchObject({ anchor: null, ack: null })
+    expect(await f.call()).toMatchObject({ status: 'error', code: 'capability_unavailable' })
+    expect(f.counts()).toEqual({ anchorCalls: 0, reads: 0, signatures: 0 })
+  })
+
   it('refuses legacy/no-anchor reads and never retroactively captures an anchor after the original Ack', async () => {
     const f = await fixture(false)
     const { memory, ...legacy } = f.twinOptions
