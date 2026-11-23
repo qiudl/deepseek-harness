@@ -481,7 +481,8 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
       failure.mockRestore()
     }
     const pending = f.metadata.confirmation(directive)
-    expect(pending).toMatchObject({ anchor: expect.any(Object), ack: null })
+    if (pending === null || pending.anchor === null) throw Error('the original memory anchor was not captured')
+    expect(pending.ack).toBeNull()
     const originalBytes = readFileSync(receiptPath)
     receipts = openReceipts()
     const ack = receipts.read(directive)
@@ -499,7 +500,7 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
     const replay = operation === 'confirm' ? f.input : receiptInput
     await expect(operateAccountTwinBinding(options, f.account, replay, f.life.signal))
       .resolves.toEqual({ state: 'acknowledged', ack })
-    expect(f.metadata.confirmation(directive)).toMatchObject({ anchor: pending?.anchor, ack })
+    expect(f.metadata.confirmation(directive)).toMatchObject({ anchor: pending.anchor, ack })
     expect(readFileSync(receiptPath)).toEqual(originalBytes)
     expect(f.counts().anchorCalls).toBe(1)
   })
