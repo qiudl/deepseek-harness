@@ -112,4 +112,22 @@ describe('private original-invocation entry', () => {
     expect(h.agent.inbox.nextTurn).toHaveLength(0)
     expect(h.adapter.requests).toHaveLength(0)
   })
+
+  it('drops a materialized occurrence when a pre-inbox listener clears its reservation', async () => {
+    const h = await harness()
+    const errors: unknown[] = []
+    const message = createUserMessage({ content: [{ type: 'text', text: 'late feedback' }], source: { kind: 'user' } })
+    h.ctx.on('agent/error', ({ error }) => { errors.push(error) })
+    h.ctx.on('agent/pre-inbox', () => { h.agent.inbox.clear() })
+    expect(runtime(h.agent).startOriginalInvocationEntry({
+      occurrenceId: brandString<OriginalInvocationEntryOccurrence['occurrenceId']>('cleared-occurrence'),
+      enter() {},
+      async materialize() { return message },
+    })).toBe(true)
+    await h.agent.whenIdle()
+    expect(errors.map(String)).toEqual(['Error: runtime_entry_occurrence_cancelled'])
+    expect(h.agent.inbox.nextTurn).toEqual([])
+    expect(h.agent.session.snapshotEvents().some(event => event.type === 'user/message')).toBe(false)
+    expect(h.adapter.requests).toHaveLength(0)
+  })
 })

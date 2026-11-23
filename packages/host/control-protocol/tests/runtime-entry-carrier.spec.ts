@@ -72,6 +72,10 @@ it.each(['runtime_entry_observe', 'runtime_entry_bind'] as const)('distinguishes
   expect(() => parseRuntimeEntryOriginCommand({ ...command, sourceSequence: '1' })).toThrow()
   expect(() => parseRuntimeEntryOriginCommand({ ...command, purpose: 'project_operation_origin_observation' })).toThrow()
 })
+it('rejects an absent or non-record native origin command', () => {
+  for (const input of [null, 'runtime_entry_observe'])
+    expect(() => parseRuntimeEntryOriginCommand(input)).toThrow()
+})
 it('requires an actual publication acknowledgment and preserves all candidate-observation bytes', () => {
   for (const record of [{ purpose: 'runtime_entry_observe', observation: null },
     { purpose: 'runtime_entry_observe', observation: origin.observation },

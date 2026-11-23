@@ -19,6 +19,7 @@ describe('Bot original attachment transfer', () => {
   })
   it('binds a safe handle to a visible message selector', () => {
     expect(parseHostBotAttachmentDownloadOpenRequest(request)).toEqual(request)
+    expect(parseHostBotAttachmentDownloadOpen(null, request)).toBeNull()
     expect(parseHostBotAttachmentDownloadOpen({ transferId, attachmentId: request.attachmentId,
       name: 'source.bin', bytes: null }, request)).toEqual({
       transferId, attachmentId: request.attachmentId, name: 'source.bin', bytes: null,
@@ -35,6 +36,7 @@ describe('Bot original attachment transfer', () => {
     const read = { transferId, offset: 0 }
     const bytes = Buffer.alloc(40 * 1024, 7).toString('base64')
     expect(parseHostBotAttachmentDownloadReadRequest(read)).toEqual(read)
+    expect(parseHostBotAttachmentDownloadChunk(null, read)).toBeNull()
     expect(parseHostBotAttachmentDownloadChunk({ ...read, bytes: null,
       chunk: bytes, hasMore: true }, read)?.chunk).toBe(bytes)
     expect(parseHostBotAttachmentDownloadChunk({ ...read, bytes: 0,
