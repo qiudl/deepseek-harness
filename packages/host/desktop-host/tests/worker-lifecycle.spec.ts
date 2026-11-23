@@ -40,6 +40,7 @@ it('denies private collaboration operations when the original worker is missing,
       .rejects.toMatchObject({ code: 'unavailable' })
     await expect(workers.collaborationAnalysis(input.profileId, {}, new AbortController().signal))
       .rejects.toMatchObject({ code: 'unavailable' })
+    expect(() => workers.taskCoordinationReceiver(input.profileId)).toThrow('unavailable')
     expect(() => workers.collaborationDeliveryReceiver(input.profileId)).toThrow('unavailable')
   }
   try {
@@ -250,6 +251,8 @@ it('coalesces concurrent ensures and waits for an in-flight start before disposa
   expect(count).toBe(1)
   expect(aborted).toBe(true)
   await expect(workers.ensure(input)).rejects.toMatchObject({ code: 'unavailable' })
+  await expect(workers.start(input)).rejects.toMatchObject({ code: 'unavailable' })
+  expect(count).toBe(1)
 })
 
 it('starts, activates, and disposes exactly one owned worker generation', async () => {

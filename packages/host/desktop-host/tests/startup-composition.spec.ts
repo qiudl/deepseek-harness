@@ -484,9 +484,14 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     .resolves.toEqual(sourceSnapshot)
   expect(readCollaborationSourceSnapshot).toHaveBeenCalledWith(sourceTarget, collaborationSignal)
   const analysisCommand = { action: 'prepare', input: { source_message_id: sourceTarget.source_message_id } }
-  await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, collaborationSignal))
+  const analysisController = new AbortController()
+  await expect(serverOptions.collaborationAnalysis?.(profile.profileId, analysisCommand, analysisController.signal))
     .resolves.toEqual(analysisCommand)
-  expect(collaborationAnalysis).toHaveBeenCalledWith(analysisCommand, collaborationSignal)
+  expect(collaborationAnalysis).toHaveBeenCalledExactlyOnceWith(analysisCommand, expect.any(AbortSignal))
+  const forwardedSignal = collaborationAnalysis.mock.calls[0]?.[1]
+  expect(forwardedSignal?.aborted).toBe(false)
+  analysisController.abort()
+  expect(forwardedSignal?.aborted).toBe(true)
   const deliveryReceiver = serverOptions.collaborationDeliveryReceiver?.(profile.profileId)
   if (!deliveryReceiver) throw new Error('missing original delivery receiver')
   expect(() => { deliveryReceiver.assertCurrent() }).not.toThrow()
