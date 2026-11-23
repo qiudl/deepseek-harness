@@ -10,11 +10,19 @@ describe('native Bot attachment preview contract', () => {
   it('binds every reply coordinate and text boundary', () => {
     expect(parseHostBotAttachmentPreviewRequest(request)).toEqual(request)
     expect(parseHostBotAttachmentPreview(value, request)).toEqual(value)
+    expect(parseHostBotAttachmentPreview(null, request)).toBeNull()
     expect(parseHostBotAttachmentPreview({ ...value, name: 'image' }, request)).toEqual({ ...value, name: 'image' })
     expect(parseHostBotAttachmentPreview({ ...value, name: 'photo.png' }, request)).toEqual({ ...value, name: 'photo.png' })
     for (const patch of [{ sessionId: 'foreign' }, { eventSeq: 8 }, { attachmentId: `sha256:${'c'.repeat(64)}` },
       { offset: 8_000 }, { chunk: 'wrong' }, { name: 'archive.zip' }, { hasMore: true }])
       expect(() => parseHostBotAttachmentPreview({ ...value, ...patch }, request)).toThrow('invalid_bot_attachment_preview_result')
+  })
+  it('accepts the final partial page but rejects an offset at the end of the preview', () => {
+    const later = parseHostBotAttachmentPreviewRequest({ ...request, offset: 8_000 })
+    const final = { ...value, ...later, total: later.offset + value.chunk.length }
+    expect(parseHostBotAttachmentPreview(final, later)).toEqual(final)
+    expect(() => parseHostBotAttachmentPreview({ ...final, total: later.offset, chunk: '' }, later))
+      .toThrow('invalid_bot_attachment_preview_result')
   })
   it('rejects arbitrary selectors', () => {
     for (const patch of [{ sessionId: '../other' }, { botId: '../main' }, { eventSeq: 0 },

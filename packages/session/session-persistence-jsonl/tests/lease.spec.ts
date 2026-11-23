@@ -431,4 +431,28 @@ describe('cross-process write lock', () => {
     await a.close()
     await b.close()
   })
+
+  it('checks the current writer across release and replacement of its POSIX lock inode', async () => {
+    const root = await freshRoot()
+    const dir = join(root, 'writer')
+    const id = SessionId('writer')
+    const original = await SessionWriteLease.acquire(dir, id)
+    try {
+      expect(original.isCurrent()).toBe(true)
+      if (process.platform !== 'win32') {
+        await rm(join(dir, LEASE_FILENAME))
+        expect(original.isCurrent()).toBe(false)
+        const successor = await SessionWriteLease.acquire(dir, id)
+        try {
+          expect(successor.isCurrent()).toBe(true)
+          expect(original.isCurrent()).toBe(false)
+        } finally {
+          await successor.release()
+        }
+      }
+    } finally {
+      await original.release()
+    }
+    expect(original.isCurrent()).toBe(false)
+  })
 })

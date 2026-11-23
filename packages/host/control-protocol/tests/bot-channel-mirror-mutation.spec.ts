@@ -24,4 +24,17 @@ describe('native Channel mirror mutation contract', () => {
     { kind: 'start', roomId, requestId, state: 'awaiting_confirmation', confirmationCode: 'wrong' }])
       expect(() => receipt(bad, input)).toThrow('invalid_bot_channel_mirror_mutation_receipt')
   })
+
+  it('allows each reconciliation command to carry only its original request identity', () => {
+    for (const kind of ['finish', 'unbind'] as const) {
+      const command = { kind, roomId, requestId }
+      const input = request(command)
+      const result = { ...command, state: kind === 'finish' ? 'active' : 'unbound' }
+      expect(input).toEqual(command)
+      expect(receipt(result, input)).toEqual(result)
+      expect(receipt(null, input)).toBeNull()
+      expect(() => request({ ...command, ticket: start.ticket })).toThrow('invalid_bot_channel_mirror_mutation')
+    }
+    expect(() => request({ ...start, endpoint: 'not-an-origin' })).toThrow('invalid_bot_channel_mirror_mutation')
+  })
 })

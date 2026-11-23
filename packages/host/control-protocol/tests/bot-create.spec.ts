@@ -22,4 +22,17 @@ describe('controlled Bot creation', () => {
     expect(() => parseHostBotCreateReceipt({ ownerBotId: 'main', createRequestId: request.createRequestId,
       state: 'created', botId: 'main', revision: 8 }, request)).toThrow('invalid_bot_create_receipt')
   })
+
+  it('retains the original model and appearance in a status request', () => {
+    const form = { ...request.bot, color: 'blue', avatarShape: 'whale', model: 'provider/model', effort: 'high' }
+    const status = { ...request, mode: 'status', bot: form }
+    const parsed = parseHostBotCreateRequest(status)
+    expect(parsed).toEqual(status)
+    expect(parseHostBotCreateReceipt(null, parsed)).toBeNull()
+    for (const patch of [{ color: 'x'.repeat(65) }, { avatarShape: 1 }, { avatarShape: 'Whale' },
+      { model: 'name-without-provider' }, { model: 1 }, { effort: 1 }, { model: null }])
+      expect(() => parseHostBotCreateRequest({ ...status, bot: { ...form, ...patch } }))
+        .toThrow('invalid_bot_create')
+    expect(() => parseHostBotCreateRequest({ ...status, mode: 'force' })).toThrow('invalid_bot_create')
+  })
 })

@@ -39,6 +39,8 @@ describe('native provider directory boundary', () => {
     expect(() => parseHostBotProvidersMutationRequest({ ...custom,
       value: { ...custom.value, baseURL: 'file:///etc/passwd' } })).toThrow()
     expect(() => parseHostBotProvidersMutationRequest({ ...custom,
+      value: { ...custom.value, baseURL: 'not-an-origin' } })).toThrow('invalid_bot_providers_mutation')
+    expect(() => parseHostBotProvidersMutationRequest({ ...custom,
       value: { ...custom.value, models: ['m1', 'm1'] } })).toThrow()
     const discovery = { ...custom, kind: 'discover',
       value: { ...custom.value, models: [] } }
@@ -47,5 +49,29 @@ describe('native provider directory boundary', () => {
       .toEqual({ models: [{ id: 'm1', name: 'Model One' }] })
     expect(() => parseHostBotProviderDiscovery({ models: [{ id: 'm1', name: 'One' },
       { id: 'm1', name: 'Two' }] })).toThrow()
+    const add = { ...request, kind: 'add-known', value: null }
+    expect(parseHostBotProvidersMutationRequest(add)).toEqual(add)
+    const withKey = { ...add, value: 'fixture-token' }
+    expect(parseHostBotProvidersMutationRequest(withKey)).toEqual(withKey)
+    expect(() => parseHostBotProvidersMutationRequest({ ...withKey, value: 'invalid token' }))
+      .toThrow('invalid_bot_providers_mutation')
+  })
+
+  it('keeps unavailable discovery and bounded aggregate model counts distinct', () => {
+    expect(parseHostBotProviders(null)).toBeNull()
+    expect(parseHostBotProviderDiscovery(null)).toBeNull()
+    expect(() => parseHostBotProviderDiscovery({ models: [], token: 'fixture' }))
+      .toThrow('invalid_bot_provider_discovery')
+    const unconfigured = { ...view, providers: [{ ...view.providers[0], key: null }] }
+    expect(parseHostBotProviders(unconfigured)).toEqual(unconfigured)
+    for (const patch of [{ addable: [{ id: 'other' }] }, { protocols: ['unknown'] }])
+      expect(() => parseHostBotProviders({ ...view, ...patch })).toThrow('invalid_bot_providers_result')
+    const providers = Array.from({ length: 5 }, (_, providerIndex) => ({
+      ...view.providers[0], id: `p${providerIndex}`, key: null,
+      models: Array.from({ length: 401 }, (_, modelIndex) => ({ ref: `m${modelIndex}`, name: 'M' })),
+    }))
+    const oversized = { ...view, providers }
+    expect(Buffer.byteLength(JSON.stringify(oversized))).toBeLessThan(60_000)
+    expect(() => parseHostBotProviders(oversized)).toThrow('invalid_bot_providers_result')
   })
 })

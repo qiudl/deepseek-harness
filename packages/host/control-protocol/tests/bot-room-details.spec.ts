@@ -44,4 +44,20 @@ describe('fixed owner Bot room details', () => {
     expect(() => parseHostBotRoomDetails({ ...value,
       channelMirror: { ...mirror, credential: 'secret' } }, request)).toThrow('invalid_bot_room_details_result')
   })
+
+  it('preserves unbound and paused mirror states with bounded destination coordinates', () => {
+    const paused = { state: 'paused', target: null, groupGap: null,
+      channelGap: null, pauseReason: 'authority_revoked' }
+    expect(parseHostBotRoomDetails({ ...value, channelMirror: null }, request)?.channelMirror).toBeNull()
+    expect(parseHostBotRoomDetails({ ...value, channelMirror: paused }, request)?.channelMirror).toEqual(paused)
+    expect(parseHostBotRoomDetails({ ...value, replyMode: 'everyone' }, request)?.replyMode).toBe('everyone')
+    expect(() => parseHostBotRoomDetails({ ...value, replyMode: 'unsupported' }, request))
+      .toThrow('invalid_bot_room_details_result')
+    const target = { projectId: 'project-1', channelId: 'channel-1', defaultAgentId: 'agent-1' }
+    for (const patch of [{ pauseReason: 'unexpected' }, { pauseReason: { reason: 'authority_revoked' } },
+      { target: { ...target, account: 'other' } }, { target: { ...target, defaultAgentId: '' } }]) {
+      expect(() => parseHostBotRoomDetails({ ...value, channelMirror: { ...paused, ...patch } }, request))
+        .toThrow('invalid_bot_room_details_result')
+    }
+  })
 })

@@ -17,4 +17,17 @@ describe('controlled Bot duplicate', () => {
     expect(() => parseHostBotDuplicateReceipt({ sourceBotId: 'source', copyRequestId: request.copyRequestId,
       state: 'created', botId: 'copy', revision: 6 }, request)).toThrow('invalid_bot_duplicate_receipt')
   })
+
+  it('keeps an unavailable or missing receipt distinct from a stale create request', () => {
+    const status = { ...request, mode: 'status' as const }
+    const receipt = { sourceBotId: request.sourceBotId, copyRequestId: request.copyRequestId,
+      botId: null, revision: 8 }
+    expect(parseHostBotDuplicateReceipt(null, status)).toBeNull()
+    expect(parseHostBotDuplicateReceipt({ ...receipt, state: 'missing' }, status)?.state).toBe('missing')
+    expect(parseHostBotDuplicateReceipt({ ...receipt, state: 'stale' }, request)?.state).toBe('stale')
+    expect(() => parseHostBotDuplicateReceipt({ ...receipt, state: 'stale' }, status))
+      .toThrow('invalid_bot_duplicate_receipt')
+    expect(() => parseHostBotDuplicateReceipt({ ...receipt, state: 'queued' }, status))
+      .toThrow('invalid_bot_duplicate_receipt')
+  })
 })

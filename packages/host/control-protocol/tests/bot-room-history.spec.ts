@@ -27,4 +27,20 @@ describe('bounded owner Bot room history', () => {
     expect(() => parseHostBotRoomHistory({ ...page, messages: [], truncatedBefore: true }, request))
       .toThrow('invalid_bot_room_history_result')
   })
+
+  it('preserves image attachments and checks the retained page boundary', () => {
+    const request = parseHostBotRoomHistoryRequest({ roomId: 'room-1', afterSeq: 1, limit: 2 })
+    const message = { seq: 2, authorKind: 'user', authorName: 'User', authorRef: null,
+      kind: 'attachment', text: 'A sketch', time: null, attachments: [{ kind: 'image',
+        attachmentId: `sha256:${'a'.repeat(64)}`, name: 'sketch.png', bytes: null }] }
+    const page = { roomId: 'room-1', revision: 2, oldestSeq: 1, latestSeq: 3,
+      truncatedBefore: false, messages: [message], nextCursor: 2 }
+    expect(parseHostBotRoomHistory(null, request)).toBeNull()
+    expect(parseHostBotRoomHistory(page, request)).toEqual(page)
+    expect(() => parseHostBotRoomHistory({ ...page, nextCursor: 3 }, request))
+      .toThrow('invalid_bot_room_history_result')
+    for (const kind of [1, '', 'x'.repeat(65)])
+      expect(() => parseHostBotRoomHistory({ ...page, messages: [{ ...message, kind }] }, request))
+        .toThrow('invalid_bot_room_history_result')
+  })
 })

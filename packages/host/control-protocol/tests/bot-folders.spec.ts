@@ -17,6 +17,7 @@ describe('native Bot Host folders', () => {
       { botId: 'main', path: null, profileId: 'other' }])
       expect(() => parseHostBotFoldersRequest(value)).toThrow()
     const request = parseHostBotFoldersRequest({ botId: 'main', path: null })
+    expect(parseHostBotFolders(null, request)).toBeNull()
     for (const value of [{ botId: 'other', kind: 'places', team: '/team', canBrowse: true,
       folders: [], truncated: false }, { botId: 'main', kind: 'places', team: '/team',
       canBrowse: true, folders: [], truncated: false, secret: 'hidden' }])
