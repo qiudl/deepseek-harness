@@ -48,6 +48,8 @@ import { parseHostCollaborationArchiveStateValue,
 import type { ProfileWorkerHandle, ProfileWorkerSpec } from './types.ts'
 import { HostAuthorityError } from './types.ts'
 import { openRemoteUiWorkerStream } from './remote-ui-stream-client.ts'
+import { parsePrivateTwinWorkerCommand, parsePrivateTwinWorkerReply, PRIVATE_TWIN_WORKER_MAX_CLAIM_BYTES,
+  PRIVATE_TWIN_WORKER_PATH, type PrivateTwinWorkerCommand, type PrivateTwinWorkerReply } from './private-twin-worker-protocol.ts'
 
 const execFileAsync = promisify(execFile)
 const gzipAsync = promisify(gzip)
@@ -71,6 +73,7 @@ const RESERVED_ENV = new Set([
   'DSH_PROFILE_DELIVERY_TOKEN',
   'DSH_PROFILE_REMOTE_SESSION_TOKEN',
   'DSH_PROFILE_REMOTE_UI_TOKEN',
+  'DSH_PROFILE_PRIVATE_TWIN_TOKEN',
   'DSH_PROFILE_PNPM_ENTRYPOINT',
   'DSH_SLARK_EMBEDDED',
 ])
@@ -89,6 +92,8 @@ export type ProfileListenerAttestor = (pid: number, origin: string) => Promise<v
 
 /** Launch configuration for `dsh --profile web` Profile workers. */
 export interface DshWebProfileWorkerFactoryOptions {
+  /** Set by the managed Native runtime when the paired Slark plugin is installed. */
+  readonly enablePrivateTwin?: boolean
   readonly runtimeEntryOrigins?: HostRuntimeEntryOriginsConfiguration
   readonly projectOperationMemoryEnvironments?: readonly HostProjectMemoryEnvironment[]
   readonly taskCoordinationEnvironments?: readonly HostTaskCoordinationEnvironment[]
@@ -209,6 +214,7 @@ export class DshWebProfileWorkerFactory {
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
+    const privateTwinToken = this.options.enablePrivateTwin === true ? randomBytes(32).toString('base64url') : undefined
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {
@@ -233,6 +239,7 @@ export class DshWebProfileWorkerFactory {
         DSH_PROFILE_DELIVERY_TOKEN: deliveryToken,
         DSH_PROFILE_REMOTE_SESSION_TOKEN: remoteSessionToken,
         DSH_PROFILE_REMOTE_UI_TOKEN: remoteUiToken,
+        ...(privateTwinToken === undefined ? {} : { DSH_PROFILE_PRIVATE_TWIN_TOKEN: privateTwinToken }),
         ...(this.options.pnpmEntrypointPath === undefined
           ? {} : { DSH_PROFILE_PNPM_ENTRYPOINT: this.options.pnpmEntrypointPath }),
         DSH_SLARK_EMBEDDED: '1',
@@ -243,7 +250,7 @@ export class DshWebProfileWorkerFactory {
     this.generation += 1
     return this.handle(child, activated.origin, activated.bootstrapCookie, this.generation,
       modelToken, remoteSessionToken, remoteUiToken, workspaceModelToken, archiveTransitionToken,
-      sourceToken, analysisToken, deliveryToken, referenceToken, workerId)
+      sourceToken, analysisToken, deliveryToken, referenceToken, workerId, privateTwinToken)
   }
 
   private async waitForOrigin(child: ChildProcess): Promise<{
@@ -312,6 +319,7 @@ export class DshWebProfileWorkerFactory {
     deliveryToken: string,
     referenceToken: string,
     workerId: string,
+    privateTwinToken?: string,
   ): ProfileWorkerHandle {
     let requestedStop = false
     let settled = false
@@ -337,6 +345,8 @@ export class DshWebProfileWorkerFactory {
       workerId,
       generation,
       bootstrapCookie,
+      ...(privateTwinToken === undefined ? {} : { operatePrivateTwin: (command: PrivateTwinWorkerCommand, signal: AbortSignal) =>
+        this.privateTwinOperation(viewOrigin, privateTwinToken, command, signal, () => requestedStop || settled, actualExit.signal) }),
       resolveBotSessionIdentity: (botId, sessionId, signal) => this.resolveBotSessionIdentity(
         viewOrigin, sourceToken, botId, sessionId, signal, () => requestedStop || settled),
       resolveBotIdentity: (botId, signal) => this.resolveBotIdentity(
@@ -901,6 +911,24 @@ export class DshWebProfileWorkerFactory {
   }
 
   /** Retain each read's deadline, owner cancellation, byte budget and reader teardown policy. */
+  private async privateTwinOperation(
+    origin: string, token: string, value: PrivateTwinWorkerCommand, signal: AbortSignal,
+    stopped: () => boolean, exited: AbortSignal,
+  ): Promise<PrivateTwinWorkerReply> {
+    const command = parsePrivateTwinWorkerCommand(value)
+    const active = AbortSignal.any([signal, exited, AbortSignal.timeout(5_000)])
+    active.throwIfAborted()
+    if (stopped()) throw new HostAuthorityError('stale')
+    const response = await fetch(origin + PRIVATE_TWIN_WORKER_PATH, {
+      method: 'POST', redirect: 'error', credentials: 'omit', cache: 'no-store',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(command), signal: active,
+    })
+    return this.readPrivateResponse(response, active, signal, stopped,
+      command.operation === 'claim' ? PRIVATE_TWIN_WORKER_MAX_CLAIM_BYTES : 1024,
+      bytes => parsePrivateTwinWorkerReply(command, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))), 'detach')
+  }
+
   private async readPrivateResponse<T>(
     response: Response,
     active: AbortSignal,

@@ -56,6 +56,57 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
+  it.runIf(process.platform === 'darwin')('issues a private capability only to the managed Profile worker', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-private-twin-profile-'))
+    const entry = join(root, 'worker.mjs')
+    const ticket = Buffer.alloc(32, 72).toString('base64url')
+    const cookie = `dsh-auth-${'a'.repeat(43)}=v1.${'b'.repeat(8)}.${'c'.repeat(43)}; Max-Age=60; Path=/; Expires=Wed, 01 Jan 2031 00:00:00 GMT; HttpOnly; SameSite=Strict`
+    writeFileSync(entry, `
+      import { createServer } from 'node:http'
+      const server = createServer(async (req, res) => {
+        if (req.url === '/?token=fixture') return res.writeHead(303, { location: '/', 'set-cookie': ${JSON.stringify(cookie)} }).end()
+        if (req.url !== '/internal/slark-private-twin') return res.writeHead(req.headers.cookie ? 200 : 401).end()
+        const token = process.env.DSH_PROFILE_PRIVATE_TWIN_TOKEN
+        if (!token || req.headers.authorization !== 'Bearer ' + token) return res.writeHead(403).end()
+        const bytes = []
+        for await (const chunk of req) bytes.push(chunk)
+        const value = JSON.parse(Buffer.concat(bytes).toString())
+        const result = value.operation === 'claim' ? { request: { operation: 'read', ticket: ${JSON.stringify(ticket)},
+          botId: 'bot', sessionId: 'part', sourceMessageId: 'user', callId: 'call', rootCallId: 'call', receipt: ${JSON.stringify(ticket)} } }
+          : value.operation === 'check' ? { current: value.ticket === ${JSON.stringify(ticket)} }
+          : { completed: value.result.answer.length === 131072 }
+        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(result))
+      })
+      server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + server.address().port + '/?token=fixture'))
+    `, { mode: 0o600 })
+    const enabled = new DshWebProfileWorkerFactory({
+      nodeExecutablePath: process.execPath, dshEntrypointPath: entry, enablePrivateTwin: true,
+    })
+    const disabled = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
+    const workers: ProfileWorkerHandle[] = []
+    onTestFinished(async () => {
+      for (const worker of workers) { worker.abort(); await worker.done }
+      rmSync(root, { recursive: true, force: true })
+    })
+    await expect(enabled.create({ ...spec(root), env: { DSH_PROFILE_PRIVATE_TWIN_TOKEN: ticket } }))
+      .rejects.toMatchObject({ code: 'invalid_input' })
+    const ordinary = await disabled.create(spec(root)); workers.push(ordinary)
+    expect(ordinary.operatePrivateTwin).toBeUndefined()
+    const worker = await enabled.create(spec(root)); workers.push(worker)
+    const call = worker.operatePrivateTwin!
+    const signal = new AbortController().signal
+    await expect(fetch(worker.viewOrigin + '/internal/slark-private-twin', {
+      method: 'POST', body: '{"operation":"claim"}',
+    })).resolves.toMatchObject({ status: 403 })
+    await expect(call({ operation: 'claim' }, signal)).resolves.toMatchObject({ request: { ticket, receipt: ticket } })
+    await expect(call({ operation: 'check', ticket }, signal)).resolves.toEqual({ current: true })
+    await expect(call({ operation: 'finish', ticket, result: { state: 'replied', answer: '"'.repeat(131072) } }, signal))
+      .resolves.toEqual({ completed: true })
+    await expect(call({ operation: 'finish', ticket, result: { state: 'replied', answer: 'x'.repeat(131073) } }, signal)).rejects.toThrow()
+    worker.abort(); await worker.done
+    await expect(call({ operation: 'claim' }, signal)).rejects.toThrow()
+  })
+
   it('projects document-relative plugin references to Host-root URLs for remote boot', async () => {
     const relative = `plugins/??${'a'.repeat(2700)}&rev=1`
     const absolute = `/${relative}`
