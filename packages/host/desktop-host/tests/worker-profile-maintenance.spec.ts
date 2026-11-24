@@ -59,7 +59,9 @@ it('REQ-20261117-0005 fences the selected Profile while privately testing a fres
     retained = permit
     expect(stopped).toContain(1)
     await expect(workers.activate(input.profileId)).rejects.toMatchObject({ code: 'unavailable' })
+    await expect(workers.start(input)).rejects.toMatchObject({ code: 'unavailable' })
     await expect(workers.ensure(input)).rejects.toMatchObject({ code: 'unavailable' })
+    expect(generation).toBe(2)
     await expect(workers.generateText('profile-b', 'text', new AbortController().signal)).resolves.toMatchObject({ text: 'reply' })
     await expect(permit.ensure({ ...input, profileId: 'profile-b' })).rejects.toMatchObject({ code: 'profile_mismatch' })
     await permit.ensure(input)
