@@ -332,7 +332,6 @@ export class ProfileWorkerSupervisor {
    */
   async start(input: StartProfileWorkerInput): Promise<void> {
     this.assertProfileAvailable(input.profileId)
-    if (this.closed) throw new HostAuthorityError('unavailable')
     return this.serial(input.profileId, () => this.startOwned(input))
   }
 
@@ -352,7 +351,6 @@ export class ProfileWorkerSupervisor {
    */
   async ensure(input: StartProfileWorkerInput): Promise<void> {
     this.assertProfileAvailable(input.profileId)
-    if (this.closed) throw new HostAuthorityError('unavailable')
     await this.serial(input.profileId, async () => {
       if (!this.workers.has(input.profileId)) await this.startOwned(input)
     })
