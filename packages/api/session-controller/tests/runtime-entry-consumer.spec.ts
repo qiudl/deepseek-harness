@@ -6,6 +6,7 @@ import { JsonStorageBackend } from '@deepseek-ai/dsh-storage-json'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { parseRuntimeEntryBinding, type RuntimeEntryBinding } from '@deepseek-ai/dsh-host-control-protocol'
@@ -230,6 +231,27 @@ it('retains an unsupported outcome when the preflight changes composition and cr
   expect(h.counts()).toEqual({ grants: 0, bodyReads: 0 })
   expect(h.consumers.records()).toHaveLength(0)
 })
+it('keeps an original reply from overtaking already queued user input', async () => {
+  const h = await harness()
+  h.agent.inject(createUserMessage({ content: [{ type: 'text', text: 'new user question' }], source: { kind: 'user' } }))
+  expect(h.agent.inbox.nextStep).toHaveLength(1)
+  const readSnapshot = vi.fn(h.args.readSnapshot)
+  await expect(h.consumer.prepare({ ...h.args, readSnapshot })).resolves.toEqual({ kind: 'unsupported' })
+  expect(readSnapshot).not.toHaveBeenCalled()
+  expect(h.consumers.records()).toHaveLength(0)
+})
+it('retains a prepared record without returning a usable capability after authority is withdrawn during commit', async () => {
+  const h = await harness(), commit = h.consumers.prepare.bind(h.consumers)
+  vi.spyOn(h.consumers, 'prepare').mockImplementationOnce(async (...args) => {
+    const stored = await commit(...args)
+    h.setCurrent(false)
+    return stored
+  })
+  await expect(h.consumer.prepare(h.args)).resolves.toEqual({ kind: 'unsupported' })
+  expect(h.counts()).toEqual({ grants: 0, bodyReads: 0 })
+  expect(h.consumers.records()[0]?.state).toBe('prepared')
+  expect(h.journal.count()).toBe(0)
+})
 it('rejects a prepared capability after current composition changes before its first Source request', async () => {
   const h = await harness(), prepared = await h.consumer.prepare(h.args)
   if (prepared.kind !== 'prepared') throw Error('missing preparation')
@@ -237,6 +259,56 @@ it('rejects a prepared capability after current composition changes before its f
   expect(await prepared.start(h.startOptions)).toMatchObject({ kind: 'gap', reason: 'authority_lost' })
   expect(h.counts()).toEqual({ grants: 0, bodyReads: 0 })
   expect(h.consumers.records()[0]?.state).toBe('prepared')
+  expect(h.journal.count()).toBe(0)
+})
+it.each(['metadata', 'native preparation', 'started record'] as const)(
+  'discards a private reply when authority is withdrawn while awaiting %s', async (boundary) => {
+    const h = await harness(), prepared = await h.consumer.prepare(h.args)
+    if (prepared.kind !== 'prepared') throw Error('missing preparation')
+    if (boundary === 'started record') {
+      const commit = h.consumers.start.bind(h.consumers)
+      vi.spyOn(h.consumers, 'start').mockImplementationOnce(async (...args) => {
+        const stored = await commit(...args)
+        h.setCurrent(false)
+        return stored
+      })
+    }
+    const wake = vi.fn()
+    const outcome = await prepared.start({ ...h.startOptions, beforeWake: wake,
+      requestOriginalMetadata: async (command) => {
+        const original = await h.startOptions.requestOriginalMetadata(command)
+        if (boundary === 'metadata') h.setCurrent(false)
+        return original
+      },
+      prepareEntry: async (...args) => {
+        const result = await h.startOptions.prepareEntry(...args)
+        if (boundary === 'native preparation') h.setCurrent(false)
+        return result
+      },
+    })
+    expect(outcome).toMatchObject({ kind: 'gap', reason: 'authority_lost' })
+    expect(h.counts()).toEqual({ grants: 1, bodyReads: 0 })
+    expect(wake).not.toHaveBeenCalled()
+    expect(h.journal.count()).toBe(0)
+    expect(h.consumers.records()[0]?.state).toBe(boundary === 'started record' ? 'started' : 'prepared')
+  })
+
+it('does not dispatch a second wake when two preparations use the same original grant', async () => {
+  const h = await harness()
+  const first = await h.consumer.prepare(h.args)
+  const retry = await h.consumer.prepare(h.args)
+  if (first.kind !== 'prepared' || retry.kind !== 'prepared') throw Error('missing preparations')
+  expect(retry.record.command).toEqual(first.record.command)
+  const original = await h.startOptions.requestOriginalMetadata(first.record.command)
+  const start = { ...h.startOptions, requestOriginalMetadata: async () => original }
+  await expect(first.start({ ...start, beforeWake: async () => { throw Error('lost at the original wake') } }))
+    .rejects.toThrow('lost at the original wake')
+  const retryWake = vi.fn()
+  await expect(retry.start({ ...start, beforeWake: retryWake })).resolves.toMatchObject({ kind: 'gap', reason: 'entry_unavailable' })
+  expect(retryWake).not.toHaveBeenCalled()
+  expect(h.counts()).toEqual({ grants: 1, bodyReads: 0 })
+  expect(h.consumers.records()).toMatchObject([{ state: 'started' }])
+  expect((await h.consumer.prepare(h.args)).kind).toBe('historical')
   expect(h.journal.count()).toBe(0)
 })
 it.each(['binding', 'raw_grant', 'grant_metadata', 'grant_digest'] as const)('rejects mismatched %s before local started or actual driver entry', async (mismatch) => {
