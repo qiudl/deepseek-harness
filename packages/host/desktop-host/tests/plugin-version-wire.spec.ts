@@ -10,7 +10,7 @@ import { ProfilePluginExecutor } from '../src/profile-plugin-executor.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { UnixHostClient, UnixHostServer } from '../src/unix-transport.ts'
 
-it('REQ-20261117-0005 reads versions over the authenticated Profile-bound socket without changing legacy inventory', async () => {
+it.skipIf(process.platform === 'win32')('REQ-20261117-0005 reads versions over the authenticated Profile-bound Unix socket without changing legacy inventory', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'plugin-version-wire-')))
   const uid = process.getuid!(), clock = { now: Date.now }, key = generateKeyPairSync('ed25519')
   const publicKey = (key.publicKey.export({ format: 'der', type: 'spki' }) as Buffer).subarray(-32).toString('base64url')
