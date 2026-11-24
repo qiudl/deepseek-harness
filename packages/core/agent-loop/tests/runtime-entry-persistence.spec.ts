@@ -96,7 +96,7 @@ describe('actual startup runtime-entry ownership', () => {
     expect(await pending).toBeUndefined()
   })
 
-  it('detects replacement of the actual POSIX lock inode before entry', async () => {
+  it.skipIf(process.platform === 'win32')('detects replacement of the actual POSIX lock inode before entry', async () => {
     const h = await harness()
     const witness = await h.ctx.agentLoop.readOriginalInvocationEntrySession(h.agent)
     const snapshot = await h.persistence.stat(h.agent.id)

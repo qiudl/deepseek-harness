@@ -62,22 +62,24 @@ export function parseRuntimeEntryAnalysisCommand(value: unknown): RuntimeEntryAn
   const start = action === 'root_feedback' && op === 'consumer_start'
   const c = record(value, ['action', 'purpose', 'operation', ...(start ? ['metadataAuthorization'] : [])])
   if (c.purpose !== 'runtime_entry' || (action !== 'root_execution_journal' && action !== 'root_feedback')) return fail()
-  const keys = action === 'root_execution_journal' || op === 'consumer_read' ? []
-    : op === 'consumer_prepare' ? ['expected_event_count', 'expected_log_digest'] : op === 'consumer_start' ? ['grant'] : fail()
+  const feedback = action === 'root_execution_journal' ? undefined
+    : op === 'consumer_read' || op === 'consumer_prepare' || op === 'consumer_start' ? op : fail()
+  const keys = feedback === 'consumer_prepare' ? ['expected_event_count', 'expected_log_digest']
+    : feedback === 'consumer_start' ? ['grant'] : []
   const o = record(operation, ['action', 'target', 'selection', 'delivery_id', ...keys])
   const common = { target: parseHostRootSubmissionTarget(o.target), selection: selection(o.selection) }
-  if (action === 'root_execution_journal') {
+  if (feedback === undefined) {
     if (op !== 'read') return fail()
-    return Object.freeze({ action, purpose: 'runtime_entry', operation: Object.freeze({ action: 'read', ...common, delivery_id: id(o.delivery_id) }) })
+    return Object.freeze({ action: 'root_execution_journal', purpose: 'runtime_entry',
+      operation: Object.freeze({ action: 'read', ...common, delivery_id: id(o.delivery_id) }) })
   }
   const query = { ...common, delivery_id: id(o.delivery_id) }
   let parsed: RuntimeEntryFeedbackOperation
-  if (op === 'consumer_read') parsed = Object.freeze({ action: op, ...query })
-  else if (op === 'consumer_prepare') parsed = Object.freeze({ action: op, ...query,
+  if (feedback === 'consumer_read') parsed = Object.freeze({ action: feedback, ...query })
+  else if (feedback === 'consumer_prepare') parsed = Object.freeze({ action: feedback, ...query,
     expected_event_count: time(o.expected_event_count), expected_log_digest: digest(o.expected_log_digest) })
-  else if (op === 'consumer_start') parsed = Object.freeze({ action: op, ...query, grant: parseRuntimeEntryConsumerGrant(o.grant) })
-  else return fail()
-  return Object.freeze({ action, purpose: 'runtime_entry', operation: parsed,
+  else parsed = Object.freeze({ action: feedback, ...query, grant: parseRuntimeEntryConsumerGrant(o.grant) })
+  return Object.freeze({ action: 'root_feedback', purpose: 'runtime_entry', operation: parsed,
     ...(start ? { metadataAuthorization: parseRuntimeEntryMetadataAuthorization(c.metadataAuthorization) } : {}) })
 }
 /** Parse the original candidate-observe or immutable Cloud-pair binding purpose.

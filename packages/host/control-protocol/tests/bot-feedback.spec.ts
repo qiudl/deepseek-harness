@@ -11,10 +11,21 @@ describe('native redacted Bot feedback contract', () => {
     expect(parseHostBotFeedbackRequest({})).toEqual({})
     expect(() => parseHostBotFeedbackRequest({ account: 'other' })).toThrow()
     expect(parseHostBotFeedback(report)).toEqual(report)
+    expect(parseHostBotFeedback(null)).toBeNull()
     expect(() => parseHostBotFeedback({ ...report, token: 'private' })).toThrow()
     expect(() => parseHostBotFeedback({ ...report, issuesUrl: 'https://evil.test' })).toThrow()
     expect(() => parseHostBotFeedback({ ...report,
       entries: [{ ...report.entries[0], stack: 'private' }] })).toThrow()
+  })
+  it('preserves redacted warnings from the API and browser with bounded codes', () => {
+    const entries = [
+      { ...report.entries[0], level: 'warn', source: 'api', code: 'request_timeout' },
+      { ...report.entries[0], level: 'warn', source: 'browser', code: 'page_unavailable' },
+    ]
+    const projected = { ...report, total: entries.length, entries }
+    expect(parseHostBotFeedback(projected)).toEqual(projected)
+    expect(() => parseHostBotFeedback({ ...projected, entries: [{ ...entries[0], code: 'x'.repeat(41) }] }))
+      .toThrow('invalid_bot_feedback_result')
   })
   it('binds log clear to one Bot Session without extra authority', () => {
     expect(parseHostBotFeedbackClearRequest({ botId: 'main', sessionId: 'chat-1' }))

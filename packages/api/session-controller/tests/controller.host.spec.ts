@@ -1,4 +1,7 @@
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -9,6 +12,7 @@ import { LlmAttemptId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import SessionController from '../src/index.ts'
@@ -63,6 +67,66 @@ describe('SessionController facade', () => {
       value: { type: 'snapshot', assistantStream: { revision: 1 } },
     })
     await frames.return?.(undefined)
+  })
+
+  it.each(['ready', 'projection-failed'] as const)('releases assistant observers after %s and remounts without an old baseline', async (mode) => {
+    const ctx = new Context()
+    onTestFinished(() => ctx.fiber.dispose())
+    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestHarness(ctx)
+    const gateway: Partial<TypertGatewayService> = { getPendingRemoteEvents: () => [] }
+    ctx.provide('typertGateway', gateway as TypertGatewayService)
+    const session = ctx.sessions.create(SessionId('assistant-remount'), { meta: { cwd: '/workspace' } })
+    const agent = { id: session.id, session, status: 'running', ctx } as Agent
+    const listeners = () => ctx.events._hooks['agent/assistant-stream']?.length ?? 0
+    const before = listeners()
+    const registrationError = Error('projection registration failed')
+    const register = vi.spyOn(ctx.sessionProjections, 'register')
+    onTestFinished(() => { register.mockRestore() })
+    if (mode === 'projection-failed') register.mockRejectedValueOnce(registrationError)
+    const logged = vi.spyOn(ctx.logger, 'error').mockImplementation(() => {})
+    onTestFinished(() => { logged.mockRestore() })
+    const inject = SessionController.inject.filter(name => ctx.get(name) !== undefined)
+    const original = ctx.plugin({
+      inject,
+      async apply(mounted: Context) {
+        await createSessionTestController(mounted, defaults)
+      },
+    })
+    onTestFinished(() => original.dispose())
+    if (mode === 'projection-failed') {
+      await expect(original.await()).rejects.toBe(registrationError)
+      expect(listeners()).toBe(before)
+    } else {
+      await original.await()
+      expect(listeners()).toBe(before + 1)
+      ctx.emit('agent/assistant-stream', {
+        agent, frame: { type: 'start', attemptId: LlmAttemptId('original-attempt'), revision: 1, turn: 1, step: 1 },
+      })
+    }
+    await original.dispose()
+    expect(listeners()).toBe(before)
+    ctx.emit('agent/assistant-stream', {
+      agent, frame: { type: 'start', attemptId: LlmAttemptId('disposed-attempt'), revision: 1, turn: 1, step: 1 },
+    })
+    let replacement: SessionController | undefined
+    const remounted = ctx.plugin({
+      inject,
+      async apply(mounted: Context) {
+        replacement = await createSessionTestController(mounted, defaults)
+      },
+    })
+    onTestFinished(() => remounted.dispose())
+    await remounted.await()
+    expect(listeners()).toBe(before + 1)
+    if (!replacement) throw Error('replacement controller did not initialize')
+    const frames = replacement.follow({ address: { kind: 'session', sessionId: session.id }, assistantStream: true },
+      new AbortController().signal)[Symbol.asyncIterator]()
+    onTestFinished(async () => { await frames.return?.(undefined) })
+    await expect(frames.next()).resolves.toMatchObject({ value: { type: 'snapshot', assistantStream: { revision: 0 } } })
+    await frames.return?.(undefined)
+    await remounted.dispose()
+    expect(listeners()).toBe(before)
   })
 
   it('serves passive reads, subscriptions and waits through its plain controllers', async () => {
@@ -198,6 +262,45 @@ describe('SessionController facade', () => {
     })
     abort.abort()
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('activates the original persisted Session when a follow attaches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-session-controller-follow-'))
+    const ctx = new Context()
+    onTestFinished(async () => {
+      await ctx.fiber.dispose()
+      await rm(root, { recursive: true, force: true })
+    })
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(JsonlPersistence, { root: join(root, 'sessions'), compression: 'none' })
+    await mountAgentLoopTestHarness(ctx)
+    const sessionId = SessionId('persisted-follow')
+    const original = await ctx.agents.create({ sessionId, meta: { cwd: root } })
+    original.agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'original conversation' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    const message = original.agent.session.snapshotEvents()[0]
+    expect(message?.type).toBe('user/message')
+    expect(await ctx.sessions.flush(original.agent.session)).toBe(true)
+    await original.dispose()
+    expect(ctx.agents.get(sessionId)).toBeUndefined()
+
+    const controller = await createSessionTestController(ctx, { ...defaults, cwd: root })
+    const abort = new AbortController()
+    const iterator = controller.follow({
+      address: { kind: 'session', sessionId }, activate: true,
+    }, abort.signal)[Symbol.asyncIterator]()
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({ done: false, value: { type: 'snapshot' } })
+      await vi.waitFor(() => {
+        const active = ctx.agents.get(sessionId)
+        expect(active?.session.snapshotEvents().filter(event => event.type === 'user/message')).toEqual([message])
+        expect(active?.session).not.toBe(original.agent.session)
+      })
+    } finally {
+      abort.abort()
+      await iterator.return?.()
+    }
   })
 
   it.each(['success', 'domain-error', 'throw'] as const)(

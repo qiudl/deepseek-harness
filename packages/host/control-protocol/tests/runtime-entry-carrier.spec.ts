@@ -48,6 +48,20 @@ it('strictly preserves legacy execution/feedback commands without granting the n
   expect(() => parseRuntimeEntryAnalysisCommand({ ...commands[0], operation: { action: 'prepare', ...query } })).toThrow()
   for (const bad of [null, 1, {}, { purpose: 'runtime_entry' }]) expect(() => parseRuntimeEntryAnalysisCommand(bad)).toThrow()
 })
+it('keeps journal and feedback operations separate and requires the original start authorization', () => {
+  const journal = { action: 'root_execution_journal', purpose: 'runtime_entry', operation: { action: 'read', ...query } }
+  const feedback = { ...journal, action: 'root_feedback' }
+  const start = { ...feedback, operation: { action: 'consumer_start', ...query, grant }, metadataAuthorization: auth }
+  expect(parseRuntimeEntryAnalysisCommand(journal)).toEqual(journal)
+  expect(parseRuntimeEntryAnalysisCommand(start)).toEqual(start)
+  expect(() => parseRuntimeEntryAnalysisCommand(feedback)).toThrow('invalid_runtime_entry_carrier')
+  expect(() => parseRuntimeEntryAnalysisCommand({ ...journal, operation: { action: 'consumer_read', ...query } }))
+    .toThrow('invalid_runtime_entry_carrier')
+  expect(() => parseRuntimeEntryAnalysisCommand({ ...feedback, operation: start.operation }))
+    .toThrow('invalid_twin_binding_offer')
+  expect(() => parseRuntimeEntryAnalysisCommand({ ...start, operation: { action: 'consumer_read', ...query } }))
+    .toThrow('invalid_twin_binding_offer')
+})
 it.each([
   { expected_event_count: -1 }, { expected_log_digest: 'unknown' }, { selection: { ...selection, expected_scope_version: '01' } },
   { selection: { ...selection, expected_scope_version: '9223372036854775808' } }, { target: { ...target, path: '/caller/path' } },
@@ -71,6 +85,10 @@ it.each(['runtime_entry_observe', 'runtime_entry_bind'] as const)('distinguishes
     .toEqual({ action: 'root_operation_origin', operation: command })
   expect(() => parseRuntimeEntryOriginCommand({ ...command, sourceSequence: '1' })).toThrow()
   expect(() => parseRuntimeEntryOriginCommand({ ...command, purpose: 'project_operation_origin_observation' })).toThrow()
+})
+it('rejects an absent or non-record native origin command', () => {
+  for (const input of [null, 'runtime_entry_observe'])
+    expect(() => parseRuntimeEntryOriginCommand(input)).toThrow()
 })
 it('requires an actual publication acknowledgment and preserves all candidate-observation bytes', () => {
   for (const record of [{ purpose: 'runtime_entry_observe', observation: null },

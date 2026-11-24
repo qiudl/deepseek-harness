@@ -17,12 +17,19 @@ function fixture(mode: 'DELETE' | 'WAL', own: boolean) {
   const sql = own ? `PRAGMA journal_mode=${mode}; CREATE TABLE unexpected(id TEXT);`
     : `PRAGMA journal_mode=${mode}; PRAGMA synchronous=FULL; PRAGMA application_id=123; PRAGMA user_version=7; CREATE TABLE original(value TEXT); INSERT INTO original VALUES('synthetic original data');`
   const result = spawnSync(process.execPath, ['--input-type=module', '-e',
-    `import { DatabaseSync } from 'node:sqlite'; import { chmodSync } from 'node:fs';
+    `import { DatabaseSync } from 'node:sqlite'; import { chmodSync, writeSync } from 'node:fs';
      const db = new DatabaseSync(${JSON.stringify(path)}); db.exec(${JSON.stringify(sql)}); chmodSync(${JSON.stringify(path)},0o600);
-     ${mode === 'WAL' ? "process.kill(process.pid,'SIGKILL')" : 'db.close()'}`],
+     ${mode === 'WAL' ? "writeSync(1, 'wal ready'); process.kill(process.pid, 'SIGKILL'); process.exit(2)" : 'db.close()'}`],
   { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, encoding: 'utf8' })
-  if (mode === 'WAL') expect(result.signal).toBe('SIGKILL')
-  else expect(result.status, result.stderr).toBe(0)
+  if (mode === 'WAL') {
+    expect(result.stdout, result.stderr).toBe('wal ready')
+    // Windows reports a self-termination through TerminateProcess as exit code 1.
+    expect(result).toMatchObject(process.platform === 'win32'
+      ? { status: 1, signal: null }
+      : { status: null, signal: 'SIGKILL' })
+    expect(statSync(path + '-wal').size).toBeGreaterThan(0)
+    expect(statSync(path + '-shm').size).toBeGreaterThan(0)
+  } else expect(result.status, result.stderr).toBe(0)
   return { dir, path }
 }
 function snapshot(dir: string) {

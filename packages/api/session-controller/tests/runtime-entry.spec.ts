@@ -156,7 +156,7 @@ describe('actual original-feedback runtime writer', () => {
     expect((await h.ctx.sessionPersistence.stat(h.agent.id))?.location).toBeDefined()
   })
 
-  it('loss of the actual kernel lease at the final SQLite fence rolls back receipt/manifest/head and never reads feedback', async () => {
+  it.skipIf(process.platform === 'win32')('replacement of the POSIX lock at the final SQLite fence rolls back receipt/manifest/head and never reads feedback', async () => {
     const h = await harness(true)
     const preparation = await h.factory.prepare(h.agent, h.b.consumerCommandId, new AbortController().signal)
     if (preparation.kind !== 'prepared') throw new Error('missing actual startup preparation')
