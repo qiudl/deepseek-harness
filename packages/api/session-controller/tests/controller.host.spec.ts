@@ -1,4 +1,7 @@
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
@@ -9,6 +12,7 @@ import { LlmAttemptId, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type TypertGatewayService from '@deepseek-ai/dsh-api-gateway'
 import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
+import * as JsonlPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import SessionController from '../src/index.ts'
@@ -258,6 +262,45 @@ describe('SessionController facade', () => {
     })
     abort.abort()
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined })
+  })
+
+  it('activates the original persisted Session when a follow attaches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-session-controller-follow-'))
+    const ctx = new Context()
+    onTestFinished(async () => {
+      await ctx.fiber.dispose()
+      await rm(root, { recursive: true, force: true })
+    })
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(JsonlPersistence, { root: join(root, 'sessions'), compression: 'none' })
+    await mountAgentLoopTestHarness(ctx)
+    const sessionId = SessionId('persisted-follow')
+    const original = await ctx.agents.create({ sessionId, meta: { cwd: root } })
+    original.agent.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'original conversation' }], source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    const message = original.agent.session.snapshotEvents()[0]
+    expect(message?.type).toBe('user/message')
+    expect(await ctx.sessions.flush(original.agent.session)).toBe(true)
+    await original.dispose()
+    expect(ctx.agents.get(sessionId)).toBeUndefined()
+
+    const controller = await createSessionTestController(ctx, { ...defaults, cwd: root })
+    const abort = new AbortController()
+    const iterator = controller.follow({
+      address: { kind: 'session', sessionId }, activate: true,
+    }, abort.signal)[Symbol.asyncIterator]()
+    try {
+      await expect(iterator.next()).resolves.toMatchObject({ done: false, value: { type: 'snapshot' } })
+      await vi.waitFor(() => {
+        const active = ctx.agents.get(sessionId)
+        expect(active?.session.snapshotEvents().filter(event => event.type === 'user/message')).toEqual([message])
+        expect(active?.session).not.toBe(original.agent.session)
+      })
+    } finally {
+      abort.abort()
+      await iterator.return?.()
+    }
   })
 
   it.each(['success', 'domain-error', 'throw'] as const)(
