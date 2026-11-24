@@ -66,6 +66,7 @@ const cloudNode = process.env.DSH_TEST_OPERATION_ORIGIN_CLOUD_NODE
 const cloudRoot = process.env.DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT
 const dsBotRoot = process.env.DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT
 const nativeConfigurationPath = process.env.DSH_TEST_RUNTIME_ENTRY_ARTIFACT_PINS
+const exerciseNativeConsumer = process.env.DSH_TEST_RUNTIME_ENTRY_NATIVE_CONSUMER === '1'
 
 async function processIdentities() {
   const output = await new Promise<string>((resolve, reject) => {
@@ -178,6 +179,8 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
     (memoryComposition ? ' with source memory delivery' : ''),
   async () => {
     if (!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot) throw Error('joined_fixture_paths_required')
+    const appUrl = process.env.PROJECT_OPERATION_ORIGIN_APP_URL
+    if (exerciseNativeConsumer && !appUrl) throw Error('joined_application_fixture_url_required')
     const nativeConfiguration = JSON.parse(
       await readFile(nativeConfigurationPath ?? '', 'utf8'),
     ) as import('@deepseek-ai/dsh-host-control-protocol').HostRuntimeEntryOriginsConfiguration
@@ -192,10 +195,13 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
     const root = await realpath(await mkdtemp(join(tmpdir(), 'req0006-origin-joined-'))),
       cwd = root,
       ctx = new Context()
+    const cloudHome = join(root, 'cloud-home')
+    if (exerciseNativeConsumer) await mkdir(cloudHome, { mode: 0o700 })
     const child = fork(cloudPath, [], {
       execPath: cloudNode,
       cwd: cloudRoot,
       execArgv: ['--import', join(cloudRoot, 'node_modules/tsx/dist/loader.mjs')],
+      env: exerciseNativeConsumer ? { ...process.env, SLARK_PG_URL: appUrl, SLARK_HOME: cloudHome } : process.env,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     })
     const childExited = new Promise<void>((resolve, reject) => {
@@ -968,7 +974,7 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
     expect(materials.every(item => item.state === 'active')).toBe(true)
     expect(executions).toBe(1)
     expect(model.requests).toHaveLength(2)
-    if (process.env.DSH_TEST_RUNTIME_ENTRY_NATIVE_CONSUMER === '1') {
+    if (exerciseNativeConsumer) {
       const sdk = await call<{
         actualEngineRunIds: readonly string[]
         physicalPosts: number
