@@ -67,6 +67,19 @@ const cloudRoot = process.env.DSH_TEST_OPERATION_ORIGIN_CLOUD_ROOT
 const dsBotRoot = process.env.DSH_TEST_OPERATION_ORIGIN_DSBOT_ROOT
 const nativeConfigurationPath = process.env.DSH_TEST_RUNTIME_ENTRY_ARTIFACT_PINS
 
+async function processIdentities() {
+  const output = await new Promise<string>((resolve, reject) => {
+    execFile('ps', ['-axo', 'pid=,ppid=,lstart='], (error, stdout) => {
+      if (error) reject(Error('owned_process_inventory_unavailable', { cause: error }))
+      else resolve(stdout)
+    })
+  })
+  return output.split('\n').flatMap((line) => {
+    const [, pid, parent, started] = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/u.exec(line) ?? []
+    return pid && parent && started ? [{ pid: Number(pid), parent: Number(parent), started }] : []
+  })
+}
+
 type ActualAccount = {
   authorityEnvironmentId: string
   accountIssuer: string
@@ -340,44 +353,49 @@ it.skipIf(!cloudPath || !cloudNode || !cloudRoot || !dsBotRoot)(
             else resolve()
           }),
         )
-      if (child.connected) {
-        console.info('native cleanup step', 'cloud')
-        if (acquired.cloudInitialized) await call('close')
-        child.disconnect()
-      }
-      const processRows = await new Promise<string>((resolve, reject) => {
-        execFile('ps', ['-axo', 'pid=,ppid=,command='], (error, stdout) => {
-          if (error) reject(Error('owned_process_inventory_unavailable')); else resolve(stdout)
-        })
-      })
-      const rows = processRows.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line))
-        .filter((row): row is RegExpExecArray => row !== null)
-      const owned = new Set([child.pid])
-      let changed = true
-      while (changed) {
-        changed = false
-        for (const row of rows) if (owned.has(Number(row[2])) && !owned.has(Number(row[1]))) {
-          owned.add(Number(row[1])); changed = true
+      try {
+        const descendants = new Map<number, string>()
+        try {
+          // Capture identity before disconnect, since descendants can be reparented on exit.
+          const processes = await processIdentities()
+          const owned = new Set([child.pid])
+          let changed = true
+          while (changed) {
+            changed = false
+            for (const row of processes) if (owned.has(row.parent) && !owned.has(row.pid)) {
+              owned.add(row.pid)
+              changed = true
+            }
+          }
+          for (const row of processes) {
+            if (row.pid !== child.pid && owned.has(row.pid)) descendants.set(row.pid, row.started)
+          }
+          if (child.connected) {
+            console.info('native cleanup step', 'cloud')
+            if (acquired.cloudInitialized) await call('close')
+            child.disconnect()
+          }
+        } finally {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
+          const terminate = setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+          }, 2000)
+          console.info('native cleanup step', 'child')
+          try { await childExited } finally {
+            clearTimeout(terminate)
+            child.stdout?.destroy()
+            child.stderr?.destroy()
+          }
         }
+        await expect.poll(async () => (await processIdentities()).filter(row =>
+          descendants.get(row.pid) === row.started).map(row => row.pid),
+        { timeout: 2000, message: 'the closed Source fixture must release its owned descendants' }).toEqual([])
+      } finally {
+        vi.restoreAllMocks()
+        vi.unstubAllEnvs()
+        console.info('native cleanup step', 'root')
+        await rm(root, { recursive: true, force: true })
       }
-      const descendants = rows.filter(row => Number(row[1]) !== child.pid && owned.has(Number(row[1])))
-      console.info('native owned child tree before shutdown', { pid: child.pid,
-        descendants: descendants.map(row => ({ pid: Number(row[1]), command: row[3] })) })
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
-      const terminate = setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-      }, 2000)
-      console.info('native cleanup step', 'child')
-      try { await childExited } finally {
-        clearTimeout(terminate)
-        child.stdout?.destroy()
-        child.stderr?.destroy()
-      }
-      expect(descendants, 'the closed Source fixture must release its owned descendants').toHaveLength(0)
-      vi.restoreAllMocks()
-      vi.unstubAllEnvs()
-      console.info('native cleanup step', 'root')
-      await rm(root, { recursive: true, force: true })
     })
     for (const name of [
       'DSH_PROFILE_SOURCE_TOKEN',
