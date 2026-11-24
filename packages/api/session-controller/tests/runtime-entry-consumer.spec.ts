@@ -311,6 +311,34 @@ it('does not dispatch a second wake when two preparations use the same original 
   expect((await h.consumer.prepare(h.args)).kind).toBe('historical')
   expect(h.journal.count()).toBe(0)
 })
+
+it('returns the historical receipt if the original grant is committed while native preparation is in flight', async () => {
+  const h = await harness(), prepared = await h.consumer.prepare(h.args)
+  if (prepared.kind !== 'prepared') throw Error('missing preparation')
+  const original = await h.startOptions.requestOriginalMetadata(prepared.record.command)
+  const nativePrepared = Promise.withResolvers<undefined>()
+  const allowCommit = Promise.withResolvers<undefined>()
+  const wake = vi.fn()
+  const inFlight = prepared.start({ ...h.startOptions, beforeWake: wake, requestOriginalMetadata: async () => original,
+    prepareEntry: async (...args) => {
+      const native = await h.startOptions.prepareEntry(...args)
+      nativePrepared.resolve(undefined)
+      await allowCommit.promise
+      return native
+    },
+  })
+  try {
+    await Promise.race([nativePrepared.promise, inFlight.then(() => { throw Error('preparation finished before the journal commit') })])
+    const winning = await h.consumers.start(prepared.binding, original.consumerGrant, h.args.signal)
+    expect(winning.wake).toBe(true)
+    allowCommit.resolve(undefined)
+    await expect(inFlight).resolves.toEqual({ kind: 'historical', record: winning.record })
+    expect(h.consumers.records()).toEqual([winning.record])
+    expect(h.journal.count()).toBe(0)
+    expect(h.counts()).toEqual({ grants: 1, bodyReads: 0 })
+    expect(wake).not.toHaveBeenCalled()
+  } finally { allowCommit.resolve(undefined); await Promise.allSettled([inFlight]) }
+})
 it.each(['binding', 'raw_grant', 'grant_metadata', 'grant_digest'] as const)('rejects mismatched %s before local started or actual driver entry', async (mismatch) => {
   const h = await harness(), prepared = await h.consumer.prepare(h.args)
   if (prepared.kind !== 'prepared') throw Error('missing preparation')
