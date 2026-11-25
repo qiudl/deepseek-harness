@@ -90,9 +90,12 @@ describe('profile worker child process', () => {
     })
     await expect(enabled.create({ ...spec(root), env: { DSH_PROFILE_PRIVATE_TWIN_TOKEN: ticket } }))
       .rejects.toMatchObject({ code: 'invalid_input' })
-    const ordinary = await disabled.create(spec(root)); workers.push(ordinary)
+    const account = { ...spec(root), allowPrivateTwin: true as const }
+    const ordinary = await disabled.create(account); workers.push(ordinary)
     expect(ordinary.operatePrivateTwin).toBeUndefined()
-    const worker = await enabled.create(spec(root)); workers.push(worker)
+    const anonymous = await enabled.create(spec(root)); workers.push(anonymous)
+    expect(anonymous.operatePrivateTwin).toBeUndefined()
+    const worker = await enabled.create(account); workers.push(worker)
     const call = worker.operatePrivateTwin!
     const signal = new AbortController().signal
     await expect(fetch(worker.viewOrigin + '/internal/slark-private-twin', {

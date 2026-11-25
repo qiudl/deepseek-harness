@@ -575,6 +575,7 @@ export async function startDesktopHostApplication(
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
       await claimWorkerGate.start(profile.profileId, () => workers.ensure({
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
+        ...(profile.kind === 'account' ? { allowPrivateTwin: true } : {}),
         pluginRoots: [join(profileRoot, 'plugins')],
       }),
       /* v8 ignore next -- the claim gate's startup-race test covers disposal; production workers need a real child. */
@@ -604,6 +605,7 @@ export async function startDesktopHostApplication(
       try {
         await claimWorkerGate.start(profile.profileId, () => workers.ensure({
           profileId: profile.profileId,
+          ...(profile.kind === 'account' ? { allowPrivateTwin: true } : {}),
           profileRoot: join(root, 'profiles', profile.profileId),
           credentialHandle: profile.keyHandle,
           pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],

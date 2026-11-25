@@ -131,6 +131,7 @@ export interface PersonProfileRecord {
 /** Worker inputs scoped to exactly one Person Profile. */
 export interface ProfileWorkerSpec {
   readonly profileId: string
+  readonly allowPrivateTwin?: true
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]

@@ -214,7 +214,8 @@ export class DshWebProfileWorkerFactory {
     const modelToken = randomBytes(32).toString('base64url')
     const remoteSessionToken = randomBytes(32).toString('base64url')
     const remoteUiToken = randomBytes(32).toString('base64url')
-    const privateTwinToken = this.options.enablePrivateTwin === true ? randomBytes(32).toString('base64url') : undefined
+    const privateTwinToken = this.options.enablePrivateTwin === true && spec.allowPrivateTwin === true
+      ? randomBytes(32).toString('base64url') : undefined
     const child = spawn(this.options.nodeExecutablePath, [
       this.options.dshEntrypointPath, '--profile', 'web', '--no-open', '--host', '127.0.0.1', '--port', '0',
     ], {

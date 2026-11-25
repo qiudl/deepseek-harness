@@ -26,6 +26,7 @@ import type { PrivateTwinWorkerReceiver } from './private-twin-transfer.ts'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
+  readonly allowPrivateTwin?: true
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
