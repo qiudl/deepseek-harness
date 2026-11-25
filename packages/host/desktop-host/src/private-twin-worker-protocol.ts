@@ -108,6 +108,9 @@ export function parsePrivateTwinWorkerCommand(value: unknown): PrivateTwinWorker
 }
 
 /** Accept only the Worker response matching the original private operation. */
+export function parsePrivateTwinWorkerReply(command: Extract<PrivateTwinWorkerCommand, { operation: 'claim' }>,
+  value: unknown): Extract<PrivateTwinWorkerReply, { request: unknown }>
+export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, value: unknown): PrivateTwinWorkerReply
 export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, value: unknown): PrivateTwinWorkerReply {
   if (command.operation === 'check') {
     if (record(value, ['current']).current !== true) return invalid()

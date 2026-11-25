@@ -98,7 +98,9 @@ describe('profile worker child process', () => {
     const worker = await enabled.create(account); workers.push(worker)
     const call = worker.operatePrivateTwin!
     const signal = new AbortController().signal
-    await expect(fetch(worker.viewOrigin + '/internal/slark-private-twin', {
+    const origin = worker.viewOrigin
+    if (!origin) throw new Error('managed worker did not open an attested listener')
+    await expect(fetch(new URL('/internal/slark-private-twin', origin), {
       method: 'POST', body: '{"operation":"claim"}',
     })).resolves.toMatchObject({ status: 403 })
     await expect(call({ operation: 'claim' }, signal)).resolves.toMatchObject({ request: { ticket, receipt: ticket } })

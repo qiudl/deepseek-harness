@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, PRIVATE_TWIN_CONTROL_REQUEST_BYTES, parseHostPrivateTwinCommand,
+import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinCommand,
   parseHostPrivateTwinResult, type HostPrivateTwinCommand, type HostPrivateTwinResult } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult, type PrivateTwinWorkerCommand,
   type PrivateTwinWorkerReply } from './private-twin-worker-protocol.ts'
@@ -50,14 +50,14 @@ export class PrivateTwinTransfer {
     if (this.busy) throw new HostAuthorityError('busy')
     this.busy = true
     try {
-      if (this.lease?.lifetime.aborted || (this.lease?.key === authority.key && this.lease.profile !== profile)) this.clear()
+      if (this.lease?.key === authority.key && this.lease.profile !== profile) this.clear()
       if (command.operation === 'claim') return await this.claim(authority, profile)
       const lease = this.lease
       if (!lease || lease.ticket !== command.ticket || lease.key !== authority.key) return stale()
       const signal = AbortSignal.any([authority.signal, this.connection, lease.lifetime])
       const guard = () => {
         signal.throwIfAborted()
-        if (this.lease !== lease || profile !== lease.profile || authority.authorize() !== lease.profile) stale()
+        if (this.lease !== lease || authority.authorize() !== lease.profile) stale()
         lease.receiver.assertCurrent()
       }
       try {
@@ -104,10 +104,8 @@ export class PrivateTwinTransfer {
     signal.throwIfAborted()
     if (authority.authorize() !== profile) return stale()
     receiver.assertCurrent()
-    if (!('request' in response)) return stale()
     if (response.request === null) return { state: 'idle' }
     const request = Buffer.from(JSON.stringify(response.request), 'utf8')
-    if (request.length > PRIVATE_TWIN_CONTROL_REQUEST_BYTES) throw new HostAuthorityError('unavailable')
     const ticket = response.request.ticket
     const result = parseHostPrivateTwinResult({ state: 'claimed', profile_id: profile, ticket,
       total_bytes: request.length, digest: digest(request) })

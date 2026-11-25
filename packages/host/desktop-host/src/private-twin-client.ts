@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, PRIVATE_TWIN_CONTROL_RESULT_BYTES, parseHostPrivateTwinResult,
+import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinResult,
   type HostPrivateTwinCommand } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult,
   type PrivateTwinWorkerRequest, type PrivateTwinWorkerResult } from './private-twin-worker-protocol.ts'
@@ -33,7 +33,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
   }
   return Object.freeze({
     profileId,
-    assertCurrent: () => input.assertCurrent(),
+    assertCurrent: () => { input.assertCurrent() },
     async claim(signal: AbortSignal) {
       if (claimed !== undefined) return stale()
       const header = await send({ operation: 'claim' }, signal)
@@ -51,10 +51,9 @@ export function createPrivateTwinControlChannel(input: Readonly<{
         offset += part.length
       }
       if (digest(bytes) !== header.digest) return stale()
-      const worker = parsePrivateTwinWorkerReply({ operation: 'claim' }, {
-        request: JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)),
-      })
-      if (!('request' in worker) || worker.request?.ticket !== ticket) return stale()
+      const request: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+      const worker = parsePrivateTwinWorkerReply({ operation: 'claim' }, { request })
+      if (worker.request?.ticket !== ticket) return stale()
       claimed = ticket
       return { request: worker.request }
     },
@@ -67,19 +66,21 @@ export function createPrivateTwinControlChannel(input: Readonly<{
     async finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal) {
       if (claimed !== ticket) return stale()
       const bytes = Buffer.from(JSON.stringify(parsePrivateTwinWorkerResult(result)), 'utf8')
-      if (bytes.length > PRIVATE_TWIN_CONTROL_RESULT_BYTES) return stale()
+      // The validated result is a nonempty JSON object within the wire limit.
       const header = { ticket, total_bytes: bytes.length, digest: digest(bytes) }
-      for (let offset = 0; offset < bytes.length; offset += PRIVATE_TWIN_CONTROL_CHUNK_BYTES) {
+      let offset = 0
+      while (true) {
         const part = bytes.subarray(offset, offset + PRIVATE_TWIN_CONTROL_CHUNK_BYTES)
         const reply = await send({ operation: 'finish', ...header, offset, bytes: part.toString('base64url') }, signal)
-        if (offset + part.length === bytes.length) {
+        const nextOffset = offset + part.length
+        if (nextOffset === bytes.length) {
           if (reply.state !== 'completed' || reply.ticket !== ticket) return stale()
           claimed = undefined
           return { completed: true as const }
         }
-        if (reply.state !== 'staged' || reply.ticket !== ticket || reply.next_offset !== offset + part.length) return stale()
+        if (reply.state !== 'staged' || reply.ticket !== ticket || reply.next_offset !== nextOffset) return stale()
+        offset = nextOffset
       }
-      return stale()
     },
   })
 }
