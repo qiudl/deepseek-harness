@@ -185,6 +185,8 @@ REQ-20261011-0002 增加 `profile.collaboration_archive_state`。已授权账号
 
 不发布运行时不变量伴随插件：编解码器在输入边界验证完整的消息值结构。
 
+仅供 Main 使用的 `profile.private_twin` 方法使用既有账户连接，每个分片限制为 24 KiB。领取元数据包含 Profile、票据、总字节数和 SHA-256 摘要。Native Host 在向 Worker 回传结果前验证当前 Worker、偏移量和摘要。
+
 ### 远端工作区目录
 
 远端目录选择器在 Host 的屏幕上运行。选定目录获得绑定配对客户端的 Profile 内确认；`workspace.create` 在60秒内一次消费此确认，拒绝其他路径或客户端。取消不生成确认，选择器确认不会写入日志。Host 仅在安装 worker 命令执行器后公布 `profile.remote_session.directory_picker`。

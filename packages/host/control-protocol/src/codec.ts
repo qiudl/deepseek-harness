@@ -5,6 +5,7 @@ import { parseHostProjectMemoryRequest } from './project-operation-memory-comman
 import { parseHostProjectMemoryResponse } from './project-operation-read-result.ts'
 import { parseHostOperationOriginResult, parseHostOperationOriginCommand } from './project-operation-origin.ts'
 import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity } from './bot-session-identity.ts'
+import { parseHostPrivateTwinCommand, parseHostPrivateTwinResult } from './private-twin.ts'
 import { HOST_NATIVE_ROOM_PREPARATION_MAX_FRAME_BYTES, parseHostNativeRoomPreparationTarget, parseHostNativeRoomPreparationOutcome } from './native-room-preparation.ts'
 import type { ProfileNativeRoomPreparationRequest, ProfileNativeRoomPreparationResult } from './types.ts'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof } from './bound-bot-rooms.ts'
@@ -166,6 +167,7 @@ import type {
   ProfileCollaborationRegistrationRequest, ProfileCollaborationRegistrationResult,
   ProfileBotIdentityRequest, ProfileBotIdentityResult, ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
   ProfileBotSessionIdentityRequest, ProfileBotSessionIdentityResult,
+  ProfilePrivateTwinRequest, ProfilePrivateTwinResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
   ProfileNativeRoomOperationRequest, ProfileNativeRoomOperationResult,
@@ -2091,6 +2093,7 @@ function decodeProfileRequest(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
   | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
   | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotSessionIdentityRequest
+  | ProfilePrivateTwinRequest
   | ProfileTwinBindingRequest | ProfileBotRosterRequest
   | ProfileBoundBotRoomsRequest
   | ProfileNativeRoomProjectionRequest
@@ -2865,6 +2868,13 @@ function decodeProfileRequest(frame: Record<string, unknown>):
       ...parseHostBotSessionTarget({ bot_id: params.bot_id, session_id: params.session_id }),
     } } satisfies ProfileBotSessionIdentityRequest
   }
+  if (frame.method === 'profile.private_twin') {
+    exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
+      'authority_binding_version', 'account_issuer', 'account_subject', 'command'])
+    return { version: 1, type: 'request', request_id: requestId, method: frame.method, params: {
+      ...collaborationAccountParams(params), command: parseHostPrivateTwinCommand(params.command),
+    } } satisfies ProfilePrivateTwinRequest
+  }
   if (frame.method === 'profile.twin_binding') {
     exactKeys(params, [...AUTHORIZED_KEYS, 'authority_environment_id', 'account_binding_handle',
       'authority_binding_version', 'account_issuer', 'account_subject', 'input'])
@@ -3018,6 +3028,7 @@ function decodeProfileResult(frame: Record<string, unknown>):
   | ProfileOpenOfflineAccountResult | ProfileRecoveryStatusResult
   | ProfileViewActivateResult | ProfileWorkspaceModelSelectionResult
   | ProfileCollaborationRegistrationResult | ProfileBotIdentityResult | ProfileBotIdentityV2Result | ProfileBotSessionIdentityResult
+  | ProfilePrivateTwinResult
   | ProfileTwinBindingResult | ProfileBotRosterResult
   | ProfileBoundBotRoomsResult
   | ProfileNativeRoomProjectionResult
@@ -3454,6 +3465,10 @@ function decodeProfileResult(frame: Record<string, unknown>):
     exactKeys(result, ['identity'])
     return { version: 1, type: 'result', request_id, method: frame.method,
       result: { identity: parseHostAccountBotSessionIdentity(result.identity) } } satisfies ProfileBotSessionIdentityResult
+  }
+  if (frame.method === 'profile.private_twin') {
+    return { version: 1, type: 'result', request_id, method: frame.method,
+      result: parseHostPrivateTwinResult(result) } satisfies ProfilePrivateTwinResult
   }
   if (frame.method === 'profile.twin_binding') {
     return { version: 1, type: 'result', request_id, method: frame.method,

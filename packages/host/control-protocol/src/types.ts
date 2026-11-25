@@ -953,6 +953,19 @@ export interface ProfileBotSessionIdentityResult extends Omit<ProfileBotIdentity
   readonly result: { readonly identity: import('./bot-session-identity.ts').HostAccountBotSessionIdentity | null }
 }
 
+/** Private-twin transfer over a current Account's authenticated Host connection. */
+export interface ProfilePrivateTwinRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
+  readonly method: 'profile.private_twin'
+  readonly params: Omit<ProfileBotIdentityRequest['params'], 'bot_id'> & {
+    readonly command: import('./private-twin.ts').HostPrivateTwinCommand
+  }
+}
+
+export interface ProfilePrivateTwinResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
+  readonly method: 'profile.private_twin'
+  readonly result: import('./private-twin.ts').HostPrivateTwinResult
+}
+
 /** Purpose-bound consent confirmation; it never authorizes model, group or device execution. */
 export interface ProfileTwinBindingRequest extends Omit<ProfileBotIdentityRequest, 'method' | 'params'> {
   readonly method: 'profile.twin_binding'
@@ -2650,6 +2663,8 @@ export type HostControlFrame =
   | ProfileBotIdentityV2Result
   | ProfileBotSessionIdentityRequest
   | ProfileBotSessionIdentityResult
+  | ProfilePrivateTwinRequest
+  | ProfilePrivateTwinResult
   | ProfileTwinBindingRequest
   | ProfileTwinBindingResult
   | ProfileBotRosterRequest

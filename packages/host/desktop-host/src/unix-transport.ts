@@ -17,6 +17,9 @@ import type { HostProjectMemoryEnvironment } from '@deepseek-ai/dsh-host-control
 import { parseHostOperationOriginCommand, parseHostOperationOriginObservation, encodeHostOperationOriginObservation } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBotSessionTarget, parseHostAccountBotSessionIdentity, type HostAccountBotSessionIdentity, type ProfileBotSessionIdentityRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { resolveAccountBotSessionIdentity } from './account-bot-session-identity.ts'
+import { PrivateTwinTransfer, type PrivateTwinWorkerReceiver } from './private-twin-transfer.ts'
+import { createPrivateTwinControlChannel, type PrivateTwinControlChannel } from './private-twin-client.ts'
+import type { ProfilePrivateTwinRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof, encodeHostNativeRoomRetirementProofPayload, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply, type HostNativeRoomRetirementTarget, type HostNativeRoomRetirementProof, type ProfileNativeRoomRetirementRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostBoundBotRoomsProof,
   encodeHostBoundBotRoomsProofPayload, parseHostNativeRoomProjectionTarget, parseHostNativeRoomProjectionProof,
@@ -391,6 +394,7 @@ export interface UnixHostServerOptions {
     hostKeyId: string) => ReturnType<typeof createSkillHubPackageInstallationStore>
   /** Retain the Account Profile worker through final coordinate publication. */
   readonly botSessionIdentityReceiver?: (profileId: string) => import('./types.ts').BotSessionIdentityReceiver
+  readonly privateTwinWorkerReceiver?: (profileId: string) => PrivateTwinWorkerReceiver
   /** Read public Bot identity only in the selected Account Profile's exclusive writer. */
   readonly resolveBotIdentity?: (profileId: string, botId: string, signal: AbortSignal) => Promise<HostBotIdentity | null>
   /** Page public Bot identities from the current Account Profile. */
@@ -751,7 +755,7 @@ export type HostControlAuthorityOptions = Pick<
   'identity' | 'host' | 'createSkillHubPackageStore' | 'inspectModelClaimSource' | 'createMigrationExport' | 'createLegacyMigrationExport'
     | 'createMigrationImport' | 'profilePersistenceGeneration' | 'recoveryMaterialsPersistenceGeneration' | 'now' | 'extensions' | 'diagnostics'
     | 'modelClaimTransaction' | 'modelClaimRecovery' | 'botSessionIdentityReceiver' | 'resolveBotIdentity' | 'listBotRoster' | 'operateBotGroup' | 'trustedBotGroupKeyrings' | 'inspectWorkspaceModelSelection' | 'inspectCollaborationArchiveState' | 'installGroupInputFence' | 'inspectCollaborationArchiveIntent' | 'transitionCollaborationArchive' | 'inspectCollaborationSource' | 'readCollaborationReferenceGrant' | 'captureCollaborationReferenceSelection' | 'readCollaborationReferenceContent' | 'readCollaborationSourceSnapshot' | 'collaborationAnalysis' | 'collaborationDeliveryReceiver' | 'generateModelText' | 'remoteSession' | 'remoteUiRead' | 'rootJournal' | 'inspectCollaborationRoot' | 'inspectRootPlanningAttempt' | 'rootAnalysisSupported' | 'rootCaptureSupported' | 'rootAnalysisRecoverySupported' | 'sourceAnalysisRecoverySupported' | 'sourceLiveResumeSupported' | 'rootLookupSupported' | 'rootPendingLookupSupported' | 'rootLiveResumeSupported' | 'rootPlanningSupported' | 'rootExecutionSupported' | 'rootFeedbackSupported' | 'rootContinuationSupported' | 'projectOperationOriginSupported'
-    | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot'
+    | 'runtimeEntryOrigins' | 'runtimeEntryKeyrings' | 'runtimeEntryReceiver' | 'runtimeEntryProfileRoot' | 'privateTwinWorkerReceiver'
     | 'prepareNativeRoom' | 'nativeRoomPreparationReceiver' | 'operateNativeRoom' | 'listBoundBotRooms' | 'retireNativeRoom'
     | 'createTwinBindingReceiptStore' | 'createProjectOperationMemoryRecipientImports' | 'createProjectOperationMemorySourceExports' | 'createProjectOperationMemoryNativeSource' | 'createProjectOperationMemoryMetadata' | 'projectOperationMemoryEnvironments' | 'taskCoordinationEnvironments' | 'taskCoordinationReceiver'
     | 'remoteUiStream' | 'remoteBotChatSupported' | 'remoteBotAttachmentSupported' | 'remoteBotRoomSupported' | 'remoteBotRoomAttachmentSupported' | 'remoteBotRoomUpdateSupported' | 'remoteBotChannelMirrorMutationSupported' | 'remoteBotSettingsUpdateSupported' | 'remoteBotGeneralSettingsUpdateSupported' | 'remoteBotProvidersMutationSupported' | 'remoteBotConnectorsMutationSupported' | 'remoteBotFeedbackClearSupported' | 'remoteBotSecretsMutationSupported' | 'remoteBotCapabilityLibraryMutationSupported' | 'remoteBotDeleteSupported' | 'remoteBotDuplicateSupported' | 'remoteBotCreateSupported' | 'remoteBotScheduleMutationSupported' | 'remoteBotMemoryMutationSupported' | 'remoteBotUpdateMutationSupported' | 'remoteBotRoomLifecycleSupported' | 'remoteUiBotChatSupported' | 'remoteUiBotRoomsSupported' | 'remoteUiBotRoomHistorySupported' | 'remoteUiBotRoomDetailsSupported' | 'remoteUiBotSettingsSupported' | 'remoteUiBotMemorySupported' | 'remoteUiBotRoomMemorySupported' | 'remoteUiBotSchedulesSupported' | 'remoteUiBotScheduleHistorySupported' | 'remoteUiBotAboutSupported' | 'remoteUiBotUsageSupported' | 'remoteUiBotGeneralSettingsSupported' | 'remoteUiBotProvidersSupported' | 'remoteUiBotConnectorsSupported' | 'remoteUiBotFeedbackSupported' | 'remoteUiBotSecretsSupported' | 'remoteUiBotCapabilityLibrarySupported' | 'remoteUiBotFoldersSupported' | 'remoteUiBotAvatarSupported' | 'remoteUiBotAttachmentPreviewSupported' | 'remoteUiBotAttachmentDownloadSupported' | 'remoteUiAssetGzipSupported' | 'remoteUiItemChunksSupported'
@@ -1258,6 +1262,7 @@ export class HostControlAuthority {
   /** Open one connection-owned control session after the carrier has authenticated its peer. */
   openSession(ownerId: string, signal: AbortSignal): HostControlServerSession {
     const clock = this.options.now ?? Date.now
+    const privateTwin = new PrivateTwinTransfer(signal)
     const packageTransferSnapshot = new SkillHubPackageTransferSnapshot<SkillHubPackageSnapshot>()
     const migrationExports = new Map<string, MigrationExportService>()
     const legacyAuthorities = new Map<string, {
@@ -1284,6 +1289,7 @@ export class HostControlAuthority {
       readonly runtimeGeneration: number
     }>()
     signal.addEventListener('abort', () => {
+      privateTwin.clear()
       packageTransferSnapshot.clear()
       for (const entry of remoteUiStreams.values()) void entry.cursor.close()
       remoteUiStreams.clear()
@@ -2902,6 +2908,17 @@ export class HostControlAuthority {
           observed.assertCurrent()
           channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method,
             result: { identity: observed.identity } })
+        } else if (frame.method === 'profile.private_twin') {
+          const capture = this.options.privateTwinWorkerReceiver
+          if (!capture) throw new HostAuthorityError('upgrade_required')
+          const account = commandReadAccount(frame.params, ownerId)
+          const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
+          const originalProfile = authorize()
+          const result = await privateTwin.execute(frame.params.command, {
+            key: JSON.stringify(account), signal: context.signal, authorize, capture,
+          })
+          if (authorize() !== originalProfile) throw new HostAuthorityError('stale')
+          channel.send({ version: 1, type: 'result', request_id: frame.request_id, method: frame.method, result })
         } else if (frame.method === 'profile.twin_binding') {
           const resolve = this.options.resolveBotIdentity, store = this.options.createTwinBindingReceiptStore
           const trustedKeyrings = this.options.trustedBotGroupKeyrings
@@ -3292,6 +3309,7 @@ export class HostControlAuthority {
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity', 'profile.bot_identity_v2'] : []),
           ...(this.options.botSessionIdentityReceiver ? ['profile.bot_session_identity'] : []),
+          ...(this.options.privateTwinWorkerReceiver ? ['profile.private_twin'] : []),
           ...(this.options.resolveBotIdentity && this.options.createTwinBindingReceiptStore
             && this.options.trustedBotGroupKeyrings?.length ? ['profile.twin_binding'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
@@ -5313,6 +5331,26 @@ export class UnixHostClient {
     return identity
   }
 
+  /** Capture one authenticated peer for Main's private-twin claim and all its chunks. */
+  openPrivateTwinChannel(input: Omit<Parameters<UnixHostClient['resolveBotIdentity']>[0], 'botId'> & {
+    readonly profileId: string
+  }): PrivateTwinControlChannel {
+    input.signal?.throwIfAborted()
+    if (!this.inspection.capabilities.includes('profile.private_twin' as HostControlCapability))
+      throw new HostAuthorityError('upgrade_required')
+    const account = { ...input }
+    const peer = this.currentPeerFingerprint()
+    return createPrivateTwinControlChannel({ profileId: account.profileId,
+      assertCurrent: () => { account.signal?.throwIfAborted(); this.requireCurrentPeer(peer) },
+      call: async (command, signal) => {
+        const request: ProfilePrivateTwinRequest = { version: 1, type: 'request', request_id: requestId(),
+          method: 'profile.private_twin', params: { ...this.collaborationAccountRequestParams(account), command } }
+        const active = account.signal ? AbortSignal.any([account.signal, signal]) : signal
+        return (await this.callCurrentPeer(request, active, peer)).result
+      },
+    })
+  }
+
   /**
    * Submit a signed owner consent or recover its original durable acknowledgement.
    * @param input - Current Account plus a complete purpose-bound Cloud command.
@@ -6902,7 +6940,7 @@ export class UnixHostClient {
 
   private async callCurrentPeer<T extends ProfileRootJournalRequest | ProfileCollaborationAnalysisRequest
     | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest | ProfileNativeRoomRetirementRequest
-    | ProfileNativeRoomPreparationRequest | ProfileBotSessionIdentityRequest>(
+    | ProfileNativeRoomPreparationRequest | ProfileBotSessionIdentityRequest | ProfilePrivateTwinRequest>(
     request: T,
     signal?: AbortSignal,
     peer = this.currentPeerFingerprint(),
@@ -7024,6 +7062,7 @@ export class UnixHostClient {
       | ProfileOpenOfflineAccountRequest | ProfileRecoveryStatusRequest
       | ProfileViewActivateRequest | ProfileWorkspaceModelSelectionRequest
       | ProfileCollaborationRegistrationRequest | ProfileBotIdentityRequest | ProfileBotIdentityV2Request | ProfileBotSessionIdentityRequest
+      | ProfilePrivateTwinRequest
       | ProfileTwinBindingRequest | ProfileBotRosterRequest
       | ProfileBoundBotRoomsRequest | ProfileNativeRoomProjectionRequest | ProfileNativeRoomRetirementRequest
       | ProfileNativeRoomRequest | ProfileNativeRoomPreparationRequest | ProfileNativeRoomOperationRequest | ProfileNativeAgentResultRequest
