@@ -56,7 +56,7 @@ async function readyHandle(child: ControlledChild): Promise<ProfileWorkerHandle>
 }
 
 describe('profile worker child process', () => {
-  it.runIf(process.platform === 'darwin')('issues a private capability only to the managed Profile worker', async () => {
+  it('issues a private capability only to the managed Profile worker', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-private-twin-profile-'))
     const entry = join(root, 'worker.mjs')
     const ticket = Buffer.alloc(32, 72).toString('base64url')
@@ -79,10 +79,15 @@ describe('profile worker child process', () => {
       })
       server.listen(0, '127.0.0.1', () => console.log('dsh web: http://127.0.0.1:' + server.address().port + '/?token=fixture'))
     `, { mode: 0o600 })
-    const enabled = new DshWebProfileWorkerFactory({
-      nodeExecutablePath: process.execPath, dshEntrypointPath: entry, enablePrivateTwin: true,
-    })
-    const disabled = new DshWebProfileWorkerFactory({ nodeExecutablePath: process.execPath, dshEntrypointPath: entry })
+    const options = { nodeExecutablePath: process.execPath, dshEntrypointPath: entry,
+      ...(process.platform === 'darwin' ? {} : { attestListener: (pid: number, origin: string) => {
+        process.kill(pid, 0)
+        expect(new URL(origin).hostname).toBe('127.0.0.1')
+        return Promise.resolve()
+      } }),
+    }
+    const enabled = new DshWebProfileWorkerFactory({ ...options, enablePrivateTwin: true })
+    const disabled = new DshWebProfileWorkerFactory(options)
     const workers: ProfileWorkerHandle[] = []
     onTestFinished(async () => {
       for (const worker of workers) { worker.abort(); await worker.done }
@@ -108,7 +113,9 @@ describe('profile worker child process', () => {
     await expect(call({ operation: 'finish', ticket, result: { state: 'replied', answer: '"'.repeat(131072) } }, signal))
       .resolves.toEqual({ completed: true })
     await expect(call({ operation: 'finish', ticket, result: { state: 'replied', answer: 'x'.repeat(131073) } }, signal)).rejects.toThrow()
-    worker.abort(); await worker.done
+    worker.abort()
+    await expect(call({ operation: 'claim' }, signal)).rejects.toMatchObject({ code: 'stale' })
+    await worker.done
     await expect(call({ operation: 'claim' }, signal)).rejects.toThrow()
   })
 

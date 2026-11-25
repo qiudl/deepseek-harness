@@ -8,7 +8,7 @@ import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { PrivateTwinTransfer } from '../src/private-twin-transfer.ts'
 import { ProfileRegistry } from '../src/profile-registry.ts'
 import { ProfileWorkerSupervisor } from '../src/worker-supervisor.ts'
-import { UnixHostClient, UnixHostServer } from '../src/unix-transport.ts'
+import { UnixHostClient, UnixHostServer, type UnixHostServerOptions } from '../src/unix-transport.ts'
 import type { PrivateTwinWorkerCommand, PrivateTwinWorkerReply } from '../src/private-twin-worker-protocol.ts'
 import { registryFileFixture } from './registry-file-fixture.ts'
 
@@ -54,32 +54,59 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
     runtimeGeneration: 5, schemaGeneration: 1 }
   const socketPath = join(root, 'host.sock')
   const attestPeer = async () => ({ uid, executableSignatureDigest: identity.executableSignatureDigest })
-  const server = new UnixHostServer({ socketPath, ownership, expectedUid: uid, attestPeer,
+  const capturePrivateTwin = workers.privateTwinWorkerReceiver.bind(workers)
+  const serverOptions: Omit<UnixHostServerOptions, 'privateTwinWorkerReceiver'> & {
+    privateTwinWorkerReceiver?: typeof capturePrivateTwin
+  } = { socketPath, ownership, expectedUid: uid, attestPeer,
     allowedDesktopExecutableDigests: new Set([identity.executableSignatureDigest]), identity, host,
-    profilePersistenceGeneration: () => 1, now: clock.now,
-    privateTwinWorkerReceiver: workers.privateTwinWorkerReceiver.bind(workers) })
+    profilePersistenceGeneration: () => 1, now: clock.now, privateTwinWorkerReceiver: capturePrivateTwin,
+  }
+  const server = new UnixHostServer(serverOptions)
   onTestFinished(() => server.close())
   await server.start()
-  const client = await UnixHostClient.connect({ socketPath, expectedUid: uid, attestPeer,
+  const connect = () => UnixHostClient.connect({ socketPath, expectedUid: uid, attestPeer,
     trustedInstallationId: identity.installationId, trustedInstallationPublicKey: publicKey,
     trustedExecutableSignatureDigest: identity.executableSignatureDigest, now: clock.now })
+  const client = await connect()
   onTestFinished(() => { client.close() })
   const signal = new AbortController().signal
   await expect(client.openPrivateTwinChannel({ ...account, profileId: randomUUID() }).claim(signal))
     .rejects.toMatchObject({ code: 'unauthorized' })
   expect(operate).not.toHaveBeenCalled()
   const { profileId } = await client.ensureAccountProfile(account)
-  const channel = client.openPrivateTwinChannel({ ...account, profileId })
+  const channel = client.openPrivateTwinChannel({ ...account, profileId, signal })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'send', content } })
   await expect(channel.check(ticket, signal)).resolves.toEqual({ current: true })
   await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'read', receipt } })
   await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).resolves.toEqual({ completed: true })
   expect(operate).toHaveBeenCalledWith({ operation: 'finish', ticket, result: { state: 'replied', answer } }, expect.any(AbortSignal))
+  // Change the observed Profile after the Worker reply and just before the result would be published.
+  const otherProfile = await host.bootstrapLocalProfile({
+    keyHandle: 'keychain:other', unlockMaterial: account.unlockMaterial, ownerId: 'other-owner',
+  })
+  const verifyProfile = host.authorizeAccountModelText.bind(host)
+  let remainingChecks = 0
+  const raced = vi.spyOn(host, 'authorizeAccountModelText').mockImplementation((authority) => {
+    if (remainingChecks > 0 && --remainingChecks === 0) return otherProfile.profileId
+    return verifyProfile(authority)
+  })
+  operate.mockImplementationOnce(async () => { remainingChecks = 4; return { request: null } })
+  try { await expect(channel.claim(signal)).rejects.toMatchObject({ code: 'stale' }) }
+  finally { raced.mockRestore() }
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
   await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).rejects.toMatchObject({ code: 'stale' })
   expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(2)
+  expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
+
+  const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })
+  delete serverOptions.privateTwinWorkerReceiver
+  await expect(existingChannel.claim(signal)).rejects.toMatchObject({ code: 'upgrade_required' })
+  const olderHost = await connect()
+  onTestFinished(() => { olderHost.close() })
+  expect(() => olderHost.openPrivateTwinChannel({ ...account, profileId }))
+    .toThrow(expect.objectContaining({ code: 'upgrade_required' }))
 })
 
 it('drops a private twin transfer when its Profile changes or the result digest disagrees', async () => {
@@ -107,4 +134,15 @@ it('drops a private twin transfer when its Profile changes or the result digest 
     total_bytes: result.length, digest: '0'.repeat(64) }, authority)).rejects.toMatchObject({ code: 'stale' })
   await expect(transfer.execute({ operation: 'check', ticket }, authority)).rejects.toMatchObject({ code: 'stale' })
   expect(operate.mock.calls.map(([command]) => command.operation)).toEqual(['claim', 'claim', 'check'])
+})
+
+
+it('refuses a Profile worker with no private-twin operation', async () => {
+  const workers = new ProfileWorkerSupervisor(async () => ({
+    closeNotifications() {}, abort() {}, done: Promise.resolve(),
+  }))
+  onTestFinished(() => workers.disposeAll())
+  const profileId = randomUUID()
+  await workers.ensure({ profileId, profileRoot: tmpdir(), credentialHandle: 'fixture', pluginRoots: [] })
+  expect(() => workers.privateTwinWorkerReceiver(profileId)).toThrow(expect.objectContaining({ code: 'upgrade_required' }))
 })

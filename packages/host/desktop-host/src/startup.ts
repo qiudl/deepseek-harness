@@ -605,7 +605,8 @@ export async function startDesktopHostApplication(
       try {
         await claimWorkerGate.start(profile.profileId, () => workers.ensure({
           profileId: profile.profileId,
-          ...(profile.kind === 'account' ? { allowPrivateTwin: true } : {}),
+          // DesktopHost admits only verified Account Profiles to offline Account recovery.
+          allowPrivateTwin: true,
           profileRoot: join(root, 'profiles', profile.profileId),
           credentialHandle: profile.keyHandle,
           pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
