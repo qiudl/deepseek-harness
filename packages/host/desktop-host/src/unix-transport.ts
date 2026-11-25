@@ -5331,7 +5331,11 @@ export class UnixHostClient {
     return identity
   }
 
-  /** Capture one authenticated peer for Main's private-twin claim and all its chunks. */
+  /**
+   * Capture one authenticated peer for Main's private-twin claim and transfers.
+   * @param input - Current Account authority, local Profile and optional cancellation.
+   * @returns A control channel pinned to the current peer.
+   */
   openPrivateTwinChannel(input: Omit<Parameters<UnixHostClient['resolveBotIdentity']>[0], 'botId'> & {
     readonly profileId: string
   }): PrivateTwinControlChannel {

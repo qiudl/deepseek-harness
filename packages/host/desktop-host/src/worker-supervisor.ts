@@ -78,7 +78,11 @@ export class ProfileWorkerSupervisor {
     } }
   }
 
-  /** Capture the current Profile worker across all private-twin transfer frames. */
+  /**
+   * Capture the current Profile worker across private-twin transfer frames.
+   * @param profileId - Native Profile selected by the current Account.
+   * @returns The exact worker generation and its synchronous validity guard.
+   */
   privateTwinWorkerReceiver(profileId: string): PrivateTwinWorkerReceiver {
     const worker = this.workers.get(profileId)
     if (this.closed || !worker) throw new HostAuthorityError('unavailable')

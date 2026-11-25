@@ -961,6 +961,7 @@ export interface ProfilePrivateTwinRequest extends Omit<ProfileBotIdentityReques
   }
 }
 
+/** Transfer response bound to the originating authenticated request. */
 export interface ProfilePrivateTwinResult extends Omit<ProfileBotIdentityResult, 'method' | 'result'> {
   readonly method: 'profile.private_twin'
   readonly result: import('./private-twin.ts').HostPrivateTwinResult

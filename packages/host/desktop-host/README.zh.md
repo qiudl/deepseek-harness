@@ -177,9 +177,7 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 <a id="model-experience"></a>
 ## 运行时不变量
 
-经签名的 Unix 控制连接根据当前账户授权 Slark 私聊分身的领取、检查和回传。每次分片传输绑定当前账户、Profile 和 Worker 代次。Profile 变化、Worker 被替换或连接关闭后，票据立即失效。
-
-受管启动器可以为已通过监听器核验的 Profile Worker 启用 Slark 本人分身适配。Native 父进程为每个 Worker 单独生成授权凭证，只用于该 Worker 的私有回环路由。Worker 句柄提供领取、复核和回传正在执行的工具调用三个操作。嵌入方还需通过当前 Account 的控制连接对操作授权。
+受管启动器可以为已通过监听器核验的 Account Profile Worker 启用 Slark 本人分身适配。Native 父进程为每个 Worker 单独生成凭证，仅用于该 Worker 的私有回环路由。经签名的 Unix 控制连接根据当前账户授权正在执行的工具调用的领取、检查和回传。分片传输绑定当前账户、Profile 和 Worker 代次。Profile 变化、Worker 被替换或连接关闭都会使票据失效。
 
 私有 task coordination 通过 `taskCoordinationEnvironmentsJson` 使用独立固定的 `urn:slark:task-coordination:v1` 环境策略（macOS launcher 为 `DSH_HOST_TASK_COORDINATION_ENVIRONMENTS`；仅子进程使用 `DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS`）。Windows 接受相同原始策略或 typed array，两者不能同时传入。策略仅含公钥；缺失时不广告支持。每次当前 control 都验证已认证 Account 和进程 peer。Main 为原 worker cut 签名，并要求同一捕获 worker 持久化 Ack 后才返回 `closed`。receipt 恢复保留原 peer、时间及签名字节。Account、Profile、registry generation 或 worker 失效会取消原 consumer 请求，覆盖其 awaited 执行。[Session Controller](../../api/session-controller/README.zh.md#collaboration-analysis-journal) 拥有持久下限及库存语义。
 

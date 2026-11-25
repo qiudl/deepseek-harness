@@ -1,6 +1,8 @@
 /** Bounded transfer frames for one live, Account-bound private-twin invocation. */
 export const PRIVATE_TWIN_CONTROL_CHUNK_BYTES = 24 * 1024
+/** Maximum serialized tool request, including JSON escaping. */
 export const PRIVATE_TWIN_CONTROL_REQUEST_BYTES = 6 * 32_000 + 8192
+/** Maximum serialized tool result, including JSON escaping. */
 export const PRIVATE_TWIN_CONTROL_RESULT_BYTES = 6 * 128 * 1024 + 8192
 
 interface PrivateTwinTransfer {
@@ -9,12 +11,14 @@ interface PrivateTwinTransfer {
   readonly digest: string
 }
 
+/** Main requests one claim, ticket check, request chunk, or result upload. */
 export type HostPrivateTwinCommand =
   | { readonly operation: 'claim' }
   | { readonly operation: 'check'; readonly ticket: string }
   | { readonly operation: 'read'; readonly ticket: string; readonly offset: number }
   | ({ readonly operation: 'finish'; readonly offset: number; readonly bytes: string } & PrivateTwinTransfer)
 
+/** Host returns a ticket state, claim metadata, or one request fragment. */
 export type HostPrivateTwinResult =
   | { readonly state: 'idle' }
   | ({ readonly state: 'claimed'; readonly profile_id: string } & PrivateTwinTransfer)
@@ -60,7 +64,11 @@ function transfer(row: Record<string, unknown>, max: number): PrivateTwinTransfe
   return { ticket: ticket(row.ticket), total_bytes: bounded(row.total_bytes, 1, max), digest: row.digest }
 }
 
-/** Validate the exact transfer operation and retain only its declared fields. */
+/**
+ * Validate a bounded transfer command.
+ * @param value - Untrusted control frame payload.
+ * @returns A detached command with an exact shape.
+ */
 export function parseHostPrivateTwinCommand(value: unknown): HostPrivateTwinCommand {
   const row = record(value)
   const { operation } = row
@@ -85,7 +93,11 @@ export function parseHostPrivateTwinCommand(value: unknown): HostPrivateTwinComm
   }
 }
 
-/** Validate a transfer response without trusting the connection or Worker to normalize it. */
+/**
+ * Validate a bounded transfer response received over the control connection.
+ * @param value - Untrusted response payload.
+ * @returns A detached response with an exact shape.
+ */
 export function parseHostPrivateTwinResult(value: unknown): HostPrivateTwinResult {
   const row = record(value)
   const { state } = row
