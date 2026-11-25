@@ -19,6 +19,8 @@ overrides:
   # Legacy runtime deploy resolves fontkit again; keep its Office dependency on the reviewed archive.
   'fontkit>@swc/helpers': '0.5.23'
   # Use the same native addon in the runtime closure and the Office engine.
+  # The root dev-only koffi-npm-layout alias supplies metadata for LibreOffice
+  # to the npm layout verifier, which models npm without pnpm overrides.
   '@deepseek-ai/libreoffice-kit>koffi': '3.3.8'
   '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:vendor/schemastery'
