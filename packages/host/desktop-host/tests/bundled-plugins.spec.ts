@@ -78,12 +78,12 @@ it.runIf(process.platform !== 'win32')('loads the exact catalog schema and rejec
   expect(() => BundledPluginCatalog.load(linked, uid)).toThrow('unsafe_bundled_plugins')
 })
 
-it('accepts the released desktop catalog size while keeping a bounded limit', () => {
-  const entries = Array.from({ length: 19 }, (_, i) => ({ ...row,
+it('accepts the desktop catalog with one pilot addon while keeping a bounded limit', () => {
+  const entries = Array.from({ length: 33 }, (_, i) => ({ ...row,
     version: `0.3.${i}`, file: `dsh-duet-0.3.${i}.tgz`, sha256: i.toString(16).padStart(64, '0') }))
   const catalog = BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: entries }), uid)
-  expect(catalog.get('dsh-duet', '0.3.18')).toBeDefined()
-  const tooMany = Array.from({ length: 33 }, (_, i) => ({ ...row,
+  expect(catalog.get('dsh-duet', '0.3.32')).toBeDefined()
+  const tooMany = Array.from({ length: 34 }, (_, i) => ({ ...row,
     version: `0.3.${i}`, file: `dsh-duet-0.3.${i}.tgz`, sha256: i.toString(16).padStart(64, '0') }))
   expect(() => BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: tooMany }), uid)).toThrow('invalid_bundled_plugins')
 })
