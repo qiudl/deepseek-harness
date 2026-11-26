@@ -88,6 +88,24 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
 
   const intent = { requestId: randomUUID(), messageSeq: 6, messageDigest: 'a'.repeat(64),
     previewDigest: 'b'.repeat(64), commandDigest: 'c'.repeat(64), expiresAt: 10_000 }
+  const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, targetRef: receipt,
+    defaultAgentRef: null, messageSeq: 3 }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_propose', proposal } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { proposal } })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'preview', proposalRef: receipt, label: 1, kind: proposal.kind, action: proposal.action,
+    display: { sourceName: '发布群', previousTarget: '现频道', targetName: '新频道', defaultAgent: '频道助手', impact: '确认后切换' } }, signal))
+    .resolves.toEqual({ completed: true })
+  const confirmation = { messageSeq: 6, text: '确认换绑', proposalRef: receipt,
+    presentations: [{ ref: receipt, callId: 'proposal', resultSeq: 5 }] }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_confirmation', confirmation } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { confirmation } })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'binding_confirmation', approval: {
+    state: 'confirmed', kind: 'group', sourceId: 'local-group', requestId: intent.requestId, expiresAt: intent.expiresAt,
+    previewDigest: intent.previewDigest, commandDigest: intent.commandDigest,
+    confirmationMessageSeq: intent.messageSeq, confirmationMessageId: source.sourceMessageId,
+  } }, signal)).resolves.toEqual({ completed: true })
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent } })
   const proof = await channel.signBindingIntent(ticket, registration, signal)
@@ -126,7 +144,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(3)
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(5)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })

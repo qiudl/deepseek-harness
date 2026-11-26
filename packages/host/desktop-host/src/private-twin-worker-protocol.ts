@@ -19,9 +19,16 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'read'; readonly receipt: string }
   | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
   | { readonly operation: 'binding_confirmation'; readonly confirmation: BindingConfirmation }
+  | { readonly operation: 'binding_propose'; readonly proposal: BindingProposal }
 )
 
 type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
+type BindingKind = 'twin' | 'group'
+type BindingAction = 'bind' | 'replace' | 'end'
+type BindingProposal = Readonly<{ kind: BindingKind; action: BindingAction; sourceRef: string;
+  targetRef: string | null; defaultAgentRef: string | null; messageSeq: number }>
+type BindingPreviewDisplay = Readonly<{ sourceName: string; previousTarget: string | null; targetName: string | null;
+  defaultAgent: string | null; impact: string }>
 type BindingConfirmation = Readonly<{ messageSeq: number; text: string; proposalRef: string | null; presentations: readonly Presentation[] }>
 type BindingApproval = Readonly<{ state: 'confirmed'; kind: 'twin' | 'group'; sourceId: string;
   requestId: string; previewDigest: string; commandDigest: string; confirmationMessageId: string;
@@ -34,6 +41,8 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
   | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
+  | { readonly state: 'preview'; readonly proposalRef: string; readonly label: number;
+      readonly kind: BindingKind; readonly action: BindingAction; readonly display: BindingPreviewDisplay }
 
 export type PrivateTwinWorkerCommand =
   | { readonly operation: 'claim' }
@@ -83,6 +92,33 @@ function matched(value: unknown, pattern: RegExp): string {
   return typeof value === 'string' && pattern.exec(value)?.[0] === value ? value : invalid()
 }
 
+function bindingAction(kind: unknown, action: unknown): { kind: BindingKind; action: BindingAction } {
+  if ((kind !== 'twin' && kind !== 'group') || (action !== 'bind' && action !== 'replace' && action !== 'end')) return invalid()
+  return { kind, action }
+}
+
+function parseBindingProposal(input: unknown): BindingProposal {
+  const row = record(input, ['kind', 'action', 'sourceRef', 'targetRef', 'defaultAgentRef', 'messageSeq'])
+  const { kind, action } = bindingAction(row.kind, row.action)
+  if ((action === 'end') !== (row.targetRef === null) ||
+      ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
+  return { kind, action, sourceRef: opaque(row.sourceRef), targetRef: row.targetRef === null ? null : opaque(row.targetRef),
+    defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq) }
+}
+
+function previewLabel(raw: unknown): string {
+  const value = text(raw, 800)
+  return value.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(value) ? value : invalid()
+}
+
+function parseBindingPreviewDisplay(raw: unknown): BindingPreviewDisplay {
+  const row = record(raw, ['sourceName', 'previousTarget', 'targetName', 'defaultAgent', 'impact'])
+  return { sourceName: previewLabel(row.sourceName), impact: previewLabel(row.impact),
+    previousTarget: row.previousTarget === null ? null : previewLabel(row.previousTarget),
+    targetName: row.targetName === null ? null : previewLabel(row.targetName),
+    defaultAgent: row.defaultAgent === null ? null : previewLabel(row.defaultAgent) }
+}
+
 function parseBindingConfirmation(raw: unknown): BindingConfirmation {
   const row = record(raw, ['messageSeq', 'text', 'proposalRef', 'presentations'])
   if (!Array.isArray(row.presentations) || row.presentations.length > 16) return invalid()
@@ -128,6 +164,13 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'binding_confirmation':
       record(input, ['state', 'approval'])
       return { state: input.state, approval: parseBindingApproval(input.approval) }
+    case 'preview': {
+      record(input, ['state', 'proposalRef', 'label', 'kind', 'action', 'display'])
+      const label = positive(input.label)
+      if (label > 999_999_999) return invalid()
+      return { state: input.state, proposalRef: opaque(input.proposalRef), label, ...bindingAction(input.kind, input.action),
+        display: parseBindingPreviewDisplay(input.display) }
+    }
     default:
       return invalid()
   }
@@ -168,9 +211,10 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation') return invalid()
+  const field = { send: 'content', read: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation', binding_propose: 'proposal' } as const
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation' && op !== 'binding_propose') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
-    op === 'send' ? 'content' : op === 'read' ? 'receipt' : op === 'binding_intent' ? 'intent' : 'confirmation'])
+    field[op]])
   const base = { ticket: opaque(fields.ticket), botId: id(fields.botId), sessionId: id(fields.sessionId),
     callId: id(fields.callId), rootCallId: id(fields.rootCallId), sourceMessageId: id(fields.sourceMessageId) }
   if (op === 'binding_intent') {
@@ -180,6 +224,10 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (op === 'binding_confirmation') {
     if (base.callId !== base.rootCallId) return invalid()
     return { request: { ...base, operation: op, confirmation: parseBindingConfirmation(fields.confirmation) } }
+  }
+  if (op === 'binding_propose') {
+    if (base.callId !== base.rootCallId) return invalid()
+    return { request: { ...base, operation: op, proposal: parseBindingProposal(fields.proposal) } }
   }
   return { request: op === 'send'
     ? { ...base, operation: op, content: text(fields.content, maxQuestionBytes) }
