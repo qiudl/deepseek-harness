@@ -1,4 +1,5 @@
 /** Private wire contract between the Native parent and its attested Profile worker. */
+import { parseHostBindingWorkerEvidence, type HostBindingWorkerEvidence } from '@deepseek-ai/dsh-host-control-protocol'
 export const PRIVATE_TWIN_WORKER_PATH = '/internal/slark-private-twin'
 export const PRIVATE_TWIN_MAX_ANSWER_BYTES = 128 * 1024
 const maxQuestionBytes = 32_000
@@ -16,6 +17,7 @@ interface PrivateTwinSource {
 export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'send'; readonly content: string }
   | { readonly operation: 'read'; readonly receipt: string }
+  | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
 )
 
 export type PrivateTwinWorkerResult =
@@ -124,11 +126,15 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  if (op !== 'read' && op !== 'send') return invalid()
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
-    op === 'send' ? 'content' : 'receipt'])
+    op === 'send' ? 'content' : op === 'read' ? 'receipt' : 'intent'])
   const base = { ticket: opaque(fields.ticket), botId: id(fields.botId), sessionId: id(fields.sessionId),
     callId: id(fields.callId), rootCallId: id(fields.rootCallId), sourceMessageId: id(fields.sourceMessageId) }
+  if (op === 'binding_intent') {
+    if (base.callId !== base.rootCallId) return invalid()
+    return { request: { ...base, operation: op, intent: parseHostBindingWorkerEvidence(fields.intent) } }
+  }
   return { request: op === 'send'
     ? { ...base, operation: op, content: text(fields.content, maxQuestionBytes) }
     : { ...base, operation: op, receipt: opaque(fields.receipt) } }

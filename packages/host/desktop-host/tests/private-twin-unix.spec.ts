@@ -1,4 +1,4 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, verify } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,7 +14,8 @@ import { registryFileFixture } from './registry-file-fixture.ts'
 
 it.skipIf(process.platform === 'win32')('chunks both directions through the signed Account peer and revokes the replaced worker', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-twin-uds-'))
-  const uid = process.getuid!(), clock = { now: () => 1000 }
+  let clockNow = 1000
+  const uid = process.getuid!(), clock = { now: () => clockNow }
   const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'A'.repeat(43) })
   onTestFinished(async () => {
     try { await ownership.release() } finally { rmSync(root, { recursive: true, force: true }) }
@@ -76,11 +77,38 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   const { profileId } = await client.ensureAccountProfile(account)
   const channel = client.openPrivateTwinChannel({ ...account, profileId, signal })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'send', content } })
+  const registration = { audience: 'https://slark.example', ownerUserId: 'slark-user', computerId: 'computer-1',
+    accountBindingId: 'cloud-binding', accountBindingVersion: 1, hostEpoch: '2' }
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
   await expect(channel.check(ticket, signal)).resolves.toEqual({ current: true })
   await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'read', receipt } })
   await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).resolves.toEqual({ completed: true })
   expect(operate).toHaveBeenCalledWith({ operation: 'finish', ticket, result: { state: 'replied', answer } }, expect.any(AbortSignal))
+
+  const intent = { requestId: randomUUID(), messageSeq: 6, messageDigest: 'a'.repeat(64),
+    previewDigest: 'b'.repeat(64), commandDigest: 'c'.repeat(64), expiresAt: 10_000 }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent } })
+  const proof = await channel.signBindingIntent(ticket, registration, signal)
+  expect(proof.claims).toMatchObject({ purpose: 'slark.dsh.binding-intent/v1',
+    environmentId: account.authorityEnvironmentId, profileId, profileEpoch: 1,
+    hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: 1,
+    mainBotId: source.botId, sessionId: source.sessionId, messageId: source.sourceMessageId,
+    installationId: identity.installationId, requestId: intent.requestId, messageSeq: 6,
+    commandDigest: intent.commandDigest, expiresAt: intent.expiresAt })
+  const bytes = Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(proof.claims).sort(([a], [b]) => a < b ? -1 : a === b ? 0 : 1))))
+  expect(verify(null, bytes, keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
+  await expect(channel.signBindingIntent(ticket, registration, signal)).resolves.toEqual(proof)
+  await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  const expiring = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  await expiring.claim(signal)
+  await expect(expiring.signBindingIntent(ticket, registration, signal)).resolves.toMatchObject({ claims: { expiresAt: 10_000 } })
+  clockNow = 10_000
+  await expect(expiring.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
+  clockNow = 1000
+
   // Change the observed Profile after the Worker reply and just before the result would be published.
   const otherProfile = await host.bootstrapLocalProfile({
     keyHandle: 'keychain:other', unlockMaterial: account.unlockMaterial, ownerId: 'other-owner',
@@ -94,10 +122,11 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   operate.mockImplementationOnce(async () => { remainingChecks = 4; return { request: null } })
   try { await expect(channel.claim(signal)).rejects.toMatchObject({ code: 'stale' }) }
   finally { raced.mockRestore() }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
-  await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(2)
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(3)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })

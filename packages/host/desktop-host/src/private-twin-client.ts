@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinResult,
-  type HostPrivateTwinCommand } from '@deepseek-ai/dsh-host-control-protocol'
+  parseHostBindingRegistration, type HostPrivateTwinCommand, type HostBindingIntentProof,
+  type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult,
   type PrivateTwinWorkerRequest, type PrivateTwinWorkerResult } from './private-twin-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
@@ -11,6 +12,7 @@ export interface PrivateTwinControlChannel {
   assertCurrent(): void
   claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null }>
   check(ticket: string, signal: AbortSignal): Promise<{ readonly current: true }>
+  signBindingIntent(ticket: string, registration: HostBindingRegistration, signal: AbortSignal): Promise<HostBindingIntentProof>
   finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal): Promise<{ readonly completed: true }>
 }
 
@@ -20,11 +22,12 @@ const stale = (): never => { throw new HostAuthorityError('stale') }
 /** Retain the expected Main-owned Profile, peer guard, and exact claim for all data transfer. */
 export function createPrivateTwinControlChannel(input: Readonly<{
   profileId: string
+  verifyBindingIntent?(proof: HostBindingIntentProof): void
   assertCurrent(): void
   call(command: HostPrivateTwinCommand, signal: AbortSignal): Promise<unknown>
 }>): PrivateTwinControlChannel {
   const profileId = input.profileId
-  let claimed: string | undefined
+  let claimed: PrivateTwinWorkerRequest | undefined
   const send = async (command: HostPrivateTwinCommand, signal: AbortSignal) => {
     input.assertCurrent(); signal.throwIfAborted()
     const result = parseHostPrivateTwinResult(await input.call(command, signal))
@@ -54,17 +57,37 @@ export function createPrivateTwinControlChannel(input: Readonly<{
       const request: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       const worker = parsePrivateTwinWorkerReply({ operation: 'claim' }, { request })
       if (worker.request?.ticket !== ticket) return stale()
-      claimed = ticket
+      claimed = worker.request
       return { request: worker.request }
     },
     async check(ticket: string, signal: AbortSignal) {
-      if (claimed !== ticket) return stale()
+      if (claimed?.ticket !== ticket) return stale()
       const result = await send({ operation: 'check', ticket }, signal)
       if (result.state !== 'current' || result.ticket !== ticket) return stale()
       return { current: true as const }
     },
+    async signBindingIntent(ticket: string, rawRegistration: HostBindingRegistration, signal: AbortSignal) {
+      if (!input.verifyBindingIntent) throw new HostAuthorityError('upgrade_required')
+      const request = claimed
+      if (!request || request.ticket !== ticket || request.operation !== 'binding_intent')
+        throw new HostAuthorityError('unauthorized')
+      const registration = parseHostBindingRegistration(rawRegistration)
+      const result = await send({ operation: 'sign_binding', ticket, registration }, signal)
+      if (result.state !== 'binding_intent' || result.ticket !== ticket || claimed !== request)
+        return stale()
+      const { proof } = result, { claims } = proof
+      if (claims.profileId !== profileId || claims.mainBotId !== request.botId ||
+          claims.sessionId !== request.sessionId || claims.messageId !== request.sourceMessageId ||
+          claims.expiresAt > request.intent.expiresAt ||
+          (['requestId', 'messageSeq', 'messageDigest', 'previewDigest', 'commandDigest'] as const)
+            .some(key => claims[key] !== request.intent[key]) ||
+          (Object.keys(registration) as Array<keyof HostBindingRegistration>)
+            .some(key => claims[key] !== registration[key])) return stale()
+      input.verifyBindingIntent(proof)
+      return proof
+    },
     async finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal) {
-      if (claimed !== ticket) return stale()
+      if (claimed?.ticket !== ticket) return stale()
       const bytes = Buffer.from(JSON.stringify(parsePrivateTwinWorkerResult(result)), 'utf8')
       // The validated result is a nonempty JSON object within the wire limit.
       const header = { ticket, total_bytes: bytes.length, digest: digest(bytes) }

@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinCommand,
-  parseHostPrivateTwinResult, type HostPrivateTwinCommand, type HostPrivateTwinResult } from '@deepseek-ai/dsh-host-control-protocol'
+  parseHostPrivateTwinResult, type HostPrivateTwinCommand, type HostPrivateTwinResult,
+  type HostBindingIntentProof, type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult, type PrivateTwinWorkerCommand,
-  type PrivateTwinWorkerReply } from './private-twin-worker-protocol.ts'
+  type PrivateTwinWorkerReply, type PrivateTwinWorkerRequest } from './private-twin-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
 
 /** A capability pinned by the supervisor to one worker generation. */
@@ -16,7 +17,13 @@ interface TransferAuthority {
   readonly signal: AbortSignal
   authorize(): string
   capture(profile: string): PrivateTwinWorkerReceiver
+  readonly signBindingIntent?: (
+    profile: string, registration: HostBindingRegistration, evidence: BindingRequest,
+  ) => HostBindingIntentProof
+  now?: () => number
 }
+
+type BindingRequest = Extract<PrivateTwinWorkerRequest, { operation: 'binding_intent' }>
 
 interface Lease {
   readonly key: string
@@ -25,6 +32,8 @@ interface Lease {
   readonly request: Buffer
   readonly receiver: PrivateTwinWorkerReceiver
   readonly lifetime: AbortSignal
+  readonly binding?: BindingRequest
+  signedBinding?: { readonly registration: string; readonly proof: HostBindingIntentProof }
   upload?: { readonly bytes: Buffer; readonly digest: string; offset: number }
 }
 
@@ -66,6 +75,17 @@ export class PrivateTwinTransfer {
         parsePrivateTwinWorkerReply(check, await lease.receiver.operate(check, signal))
         guard()
         if (command.operation === 'check') return { state: 'current', ticket: lease.ticket }
+        if (command.operation === 'sign_binding') {
+          const binding = lease.binding, sign = authority.signBindingIntent
+          if (!binding || !sign) throw new HostAuthorityError('unauthorized')
+          const registration = JSON.stringify(command.registration)
+          if (lease.signedBinding && lease.signedBinding.registration !== registration) return stale()
+          const proof = lease.signedBinding?.proof ?? sign(lease.profile, command.registration, binding)
+          if (proof.claims.expiresAt <= (authority.now ?? Date.now)()) return stale()
+          guard()
+          lease.signedBinding = { registration, proof }
+          return { state: 'binding_intent', ticket: lease.ticket, proof }
+        }
         if (command.operation === 'read') {
           if (command.offset >= lease.request.length) return stale()
           const bytes = lease.request.subarray(command.offset, command.offset + PRIVATE_TWIN_CONTROL_CHUNK_BYTES)
@@ -109,7 +129,8 @@ export class PrivateTwinTransfer {
     const ticket = response.request.ticket
     const result = parseHostPrivateTwinResult({ state: 'claimed', profile_id: profile, ticket,
       total_bytes: request.length, digest: digest(request) })
-    const lease: Lease = { key: authority.key, profile, ticket, request, receiver, lifetime }
+    const lease: Lease = { key: authority.key, profile, ticket, request, receiver, lifetime,
+      ...(response.request.operation === 'binding_intent' ? { binding: response.request } : {}) }
     this.lease = lease
     lifetime.addEventListener('abort', () => { if (this.lease === lease) this.lease = undefined }, { once: true })
     return result

@@ -775,6 +775,16 @@ export class DesktopHost {
     }
   }
 
+  /** Recheck the Account and return its current Native binding generation for intent signing. */
+  authorizeBindingIntentProfile(input: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]) {
+    this.authorizeCollaborationRegistration(input)
+    const profileId = this.authorizeAccountModelText(input)
+    const profile = this.options.registry.resolveProfile(profileId)
+    if (!profile || !this.options.registry.matchesAccountIdentity(profile, input))
+      throw new HostAuthorityError('profile_mismatch')
+    return { profileId, generation: profile.bindingGeneration }
+  }
+
   /** Own a current Account fence throughout one awaited original collaboration request.
    * @param account - Actual authenticated connection Account, never supplied worker authority.
    * @param signal - Original parent-owned request cancellation.
