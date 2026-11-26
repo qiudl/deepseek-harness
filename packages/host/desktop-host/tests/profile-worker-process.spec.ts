@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { DshWebProfileWorkerFactory, ProfileWorkerProcessFactory } from '../src/index.ts'
@@ -756,6 +756,19 @@ describe('dsh web Profile worker', () => {
             .end(JSON.stringify({ value: { items: [] } }))
           return
         }
+        if (url.pathname === '/internal/desktop-collaboration-analysis') {
+          if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_ANALYSIS_TOKEN) {
+            response.writeHead(403).end()
+            return
+          }
+          const chunks = []
+          for await (const chunk of request) chunks.push(chunk)
+          const command = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          const pins = JSON.parse(process.env.DSH_PROFILE_RUNTIME_ENTRY_ORIGINS)
+          response.writeHead(200, { 'content-type': 'application/json' })
+            .end(JSON.stringify({ value: { evidence: command.evidence, pins } }))
+          return
+        }
         if (url.pathname === '/internal/desktop-remote-ui') {
           if (request.headers.authorization !== 'Bearer ' + process.env.DSH_PROFILE_REMOTE_UI_TOKEN) {
             response.writeHead(403).end()
@@ -823,16 +836,41 @@ describe('dsh web Profile worker', () => {
       })
       process.on('SIGTERM', () => server.close(() => process.exit(0)))
     `)
+    const owned: { worker?: ProfileWorkerHandle } = {}
+    onTestFinished(async () => {
+      try {
+        if (owned.worker) {
+          owned.worker.closeNotifications()
+          owned.worker.abort()
+          await owned.worker.done
+        }
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+        rmSync(dirname(executable), { recursive: true, force: true })
+      }
+    })
+    const runtimeEntryOrigins = {
+      schemaVersion: 1 as const,
+      implementationDigest: 'a'.repeat(64),
+      compositionDigest: 'b'.repeat(64),
+      artifactPins: ['project-operation-native-entry.js', 'project-operation-journal.js'].map((name) => {
+        const path = join(root, name)
+        const contents = `export const fixture = '${name}'\n`
+        writeFileSync(path, contents)
+        return { path, sha256: createHash('sha256').update(contents).digest('hex') }
+      }),
+    }
     const factory = new DshWebProfileWorkerFactory({
       nodeExecutablePath: process.execPath,
       dshEntrypointPath: executable,
+      runtimeEntryOrigins,
       attestListener: async (pid, origin) => {
         expect(pid).toBeGreaterThan(0)
         await expect(fetch(origin).then(response => response.status)).resolves.toBe(401)
       },
     })
     const worker = await factory.create(spec(root))
-    onTestFinished(async () => { worker.closeNotifications(); worker.abort(); await worker.done })
+    owned.worker = worker
     expect(worker.viewOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
     expect(worker.viewOrigin).not.toContain('access_key')
     expect(JSON.stringify(worker)).not.toContain('must-stay-owner-only')
@@ -856,6 +894,13 @@ describe('dsh web Profile worker', () => {
     await expect(worker.remoteSession?.({
       operation: 'session.list', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
     }, new AbortController().signal)).resolves.toEqual({ items: [] })
+    const signal = new AbortController().signal
+    const evidence = Array.from({ length: 1024 }, (_, ordinal) => ordinal)
+    await expect(worker.collaborationAnalysis?.({ action: 'project_operation_memory_anchor', evidence }, signal))
+      .resolves.toEqual({ evidence, pins: runtimeEntryOrigins })
+    await expect(worker.collaborationAnalysis?.({ action: 'root_feedback', evidence }, signal)).rejects.toThrow()
+    expect((await fetch(`${worker.viewOrigin}/internal/desktop-collaboration-analysis`, { method: 'POST', signal })).status)
+      .toBe(403)
     await expect(worker.remoteSession?.({
       operation: 'session.cancel', command_id: '123e4567-e89b-42d3-a456-426614174000' as never,
       session_id: 'session-1', control: { controller_id: '123e4567-e89b-42d3-a456-426614174001',

@@ -58,6 +58,28 @@ it('rejects same-key retargeting and Account version changes without rewriting t
   expect(f.bytes()).toEqual(original)
 })
 
+it('recovers only the original unambiguous recipient scope without rewriting the signed receipt', () => {
+  const f = fixture()
+  const store = f.store()
+  const scope = f.offer.directions[1].scope
+  const owner = f.ack.ownerUserId, environment = f.ack.authorityEnvironmentId
+  expect(store.confirmedRecipient(scope, owner, environment)).toBeNull()
+  store.commit(f.offer, f.ack, () => {})
+  const original = f.bytes()
+  expect(f.store().confirmedRecipient(scope, owner, environment)).toEqual({ offer: f.offer, ack: f.ack })
+  expect(f.store().confirmedRecipient(scope, 'other-owner', environment)).toBeNull()
+  const differentScope = { ...scope, sourceRef: { ...scope.sourceRef, hostProfileId: f.ack.requestId } }
+  expect(() => store.confirmedRecipient(differentScope, owner, environment)).toThrow('idempotency_conflict')
+  expect(f.bytes()).toEqual(original)
+
+  const requestId = f.ack.hostProfileId
+  store.commit(f.offer, f.makeAck({ requestId, payloadDigest: hostTwinBindingCommandDigest(requestId, f.offer) }), () => {})
+  const ambiguous = f.bytes()
+  expect(() => f.store().confirmedRecipient(scope, owner, environment)).toThrow('idempotency_conflict')
+  expect(f.bytes()).toEqual(ambiguous)
+  expect(f.writes()).toBe(2)
+})
+
 it('serializes different-key commits and checks whole-collection quotas before mutation', () => {
   const f = fixture()
   const otherId = f.ack.hostProfileId

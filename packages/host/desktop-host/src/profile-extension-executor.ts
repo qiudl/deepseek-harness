@@ -48,12 +48,13 @@ export class ProfileExtensionExecutor implements ExtensionExecutor {
    * @param signal Read lifetime.
    * @returns Bounded installation metadata without content.
    */
-  inventory(profileId: string, kind: ExtensionKind, signal?: AbortSignal):
+  inventory(profileId: string, kind: ExtensionKind, signal?: AbortSignal, versions = false):
   Promise<readonly { id: string; name: string; transport: string }[]> {
     if (kind === 'skill') {
       if (!this.skill) return Promise.reject(Error('upgrade_required'))
       return this.skill.inventory(profileId, signal)
     }
+    if (kind === 'plugin' && this.plugin && versions) return this.plugin.inventory(profileId, true)
     return this.executor(kind).inventory(profileId)
   }
   /** @param profileId Authorized Profile. @param original Package receipt. @returns Completion validation. */

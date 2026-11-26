@@ -72,11 +72,9 @@ export function parseHostBotFolders(value: unknown, request: HostBotFoldersReque
   if (request.path === null && value.kind === 'places' &&
     exact(value, ['botId', 'kind', 'team', 'canBrowse', 'folders', 'truncated']) &&
     fullPath(value.team) && typeof value.canBrowse === 'boolean' &&
-    Array.isArray(value.folders) && value.folders.length <= 100 &&
-    value.folders.every(folder => record(folder) && exact(folder, ['path', 'title']) &&
-      fullPath(folder.path) && bounded(folder.title, 256)) && typeof value.truncated === 'boolean') {
+    Array.isArray(value.folders) && value.folders.length <= 100 && typeof value.truncated === 'boolean') {
     const folders = value.folders.map((folder: unknown) => {
-      if (!record(folder) || !fullPath(folder.path) || !bounded(folder.title, 256))
+      if (!record(folder) || !exact(folder, ['path', 'title']) || !fullPath(folder.path) || !bounded(folder.title, 256))
         throw Error('invalid_bot_folders_result')
       return { path: folder.path, title: folder.title }
     })
@@ -86,16 +84,15 @@ export function parseHostBotFolders(value: unknown, request: HostBotFoldersReque
   if (request.path !== null && value.kind === 'browse' &&
     exact(value, ['botId', 'kind', 'path', 'home', 'crumbs', 'entries', 'truncated']) &&
     fullPath(value.path) && fullPath(value.home) && Array.isArray(value.crumbs) &&
-    value.crumbs.length <= 64 && value.crumbs.every(entry) &&
-    Array.isArray(value.entries) && value.entries.length <= 100 &&
-    value.entries.every(entry) && typeof value.truncated === 'boolean') {
+    value.crumbs.length <= 64 && Array.isArray(value.entries) && value.entries.length <= 100 &&
+    typeof value.truncated === 'boolean') {
     const parseEntry = (folder: unknown): HostBotFolderEntry => {
       if (!entry(folder)) throw Error('invalid_bot_folders_result')
       return { name: folder.name, path: folder.path, hidden: folder.hidden }
     }
     return { botId: request.botId, kind: 'browse', path: value.path, home: value.home,
-      crumbs: value.crumbs.map((folder: unknown) => parseEntry(folder)),
-      entries: value.entries.map((folder: unknown) => parseEntry(folder)),
+      crumbs: value.crumbs.map(parseEntry),
+      entries: value.entries.map(parseEntry),
       truncated: value.truncated }
   }
   throw Error('invalid_bot_folders_result')

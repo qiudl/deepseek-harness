@@ -4,6 +4,15 @@ import { readBundledPluginPatch } from './bundled-plugin-recovery.ts'
 import type { BundledPlugin, BundledPluginCatalog } from './bundled-plugins.ts'
 
 type Layers = readonly Pick<ProfileLayer, 'packageName' | 'patches'>[]
+type ComposedEntry = ReturnType<typeof composeEntries>[number]
+/** Reviewed composition migration, separate from package versions and data-schema compatibility. */
+export type BundledUpgradePolicy = 'ds-bot-settings-seat-v1'
+
+function settingsSeatChange(old: ComposedEntry, next: ComposedEntry, policy?: BundledUpgradePolicy): boolean {
+  return policy === 'ds-bot-settings-seat-v1' && old.id === 'ui-settings-general'
+    && old.disabled !== true && next.disabled === true
+    && JSON.stringify({ ...old, disabled: undefined }) === JSON.stringify({ ...next, disabled: undefined })
+}
 
 /** Refuse values JSON would silently alter while copying a shared configuration. */
 function isPlainJson(value: unknown, ancestors = new Set<object>()): boolean {
@@ -23,7 +32,7 @@ function isPlainJson(value: unknown, ancestors = new Set<object>()): boolean {
  * @param text Patch read from the validated bundle archive.
  * @returns Insertion patches suitable for planning, or throws for unsupported syntax.
  */
-export function parseBundledUpgradePatch(text: string): ProfileLayer['patches'] {
+export function parseBundledUpgradePatch(text: string, policy?: BundledUpgradePolicy): ProfileLayer['patches'] {
   if (Buffer.byteLength(text) > 1_048_576) throw Error('invalid_patch')
   const doc = parseDocument(text)
   if (doc.errors.length || doc.warnings.length || !isSeq(doc.contents)) throw Error('invalid_patch')
@@ -32,6 +41,8 @@ export function parseBundledUpgradePatch(text: string): ProfileLayer['patches'] 
   for (const patch of parsed as unknown[]) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw Error('invalid_patch')
     const record = patch as Record<string, unknown>
+    if (policy === 'ds-bot-settings-seat-v1' && Object.keys(record).sort().join(',') === 'disabled,id'
+      && record.id === 'ui-settings-general' && record.disabled === true) continue
     if (Object.keys(record).join(',') !== 'insert' || !Array.isArray(record.insert) || record.insert.length > 128) throw Error('invalid_patch')
     for (const entry of record.insert as unknown[]) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw Error('invalid_patch')
@@ -50,15 +61,17 @@ export function parseBundledUpgradePatch(text: string): ProfileLayer['patches'] 
  * @param overrides Later Profile overrides. @returns Configuration preservation plan.
  */
 export async function prepareBundledPluginUpgrade(catalog: BundledPluginCatalog, plugin: BundledPlugin,
-  oldLayers: Layers, patch: string, overrides: ProfileLayer['patches']): Promise<{ patch: string; patches: ProfileLayer['patches'] }> {
-  const patches = parseBundledUpgradePatch(await readBundledPluginPatch(catalog, plugin))
+  oldLayers: Layers, patch: string, overrides: ProfileLayer['patches'], policy?: BundledUpgradePolicy): Promise<{ patch: string; patches: ProfileLayer['patches'] }> {
+  if (policy !== undefined && plugin.name !== 'ds-bot') throw Error('invalid_patch')
+  const patches = parseBundledUpgradePatch(await readBundledPluginPatch(catalog, plugin), policy)
   const newLayers = oldLayers.map(layer => layer.packageName === plugin.name ? { ...layer, patches } : layer)
-  return { ...planPluginUpgrade(oldLayers, newLayers, patch, overrides, plugin.name), patches }
+  return { ...planPluginUpgrade(oldLayers, newLayers, patch, overrides, plugin.name, policy), patches }
 }
 
 /** Plan a config-only preservation patch. Callers must persist it under a recoverable transaction. */
 export function planPluginUpgrade(oldLayers: Layers, newLayers: Layers, patch: string,
-  overrides: ProfileLayer['patches'], packageName: string): { patch: string } {
+  overrides: ProfileLayer['patches'], packageName: string, policy?: BundledUpgradePolicy): { patch: string } {
+  if (policy !== undefined && packageName !== 'ds-bot') throw Error('invalid_patch')
   if (oldLayers.filter(layer => layer.packageName === packageName).length !== 1 ||
       newLayers.filter(layer => layer.packageName === packageName).length !== 1 ||
       JSON.stringify(oldLayers.filter(layer => layer.packageName !== packageName)) !==
@@ -78,6 +91,7 @@ export function planPluginUpgrade(oldLayers: Layers, newLayers: Layers, patch: s
     const next = after.find(row => row.id === shared.id)
     if (!old || !next || !shared.id) throw Error('plugin_upgrade_shared_entry_changed')
     if (JSON.stringify(old) === JSON.stringify(next)) continue
+    if (settingsSeatChange(old, next, policy)) continue
     if (JSON.stringify({ ...old, config: undefined }) !== JSON.stringify({ ...next, config: undefined }) ||
         !isPlainJson(old.config)) throw Error('plugin_upgrade_shared_entry_changed')
     const config: unknown = JSON.parse(JSON.stringify(old.config))
@@ -91,7 +105,9 @@ export function planPluginUpgrade(oldLayers: Layers, newLayers: Layers, patch: s
   const expected = composeEntries([...oldLayers.map(layer => layer.patches), local, overrides])
   if (JSON.stringify(beforeWithPatch) !== JSON.stringify(expected)) throw Error('plugin_upgrade_shared_entry_changed')
   for (const shared of base) {
-    if (JSON.stringify(expected.find(row => row.id === shared.id)) !== JSON.stringify(preserved.find(row => row.id === shared.id))) {
+    const old = expected.find(row => row.id === shared.id), next = preserved.find(row => row.id === shared.id)
+    if (old && next && settingsSeatChange(old, next, policy)) continue
+    if (JSON.stringify(old) !== JSON.stringify(next)) {
       throw Error('plugin_upgrade_shared_entry_changed')
     }
   }

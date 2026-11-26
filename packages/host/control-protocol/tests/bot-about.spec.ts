@@ -13,7 +13,21 @@ describe('native Bot About', () => {
     expect(parseHostBotAboutRequest({ fresh: true })).toEqual({ fresh: true })
     expect(() => parseHostBotAboutRequest({ fresh: true, profileId: 'other' })).toThrow()
     expect(parseHostBotAbout(page)).toEqual(page)
+    const npmPage = { ...page, dsh: { ...page.dsh, kind: 'npm' } }
+    expect(parseHostBotAbout(npmPage)).toEqual(npmPage)
+    expect(parseHostBotAbout({ ...page, dsh: null })).toEqual({ ...page, dsh: null })
     expect(parseHostBotAbout(null)).toBeNull()
+  })
+
+  it('enforces the serialized status budget when individually valid strings expand in JSON', () => {
+    const link = 'https://github.com/fixture/updates/' + '\u0000'.repeat(470)
+    const version = '\u0000'.repeat(80)
+    const oversized = {
+      bot: { ...page.bot, name: '\u0000'.repeat(100), current: version, latest: version, notesUrl: link, repoUrl: link },
+      dsh: page.dsh,
+    }
+    expect(Buffer.byteLength(JSON.stringify(oversized))).toBeGreaterThan(4_096)
+    expect(() => parseHostBotAbout(oversized)).toThrow('invalid_bot_about_result')
   })
 
   it('rejects hidden fields, raw installer errors and unsafe links', () => {

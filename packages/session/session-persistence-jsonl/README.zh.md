@@ -183,3 +183,5 @@ JSONL 存储不修改实时请求前缀。只有重建历史、当前 envelope �
 无。
 
 </details>
+
+本地 owner 导入恢复在允许原意图尚未存在时使用 `OwnerMigrationImportService.find()`：缺失返回 `undefined`，不新建导入。`status()` 仍在缺失时抛出错误。两种查询保持相同的传输、代际、安装与 Profile 绑定，并执行终态秘密清理；其他存储故障继续作为错误返回。

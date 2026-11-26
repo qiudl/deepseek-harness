@@ -28,4 +28,15 @@ describe('native Bot schedule delivery history', () => {
     expect(parseHostBotScheduleHistory({ ...empty, available: false, code: null }, request)?.available).toBe(false)
     expect(() => parseHostBotScheduleHistory({ ...empty, records: page.records }, request)).toThrow()
   })
+
+  it('distinguishes an unavailable page from an expired or repeated cursor', () => {
+    const older = parseHostBotScheduleHistoryRequest({ ...request, before: 'm1' })
+    expect(parseHostBotScheduleHistory(null, older)).toBeNull()
+    const missing = { ...page, code: 'delivery_cursor_not_found', records: [],
+      nextBefore: null, retention: null, earlierRecordsUnavailable: false }
+    expect(parseHostBotScheduleHistory(missing, older)).toEqual(missing)
+    expect(() => parseHostBotScheduleHistory(page, older)).toThrow('invalid_bot_schedule_history_result')
+    expect(() => parseHostBotScheduleHistoryRequest({ ...older, before: 'bad cursor' }))
+      .toThrow('invalid_bot_schedule_history_request')
+  })
 })

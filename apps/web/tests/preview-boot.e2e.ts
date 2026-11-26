@@ -29,6 +29,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compileFunction } from 'node:vm'
 import { chromium } from 'playwright'
 import type { Browser, Page } from 'playwright'
 import { expect, it } from 'vitest'
@@ -38,7 +39,7 @@ import {
 } from '@deepseek-ai/dsh-experimental-webworker-packer'
 import {
   IMAGE_FILE_NAME, IMAGE_MANIFEST_PATH, parseImageManifest, parseTar, PREVIEW_FIXTURE_MANIFEST_FILE,
-  PREVIEW_FIXTURE_MANIFEST_VERSION, type ImageManifest, type PreviewFixtureManifest,
+  PREVIEW_FIXTURE_MANIFEST_VERSION, WRAPPER_PARAMS, type ImageManifest, type PreviewFixtureManifest,
 } from '@deepseek-ai/dsh-experimental-webworker-runtime'
 import {
   VFS_EXAMPLE_SESSION_IDS,
@@ -125,6 +126,8 @@ interface PreviewAssets {
   readonly overrides: ReadonlyMap<string, string>
   /** Manifest of the base image the site serves. */
   readonly manifest: ImageManifest
+  /** Lowered Session Controller journal, as it will be wrapped by the worker. */
+  readonly runtimeEntryJournal: string | undefined
   cleanup(): void
 }
 
@@ -175,9 +178,14 @@ function requireVfsAssets(): PreviewAssets {
     writeAsset(`preview/${IMAGE_FILE_NAME}`, packed.image)
     for (const archive of packed.lazyArchives) writeAsset(`preview/${archive.name}`, archive.image)
   }
-  const manifestEntry = parseTar(gunzipSync(image)).find(entry => entry.name === IMAGE_MANIFEST_PATH)
+  const entries = parseTar(gunzipSync(image))
+  const manifestEntry = entries.find(entry => entry.name === IMAGE_MANIFEST_PATH)
   if (manifestEntry === undefined) throw new Error('preview boot: the base image carries no manifest')
   const manifest = parseImageManifest(JSON.parse(new TextDecoder().decode(manifestEntry.bytes)), IMAGE_MANIFEST_PATH)
+  const journalEntry = entries.find(entry =>
+    entry.name === 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/types/runtime-entry-journal.js',
+  )
+  const runtimeEntryJournal = journalEntry && new TextDecoder().decode(journalEntry.bytes)
   const currentCache = buildVfsExampleFiles().get('home/storages/session_projcache.json')
   if (currentCache === undefined) throw new Error('preview boot: generated example has no projection cache')
   const cacheDirectory = join(directory, 'current-projection-cache')
@@ -202,7 +210,7 @@ function requireVfsAssets(): PreviewAssets {
     fixtures,
   }
   writeAsset(`preview/${PREVIEW_FIXTURE_MANIFEST_FILE}`, `${JSON.stringify(fixtureManifest, null, 2)}\n`)
-  return { overrides, manifest, cleanup: () => { rmSync(directory, { recursive: true, force: true }) } }
+  return { overrides, manifest, runtimeEntryJournal, cleanup: () => { rmSync(directory, { recursive: true, force: true }) } }
 }
 
 /**
@@ -281,16 +289,19 @@ async function within<T>(work: Promise<T>, ms: number, stalled: string): Promise
   }
 }
 
-it('boots the packed worker deployment to an interactive page', async () => {
+it.each(['empty', 'seeded'] as const)('boots the packed worker deployment with %s Preview data', async (fixture) => {
   requirePreviewPages()
   const assets = requireVfsAssets()
   try {
+    const journal = assets.runtimeEntryJournal
+    if (journal === undefined) throw new Error('preview boot: the base image is missing the Session Controller journal')
+    expect(() => compileFunction(journal, [...WRAPPER_PARAMS]), 'the worker can compile the packed journal').not.toThrow()
     const site = await serveDist(assets.overrides)
     try {
       const browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] })
       try {
-        await bootEmptyPreview(site.origin, browser)
-        await bootPreview(site, assets.manifest, browser)
+        if (fixture === 'empty') await bootEmptyPreview(site.origin, browser)
+        else await bootPreview(site, assets.manifest, browser)
       } finally {
         await browser.close()
       }

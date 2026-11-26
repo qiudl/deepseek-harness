@@ -32,10 +32,20 @@ interface StartProfileWorkerInput {
   readonly pluginRoots: readonly string[]
 }
 
+/** Host-private permit; no worker or path authority crosses a renderer boundary. */
+export interface ProfileWorkerMaintenancePermit {
+  assertCurrent(): void
+  ensure(input: StartProfileWorkerInput): Promise<void>
+  activate(): ReturnType<ProfileWorkerSupervisor['activate']>
+  dispose(): Promise<void>
+}
+
 /** Owns one isolated child per unlocked Profile and awaits quiescence on disposal. */
 export class ProfileWorkerSupervisor {
   private closed = false
   private readonly workers = new Map<string, ProfileWorkerHandle>()
+  private readonly maintenance = new Map<string, symbol>()
+  private readonly admissions = new Map<string, Set<{ readonly done: Promise<unknown>; readonly purpose: 'startup' | 'mutation' }>>()
   private readonly pending = new Map<string, Promise<void>>()
   private readonly collaborationRequests = new Map<ProfileWorkerHandle, Set<AbortController>>()
   constructor(private readonly factory: ProfileWorkerFactory) {}
@@ -49,7 +59,7 @@ export class ProfileWorkerSupervisor {
    */
   async resolveBotIdentity(profileId: string, botId: string, signal: AbortSignal): Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotIdentity | null> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.resolveBotIdentity) throw new HostAuthorityError('unavailable')
     const result = await worker.resolveBotIdentity(botId, signal)
     signal.throwIfAborted()
@@ -63,7 +73,7 @@ export class ProfileWorkerSupervisor {
    * @returns A private reader and synchronous guard for that original worker.
    */
   botSessionIdentityReceiver(profileId: string): BotSessionIdentityReceiver {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker) throw new HostAuthorityError('unavailable')
     if (!worker.resolveBotSessionIdentity) throw new HostAuthorityError('upgrade_required')
     const read = worker.resolveBotSessionIdentity.bind(worker)
@@ -108,7 +118,7 @@ export class ProfileWorkerSupervisor {
   async listBotRoster(profileId: string, afterBotId: string, limit: number, signal: AbortSignal):
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotRosterPage | null> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.listBotRoster) throw new HostAuthorityError('unavailable')
     const page = await worker.listBotRoster(afterBotId, limit, signal)
     signal.throwIfAborted()
@@ -127,7 +137,7 @@ export class ProfileWorkerSupervisor {
   async listBoundBotRooms(profileId: string, query: HostBoundBotRoomsQuery,
     signal: AbortSignal): Promise<HostBoundBotRoomsRead> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker) throw new HostAuthorityError('unavailable')
     if (!worker.listBoundBotRooms) throw new HostAuthorityError('upgrade_required')
     const result = await worker.listBoundBotRooms(query, signal)
@@ -148,7 +158,7 @@ export class ProfileWorkerSupervisor {
   async prepareNativeRoom(profileId: string, roomId: string, signal: AbortSignal):
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostNativeRoomSource | null> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.prepareNativeRoom) throw new HostAuthorityError('unavailable')
     const binding = await worker.prepareNativeRoom(roomId, signal)
     signal.throwIfAborted()
@@ -162,7 +172,7 @@ export class ProfileWorkerSupervisor {
    * @returns Phase reader and synchronous guard for that exact worker generation.
    */
   nativeRoomPreparationReceiver(profileId: string): NativeRoomPreparationReceiver {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker) throw new HostAuthorityError('unavailable')
     if (!worker.prepareNativeRoomPhase) throw new HostAuthorityError('upgrade_required')
     const read = worker.prepareNativeRoomPhase.bind(worker)
@@ -185,7 +195,7 @@ export class ProfileWorkerSupervisor {
   async operateBotGroup(profileId: string, command: HostBotGroupCommand,
     signal: AbortSignal): Promise<HostBotGroupResponse> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.operateBotGroup) throw new HostAuthorityError('unavailable')
     const result = await worker.operateBotGroup(command, signal)
     signal.throwIfAborted()
@@ -202,7 +212,7 @@ export class ProfileWorkerSupervisor {
   async operateNativeRoom(profileId: string, command: HostNativeRoomCommand,
     signal: AbortSignal): Promise<HostNativeRoomReply> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.operateNativeRoom) throw new HostAuthorityError('unavailable')
     const reply = await worker.operateNativeRoom(command, signal)
     signal.throwIfAborted()
@@ -220,7 +230,7 @@ export class ProfileWorkerSupervisor {
   async retireNativeRoom(profileId: string, command: HostNativeRoomRetirementCommand,
     signal: AbortSignal): Promise<HostNativeRoomRetirementReply> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker) throw new HostAuthorityError('unavailable')
     if (!worker.retireNativeRoom) throw new HostAuthorityError('upgrade_required')
     const reply = await worker.retireNativeRoom(command, signal)
@@ -230,7 +240,111 @@ export class ProfileWorkerSupervisor {
   }
 
   private assertCurrentWorker(profileId: string, worker: ProfileWorkerHandle): void {
-    if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
+    if (this.closed || this.availableWorker(profileId) !== worker) throw new HostAuthorityError('stale')
+  }
+
+  /**
+   * Refuse concurrent entry points before they materialize any Profile configuration.
+   * @param profileId Profile whose live worker admission is checked.
+   */
+  assertProfileAvailable(profileId: string): void {
+    if (this.closed || this.maintenance.has(profileId)) throw new HostAuthorityError('unavailable')
+  }
+
+  private availableWorker(profileId: string): ProfileWorkerHandle | undefined {
+    this.assertProfileAvailable(profileId)
+    return this.workers.get(profileId)
+  }
+
+  /**
+   * Own an admitted Profile startup's document writes until they reach quiescence.
+   * @param profileId Selected Profile whose documents the caller will materialize.
+   * @param operation Complete startup work; its guard refuses new work once maintenance begins.
+   * @param purpose Startup writers settle before maintenance; an active mutation refuses upgrade admission.
+   * @returns The startup result only while ordinary Profile admission remains available.
+   */
+  async withProfileAdmission<T>(profileId: string, operation: (guard: () => void) => Promise<T>,
+    purpose: 'startup' | 'mutation' = 'startup'): Promise<T> {
+    this.assertProfileAvailable(profileId)
+    let admitted = this.admissions.get(profileId)
+    if (!admitted) { admitted = new Set(); this.admissions.set(profileId, admitted) }
+    const guard = () => { this.assertProfileAvailable(profileId) }
+    const done = Promise.resolve().then(async () => {
+      guard()
+      const result = await operation(guard)
+      guard()
+      return result
+    })
+    const lifetime = { done, purpose }
+    admitted.add(lifetime)
+    try { return await done } finally {
+      admitted.delete(lifetime)
+      if (!admitted.size) this.admissions.delete(profileId)
+    }
+  }
+
+  /**
+   * Fence native callers and worker acquisition while the owner snapshots and verifies an upgrade.
+   * The caller owns data restoration and crash recovery; this method only owns live worker access.
+   * @param profileId Host-authorized Profile; another Profile cannot be selected through the permit.
+   * @param operation Private upgrade work; successful completion publishes its final worker.
+   * @returns The operation result after releasing its process-local fence.
+   */
+  async withProfileMaintenance<T>(profileId: string, operation: (permit: ProfileWorkerMaintenancePermit) => Promise<T>): Promise<T> {
+    this.assertProfileAvailable(profileId)
+    if ([...(this.admissions.get(profileId) ?? [])].some(entry => entry.purpose === 'mutation')) {
+      throw new HostAuthorityError('unavailable')
+    }
+    const token = Symbol('profile-maintenance')
+    this.maintenance.set(profileId, token)
+    const current = () => {
+      if (this.closed || this.maintenance.get(profileId) !== token) throw new HostAuthorityError('stale')
+    }
+    let stopped = false, releasable = false
+    const stop = { failed: false }
+    try {
+      // An already admitted startup may still be publishing owner documents before ensure().
+      // Its complete lifetime must settle before taking a source snapshot.
+      await Promise.allSettled([...(this.admissions.get(profileId) ?? [])].map(entry => entry.done))
+      await this.dispose(profileId)
+      stopped = true
+      current()
+      const result = await operation({
+        assertCurrent: current,
+        ensure: async (input) => {
+          current()
+          if (input.profileId !== profileId) throw new HostAuthorityError('profile_mismatch')
+          await this.serial(profileId, async () => {
+            current()
+            if (!this.workers.has(profileId)) await this.startOwned(input)
+            current()
+          })
+        },
+        activate: () => Promise.resolve().then(() => {
+          current()
+          const worker = this.workers.get(profileId)
+          if (!worker || worker.viewOrigin === undefined || worker.generation === undefined || worker.bootstrapCookie === undefined) {
+            throw new HostAuthorityError('unavailable')
+          }
+          return { origin: worker.viewOrigin, generation: worker.generation, bootstrapCookie: worker.bootstrapCookie }
+        }),
+        dispose: async () => {
+          current()
+          try { await this.dispose(profileId) } catch (error) { stop.failed = true; throw error }
+          current()
+        },
+      })
+      releasable = true
+      return result
+    } catch (error) {
+      if (stopped && !stop.failed) {
+        await this.dispose(profileId)
+        releasable = true
+      }
+      throw error
+    } finally {
+      if (releasable) this.maintenance.delete(profileId)
+    }
   }
 
   /**
@@ -238,7 +352,7 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile root, credential handle, and allowed plugin roots.
    */
   async start(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed) throw new HostAuthorityError('unavailable')
+    this.assertProfileAvailable(input.profileId)
     return this.serial(input.profileId, () => this.startOwned(input))
   }
 
@@ -257,7 +371,7 @@ export class ProfileWorkerSupervisor {
    * @param input - Profile-owned runtime inputs.
    */
   async ensure(input: StartProfileWorkerInput): Promise<void> {
-    if (this.closed) throw new HostAuthorityError('unavailable')
+    this.assertProfileAvailable(input.profileId)
     await this.serial(input.profileId, async () => {
       if (!this.workers.has(input.profileId)) await this.startOwned(input)
     })
@@ -274,7 +388,7 @@ export class ProfileWorkerSupervisor {
     readonly bootstrapCookie: { readonly name: string; readonly value: string }
   }> {
     await Promise.resolve()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (!worker || worker.viewOrigin === undefined || worker.generation === undefined || worker.bootstrapCookie === undefined) {
       throw new HostAuthorityError('unavailable')
     }
@@ -293,7 +407,7 @@ export class ProfileWorkerSupervisor {
     readonly model: string
     readonly text: string
   }> {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.generateText) throw new HostAuthorityError('unavailable')
     return worker.generateText(text, signal)
   }
@@ -311,9 +425,9 @@ export class ProfileWorkerSupervisor {
     signal: AbortSignal,
   ): Promise<HostWorkspaceModelSelection> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectWorkspaceModelSelection) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.inspectWorkspaceModelSelection(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -333,9 +447,9 @@ export class ProfileWorkerSupervisor {
     profileId: string, target: HostCollaborationArchiveStateTarget, signal: AbortSignal,
   ): Promise<HostCollaborationArchiveStateValue> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectCollaborationArchiveState) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.inspectCollaborationArchiveState(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -352,7 +466,7 @@ export class ProfileWorkerSupervisor {
     profileId: string, target: HostCollaborationArchiveIntentTarget, signal: AbortSignal,
   ): Promise<HostCollaborationArchiveIntentValue> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectCollaborationArchiveIntent) throw new HostAuthorityError('unavailable')
     const result = await worker.inspectCollaborationArchiveIntent(target, signal)
     signal.throwIfAborted()
@@ -370,7 +484,7 @@ export class ProfileWorkerSupervisor {
     profileId: string, target: HostCollaborationArchiveTransitionTarget, signal: AbortSignal,
   ): Promise<HostCollaborationArchiveTransitionResult> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.transitionCollaborationArchive) throw new HostAuthorityError('unavailable')
     const result = await worker.transitionCollaborationArchive(target, signal)
     signal.throwIfAborted()
@@ -388,7 +502,7 @@ export class ProfileWorkerSupervisor {
     profileId: string, challenge: HostGroupInputFenceChallenge, signal: AbortSignal,
   ): Promise<HostGroupInputFenceValue> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.installGroupInputFence) throw new HostAuthorityError('unavailable')
     const result = await worker.installGroupInputFence(challenge, signal)
     signal.throwIfAborted()
@@ -405,9 +519,9 @@ export class ProfileWorkerSupervisor {
    */
   async rootJournal(profileId: string, input: HostRootJournalCommand, signal: AbortSignal): Promise<HostRootJournalMetadata> {
     signal.throwIfAborted()
-    const command = parseHostRootJournalCommand(input), worker = this.workers.get(profileId)
+    const command = parseHostRootJournalCommand(input), worker = this.availableWorker(profileId)
     if (this.closed || !worker?.rootJournal) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.rootJournal(command, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -424,9 +538,9 @@ export class ProfileWorkerSupervisor {
   async inspectRootPlanningAttempt(profileId: string, target: HostRootSubmissionTarget, attemptId: HostControlRequestId,
     binding: string, signal: AbortSignal): Promise<HostRootPlanningAttemptDescriptor> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectRootPlanningAttempt) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.inspectRootPlanningAttempt(target, attemptId, binding, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -444,9 +558,9 @@ export class ProfileWorkerSupervisor {
     signal: AbortSignal,
   ): Promise<HostRootSubmissionDescriptor> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectCollaborationRoot) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.inspectCollaborationRoot(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -471,9 +585,9 @@ export class ProfileWorkerSupervisor {
     signal: AbortSignal,
   ): Promise<HostCollaborationSourceDescriptor> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.inspectCollaborationSource) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.inspectCollaborationSource(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -494,9 +608,9 @@ export class ProfileWorkerSupervisor {
   async readCollaborationReferenceGrant(profileId: string, target: HostCollaborationSourceTarget,
     requestDigest: HostControlSha256, signal: AbortSignal): Promise<HostCollaborationReferenceGrant> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.readCollaborationReferenceGrant) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.readCollaborationReferenceGrant(target, requestDigest, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -516,9 +630,9 @@ export class ProfileWorkerSupervisor {
   async captureCollaborationReferenceSelection(profileId: string, selection: HostCollaborationReferenceSelection,
     signal: AbortSignal): Promise<HostRemoteSessionJson> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.captureCollaborationReferenceSelection) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.captureCollaborationReferenceSelection(selection, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -535,9 +649,9 @@ export class ProfileWorkerSupervisor {
   async readCollaborationReferenceContent(profileId: string, target: HostCollaborationReferenceContentTarget,
     signal: AbortSignal): Promise<HostCollaborationReferenceContentChunk> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.readCollaborationReferenceContent) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.readCollaborationReferenceContent(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -553,9 +667,9 @@ export class ProfileWorkerSupervisor {
    */
   async collaborationAnalysis(profileId: string, command: HostRemoteSessionJson, signal: AbortSignal): Promise<HostRemoteSessionJson> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.collaborationAnalysis) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const controller = new AbortController(), requests = this.collaborationRequests.get(worker) ?? new Set<AbortController>()
     requests.add(controller); this.collaborationRequests.set(worker, requests)
     const owned = AbortSignal.any([signal, controller.signal])
@@ -575,7 +689,7 @@ export class ProfileWorkerSupervisor {
    * @returns Private receiver rejecting replacement or disposal of the original worker.
    */
   taskCoordinationReceiver(profileId: string): TaskCoordinationReceiver {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.collaborationAnalysis || !worker.workerId) throw new HostAuthorityError('unavailable')
     const assertCurrent = () =>{  this.assertCurrentWorker(profileId, worker) }
     return { workerId: worker.workerId, assertCurrent, execute: async (command, signal) => {
@@ -591,11 +705,11 @@ export class ProfileWorkerSupervisor {
    * @returns Private receiver that refuses closure, worker replacement or cancellation before and after writes.
    */
   collaborationDeliveryReceiver(profileId: string): CollaborationDeliveryReceiver {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.receiveCollaborationDelivery) throw new HostAuthorityError('unavailable')
     const receive = worker.receiveCollaborationDelivery.bind(worker)
     const assertCurrent = () => {
-      if (this.closed || this.workers.get(profileId) !== worker) throw new HostAuthorityError('stale')
+      if (this.closed || this.availableWorker(profileId) !== worker) throw new HostAuthorityError('stale')
     }
     return { assertCurrent, receive: async (capsule, signal) => {
       signal.throwIfAborted(); assertCurrent()
@@ -618,9 +732,9 @@ export class ProfileWorkerSupervisor {
     signal: AbortSignal,
   ): Promise<HostCollaborationSourceSnapshot> {
     signal.throwIfAborted()
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.readCollaborationSourceSnapshot) throw new HostAuthorityError('unavailable')
-    const current = () => !this.closed && this.workers.get(profileId) === worker
+    const current = () => !this.closed && this.availableWorker(profileId) === worker
     const result = await worker.readCollaborationSourceSnapshot(target, signal)
     signal.throwIfAborted()
     if (!current()) throw new HostAuthorityError('stale')
@@ -647,7 +761,7 @@ export class ProfileWorkerSupervisor {
     command: HostRemoteSessionCommand,
     signal: AbortSignal,
   ): Promise<HostRemoteSessionJson> {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.remoteSession) throw new HostAuthorityError('unavailable')
     return worker.remoteSession(command, signal)
   }
@@ -661,7 +775,7 @@ export class ProfileWorkerSupervisor {
    * @returns The worker's read projection.
    */
   async remoteUiRead(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal): Promise<unknown> {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.remoteUiRead) throw new HostAuthorityError('unavailable')
     return worker.remoteUiRead(endpoint, payload, signal)
   }
@@ -676,7 +790,7 @@ export class ProfileWorkerSupervisor {
    * @returns Native Session events until cancellation or end.
    */
   remoteUiStream(profileId: string, endpoint: string, payload: unknown, signal: AbortSignal, itemChunks = false): AsyncIterable<unknown> {
-    const worker = this.workers.get(profileId)
+    const worker = this.availableWorker(profileId)
     if (this.closed || !worker?.remoteUiStream) throw new HostAuthorityError('unavailable')
     return worker.remoteUiStream(endpoint, payload, signal, itemChunks)
   }
@@ -715,6 +829,7 @@ export class ProfileWorkerSupervisor {
     this.closed = true
     for (const requests of this.collaborationRequests.values()) for (const controller of requests)
       controller.abort(new HostAuthorityError('stale'))
+    await Promise.allSettled([...this.admissions.values()].flatMap(admitted => [...admitted].map(entry => entry.done)))
     const ids = new Set([...this.workers.keys(), ...this.pending.keys()])
     const results = await Promise.allSettled([...ids].map(profileId => this.dispose(profileId)))
     const failed = results.find(result => result.status === 'rejected')

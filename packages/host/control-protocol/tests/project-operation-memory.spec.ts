@@ -198,6 +198,22 @@ function assertEnvelope(
   return e
 }
 
+it('accepts a single projection proof only for retained search and evidence responses', () => {
+  const searchResult = result(3)
+  const retained = envelope('search', searchResult, 'projection').value
+  const fromSource = envelope('search', searchResult).value
+  const evidence = envelope('evidence', result(4), 'projection').value
+  expect(results.parseHostProjectMemoryResponse(retained)).toEqual(retained)
+  expect(results.parseHostProjectMemoryResponse(evidence)).toEqual(evidence)
+  expect(() => results.parseHostProjectMemoryResponse({ ...retained, projectionProof: null })).toThrow()
+  expect(() => results.parseHostProjectMemoryResponse({ ...retained, sourceProof: fromSource.sourceProof })).toThrow()
+
+  const history = envelope('history_page', result(1)).value
+  expect(() => results.parseHostProjectMemoryResponse({
+    ...history, sourceProof: null, projectionProof: retained.projectionProof,
+  })).toThrow()
+})
+
 it('accepts both confirmed directions and explicit null peers without granting authority', () => {
   const offer = JSON.parse(readFileSync(new URL('./fixtures/twin-binding-offer-v1.json', import.meta.url), 'utf8')) as {
     offer: { directions: [{ scope: unknown }, { scope: wire.HostProjectMemoryDirective['scope'] }] }

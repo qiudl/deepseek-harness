@@ -68,6 +68,8 @@ it('commits one command before publication; concurrent confirmation and reopen r
   await journal.close()
   const reopened = await openCollaborationRootExecutionJournal(h.facility)
   expect(reopened.read(h.root, selection())).toEqual(entry)
+  expect(reopened.findByCommandId(entry.execution_command_id)).toEqual(entry)
+  expect(reopened.findByCommandId('another-execution-command')).toBeUndefined()
   expect(await reopened.prepare(h.root, selection(), signal())).toEqual(entry)
   expect(await readFile(join(h.directory, 'collaboration_source_v2.json'))).toEqual(sourceBefore)
   expect(await readFile(join(h.directory, 'collaboration_root_submission_v1.json'))).toEqual(rootsBefore)

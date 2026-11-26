@@ -4,12 +4,13 @@ import { parseHostBotSettingsUpdateRequest, parseHostBotSettingsUpdateReceipt } 
 describe('native Bot profile edit', () => {
   const request = { botId: 'main', sessionId: 'session-1', expectedRevision: 7,
     change: { kind: 'role', value: 'Coordinator' } }
+  const settings = { botId: 'main', revision: 8, name: 'Main', role: 'Coordinator',
+    instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
+    model: null, appliedModel: null, effort: null, workDir: null,
+    isMain: true, isPrimary: true, pinned: false, hidden: false, capabilityChoices: [] }
+
   it('accepts a fixed edit and a correlated saved snapshot', () => {
     const parsed = parseHostBotSettingsUpdateRequest(request)
-    const settings = { botId: 'main', revision: 8, name: 'Main', role: 'Coordinator',
-      instructions: '', color: null, avatarShape: null, hasAvatarImage: false,
-      model: null, appliedModel: null, effort: null, workDir: null,
-      isMain: true, isPrimary: true, pinned: false, hidden: false, capabilityChoices: [] }
     expect(parseHostBotSettingsUpdateReceipt({ botId: 'main', state: 'applied',
       revision: 8, settings }, parsed)?.settings).toEqual(settings)
     expect(parseHostBotSettingsUpdateReceipt({ botId: 'main', state: 'stale',
@@ -58,5 +59,43 @@ describe('native Bot profile edit', () => {
       { botId: 'main', state: 'applied', revision: 7, settings: null },
       { botId: 'main', state: 'stale', revision: 8, settings: {} }])
       expect(() => parseHostBotSettingsUpdateReceipt(value, parsed)).toThrow()
+  })
+
+  it('keeps supported instructions, appearance defaults and visibility edits', () => {
+    for (const change of [
+      { kind: 'instructions', value: '整理办公室待办' },
+      { kind: 'instructions', value: '' },
+      { kind: 'color', value: '#123aEF' },
+      { kind: 'color', value: 'warm-blue' },
+      { kind: 'color', value: null },
+      { kind: 'avatar-shape', value: 'rounded-square' },
+      { kind: 'avatar-shape', value: null },
+      { kind: 'pinned', value: true },
+      { kind: 'hidden', value: false },
+    ]) {
+      const next = { ...request, change }
+      expect(parseHostBotSettingsUpdateRequest(next)).toEqual(next)
+    }
+    for (const change of [
+      { kind: 'instructions', value: ' untrimmed' },
+      { kind: 'instructions', value: '界'.repeat(10_923) },
+      { kind: 'color', value: 'warm blue' },
+      { kind: 'color', value: 'a'.repeat(65) },
+      { kind: 'color', value: 2 },
+      { kind: 'avatar-shape', value: 'Upper' },
+      { kind: 'avatar-shape', value: 2 },
+    ]) {
+      expect(() => parseHostBotSettingsUpdateRequest({ ...request, change })).toThrow('invalid_bot_settings_update')
+    }
+  })
+
+  it('distinguishes no settings service from a save without matching settings', () => {
+    const parsed = parseHostBotSettingsUpdateRequest(request)
+    expect(parseHostBotSettingsUpdateReceipt(null, parsed)).toBeNull()
+    for (const snapshot of [null, { ...settings, revision: 9 }, { ...settings, botId: 'other' }]) {
+      expect(() => parseHostBotSettingsUpdateReceipt({
+        botId: 'main', state: 'applied', revision: 8, settings: snapshot,
+      }, parsed)).toThrow('invalid_bot_settings_update_receipt')
+    }
   })
 })

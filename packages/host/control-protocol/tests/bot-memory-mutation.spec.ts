@@ -40,4 +40,30 @@ describe('controlled native Bot memory writes', () => {
       expect(() => parseHostBotMemoryMutationReceipt(forged, ask))
         .toThrow('invalid_bot_memory_mutation_receipt')
   })
+
+  it('correlates a topic-scoped forget receipt without echoing forgotten content', () => {
+    const forget = parseHostBotMemoryMutationRequest({ ...ask, mode: 'forget',
+      text: 'Old fact', scope: 'team', topic: 'Onboarding' })
+    const receipt = { ...applied, operation: 'forget', reply: null, changes: [] }
+    expect(parseHostBotMemoryMutationReceipt(receipt, forget)).toEqual(receipt)
+    expect(parseHostBotMemoryMutationReceipt(null, forget)).toBeNull()
+    expect(() => parseHostBotMemoryMutationRequest({ ...forget, topic: '' }))
+      .toThrow('invalid_bot_memory_mutation')
+    for (const patch of [{ reply: 'Old fact' }, { changes: applied.changes }])
+      expect(() => parseHostBotMemoryMutationReceipt({ ...receipt, ...patch }, forget))
+        .toThrow('invalid_bot_memory_mutation_receipt')
+  })
+
+  it('preserves bounded edit and removal outcomes in a partial group result', () => {
+    const group = parseHostBotMemoryMutationRequest({ ...ask, targetKind: 'room', targetId: 'room-1' })
+    const changes = [
+      { op: 'edit', scope: 'group', text: 'Current fact', before: 'Old fact', ok: true, error: null },
+      { op: 'remove', scope: 'group', text: 'Retained fact', before: 'Retained fact', ok: false, error: 'read_only' },
+    ]
+    const receipt = { ...applied, targetKind: 'room', targetId: 'room-1', changes }
+    expect(parseHostBotMemoryMutationReceipt(receipt, group)).toEqual(receipt)
+    for (const patch of [{ before: 'x'.repeat(801) }, { error: 'x'.repeat(257) }])
+      expect(() => parseHostBotMemoryMutationReceipt({ ...receipt, changes: [{ ...changes[0], ...patch }] }, group))
+        .toThrow('invalid_bot_memory_mutation_receipt')
+  })
 })

@@ -34,3 +34,19 @@ it('lists the composed root entry IDs used to refuse colliding bundled plugins',
   const bundle = { packageName: 'fixture', patches: [{ insert: [{ id: 'added', name: '@fixture/plugin' }, { id: '', name: 'anonymous' }] }] }
   expect([...composedEntryIds([base, bundle], [{ insert: [{ id: 'user', name: 'user' }] }])].sort()).toEqual(['added', 'existing', 'user'])
 })
+
+it('acknowledges owned entries while a reviewed settings-seat migration only disables a shared entry', () => {
+  const settings = { packageName: 'base', patches: [{ insert: [
+    { id: 'ui-settings-general', name: 'settings', config: { retained: true } },
+  ] }] }
+  const bot = { packageName: 'ds-bot', patches: [
+    { insert: [{ id: 'bot', name: 'ds-bot' }] },
+    { id: 'ui-settings-general', disabled: true },
+  ] }
+  expect(() => pluginBundleEntries([settings, bot], [], 'ds-bot')).toThrow('plugin_contribution_unobservable')
+  expect(pluginBundleEntries([settings, bot], [], 'ds-bot', new Set(['ui-settings-general'])))
+    .toEqual([{ entryId: 'include:bot', moduleName: 'ds-bot' }])
+  const changed = { ...bot, patches: [...bot.patches, { id: 'ui-settings-general', config: { retained: false } }] }
+  expect(() => pluginBundleEntries([settings, changed], [], 'ds-bot', new Set(['ui-settings-general'])))
+    .toThrow('plugin_contribution_unobservable')
+})

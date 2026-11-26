@@ -89,6 +89,93 @@ function decodeSnapshot(bytes: Buffer, digest: string): Snapshot {
   return { version: 1, rootMode: row.rootMode, entries }
 }
 
+/**
+ * Read a file from a digest-verified bounded private snapshot, without filesystem access.
+ * @param bytes Serialized private tree snapshot.
+ * @param digest Pinned snapshot SHA-256.
+ * @param path Relative file path within the snapshot.
+ * @returns File bytes, or undefined when no file exists at that path.
+ */
+export function privateTreeSnapshotFile(bytes: Buffer, digest: string, path: string): Buffer | undefined {
+  const entry = decodeSnapshot(bytes, digest).entries.find(row => row.path === path)
+  return entry?.kind === 'file' ? Buffer.from(entry.content, 'base64') : undefined
+}
+
+/**
+ * Distinguish an empty tree from an unknown data format with a missing state file.
+ * @param bytes Serialized private tree snapshot.
+ * @param digest Pinned snapshot SHA-256.
+ * @returns Whether the verified tree has no entries.
+ */
+export function privateTreeSnapshotIsEmpty(bytes: Buffer, digest: string): boolean {
+  return decodeSnapshot(bytes, digest).entries.length === 0
+}
+
+/**
+ * Verify opaque user files as bytes; a JSON-state check alone cannot prove attachments survived.
+ * @param before Serialized source tree snapshot.
+ * @param beforeDigest Pinned source SHA-256.
+ * @param after Serialized candidate tree snapshot.
+ * @param afterDigest Pinned candidate SHA-256.
+ * @param convertedFiles Declared relative files whose contents are checked by their schema adapter.
+ */
+export function assertPrivateTreeFilesPreserved(before: Buffer, beforeDigest: string, after: Buffer, afterDigest: string,
+  convertedFiles: readonly string[]): void {
+  const source = decodeSnapshot(before, beforeDigest), target = decodeSnapshot(after, afterDigest)
+  const entries = new Map(target.entries.map(entry => [entry.path, entry]))
+  for (const entry of source.entries) {
+    if (convertedFiles.includes(entry.path)) continue
+    const actual = entries.get(entry.path)
+    if (!actual || actual.kind !== entry.kind || actual.mode !== entry.mode
+      || entry.kind === 'file' && (actual.kind !== 'file' || entry.content !== actual.content)) throw Error('bot_upgrade_file_loss')
+  }
+}
+
+function writeSnapshotEntries(root: string, snapshot: Snapshot, guard: () => void): void {
+  for (const entry of snapshot.entries) {
+    guard()
+    const path = join(root, ...entry.path.split('/'))
+    if (entry.kind === 'directory') mkdirSync(path, { mode: 0o700 })
+    else {
+      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, entry.mode)
+      try { writeFileSync(fd, Buffer.from(entry.content, 'base64')); fsyncSync(fd) } finally { closeSync(fd) }
+      chmodSync(path, entry.mode)
+    }
+  }
+}
+
+/** Materialize an immutable snapshot into a new private sibling; never replace an existing tree.
+ * @param root New, Host-selected candidate path beneath an owner-private directory.
+ * @param bytes Private snapshot bytes.
+ * @param digest Pinned snapshot SHA-256.
+ * @param uid Required owner.
+ * @param guard Current transaction authorization.
+ */
+export function materializePrivateTreeSnapshot(root: string, bytes: Buffer, digest: string, uid: number, guard: () => void): void {
+  const snapshot = decodeSnapshot(bytes, digest)
+  const parent = dirname(root)
+  if (!isAbsolute(root) || !safeName(basename(root)) || realpathSync(parent) !== parent) throw Error('unsafe_snapshot_target')
+  const parentStat = lstatSync(parent)
+  if (!parentStat.isDirectory() || parentStat.isSymbolicLink() || parentStat.uid !== uid || (parentStat.mode & 0o077) !== 0) {
+    throw Error('unsafe_snapshot_target')
+  }
+  guard(); mkdirSync(root, { mode: 0o700 })
+  writeSnapshotEntries(root, snapshot, guard)
+  for (const entry of [...snapshot.entries].reverse()) if (entry.kind === 'directory') {
+    const directory = join(root, ...entry.path.split('/'))
+    chmodSync(directory, entry.mode)
+    const fd = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+  }
+  chmodSync(root, snapshot.rootMode)
+  guard()
+  if (capturePluginTree(root, uid).digest !== digest) throw Error('snapshot_materialization_failed')
+  for (const directory of [root, parent]) {
+    const fd = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW)
+    try { fsyncSync(fd) } finally { closeSync(fd) }
+  }
+}
+
 /** Restore a snapshot into a new sibling directory and retain the replaced tree for crash recovery.
  * @param root Existing installed plugin directory. @param operationId Original operation UUID.
  * @param bytes Private snapshot. @param digest Recorded snapshot SHA-256.
@@ -107,15 +194,7 @@ export function restorePluginTree(
   const attempt = randomUUID()
   const staged = join(parent, `.plugin-tree-stage-${operationId}-${attempt}`); const previous = join(parent, `.plugin-tree-replaced-${operationId}-${attempt}`)
   guard(); mkdirSync(staged, { mode: 0o700 })
-  for (const entry of snapshot.entries) {
-    guard(); const path = join(staged, ...entry.path.split('/'))
-    if (entry.kind === 'directory') mkdirSync(path, { mode: 0o700 })
-    else {
-      const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, entry.mode)
-      try { writeFileSync(fd, Buffer.from(entry.content, 'base64')); fsyncSync(fd) } finally { closeSync(fd) }
-      chmodSync(path, entry.mode)
-    }
-  }
+  writeSnapshotEntries(staged, snapshot, guard)
   for (const entry of [...snapshot.entries].reverse()) if (entry.kind === 'directory') {
     const path = join(staged, ...entry.path.split('/')); chmodSync(path, entry.mode)
     const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { fsyncSync(fd) } finally { closeSync(fd) }

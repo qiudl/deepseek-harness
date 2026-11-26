@@ -14,6 +14,7 @@ describe('native Bot memory page', () => {
   it('validates the exact selector and stable page continuity', () => {
     expect(parseHostBotMemoryRequest(request)).toEqual(request)
     expect(parseHostBotMemory(page, request)).toEqual(page)
+    expect(parseHostBotMemory(null, request)).toBeNull()
     const next = { ...request, cursor: `${digest}:2`, summarize: false }
     expect(parseHostBotMemory({ ...page, entries: [{ ...entry, text: 'Third' }], nextCursor: null }, next))
       .toMatchObject({ total: 3, nextCursor: null })
@@ -22,6 +23,18 @@ describe('native Bot memory page', () => {
     for (const bad of [{ ...request, botId: '../main' }, { ...request, limit: 21 },
       { ...request, cursor: 'bad' }, { ...request, extra: true }])
       expect(() => parseHostBotMemoryRequest(bad)).toThrow('invalid_bot_memory_request')
+  })
+
+  it('preserves authorized team entries and rejects payload fields when memory is unavailable', () => {
+    const teamEntry = { ...entry, scope: 'team', text: 'Shared project fact' }
+    const sharedPage = { ...page, total: 1, entries: [teamEntry], nextCursor: null, sizes: { own: 0, team: 42 } }
+    expect(parseHostBotMemory(sharedPage, request)).toEqual(sharedPage)
+    expect(() => parseHostBotMemory({ ...sharedPage, available: false }, request))
+      .toThrow('invalid_bot_memory_result')
+    expect(() => parseHostBotMemory({ ...sharedPage, selection: 'private' }, request))
+      .toThrow('invalid_bot_memory_result')
+    expect(() => parseHostBotMemory({ ...sharedPage, entries: [{ ...teamEntry, scope: 'external' }] }, request))
+      .toThrow('invalid_bot_memory_result')
   })
 
   it('rejects forged or discontinuous replies before they reach the mobile client', () => {

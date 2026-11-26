@@ -619,7 +619,7 @@ export interface UnixHostServerOptions {
     readonly skillInvocation?: boolean
     readonly mcpRemove?: boolean
     readonly mcpUpdate?: boolean
-    inventory(profileId: string, kind: HostExtensionKind, signal?: AbortSignal):
+    inventory(profileId: string, kind: HostExtensionKind, signal?: AbortSignal, versions?: boolean):
     Promise<readonly { id: string; name: string; transport: string }[]>
   }
   readonly createMigrationExport?: (
@@ -2011,9 +2011,9 @@ export class HostControlAuthority {
           let result: HostExtensionResponse
           try {
             if (command.action === 'inventory') {
-              const entries = await extension.inventory(profileId, command.kind, signal)
+              const entries = await extension.inventory(profileId, command.kind, signal, command.plugin_versions === 1)
               authority()
-              result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
+              result = { state: 'inventory', kind: command.kind, entries, ...(command.kind === 'plugin' && extension.pluginRemove ? { plugin_remove: true } : {}), ...(command.kind === 'plugin' && extension.pluginUpdate ? { plugin_update: true } : {}), ...(command.plugin_versions === 1 ? { plugin_versions: 1 as const } : {}), ...(command.kind === 'plugin' && extension.pluginToggle ? { plugin_toggle: true } : {}), ...(command.kind === 'skill' && extension.skillArchives ? { skill_archives: true } : {}), ...(command.kind === 'skill' && extension.skillRemove ? { skill_remove: true } : {}), ...(command.kind === 'skill' && extension.skillReplace ? { skill_replace: true } : {}), ...(command.kind === 'skill' && extension.skillFiles ? { skill_files: true } : {}), ...(command.kind === 'skill' && extension.skillInvocation ? { skill_invocation: true } : {}), ...(command.kind === 'mcp' && extension.mcpRemove ? { mcp_remove: true } : {}), ...(command.kind === 'mcp' && extension.mcpUpdate ? { mcp_update: true } : {}) }
             } else if (command.action === 'prepare') {
               const plan = await extension.operations.prepare(authority, command.kind, command.payload)
               result = { state: 'prepared', plan_id: plan.planId as never, kind: plan.kind,

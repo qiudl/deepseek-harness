@@ -114,3 +114,5 @@ Typert 生成由 `./typert` 与 `./remote` 导出的 Host 和 Client Remote 产�
 无。
 
 </details>
+
+Loader 行可携带从该模块实际解析包读取的 `packageVersion`。缺少包元数据时不返回此字段。版本只描述所解析代码；确认升级的调用方还必须在新 worker 上分别核验条目已启用且 fiber 为 active。

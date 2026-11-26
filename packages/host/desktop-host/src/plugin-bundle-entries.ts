@@ -15,16 +15,23 @@ export function composedEntryIds(layers: Layers, overrides: ProfileLayer['patche
  * @param layers Installed bundle layers.
  * @param overrides Profile and home patches in runtime order.
  * @param packageName Installed bundle identity.
+ * @param sharedDisabled Optional reviewed shared rows whose only change is disabling their existing entry; absent means none.
  * @returns Changed enabled root rows; unobservable, grouped or conditional contributions reject acknowledgement.
  */
 export function pluginBundleEntries(
-  layers: Layers, overrides: ProfileLayer['patches'], packageName: string,
+  layers: Layers, overrides: ProfileLayer['patches'], packageName: string, sharedDisabled?: ReadonlySet<string>,
 ): { entryId: string; moduleName: string }[] {
   if (layers.filter(layer => layer.packageName === packageName).length !== 1) throw Error('plugin_bundle_missing')
   const before = composeEntries([...layers.filter(layer => layer.packageName !== packageName).map(layer => layer.patches), overrides])
   const after = composeEntries([...layers.map(layer => layer.patches), overrides], () => { throw Error('plugin_patch_not_applied') })
   const original = new Map(before.map(row => [row.id, JSON.stringify(row)]))
-  const changed = after.filter(row => original.get(row.id) !== JSON.stringify(row))
+  const changed = after.filter((row) => {
+    if (original.get(row.id) === JSON.stringify(row)) return false
+    const previous = before.find(entry => entry.id === row.id)
+    if (previous && sharedDisabled?.has(row.id) && row.disabled === true
+      && JSON.stringify({ ...previous, disabled: undefined }) === JSON.stringify({ ...row, disabled: undefined })) return false
+    return true
+  })
   if (!changed.length || before.some(row => !after.some(candidate => candidate.id === row.id))) throw Error('plugin_contribution_unobservable')
   const ids = new Set<string>()
   for (const row of after) {
