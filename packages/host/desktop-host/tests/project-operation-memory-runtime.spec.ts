@@ -1408,7 +1408,7 @@ it.skipIf(process.platform === 'win32')('passes the original optional native cut
     expect((await post({ ...body, nativeActivationCut: cut, unknown: true })).status).toBe(400)
     expect((await post({ ...body, action: 'project_operation_memory_anchor', nativeActivationCut: cut })).status).toBe(400)
 
-    const read = f.owner.reader.readRuntimeEntryEffect
+    const read = f.owner.reader.readRuntimeEntryEffect?.bind(f.owner.reader)
     if (!read) throw Error('missing worker native effect reader')
     const reference = {
       entryId: randomUUID(), entryReceiptDigest: '1'.repeat(64), manifestDigest: '2'.repeat(64),
