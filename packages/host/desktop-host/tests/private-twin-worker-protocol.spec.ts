@@ -21,6 +21,7 @@ it('accepts only the reply form for the original private Worker command', () => 
     [claim, { request: { ...send, operation: 'group' } }], [claim, { request: { ...read, arbitrary: true } }],
     [claim, { request: { ...send, botId: '../../other' } }], [claim, { request: { ...send, sessionId: '.' } }],
     [claim, { request: { ...send, receipt: ticket } }], [claim, { request: { ...send, sourceMessageId: 123 } }],
+    [claim, { request: { ...source, operation: 'binding_intent', intent: {} } }],
     [check, { current: false }], [finish, { completed: false }], [claim, { request: [] }],
   ] as const) expect(() => parsePrivateTwinWorkerReply(command, reply)).toThrow('invalid_private_twin_worker_frame')
   for (const command of [{ operation: 'unknown' }, { ...check, ticket: 'a'.repeat(43) }, { ...claim, [Symbol()]: true }]) {

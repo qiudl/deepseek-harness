@@ -1,5 +1,7 @@
 import { expect, it } from 'vitest'
 import {
+  encodeHostBindingIntent, HOST_BINDING_INTENT_PURPOSE, parseHostBindingIntentProof,
+  parseHostBindingRegistration, parseHostBindingWorkerEvidence,
   parseHostPrivateTwinCommand, parseHostPrivateTwinResult, PRIVATE_TWIN_CONTROL_CHUNK_BYTES,
   PRIVATE_TWIN_CONTROL_REQUEST_BYTES,
 } from '../src/index.ts'
@@ -33,4 +35,34 @@ it('validates idle, claim and exact progress states without trusting result coor
     { ...claimed, profile_id: 123 }, { ...claimed, total_bytes: 0 }, { ...claimed, total_bytes: 1.5 },
     { state: 'chunk', ticket, offset: 0, bytes: 'YQ==' }, { state: 'staged', ticket, next_offset: 0 },
   ]) expect(() => parseHostPrivateTwinResult(value)).toThrow('invalid_host_private_twin_frame')
+})
+
+it('accepts only exact binding claims, registration, evidence and bounded lifetime', () => {
+  const registration = { audience: 'https://slark.example', ownerUserId: 'owner', computerId: 'computer',
+    accountBindingId: 'cloud-account', accountBindingVersion: 2, hostEpoch: '7' }
+  const evidence = { requestId: profile_id, messageSeq: 24, messageDigest: digest,
+    previewDigest: digest, commandDigest: digest, expiresAt: 101 }
+  const claims = { ...registration, ...evidence, version: 1, purpose: HOST_BINDING_INTENT_PURPOSE,
+    environmentId: profile_id, profileId: profile_id, profileEpoch: 1, hostAccountBindingId: 'host-account',
+    hostAccountBindingVersion: 2, installationId: profile_id, hostInstanceId: profile_id, processNonce: ticket,
+    mainBotId: 'main', sessionId: 'private', messageId: 'confirm', issuedAt: 100 }
+  const signature = Buffer.alloc(64, 13).toString('base64url')
+  const proof = parseHostBindingIntentProof({ claims, signature })
+  expect(proof).toEqual({ claims, signature })
+  expect(proof.claims).not.toBe(claims)
+  expect(Buffer.from(encodeHostBindingIntent(proof.claims)).toString()).toMatch(/^\{"accountBindingId":"cloud-account",/u)
+  expect(parseHostPrivateTwinCommand({ operation: 'sign_binding', ticket, registration })).toEqual({ operation: 'sign_binding', ticket, registration })
+  expect(parseHostPrivateTwinResult({ state: 'binding_intent', ticket, proof })).toEqual({ state: 'binding_intent', ticket, proof })
+  for (const invalid of [null, [], { ...registration, extra: true },
+    Object.defineProperty({ ...registration }, 'hostEpoch', { get() { throw Error('unsolicited getter') } }),
+    { ...registration, audience: 'https://slark.example/path' }, { ...registration, audience: 'http://slark.example' },
+    { ...registration, audience: 'x'.repeat(2049) }, { ...registration, audience: 1 },
+    { ...registration, hostEpoch: '9223372036854775808' }, { ...registration, ownerUserId: 'owner\n' },
+  ]) expect(() => parseHostBindingRegistration(invalid)).toThrow('invalid_host_binding_intent')
+  for (const invalid of [{ ...evidence, messageSeq: '24' }, { ...evidence, messageSeq: 0 },
+    { ...evidence, expiresAt: Number.MAX_SAFE_INTEGER + 1 }, { ...evidence, commandDigest: 'bad' },
+  ]) expect(() => parseHostBindingWorkerEvidence(invalid)).toThrow('invalid_host_binding_intent')
+  for (const invalid of [{ ...claims, expiresAt: claims.issuedAt }, { ...claims, expiresAt: 30_101 },
+    { ...claims, purpose: 'unsupported' }, { ...claims, version: 2 },
+  ]) expect(() => parseHostBindingIntentProof({ claims: invalid, signature })).toThrow('invalid_host_binding_intent')
 })
