@@ -68,3 +68,25 @@ it('keeps confirmation evidence private and bounded before requesting a separate
   for (const state of ['needs_confirmation', 'selection_required', 'stale', 'cancelled', 'denied', 'conflict'])
     expect(parsePrivateTwinWorkerResult({ state })).toEqual({ state })
 })
+
+it('keeps proposal arguments and public preview output within their exact wire contracts', () => {
+  const proposal = { kind: 'group', action: 'bind', sourceRef: ticket, targetRef: ticket,
+    defaultAgentRef: ticket, messageSeq: 7 }
+  const request = { ...source, rootCallId: source.callId, operation: 'binding_propose', proposal }
+  const ending = { ...proposal, action: 'end', targetRef: null, defaultAgentRef: null }
+  for (const value of [request, { ...request, proposal: ending }])
+    expect(parsePrivateTwinWorkerReply(claim, { request: value })).toEqual({ request: value })
+  for (const value of [{ ...request, rootCallId: 'different-call' }, ...[
+    { action: 'create' }, { kind: 'workspace' }, { targetRef: null }, { action: 'end' },
+    { ...ending, defaultAgentRef: ticket }, { kind: 'twin' },
+  ].map(patch => ({ ...request, proposal: { ...proposal, ...patch } }))])
+    expect(() => parsePrivateTwinWorkerReply(claim, { request: value })).toThrow('invalid_private_twin_worker_frame')
+  const display = { sourceName: '发布群', previousTarget: null, targetName: '交付频道', defaultAgent: '助手', impact: '确认后绑定' }
+  const preview = { state: 'preview', proposalRef: ticket, label: 2, kind: 'group', action: 'bind', display }
+  for (const value of [preview, { ...preview, action: 'end', kind: 'twin',
+    display: { ...display, previousTarget: '旧分身', targetName: null, defaultAgent: null } }])
+    expect(parsePrivateTwinWorkerResult(value)).toEqual(value)
+  for (const value of [{ ...preview, label: 1_000_000_000 },
+    ...[{ sourceName: 'a'.repeat(201) }, { impact: '换\n行' }, { secret: 'hidden' }].map(patch => ({ ...preview, display: { ...display, ...patch } })),
+  ]) expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
+})
