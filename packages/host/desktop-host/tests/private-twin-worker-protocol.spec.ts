@@ -44,3 +44,27 @@ it('preserves terminal result status and rejects non-text or oversized reply bod
     expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
   }
 })
+
+it('keeps confirmation evidence private and bounded before requesting a separately signed intent', () => {
+  const presentation = { ref: ticket, callId: 'original-call', resultSeq: 10 }
+  const confirmation = { messageSeq: 11, text: '确认第1项', proposalRef: null, presentations: [presentation] }
+  const request = { ...source, rootCallId: source.callId, operation: 'binding_confirmation', confirmation }
+  expect(parsePrivateTwinWorkerReply(claim, { request })).toEqual({ request })
+  expect(parsePrivateTwinWorkerReply(claim, { request: { ...request,
+    confirmation: { ...confirmation, proposalRef: ticket } } })).toEqual({ request: { ...request,
+      confirmation: { ...confirmation, proposalRef: ticket } } })
+  for (const overrides of [{ rootCallId: 'ancestor' }, ...[
+    { messageSeq: 0 }, { text: '字'.repeat(1366) }, { presentations: Array(17).fill(presentation) },
+    { presentations: [{ ...presentation, callId: '../../other' }] }, { proposalRef: 'untrusted' }, { extra: true },
+  ].map(patch => ({ confirmation: { ...confirmation, ...patch } }))])
+    expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, ...overrides } })).toThrow('invalid_private_twin_worker_frame')
+  const approval = { state: 'confirmed', kind: 'group', sourceId: 'local-group', requestId: 'b3eeeaf0-6d61-4f7c-a6ad-feccae862c10',
+    previewDigest: 'a'.repeat(64), commandDigest: 'b'.repeat(64), confirmationMessageId: 'direct-user', confirmationMessageSeq: 11,
+    expiresAt: 12_000 }
+  const result = { state: 'binding_confirmation', approval }
+  expect(parsePrivateTwinWorkerResult(result)).toEqual(result)
+  for (const patch of [{ kind: 'other' }, { state: 'other' }, { commandDigest: 'bad' }, { token: 'extra' }])
+    expect(() => parsePrivateTwinWorkerResult({ ...result, approval: { ...approval, ...patch } })).toThrow('invalid_private_twin_worker_frame')
+  for (const state of ['needs_confirmation', 'selection_required', 'stale', 'cancelled', 'denied', 'conflict'])
+    expect(parsePrivateTwinWorkerResult({ state })).toEqual({ state })
+})

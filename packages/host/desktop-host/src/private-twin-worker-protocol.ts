@@ -18,13 +18,22 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'send'; readonly content: string }
   | { readonly operation: 'read'; readonly receipt: string }
   | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
+  | { readonly operation: 'binding_confirmation'; readonly confirmation: BindingConfirmation }
 )
+
+type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
+type BindingConfirmation = Readonly<{ messageSeq: number; text: string; proposalRef: string | null; presentations: readonly Presentation[] }>
+type BindingApproval = Readonly<{ state: 'confirmed'; kind: 'twin' | 'group'; sourceId: string;
+  requestId: string; previewDigest: string; commandDigest: string; confirmationMessageId: string;
+  confirmationMessageSeq: number; expiresAt: number }>
 
 export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
   | { readonly state: 'accepted'; readonly receipt: string }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
+  | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
+  | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
 
 export type PrivateTwinWorkerCommand =
   | { readonly operation: 'claim' }
@@ -66,11 +75,41 @@ function text(value: unknown, bytes: number): string {
   return value
 }
 
+function positive(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : invalid()
+}
+
+function matched(value: unknown, pattern: RegExp): string {
+  return typeof value === 'string' && pattern.exec(value)?.[0] === value ? value : invalid()
+}
+
+function parseBindingConfirmation(raw: unknown): BindingConfirmation {
+  const row = record(raw, ['messageSeq', 'text', 'proposalRef', 'presentations'])
+  if (!Array.isArray(row.presentations) || row.presentations.length > 16) return invalid()
+  return { messageSeq: positive(row.messageSeq), text: text(row.text, 4096),
+    proposalRef: row.proposalRef === null ? null : opaque(row.proposalRef), presentations: row.presentations.map(raw => {
+      const item = record(raw, ['ref', 'callId', 'resultSeq'])
+      return { ref: opaque(item.ref), callId: id(item.callId), resultSeq: positive(item.resultSeq) }
+    }) }
+}
+
+function parseBindingApproval(raw: unknown): BindingApproval {
+  const row = record(raw, ['state', 'kind', 'sourceId', 'requestId', 'previewDigest', 'commandDigest',
+    'confirmationMessageId', 'confirmationMessageSeq', 'expiresAt'])
+  if (row.state !== 'confirmed' || (row.kind !== 'twin' && row.kind !== 'group')) return invalid()
+  return { state: 'confirmed', kind: row.kind, sourceId: id(row.sourceId),
+    requestId: matched(row.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+    previewDigest: matched(row.previewDigest, /^[a-f0-9]{64}$/u), commandDigest: matched(row.commandDigest, /^[a-f0-9]{64}$/u),
+    confirmationMessageId: id(row.confirmationMessageId), confirmationMessageSeq: positive(row.confirmationMessageSeq),
+    expiresAt: positive(row.expiresAt) }
+}
+
 /** Validate a worker result before sending it through the private endpoint. */
 export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerResult {
   const input = record(value)
   switch (input.state) {
     case 'unavailable': case 'pending': case 'failed': case 'unconfirmed':
+    case 'needs_confirmation': case 'selection_required': case 'stale': case 'cancelled': case 'conflict': case 'denied':
       record(input, ['state'])
       return { state: input.state }
     case 'replied':
@@ -86,6 +125,9 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
       }
       record(input, ['state'])
       return { state: input.state }
+    case 'binding_confirmation':
+      record(input, ['state', 'approval'])
+      return { state: input.state, approval: parseBindingApproval(input.approval) }
     default:
       return invalid()
   }
@@ -126,14 +168,18 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  if (op !== 'read' && op !== 'send' && op !== 'binding_intent') return invalid()
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
-    op === 'send' ? 'content' : op === 'read' ? 'receipt' : 'intent'])
+    op === 'send' ? 'content' : op === 'read' ? 'receipt' : op === 'binding_intent' ? 'intent' : 'confirmation'])
   const base = { ticket: opaque(fields.ticket), botId: id(fields.botId), sessionId: id(fields.sessionId),
     callId: id(fields.callId), rootCallId: id(fields.rootCallId), sourceMessageId: id(fields.sourceMessageId) }
   if (op === 'binding_intent') {
     if (base.callId !== base.rootCallId) return invalid()
     return { request: { ...base, operation: op, intent: parseHostBindingWorkerEvidence(fields.intent) } }
+  }
+  if (op === 'binding_confirmation') {
+    if (base.callId !== base.rootCallId) return invalid()
+    return { request: { ...base, operation: op, confirmation: parseBindingConfirmation(fields.confirmation) } }
   }
   return { request: op === 'send'
     ? { ...base, operation: op, content: text(fields.content, maxQuestionBytes) }
