@@ -473,4 +473,5 @@ export {
   HOST_BINDING_INTENT_PURPOSE, encodeHostBindingIntent, parseHostBindingIntentProof,
   parseHostBindingRegistration, parseHostBindingWorkerEvidence,
 } from './private-binding-intent.ts'
-export type { HostBindingIntentProof, HostBindingRegistration, HostBindingWorkerEvidence } from './private-binding-intent.ts'
+export { encodeHostBindingClaims, HOST_BINDING_RECEIPT_PURPOSE, parseHostBindingReceiptProof } from './private-binding-intent.ts'
+export type { HostBindingIntentProof, HostBindingReceiptProof, HostBindingRegistration, HostBindingWorkerEvidence } from './private-binding-intent.ts'

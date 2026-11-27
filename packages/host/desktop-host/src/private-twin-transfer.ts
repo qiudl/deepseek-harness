@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinCommand,
   parseHostPrivateTwinResult, type HostPrivateTwinCommand, type HostPrivateTwinResult,
-  type HostBindingIntentProof, type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
+  type HostBindingIntentProof, type HostBindingReceiptProof, type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult, type PrivateTwinWorkerCommand,
   type PrivateTwinWorkerReply, type PrivateTwinWorkerRequest } from './private-twin-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
@@ -21,10 +21,14 @@ interface TransferAuthority {
   readonly signBindingIntent?: (
     profile: string, registration: HostBindingRegistration, evidence: BindingRequest,
   ) => HostBindingIntentProof
+  readonly signBindingReceipt?: (
+    profile: string, registration: HostBindingRegistration, request: ReceiptRequest, lookupId: string,
+  ) => HostBindingReceiptProof
   now?: () => number
 }
 
 type BindingRequest = Extract<PrivateTwinWorkerRequest, { operation: 'binding_intent' }>
+type ReceiptRequest = Extract<PrivateTwinWorkerRequest, { operation: 'binding_receipt' }>
 
 interface Lease {
   readonly key: string
@@ -34,8 +38,10 @@ interface Lease {
   readonly receiver: PrivateTwinWorkerReceiver
   readonly lifetime: AbortSignal
   readonly binding?: BindingRequest
+  readonly receipt?: ReceiptRequest
   readonly bindingProfileEpoch?: number
   signedBinding?: { readonly registration: string; readonly proof: HostBindingIntentProof }
+  signedReceipt?: { readonly input: string; readonly proof: HostBindingReceiptProof }
   upload?: { readonly bytes: Buffer; readonly digest: string; offset: number }
 }
 
@@ -91,6 +97,18 @@ export class PrivateTwinTransfer {
           lease.signedBinding = { registration, proof }
           return { state: 'binding_intent', ticket: lease.ticket, proof }
         }
+        if (command.operation === 'sign_binding_receipt') {
+          const read = lease.receipt, sign = authority.signBindingReceipt
+          if (!read || !sign || lease.bindingProfileEpoch === undefined) throw new HostAuthorityError('unauthorized')
+          const input = JSON.stringify([command.registration, command.lookup_id])
+          if (lease.signedReceipt && lease.signedReceipt.input !== input) return stale()
+          const proof = lease.signedReceipt?.proof ?? sign(lease.profile, command.registration, read, command.lookup_id)
+          if (proof.claims.expiresAt <= (authority.now ?? Date.now)() ||
+              proof.claims.profileEpoch !== lease.bindingProfileEpoch) return stale()
+          guard()
+          lease.signedReceipt = { input, proof }
+          return { state: 'binding_receipt', ticket: lease.ticket, proof }
+        }
         if (command.operation === 'read') {
           if (command.offset >= lease.request.length) return stale()
           const bytes = lease.request.subarray(command.offset, command.offset + PRIVATE_TWIN_CONTROL_CHUNK_BYTES)
@@ -141,7 +159,8 @@ export class PrivateTwinTransfer {
       ...(bindingProfileEpoch === undefined ? {} : { binding_profile_epoch: bindingProfileEpoch }) })
     const lease: Lease = { key: authority.key, profile, ticket, request, receiver, lifetime,
       ...(bindingProfileEpoch === undefined ? {} : { bindingProfileEpoch }),
-      ...(response.request.operation === 'binding_intent' ? { binding: response.request } : {}) }
+      ...(response.request.operation === 'binding_intent' ? { binding: response.request } : {}),
+      ...(response.request.operation === 'binding_receipt' ? { receipt: response.request } : {}) }
     this.lease = lease
     lifetime.addEventListener('abort', () => { if (this.lease === lease) this.lease = undefined }, { once: true })
     return result

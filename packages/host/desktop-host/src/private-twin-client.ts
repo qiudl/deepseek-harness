@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinResult,
   parseHostBindingRegistration, type HostPrivateTwinCommand, type HostBindingIntentProof,
-  type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
+  type HostBindingRegistration, type HostBindingReceiptProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult,
   type PrivateTwinWorkerRequest, type PrivateTwinWorkerResult } from './private-twin-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
@@ -13,6 +13,8 @@ export interface PrivateTwinControlChannel {
   claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null; readonly bindingProfileEpoch?: number }>
   check(ticket: string, signal: AbortSignal): Promise<{ readonly current: true }>
   signBindingIntent(ticket: string, registration: HostBindingRegistration, signal: AbortSignal): Promise<HostBindingIntentProof>
+  signBindingReceipt(ticket: string, registration: HostBindingRegistration, lookupId: string,
+    signal: AbortSignal): Promise<HostBindingReceiptProof>
   finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal): Promise<{ readonly completed: true }>
 }
 
@@ -24,6 +26,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
   profileId: string
   includeBindingProfileEpoch?: boolean
   verifyBindingIntent?(proof: HostBindingIntentProof): void
+  verifyBindingReceipt?(proof: HostBindingReceiptProof): void
   assertCurrent(): void
   call(command: HostPrivateTwinCommand, signal: AbortSignal): Promise<unknown>
 }>): PrivateTwinControlChannel {
@@ -90,6 +93,21 @@ export function createPrivateTwinControlChannel(input: Readonly<{
           (Object.keys(registration) as Array<keyof HostBindingRegistration>)
             .some(key => claims[key] !== registration[key])) return stale()
       input.verifyBindingIntent(proof)
+      return proof
+    },
+    async signBindingReceipt(ticket: string, rawRegistration: HostBindingRegistration, lookupId: string, signal: AbortSignal) {
+      if (!input.verifyBindingReceipt) throw new HostAuthorityError('upgrade_required')
+      const request = claimed, profileEpoch = bindingProfileEpoch
+      if (!request || request.ticket !== ticket || request.operation !== 'binding_receipt' || profileEpoch === undefined)
+        throw new HostAuthorityError('unauthorized')
+      const registration = parseHostBindingRegistration(rawRegistration)
+      const result = await send({ operation: 'sign_binding_receipt', ticket, registration, lookup_id: lookupId }, signal)
+      if (result.state !== 'binding_receipt' || result.ticket !== ticket || claimed !== request) return stale()
+      const { proof } = result, { claims } = proof
+      if (claims.profileId !== profileId || claims.profileEpoch !== profileEpoch || claims.mainBotId !== request.botId ||
+          claims.sessionId !== request.sessionId || claims.lookupId !== lookupId ||
+          (Object.keys(registration) as Array<keyof HostBindingRegistration>).some(key => claims[key] !== registration[key])) return stale()
+      input.verifyBindingReceipt(proof)
       return proof
     },
     async finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal) {

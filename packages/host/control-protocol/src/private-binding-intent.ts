@@ -58,29 +58,51 @@ export function parseHostBindingWorkerEvidence(value: unknown) {
 export type HostBindingWorkerEvidence = ReturnType<typeof parseHostBindingWorkerEvidence>
 
 export const HOST_BINDING_INTENT_PURPOSE = 'slark.dsh.binding-intent/v1'
+export const HOST_BINDING_RECEIPT_PURPOSE = 'slark.dsh.binding-receipt/v1'
+const profileFields = ['environmentId', 'hostAccountBindingId', 'hostAccountBindingVersion', 'profileId', 'profileEpoch',
+  'installationId', 'hostInstanceId', 'processNonce', 'mainBotId', 'sessionId', 'issuedAt'] as const
 
-/** Detach a complete Host signature, with the same claims Slark verifies. */
-export function parseHostBindingIntentProof(raw: unknown) {
-  const envelope = record(raw, ['claims', 'signature'])
-  const row = record(envelope.claims, ['version', 'purpose', ...registrationFields, ...evidenceFields,
-    'environmentId', 'hostAccountBindingId', 'hostAccountBindingVersion', 'profileId', 'profileEpoch',
-    'installationId', 'hostInstanceId', 'processNonce', 'mainBotId', 'sessionId', 'messageId', 'issuedAt'])
-  if (row.version !== 1 || row.purpose !== HOST_BINDING_INTENT_PURPOSE) return invalid()
-  const claims = Object.freeze({ version: 1 as const, purpose: HOST_BINDING_INTENT_PURPOSE,
-    ...registration(row), ...evidence(row), environmentId: matched(row.environmentId, uuid),
+function profile(row: Record<string, unknown>) {
+  return { ...registration(row), environmentId: matched(row.environmentId, uuid),
     hostAccountBindingId: matched(row.hostAccountBindingId, id), hostAccountBindingVersion: positive(row.hostAccountBindingVersion),
     profileId: matched(row.profileId, uuid), profileEpoch: positive(row.profileEpoch),
     installationId: matched(row.installationId, uuid), hostInstanceId: matched(row.hostInstanceId, uuid),
     processNonce: matched(row.processNonce, nonce), mainBotId: matched(row.mainBotId, id),
-    sessionId: matched(row.sessionId, id), messageId: matched(row.messageId, id), issuedAt: positive(row.issuedAt) })
+    sessionId: matched(row.sessionId, id), issuedAt: positive(row.issuedAt) }
+}
+
+export function parseHostBindingLookupId(value: unknown): string { return matched(value, uuid) }
+
+/** Detach a complete Host signature, with the same claims Slark verifies. */
+export function parseHostBindingIntentProof(raw: unknown) {
+  const envelope = record(raw, ['claims', 'signature'])
+  const row = record(envelope.claims, ['version', 'purpose', ...registrationFields, ...evidenceFields, ...profileFields, 'messageId'])
+  if (row.version !== 1 || row.purpose !== HOST_BINDING_INTENT_PURPOSE) return invalid()
+  const claims = Object.freeze({ version: 1 as const, purpose: HOST_BINDING_INTENT_PURPOSE,
+    ...profile(row), ...evidence(row), messageId: matched(row.messageId, id) })
   if (claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > 30_000) return invalid()
   return Object.freeze({ claims, signature: matched(envelope.signature, signature) })
 }
 export type HostBindingIntentProof = ReturnType<typeof parseHostBindingIntentProof>
 
+/** Bind recovery to the original request in the current Account, Profile and private chat. */
+export function parseHostBindingReceiptProof(raw: unknown) {
+  const envelope = record(raw, ['claims', 'signature'])
+  const row = record(envelope.claims, ['version', 'purpose', ...registrationFields, ...profileFields,
+    'lookupBy', 'lookupId', 'expiresAt'])
+  if (row.version !== 1 || row.purpose !== HOST_BINDING_RECEIPT_PURPOSE || row.lookupBy !== 'request') return invalid()
+  const claims = Object.freeze({ version: 1 as const, purpose: HOST_BINDING_RECEIPT_PURPOSE, ...profile(row),
+    lookupBy: 'request' as const, lookupId: parseHostBindingLookupId(row.lookupId), expiresAt: positive(row.expiresAt) })
+  if (claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > 30_000) return invalid()
+  return Object.freeze({ claims, signature: matched(envelope.signature, signature) })
+}
+export type HostBindingReceiptProof = ReturnType<typeof parseHostBindingReceiptProof>
+
 /** Canonical Slark JSON for this flat signed envelope. */
-export function encodeHostBindingIntent(claims: HostBindingIntentProof['claims']): Uint8Array {
+export function encodeHostBindingClaims(claims: HostBindingIntentProof['claims'] | HostBindingReceiptProof['claims']): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(Object.fromEntries(
     Object.keys(claims).sort().map(key => [key, claims[key as keyof typeof claims]]),
   )))
 }
+
+export const encodeHostBindingIntent = encodeHostBindingClaims

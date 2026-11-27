@@ -18,6 +18,7 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'send'; readonly content: string }
   | { readonly operation: 'read'; readonly receipt: string }
   | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
+  | { readonly operation: 'binding_receipt'; readonly receipt: string }
   | { readonly operation: 'binding_confirmation'; readonly confirmation: BindingConfirmation }
   | { readonly operation: 'binding_propose'; readonly proposal: BindingProposal }
   | { readonly operation: 'binding_targets'; readonly lookup: BindingTargetLookup }
@@ -79,6 +80,7 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
   | { readonly state: 'accepted' | 'active'; readonly receipt: string }
+  | { readonly state: 'binding_status'; readonly status: 'accepted' | 'in_progress' | 'active' | 'ended' | 'cancelled' | 'denied' | 'conflict' | 'outcome_unknown' | 'missing' }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
   | { readonly state: 'consent_recorded'; readonly remaining: 'dsh_to_slark' | 'slark_to_dsh'; readonly label: number }
@@ -230,6 +232,13 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'accepted': case 'active':
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
+    case 'binding_status': {
+      record(input, ['state', 'status'])
+      const status = input.status
+      if (status !== 'accepted' && status !== 'in_progress' && status !== 'active' && status !== 'ended' && status !== 'cancelled' &&
+          status !== 'denied' && status !== 'conflict' && status !== 'outcome_unknown' && status !== 'missing') return invalid()
+      return { state: input.state, status }
+    }
     case 'outcome_unknown':
       if (Object.hasOwn(input, 'receipt')) {
         record(input, ['state', 'receipt'])
@@ -295,9 +304,9 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  const field = { send: 'content', read: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation',
+  const field = { send: 'content', read: 'receipt', binding_receipt: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation',
     binding_propose: 'proposal', binding_targets: 'lookup' } as const
-  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation' &&
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_receipt' && op !== 'binding_confirmation' &&
       op !== 'binding_propose' && op !== 'binding_targets') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
     field[op]])

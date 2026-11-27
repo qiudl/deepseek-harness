@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
+import { encodeHostBindingClaims } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { PrivateTwinTransfer } from '../src/private-twin-transfer.ts'
@@ -118,6 +119,8 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent }, bindingProfileEpoch: generation })
   const proof = await channel.signBindingIntent(ticket, registration, signal)
+  await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
   expect(proof.claims).toMatchObject({ purpose: 'slark.dsh.binding-intent/v1',
     environmentId: account.authorityEnvironmentId, profileId, profileEpoch: generation,
     hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: 1,
@@ -129,6 +132,16 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   expect(verify(null, bytes, keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
   await expect(channel.signBindingIntent(ticket, registration, signal)).resolves.toEqual(proof)
   await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_receipt', receipt } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { operation: 'binding_receipt', receipt }, bindingProfileEpoch: generation })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  const recovered = await channel.signBindingReceipt(ticket, registration, intent.requestId, signal)
+  expect(recovered.claims).toMatchObject({ purpose: 'slark.dsh.binding-receipt/v1',
+    profileId, profileEpoch: generation, mainBotId: source.botId, sessionId: source.sessionId,
+    lookupBy: 'request', lookupId: intent.requestId })
+  expect(verify(null, encodeHostBindingClaims(recovered.claims), keys.publicKey, Buffer.from(recovered.signature, 'base64url'))).toBe(true)
+  await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal)).resolves.toEqual(recovered)
+  await expect(channel.finish(ticket, { state: 'binding_status', status: 'active' }, signal)).resolves.toEqual({ completed: true })
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   const expiring = client.openPrivateTwinChannel({ ...account, profileId, signal })
   await expiring.claim(signal)
@@ -154,7 +167,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(6)
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(7)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })
