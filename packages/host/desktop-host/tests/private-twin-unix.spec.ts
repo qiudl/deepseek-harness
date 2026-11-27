@@ -99,7 +99,8 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, sourceId: 'local-group', targetRef: receipt,
     defaultAgentRef: null, messageSeq: 3 }
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_propose', proposal } })
-  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { proposal } })
+  const generation = 1 // First Account binding for this fresh registry.
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { proposal }, bindingProfileEpoch: generation })
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
   await expect(channel.finish(ticket, { state: 'preview', proposalRef: receipt, label: 1, kind: proposal.kind, action: proposal.action,
     display: { sourceName: '发布群', previousTarget: '现频道', targetName: '新频道', defaultAgent: '频道助手', impact: '确认后切换' } }, signal))
@@ -107,7 +108,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   const confirmation = { messageSeq: 6, text: '确认换绑', proposalRef: receipt,
     presentations: [{ ref: receipt, callId: 'proposal', resultSeq: 5 }] }
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_confirmation', confirmation } })
-  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { confirmation } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { confirmation }, bindingProfileEpoch: generation })
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
   await expect(channel.finish(ticket, { state: 'binding_confirmation', approval: {
     state: 'confirmed', kind: 'group', sourceId: 'local-group', requestId: intent.requestId, expiresAt: intent.expiresAt,
@@ -115,10 +116,10 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
     confirmationMessageSeq: intent.messageSeq, confirmationMessageId: source.sourceMessageId,
   } }, signal)).resolves.toEqual({ completed: true })
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
-  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent }, bindingProfileEpoch: generation })
   const proof = await channel.signBindingIntent(ticket, registration, signal)
   expect(proof.claims).toMatchObject({ purpose: 'slark.dsh.binding-intent/v1',
-    environmentId: account.authorityEnvironmentId, profileId, profileEpoch: 1,
+    environmentId: account.authorityEnvironmentId, profileId, profileEpoch: generation,
     hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: 1,
     mainBotId: source.botId, sessionId: source.sessionId, messageId: source.sourceMessageId,
     installationId: identity.installationId, requestId: intent.requestId, messageSeq: 6,

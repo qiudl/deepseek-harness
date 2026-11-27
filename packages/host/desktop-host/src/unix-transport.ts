@@ -2919,6 +2919,15 @@ export class HostControlAuthority {
           const originalProfile = authorize()
           const result = await privateTwin.execute(frame.params.command, {
             key: JSON.stringify(account), signal: context.signal, authorize, capture, now: clock,
+            observeBindingProfileEpoch: (profile) => {
+              try {
+                const current = this.options.host.authorizeBindingIntentProfile(account)
+                if (current.profileId === profile) return current.generation
+              } catch (error) {
+                if (!(error instanceof HostAuthorityError)) throw error
+              }
+              throw new HostAuthorityError('stale')
+            },
             signBindingIntent: (profile, registration, request) => {
               const local = this.options.host.authorizeBindingIntentProfile(account)
               const issuedAt = clock()
@@ -3330,7 +3339,7 @@ export class HostControlAuthority {
           'profile.collaboration_registration',
           ...(this.options.resolveBotIdentity ? ['profile.bot_identity', 'profile.bot_identity_v2'] : []),
           ...(this.options.botSessionIdentityReceiver ? ['profile.bot_session_identity'] : []),
-          ...(this.options.privateTwinWorkerReceiver ? ['profile.private_twin', 'profile.binding_intent'] : []),
+          ...(this.options.privateTwinWorkerReceiver ? ['profile.private_twin', 'profile.binding_intent', 'profile.binding_preview_epoch'] : []),
           ...(this.options.resolveBotIdentity && this.options.createTwinBindingReceiptStore
             && this.options.trustedBotGroupKeyrings?.length ? ['profile.twin_binding'] : []),
           ...(this.options.listBotRoster ? ['profile.bot_roster'] : []),
@@ -5367,6 +5376,7 @@ export class UnixHostClient {
     const peer = this.currentPeerFingerprint()
     return createPrivateTwinControlChannel({ profileId: account.profileId,
       assertCurrent: () => { account.signal?.throwIfAborted(); this.requireCurrentPeer(peer) },
+      includeBindingProfileEpoch: this.inspection.capabilities.includes('profile.binding_preview_epoch' as HostControlCapability),
       ...(this.inspection.capabilities.includes('profile.binding_intent' as HostControlCapability) ? {
         verifyBindingIntent: (proof: HostBindingIntentProof) => {
           this.requireCurrentPeer(peer)

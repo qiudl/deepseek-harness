@@ -81,6 +81,7 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'accepted'; readonly receipt: string }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
+  | { readonly state: 'consent_recorded'; readonly remaining: 'dsh_to_slark' | 'slark_to_dsh'; readonly label: number }
   | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
   | BindingTargetPage
   | Readonly<{
@@ -239,6 +240,12 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'binding_confirmation':
       record(input, ['state', 'approval'])
       return { state: input.state, approval: parseBindingApproval(input.approval) }
+    case 'consent_recorded': {
+      record(input, ['state', 'remaining', 'label'])
+      const label = positive(input.label)
+      if (label > 999_999_999 || (input.remaining !== 'dsh_to_slark' && input.remaining !== 'slark_to_dsh')) return invalid()
+      return { state: input.state, remaining: input.remaining, label }
+    }
     case 'candidates':
       return parseBindingTargetPage(input)
     case 'preview': {

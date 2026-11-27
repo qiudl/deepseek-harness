@@ -66,6 +66,11 @@ it('keeps confirmation evidence private and bounded before requesting a separate
     expect(() => parsePrivateTwinWorkerResult({ ...result, approval: { ...approval, ...patch } })).toThrow('invalid_private_twin_worker_frame')
   for (const state of ['needs_confirmation', 'selection_required', 'stale', 'cancelled', 'denied', 'conflict'])
     expect(parsePrivateTwinWorkerResult({ state })).toEqual({ state })
+  const recorded = { state: 'consent_recorded', remaining: 'dsh_to_slark', label: 2 }
+  expect(parsePrivateTwinWorkerResult(recorded)).toEqual(recorded)
+  for (const value of [{ ...recorded, label: 0 }, { ...recorded, label: 1_000_000_000 },
+    { ...recorded, remaining: 'both' }, { ...recorded, sourceId: 'private-child' }])
+    expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
 })
 
 it('keeps proposal arguments and public preview output within their exact wire contracts', () => {

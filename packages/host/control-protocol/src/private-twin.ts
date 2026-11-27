@@ -15,7 +15,7 @@ interface PrivateTwinTransfer {
 
 /** Main requests one claim, ticket check, request chunk, or result upload. */
 export type HostPrivateTwinCommand =
-  | { readonly operation: 'claim' }
+  | { readonly operation: 'claim'; readonly binding_profile_epoch?: true }
   | { readonly operation: 'check'; readonly ticket: string }
   | { readonly operation: 'read'; readonly ticket: string; readonly offset: number }
   | { readonly operation: 'sign_binding'; readonly ticket: string; readonly registration: HostBindingRegistration }
@@ -24,7 +24,7 @@ export type HostPrivateTwinCommand =
 /** Host returns a ticket state, claim metadata, or one request fragment. */
 export type HostPrivateTwinResult =
   | { readonly state: 'idle' }
-  | ({ readonly state: 'claimed'; readonly profile_id: string } & PrivateTwinTransfer)
+  | ({ readonly state: 'claimed'; readonly profile_id: string; readonly binding_profile_epoch?: number } & PrivateTwinTransfer)
   | { readonly state: 'current'; readonly ticket: string }
   | { readonly state: 'chunk'; readonly ticket: string; readonly offset: number; readonly bytes: string }
   | { readonly state: 'staged'; readonly ticket: string; readonly next_offset: number }
@@ -78,8 +78,12 @@ export function parseHostPrivateTwinCommand(value: unknown): HostPrivateTwinComm
   const { operation } = row
   switch (operation) {
     case 'claim':
-      record(row, ['operation'])
-      return { operation }
+      if (!Object.hasOwn(row, 'binding_profile_epoch')) {
+        record(row, ['operation'])
+        return { operation }
+      }
+      record(row, ['operation', 'binding_profile_epoch'])
+      return row.binding_profile_epoch === true ? { operation, binding_profile_epoch: true } : invalid()
     case 'check':
       record(row, ['operation', 'ticket'])
       return { operation, ticket: ticket(row.ticket) }
@@ -113,11 +117,15 @@ export function parseHostPrivateTwinResult(value: unknown): HostPrivateTwinResul
       record(row, ['state'])
       return { state }
     case 'claimed': {
-      record(row, ['state', 'ticket', 'total_bytes', 'digest', 'profile_id'])
+      const epoch = Object.hasOwn(row, 'binding_profile_epoch')
+        ? bounded(row.binding_profile_epoch, 1, Number.MAX_SAFE_INTEGER) : undefined
+      record(row, ['state', 'ticket', 'total_bytes', 'digest', 'profile_id',
+        ...(epoch === undefined ? [] : ['binding_profile_epoch'])])
       const { profile_id } = row
       if (typeof profile_id !== 'string'
         || profileIdPattern.exec(profile_id)?.[0] !== profile_id) return invalid()
-      return { state, ...transfer(row, PRIVATE_TWIN_CONTROL_REQUEST_BYTES), profile_id }
+      return { state, ...transfer(row, PRIVATE_TWIN_CONTROL_REQUEST_BYTES), profile_id,
+        ...(epoch === undefined ? {} : { binding_profile_epoch: epoch }) }
     }
     case 'chunk':
       record(row, ['state', 'ticket', 'offset', 'bytes'])

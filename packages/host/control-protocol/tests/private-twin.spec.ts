@@ -13,9 +13,12 @@ const digest = 'a'.repeat(64)
 it('validates exact private twin commands and bounded upload fragments', () => {
   const finish = { operation: 'finish', ticket, offset: 1, total_bytes: 2, digest, bytes: 'YQ' }
   expect(parseHostPrivateTwinCommand({ operation: 'claim' })).toEqual({ operation: 'claim' })
+  expect(parseHostPrivateTwinCommand({ operation: 'claim', binding_profile_epoch: true }))
+    .toEqual({ operation: 'claim', binding_profile_epoch: true })
   expect(parseHostPrivateTwinCommand(finish)).toEqual(finish)
   for (const value of [
     null, [], { operation: 'other' }, { operation: 'claim', [Symbol()]: 'extra' },
+    { operation: 'claim', binding_profile_epoch: false }, { operation: 'claim', binding_profile_epoch: 1 },
     Object.defineProperty({ operation: 'claim' }, 'ticket', { get() { throw Error('untrusted getter') } }),
     { operation: 'check', ticket: 'YQ' }, { operation: 'check', ticket: '!' },
     { operation: 'read', ticket, offset: -1 }, { operation: 'read', ticket, offset: PRIVATE_TWIN_CONTROL_REQUEST_BYTES },
@@ -29,10 +32,13 @@ it('validates idle, claim and exact progress states without trusting result coor
   const claimed = { state: 'claimed', profile_id, ticket, total_bytes: 1, digest }
   expect(parseHostPrivateTwinResult({ state: 'idle' })).toEqual({ state: 'idle' })
   expect(parseHostPrivateTwinResult(claimed)).toEqual(claimed)
+  const scoped = { ...claimed, binding_profile_epoch: 7 }
+  expect(parseHostPrivateTwinResult(scoped)).toEqual(scoped)
   for (const state of ['current', 'completed']) expect(parseHostPrivateTwinResult({ state, ticket })).toEqual({ state, ticket })
   for (const value of [
     { state: 'unrecognized' }, { state: 'idle', ticket }, { ...claimed, profile_id: 'unknown' },
     { ...claimed, profile_id: 123 }, { ...claimed, total_bytes: 0 }, { ...claimed, total_bytes: 1.5 },
+    { ...claimed, binding_profile_epoch: 0 }, { ...claimed, binding_profile_epoch: '7' },
     { state: 'chunk', ticket, offset: 0, bytes: 'YQ==' }, { state: 'staged', ticket, next_offset: 0 },
   ]) expect(() => parseHostPrivateTwinResult(value)).toThrow('invalid_host_private_twin_frame')
 })

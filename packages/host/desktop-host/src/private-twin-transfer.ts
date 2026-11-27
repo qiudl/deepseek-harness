@@ -16,6 +16,7 @@ interface TransferAuthority {
   readonly key: string
   readonly signal: AbortSignal
   authorize(): string
+  readonly observeBindingProfileEpoch?: (profile: string) => number
   capture(profile: string): PrivateTwinWorkerReceiver
   readonly signBindingIntent?: (
     profile: string, registration: HostBindingRegistration, evidence: BindingRequest,
@@ -33,6 +34,7 @@ interface Lease {
   readonly receiver: PrivateTwinWorkerReceiver
   readonly lifetime: AbortSignal
   readonly binding?: BindingRequest
+  readonly bindingProfileEpoch?: number
   signedBinding?: { readonly registration: string; readonly proof: HostBindingIntentProof }
   upload?: { readonly bytes: Buffer; readonly digest: string; offset: number }
 }
@@ -60,13 +62,15 @@ export class PrivateTwinTransfer {
     this.busy = true
     try {
       if (this.lease?.key === authority.key && this.lease.profile !== profile) this.clear()
-      if (command.operation === 'claim') return await this.claim(authority, profile)
+      if (command.operation === 'claim') return await this.claim(authority, profile, command.binding_profile_epoch === true)
       const lease = this.lease
       if (!lease || lease.ticket !== command.ticket || lease.key !== authority.key) return stale()
       const signal = AbortSignal.any([authority.signal, this.connection, lease.lifetime])
       const guard = () => {
         signal.throwIfAborted()
-        if (this.lease !== lease || authority.authorize() !== lease.profile) stale()
+        if (this.lease !== lease || authority.authorize() !== lease.profile ||
+            (lease.bindingProfileEpoch !== undefined &&
+              authority.observeBindingProfileEpoch?.(lease.profile) !== lease.bindingProfileEpoch)) stale()
         lease.receiver.assertCurrent()
       }
       try {
@@ -81,7 +85,8 @@ export class PrivateTwinTransfer {
           const registration = JSON.stringify(command.registration)
           if (lease.signedBinding && lease.signedBinding.registration !== registration) return stale()
           const proof = lease.signedBinding?.proof ?? sign(lease.profile, command.registration, binding)
-          if (proof.claims.expiresAt <= (authority.now ?? Date.now)()) return stale()
+          if (proof.claims.expiresAt <= (authority.now ?? Date.now)() ||
+              (lease.bindingProfileEpoch !== undefined && proof.claims.profileEpoch !== lease.bindingProfileEpoch)) return stale()
           guard()
           lease.signedBinding = { registration, proof }
           return { state: 'binding_intent', ticket: lease.ticket, proof }
@@ -113,8 +118,11 @@ export class PrivateTwinTransfer {
     } finally { this.busy = false }
   }
 
-  private async claim(authority: TransferAuthority, profile: string): Promise<HostPrivateTwinResult> {
+  private async claim(authority: TransferAuthority, profile: string, includeBindingEpoch: boolean): Promise<HostPrivateTwinResult> {
     if (this.lease) throw new HostAuthorityError('busy')
+    const observe = includeBindingEpoch ? authority.observeBindingProfileEpoch : undefined
+    if (includeBindingEpoch && !observe) throw new HostAuthorityError('upgrade_required')
+    const epoch = observe?.(profile)
     const lifetime = AbortSignal.timeout(20_000)
     const signal = AbortSignal.any([this.connection, authority.signal, lifetime])
     const receiver = authority.capture(profile)
@@ -122,14 +130,17 @@ export class PrivateTwinTransfer {
     const command = { operation: 'claim' } as const
     const response = parsePrivateTwinWorkerReply(command, await receiver.operate(command, signal))
     signal.throwIfAborted()
-    if (authority.authorize() !== profile) return stale()
+    if (authority.authorize() !== profile || observe?.(profile) !== epoch) return stale()
     receiver.assertCurrent()
     if (response.request === null) return { state: 'idle' }
     const request = Buffer.from(JSON.stringify(response.request), 'utf8')
     const ticket = response.request.ticket
+    const bindingProfileEpoch = response.request.operation.startsWith('binding_') ? epoch : undefined
     const result = parseHostPrivateTwinResult({ state: 'claimed', profile_id: profile, ticket,
-      total_bytes: request.length, digest: digest(request) })
+      total_bytes: request.length, digest: digest(request),
+      ...(bindingProfileEpoch === undefined ? {} : { binding_profile_epoch: bindingProfileEpoch }) })
     const lease: Lease = { key: authority.key, profile, ticket, request, receiver, lifetime,
+      ...(bindingProfileEpoch === undefined ? {} : { bindingProfileEpoch }),
       ...(response.request.operation === 'binding_intent' ? { binding: response.request } : {}) }
     this.lease = lease
     lifetime.addEventListener('abort', () => { if (this.lease === lease) this.lease = undefined }, { once: true })

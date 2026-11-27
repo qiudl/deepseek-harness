@@ -10,7 +10,7 @@ import { HostAuthorityError } from './types.ts'
 export interface PrivateTwinControlChannel {
   readonly profileId: string
   assertCurrent(): void
-  claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null }>
+  claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null; readonly bindingProfileEpoch?: number }>
   check(ticket: string, signal: AbortSignal): Promise<{ readonly current: true }>
   signBindingIntent(ticket: string, registration: HostBindingRegistration, signal: AbortSignal): Promise<HostBindingIntentProof>
   finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal): Promise<{ readonly completed: true }>
@@ -22,12 +22,14 @@ const stale = (): never => { throw new HostAuthorityError('stale') }
 /** Retain the expected Main-owned Profile, peer guard, and exact claim for all data transfer. */
 export function createPrivateTwinControlChannel(input: Readonly<{
   profileId: string
+  includeBindingProfileEpoch?: boolean
   verifyBindingIntent?(proof: HostBindingIntentProof): void
   assertCurrent(): void
   call(command: HostPrivateTwinCommand, signal: AbortSignal): Promise<unknown>
 }>): PrivateTwinControlChannel {
   const profileId = input.profileId
   let claimed: PrivateTwinWorkerRequest | undefined
+  let bindingProfileEpoch: number | undefined
   const send = async (command: HostPrivateTwinCommand, signal: AbortSignal) => {
     input.assertCurrent(); signal.throwIfAborted()
     const result = parseHostPrivateTwinResult(await input.call(command, signal))
@@ -39,7 +41,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
     assertCurrent: () => { input.assertCurrent() },
     async claim(signal: AbortSignal) {
       if (claimed !== undefined) return stale()
-      const header = await send({ operation: 'claim' }, signal)
+      const header = await send({ operation: 'claim', ...(input.includeBindingProfileEpoch ? { binding_profile_epoch: true } : {}) }, signal)
       if (header.state === 'idle') return { request: null }
       if (header.state !== 'claimed' || header.profile_id !== profileId) return stale()
       const { ticket } = header
@@ -57,8 +59,11 @@ export function createPrivateTwinControlChannel(input: Readonly<{
       const request: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       const worker = parsePrivateTwinWorkerReply({ operation: 'claim' }, { request })
       if (worker.request?.ticket !== ticket) return stale()
+      const wantsEpoch = Boolean(input.includeBindingProfileEpoch && worker.request.operation.startsWith('binding_'))
+      if (wantsEpoch !== (header.binding_profile_epoch !== undefined)) return stale()
       claimed = worker.request
-      return { request: worker.request }
+      bindingProfileEpoch = header.binding_profile_epoch
+      return { request: worker.request, ...(bindingProfileEpoch === undefined ? {} : { bindingProfileEpoch }) }
     },
     async check(ticket: string, signal: AbortSignal) {
       if (claimed?.ticket !== ticket) return stale()
@@ -76,7 +81,8 @@ export function createPrivateTwinControlChannel(input: Readonly<{
       if (result.state !== 'binding_intent' || result.ticket !== ticket || claimed !== request)
         return stale()
       const { proof } = result, { claims } = proof
-      if (claims.profileId !== profileId || claims.mainBotId !== request.botId ||
+      if (claims.profileId !== profileId || (bindingProfileEpoch !== undefined && claims.profileEpoch !== bindingProfileEpoch) ||
+          claims.mainBotId !== request.botId ||
           claims.sessionId !== request.sessionId || claims.messageId !== request.sourceMessageId ||
           claims.expiresAt > request.intent.expiresAt ||
           (['requestId', 'messageSeq', 'messageDigest', 'previewDigest', 'commandDigest'] as const)
@@ -99,6 +105,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
         if (nextOffset === bytes.length) {
           if (reply.state !== 'completed' || reply.ticket !== ticket) return stale()
           claimed = undefined
+          bindingProfileEpoch = undefined
           return { completed: true as const }
         }
         if (reply.state !== 'staged' || reply.ticket !== ticket || reply.next_offset !== nextOffset) return stale()

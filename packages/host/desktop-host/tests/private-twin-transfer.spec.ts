@@ -71,6 +71,28 @@ it('rejects out-of-bounds reads and an upload that resumes at a different offset
   expect(operate.mock.calls.some(([command]) => command.operation === 'finish')).toBe(false)
 })
 
+it('pins a binding claim to the Native generation before and after every Worker exchange', async () => {
+  const { transfer, owner, operate } = fixture()
+  const scopedClaim = { operation: 'claim', binding_profile_epoch: true } as const
+  const scoped = { ticket, botId: request.botId, sessionId: request.sessionId, callId: request.callId,
+    rootCallId: request.rootCallId, sourceMessageId: request.sourceMessageId,
+    operation: 'binding_propose', proposal: { kind: 'twin', action: 'bind',
+      sourceRef: ticket, sourceId: 'child', targetRef: ticket, defaultAgentRef: null, messageSeq: 2 } } as const
+  let epoch = 4
+  const authority = { ...owner, observeBindingProfileEpoch: () => epoch }
+  await expect(transfer.execute(scopedClaim, owner)).rejects.toMatchObject({ code: 'upgrade_required' })
+  operate.mockImplementationOnce(async () => { epoch++; return { request: scoped } })
+  await expect(transfer.execute(scopedClaim, authority)).rejects.toMatchObject({ code: 'stale' })
+  operate.mockResolvedValueOnce({ request: scoped })
+  await expect(transfer.execute(scopedClaim, authority)).resolves.toMatchObject({ state: 'claimed', binding_profile_epoch: 5 })
+  operate.mockImplementationOnce(async () => { epoch++; return { current: true } })
+  await expect(transfer.execute(check, authority)).rejects.toMatchObject({ code: 'stale' })
+  expect(operate.mock.calls.some(([command]) => command.operation === 'finish')).toBe(false)
+  operate.mockResolvedValueOnce({ request: scoped })
+  const legacy = await transfer.execute(claim, authority)
+  expect(legacy).not.toHaveProperty('binding_profile_epoch')
+})
+
 function assertClaimed<T extends { state: string }>(result: T): asserts result is Extract<T, { state: 'claimed' }> {
   if (result.state !== 'claimed') throw Error('expected a claimed transfer')
 }
