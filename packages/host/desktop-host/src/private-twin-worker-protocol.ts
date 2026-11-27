@@ -78,7 +78,7 @@ type BindingApproval = Readonly<{
 export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
-  | { readonly state: 'accepted'; readonly receipt: string }
+  | { readonly state: 'accepted' | 'active'; readonly receipt: string }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
   | { readonly state: 'consent_recorded'; readonly remaining: 'dsh_to_slark' | 'slark_to_dsh'; readonly label: number }
@@ -227,7 +227,7 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'replied':
       record(input, ['state', 'answer'])
       return { state: input.state, answer: input.answer === null ? null : text(input.answer, PRIVATE_TWIN_MAX_ANSWER_BYTES) }
-    case 'accepted':
+    case 'accepted': case 'active':
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
     case 'outcome_unknown':
