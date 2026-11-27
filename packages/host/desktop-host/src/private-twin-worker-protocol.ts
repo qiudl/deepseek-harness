@@ -44,6 +44,7 @@ type BindingProposal = Readonly<{
   messageSeq: number
   groupSource?: PairingSource
   groupSourceName?: string
+  groupCurrent?: Readonly<{ bindingId: string; version: string }>
 }>
 type BindingTargetLookup = Readonly<{
   kind: BindingKind
@@ -98,6 +99,16 @@ export type PrivateTwinWorkerResult =
     readonly expiresAt: number
     readonly source: PairingSource
     readonly target: Readonly<{ projectId: string; channelId: string; defaultAgentId: string }> }
+  | {
+    readonly state: 'group_end'
+    readonly operationId: string
+    readonly receipt: string
+    readonly endpoint: string
+    readonly status: 'in_progress' | 'ended'
+    readonly source: PairingSource
+    readonly bindingId: string
+    readonly bindingVersion: 1
+  }
   | { readonly state: 'binding_status'; readonly status: 'accepted' | 'in_progress' | 'active' | 'ended' | 'cancelled' | 'denied' | 'conflict' | 'outcome_unknown' | 'missing' }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
@@ -169,19 +180,26 @@ function bindingAction(kind: unknown, action: unknown): { kind: BindingKind; act
 function parseBindingProposal(input: unknown): BindingProposal {
   const row = record(input)
   const hasGroupSource = Object.hasOwn(row, 'groupSource')
+  const hasGroupCurrent = Object.hasOwn(row, 'groupCurrent')
   record(row, ['kind', 'action', 'sourceRef', 'sourceId', 'targetRef', 'defaultAgentRef', 'messageSeq',
-    ...(hasGroupSource ? ['groupSource', 'groupSourceName'] : [])])
+    ...(hasGroupSource ? ['groupSource', 'groupSourceName'] : []), ...(hasGroupCurrent ? ['groupCurrent'] : [])])
   const { kind, action } = bindingAction(row.kind, row.action)
   if ((action === 'end') !== (row.targetRef === null) ||
       ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
-  if (hasGroupSource && (kind !== 'group' || action !== 'bind')) return invalid()
+  if ((hasGroupCurrent && !hasGroupSource) || (hasGroupSource && (kind !== 'group' || hasGroupCurrent === (action === 'bind'))))
+    return invalid()
   const sourceId = id(row.sourceId)
   const groupSourceName = hasGroupSource ? text(row.groupSourceName, 800) : undefined
   if (groupSourceName && (groupSourceName.length > 200 || /\p{Cc}/u.test(groupSourceName))) return invalid()
+  const groupCurrent = hasGroupCurrent ? record(row.groupCurrent, ['bindingId', 'version']) : null
   return { kind, action, sourceRef: opaque(row.sourceRef), sourceId,
     targetRef: row.targetRef === null ? null : opaque(row.targetRef),
     defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq),
-    ...(groupSourceName ? { groupSource: parsePairingSource(row.groupSource, sourceId), groupSourceName } : {}) }
+    ...(groupSourceName ? { groupSource: parsePairingSource(row.groupSource, sourceId), groupSourceName } : {}),
+    ...(groupCurrent ? { groupCurrent: {
+      bindingId: matched(groupCurrent.bindingId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+      version: matched(groupCurrent.version, /^[1-9][0-9]{0,18}$/u),
+    } } : {}) }
 }
 
 function parsePairingSource(raw: unknown, roomId: string): PairingSource {
@@ -277,6 +295,17 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
       return { state: input.state, operationId, receipt: opaque(input.receipt), endpoint: endpoint.origin, ticket: opaque(input.ticket),
         expiresAt: positive(input.expiresAt), source: parsePairingSource(source, id(source.roomId)),
         target: { projectId: id(target.projectId), channelId: id(target.channelId), defaultAgentId: id(target.defaultAgentId) } }
+    }
+    case 'group_end': {
+      record(input, ['state', 'operationId', 'receipt', 'endpoint', 'status', 'source', 'bindingId', 'bindingVersion'])
+      if (typeof input.endpoint !== 'string' || input.endpoint.length > 200 || !URL.canParse(input.endpoint)) return invalid()
+      const endpoint = new URL(input.endpoint), uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      if (endpoint.protocol !== 'https:' || endpoint.origin !== input.endpoint || input.bindingVersion !== 1 ||
+          (input.status !== 'in_progress' && input.status !== 'ended')) return invalid()
+      const source = record(input.source)
+      return { state: input.state, operationId: matched(input.operationId, uuid), receipt: opaque(input.receipt),
+        endpoint: endpoint.origin, status: input.status, source: parsePairingSource(source, id(source.roomId)),
+        bindingId: matched(input.bindingId, uuid), bindingVersion: 1 }
     }
     case 'binding_status': {
       record(input, ['state', 'status'])
