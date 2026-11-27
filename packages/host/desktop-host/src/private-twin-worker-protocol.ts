@@ -25,7 +25,7 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
 type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
 type BindingKind = 'twin' | 'group'
 type BindingAction = 'bind' | 'replace' | 'end'
-type BindingProposal = Readonly<{ kind: BindingKind; action: BindingAction; sourceRef: string;
+type BindingProposal = Readonly<{ kind: BindingKind; action: BindingAction; sourceRef: string; sourceId: string;
   targetRef: string | null; defaultAgentRef: string | null; messageSeq: number }>
 type BindingPreviewDisplay = Readonly<{ sourceName: string; previousTarget: string | null; targetName: string | null;
   defaultAgent: string | null; impact: string }>
@@ -98,11 +98,11 @@ function bindingAction(kind: unknown, action: unknown): { kind: BindingKind; act
 }
 
 function parseBindingProposal(input: unknown): BindingProposal {
-  const row = record(input, ['kind', 'action', 'sourceRef', 'targetRef', 'defaultAgentRef', 'messageSeq'])
+  const row = record(input, ['kind', 'action', 'sourceRef', 'sourceId', 'targetRef', 'defaultAgentRef', 'messageSeq'])
   const { kind, action } = bindingAction(row.kind, row.action)
   if ((action === 'end') !== (row.targetRef === null) ||
       ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
-  return { kind, action, sourceRef: opaque(row.sourceRef), targetRef: row.targetRef === null ? null : opaque(row.targetRef),
+  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId), targetRef: row.targetRef === null ? null : opaque(row.targetRef),
     defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq) }
 }
 

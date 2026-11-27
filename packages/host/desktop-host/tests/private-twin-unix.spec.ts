@@ -88,7 +88,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
 
   const intent = { requestId: randomUUID(), messageSeq: 6, messageDigest: 'a'.repeat(64),
     previewDigest: 'b'.repeat(64), commandDigest: 'c'.repeat(64), expiresAt: 10_000 }
-  const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, targetRef: receipt,
+  const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, sourceId: 'local-group', targetRef: receipt,
     defaultAgentRef: null, messageSeq: 3 }
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_propose', proposal } })
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { proposal } })

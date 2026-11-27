@@ -70,14 +70,14 @@ it('keeps confirmation evidence private and bounded before requesting a separate
 })
 
 it('keeps proposal arguments and public preview output within their exact wire contracts', () => {
-  const proposal = { kind: 'group', action: 'bind', sourceRef: ticket, targetRef: ticket,
+  const proposal = { kind: 'group', action: 'bind', sourceRef: ticket, sourceId: 'group-1', targetRef: ticket,
     defaultAgentRef: ticket, messageSeq: 7 }
   const request = { ...source, rootCallId: source.callId, operation: 'binding_propose', proposal }
   const ending = { ...proposal, action: 'end', targetRef: null, defaultAgentRef: null }
   for (const value of [request, { ...request, proposal: ending }])
     expect(parsePrivateTwinWorkerReply(claim, { request: value })).toEqual({ request: value })
   for (const value of [{ ...request, rootCallId: 'different-call' }, ...[
-    { action: 'create' }, { kind: 'workspace' }, { targetRef: null }, { action: 'end' },
+    { action: 'create' }, { kind: 'workspace' }, { sourceId: '../../outside' }, { targetRef: null }, { action: 'end' },
     { ...ending, defaultAgentRef: ticket }, { kind: 'twin' },
   ].map(patch => ({ ...request, proposal: { ...proposal, ...patch } }))])
     expect(() => parsePrivateTwinWorkerReply(claim, { request: value })).toThrow('invalid_private_twin_worker_frame')
