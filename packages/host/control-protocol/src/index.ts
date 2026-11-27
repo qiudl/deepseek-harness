@@ -160,6 +160,7 @@ export type { HostBotChatSubmission, HostBotChatReceipt, HostBotChatSubmissionId
 export type { ProfileBotIdentityRequest, ProfileBotIdentityResult,
   ProfileBotIdentityV2Request, ProfileBotIdentityV2Result,
   ProfileBotSessionIdentityRequest, ProfileBotSessionIdentityResult,
+  ProfilePrivateTwinRequest, ProfilePrivateTwinResult,
   ProfileTwinBindingRequest, ProfileTwinBindingResult,
   ProfileBotRosterRequest, ProfileBotRosterResult,
   ProfileNativeRoomRequest, ProfileNativeRoomResult,
@@ -464,3 +465,6 @@ export { parseHostBotDuplicateRequest, parseHostBotDuplicateReceipt } from './bo
 export type { HostBotDuplicateRequest, HostBotDuplicateReceipt } from './bot-duplicate.ts'
 export { parseHostBotCreateRequest, parseHostBotCreateReceipt } from './bot-create.ts'
 export type { HostBotCreateRequest, HostBotCreateReceipt } from './bot-create.ts'
+export { parseHostPrivateTwinCommand, parseHostPrivateTwinResult, PRIVATE_TWIN_CONTROL_CHUNK_BYTES,
+  PRIVATE_TWIN_CONTROL_REQUEST_BYTES, PRIVATE_TWIN_CONTROL_RESULT_BYTES } from './private-twin.ts'
+export type { HostPrivateTwinCommand, HostPrivateTwinResult } from './private-twin.ts'

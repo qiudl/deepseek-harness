@@ -175,6 +175,8 @@ See the [single Host control protocol Agent Note](../../../.agents/notes/impleme
 
 No runtime invariant companion is published: the codec validates the complete wire value algebra at its input boundary.
 
+The Main-only `profile.private_twin` method uses the existing Account-bound connection. The codec bounds each payload fragment to 24 KiB. Claim metadata includes the Profile, ticket, total byte count and SHA-256 digest. The Native Host validates the current worker, offsets and digest before returning a result to the worker.
+
 `parseHostRemoteSessionJson` exposes the existing Host JSON limits to private-worker consumers. It detaches parsed data and rejects nonfinite numbers, unsafe keys, excess depth/count and oversized strings; it grants no operation authority.
 
 ### Remote workspace directories

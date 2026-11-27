@@ -18,6 +18,7 @@
         projectOperationMemoryEnvironmentsJson: !!js process.env.DSH_HOST_PROJECT_OPERATION_MEMORY_ENVIRONMENTS
         runtimeEntryOriginsJson: !!js process.env.DSH_HOST_RUNTIME_ENTRY_ORIGINS
         taskCoordinationEnvironmentsJson: !!js process.env.DSH_HOST_TASK_COORDINATION_ENVIRONMENTS
+        enablePrivateTwin: !!js process.env.DSH_HOST_PRIVATE_TWIN_ENABLED === 'true'
         installationPrivateKeyPath: !!js process.env.DSH_HOST_INSTALLATION_PRIVATE_KEY_PATH
         installationPublicKey: !!js process.env.DSH_HOST_INSTALLATION_PUBLIC_KEY
         installationId: !!js process.env.DSH_HOST_INSTALLATION_ID

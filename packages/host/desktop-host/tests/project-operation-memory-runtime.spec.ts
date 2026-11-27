@@ -65,7 +65,9 @@ function file() {
     },
   }
 }
-async function fixture(confirm = true, journalEpoch = 'journal_1') {
+type NativeEffectReader = NonNullable<ConstructorParameters<typeof DesktopProjectOperationMemory>[5]>
+
+async function fixture(confirm = true, journalEpoch = 'journal_1', nativeEffectReader?: NativeEffectReader) {
   const ctx = new Context()
   lives.push(ctx)
   const cloud = generateKeyPairSync('ed25519'),
@@ -120,6 +122,7 @@ async function fixture(confirm = true, journalEpoch = 'journal_1') {
       v.ack.hostProfileId,
       life.signal,
       () => state.clockRead?.() ?? state.now,
+      nativeEffectReader,
     )
   ctx.provide('projectOperationMemoryAuthorizations', owner.reader)
   const captured: ProjectOperationMemoryAuthorizationToken[] = [],
@@ -1358,7 +1361,8 @@ describe.skipIf(process.platform === 'win32')('POSIX private memory composition'
 
 /** The source producer is controlled here; HTTP grammar and the opaque worker reader are real. */
 it.skipIf(process.platform === 'win32')('passes the original optional native cut through HTTP and rejects malformed or mismatched cut metadata before the producer', async () => {
-  const f = await fixture(true, randomUUID())
+  const readNativeEffect = vi.fn<NativeEffectReader>()
+  const f = await fixture(true, randomUUID(), readNativeEffect)
   await f.call()
   const body = f.commands.at(-1)
   if (!body || typeof body !== 'object' || !('anchor' in body) || !('confirmation' in body) || !('request' in body))
@@ -1403,5 +1407,36 @@ it.skipIf(process.platform === 'win32')('passes the original optional native cut
     expect(f.counts().reads).toBe(prior + 2)
     expect((await post({ ...body, nativeActivationCut: cut, unknown: true })).status).toBe(400)
     expect((await post({ ...body, action: 'project_operation_memory_anchor', nativeActivationCut: cut })).status).toBe(400)
+
+    const read = f.owner.reader.readRuntimeEntryEffect?.bind(f.owner.reader)
+    if (!read) throw Error('missing worker native effect reader')
+    const reference = {
+      entryId: randomUUID(), entryReceiptDigest: '1'.repeat(64), manifestDigest: '2'.repeat(64),
+    } as Parameters<typeof read>[1]
+    const effect = { ...reference, journalId: cut.journalId, journalEpoch: cut.journalEpoch, entryEffectSeq: '1' }
+    const observed: unknown[] = []
+    f.state.block = async () => {
+      const current = f.captured.at(-1)
+      if (!current) throw Error('missing source authorization')
+      observed.push(await read(current, reference).catch((error: unknown) => error))
+    }
+    readNativeEffect.mockReturnValueOnce(effect)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({ ...effect, manifestDigest: '3'.repeat(64) })
+      .mockImplementationOnce(async () => {
+        await Promise.resolve()
+        f.life.abort()
+        return effect
+      })
+    expect((await post(body)).status).toBe(200)
+    expect(readNativeEffect).not.toHaveBeenCalled()
+    for (let count = 0; count < 3; count++) expect((await post({ ...body, nativeActivationCut: cut })).status).toBe(200)
+    await post({ ...body, nativeActivationCut: cut })
+    expect(f.life.signal.aborted).toBe(true)
+    expect(readNativeEffect).toHaveBeenCalledTimes(4)
+    expect(readNativeEffect).toHaveBeenNthCalledWith(
+      1, reference, expect.objectContaining({ nativeActivationCut: cut }), expect.any(AbortSignal),
+    )
+    expect(observed).toEqual([null, effect, null, expect.objectContaining({ code: 'capability_unavailable' }), null])
   } finally { await new Promise<void>((resolve, reject) => server.close((error) => { if (error) reject(error); else resolve() })) }
 })

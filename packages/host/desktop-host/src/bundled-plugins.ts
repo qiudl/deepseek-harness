@@ -22,6 +22,7 @@ const archiveName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tgz$/u
 const sha256 = /^[0-9a-f]{64}$/u
 const entryId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const MAX_CATALOG_BYTES = 65_536
+const MAX_CATALOG_PLUGINS = 33
 const MAX_ARCHIVE_BYTES = 33_554_432
 /** Profile-owned, content-addressed archive directory relative to `profiles/web`. */
 export const BUNDLED_ARCHIVE_DIRECTORY = '.bundled-plugins'
@@ -49,7 +50,7 @@ function parse(value: unknown): BundledPlugin[] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('invalid_bundled_plugins')
   const catalog = value as Record<string, unknown>
   if (Object.keys(catalog).sort().join(',') !== 'plugins,schemaVersion' || catalog.schemaVersion !== 1
-    || !Array.isArray(catalog.plugins) || !catalog.plugins.length || catalog.plugins.length > 32) throw Error('invalid_bundled_plugins')
+    || !Array.isArray(catalog.plugins) || !catalog.plugins.length || catalog.plugins.length > MAX_CATALOG_PLUGINS) throw Error('invalid_bundled_plugins')
   const identities = new Set<string>(); const files = new Set<string>(); const digests = new Set<string>()
   return catalog.plugins.map((raw: unknown) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_bundled_plugins')

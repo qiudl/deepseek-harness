@@ -131,6 +131,7 @@ export interface PersonProfileRecord {
 /** Worker inputs scoped to exactly one Person Profile. */
 export interface ProfileWorkerSpec {
   readonly profileId: string
+  readonly allowPrivateTwin?: true
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
@@ -141,6 +142,9 @@ export interface ProfileWorkerSpec {
 export interface ProfileWorkerHandle {
   /** Nonsecret identity minted for this exact launched worker process. */
   readonly workerId?: string
+  /** Operate the managed Slark private-twin adapter in this exact running Profile. */
+  readonly operatePrivateTwin?: (command: import('./private-twin-worker-protocol.ts').PrivateTwinWorkerCommand,
+    signal: AbortSignal) => Promise<import('./private-twin-worker-protocol.ts').PrivateTwinWorkerReply>
   /** Observe one exact Bot/Session association through the private Profile producer. */
   readonly resolveBotSessionIdentity?: (botId: string, sessionId: string, signal: AbortSignal) =>
   Promise<import('@deepseek-ai/dsh-host-control-protocol').HostBotSessionCoordinates | null>

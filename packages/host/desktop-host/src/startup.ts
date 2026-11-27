@@ -137,6 +137,8 @@ export interface Config {
   readonly projectOperationMemoryEnvironmentsJson?: string
   readonly taskCoordinationEnvironmentsJson?: string
   readonly runtimeEntryOriginsJson?: string
+  /** The signed macOS embedding verified the private-twin plugin and its activation. */
+  readonly enablePrivateTwin?: boolean
   readonly installationPrivateKeyPath: string
   readonly installationPublicKey: string
   readonly installationId: string
@@ -181,6 +183,7 @@ export const Config: z<Config> = z.object({
   projectOperationMemoryEnvironmentsJson: z.string(),
   taskCoordinationEnvironmentsJson: z.string(),
   runtimeEntryOriginsJson: z.string(),
+  enablePrivateTwin: z.boolean(),
   installationPrivateKeyPath: z.string().required(),
   installationPublicKey: z.string().required(),
   installationId: z.string().required(),
@@ -500,6 +503,7 @@ export async function startDesktopHostApplication(
   const runtimeEntryOrigins = parseHostRuntimeEntryOriginsJson(config.runtimeEntryOriginsJson)
   if (runtimeEntryOrigins) assertRuntimeEntryOriginArtifacts(runtimeEntryOrigins.artifactPins)
   const workerFactory = new DshWebProfileWorkerFactory({
+    ...(config.enablePrivateTwin === true ? { enablePrivateTwin: true } : {}),
     ...(runtimeEntryOrigins ? { runtimeEntryOrigins } : {}),
     taskCoordinationEnvironments: parseHostTaskCoordinationEnvironments(config.taskCoordinationEnvironmentsJson),
     operationOriginKeyrings: trustedBotGroupKeyrings(config.botGroupPublicKeyringsJson),
@@ -581,6 +585,7 @@ export async function startDesktopHostApplication(
       replaceOwnerFile(join(profileRoot, 'cordis.patch.yml'), existingProfilePatch(profileRoot, persistence, ownerPaths))
       const input = {
         profileId: profile.profileId, profileRoot, credentialHandle: profile.keyHandle,
+        ...(profile.kind === 'account' ? { allowPrivateTwin: true as const } : {}),
         pluginRoots: [join(profileRoot, 'plugins')],
       }
       if (permit) { await permit.ensure(input); guard(); return }
@@ -629,6 +634,8 @@ export async function startDesktopHostApplication(
         try {
           await claimWorkerGate.start(profile.profileId, () => workers.ensure({
             profileId: profile.profileId,
+            // DesktopHost admits only verified Account Profiles to offline Account recovery.
+            allowPrivateTwin: true,
             profileRoot: join(root, 'profiles', profile.profileId),
             credentialHandle: profile.keyHandle,
             pluginRoots: [join(root, 'profiles', profile.profileId, 'plugins')],
@@ -1019,6 +1026,7 @@ export async function startDesktopHostApplication(
       generateModelText: (profileId, text, signal) => workers.generateText(profileId, text, signal),
       ...collaborationWorkerReaders(workers),
       ...rootWorkerOperations(workers),
+      ...(config.enablePrivateTwin === true ? { privateTwinWorkerReceiver: workers.privateTwinWorkerReceiver.bind(workers) } : {}),
       rootAnalysisSupported: true,
       rootCaptureSupported: true,
       rootAnalysisRecoverySupported: true,

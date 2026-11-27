@@ -22,9 +22,11 @@ import type { HostBotGroupCommand, HostBotGroupResponse } from '@deepseek-ai/dsh
 import { matchesHostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { HostNativeRoomCommand, HostNativeRoomReply } from '@deepseek-ai/dsh-host-control-protocol'
 import type { TaskCoordinationReceiver } from './account-task-coordination.ts'
+import type { PrivateTwinWorkerReceiver } from './private-twin-transfer.ts'
 
 interface StartProfileWorkerInput {
   readonly profileId: string
+  readonly allowPrivateTwin?: true
   readonly profileRoot: string
   readonly credentialHandle: string
   readonly pluginRoots: readonly string[]
@@ -82,6 +84,25 @@ export class ProfileWorkerSupervisor {
       signal.throwIfAborted(); assertCurrent()
       if (result !== null && (result.bot_id !== target.bot_id || result.session_id !== target.session_id))
         throw new HostAuthorityError('profile_mismatch')
+      return result
+    } }
+  }
+
+  /**
+   * Capture the current Profile worker across private-twin transfer frames.
+   * @param profileId - Native Profile selected by the current Account.
+   * @returns The exact worker generation and its synchronous validity guard.
+   */
+  privateTwinWorkerReceiver(profileId: string): PrivateTwinWorkerReceiver {
+    const worker = this.workers.get(profileId)
+    if (this.closed || !worker) throw new HostAuthorityError('unavailable')
+    if (!worker.operatePrivateTwin) throw new HostAuthorityError('upgrade_required')
+    const operate = worker.operatePrivateTwin.bind(worker)
+    const assertCurrent = () => { this.assertCurrentWorker(profileId, worker) }
+    return { assertCurrent, operate: async (command, signal) => {
+      signal.throwIfAborted(); assertCurrent()
+      const result = await operate(command, signal)
+      signal.throwIfAborted(); assertCurrent()
       return result
     } }
   }

@@ -203,11 +203,14 @@ it.skipIf(process.platform === 'win32')('wires Slark federation verification thr
     rmSync(root, { recursive: true, force: true })
   })
   const { startDesktopHostApplication } = await import('../src/startup.ts')
-  const application = await startDesktopHostApplication(config, { now: () => NOW }, {
+  const application = await startDesktopHostApplication(Object.assign(config, { enablePrivateTwin: true }), { now: () => NOW }, {
     platform: 'darwin',
-    createServer: options => new UnixHostServer({ ...options,
-      attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
-    }),
+    createServer: (options) => {
+      expect(options.privateTwinWorkerReceiver).toBeTypeOf('function')
+      return new UnixHostServer({ ...options,
+        attestPeer: async () => ({ uid: process.getuid!(), executableSignatureDigest: '2'.repeat(64) }),
+      })
+    },
     profileWorkerFactory: async () => ({
       viewOrigin: 'http://127.0.0.1:43123', generation: 1,
       bootstrapCookie: { name: 'fixture', value: 'private' },
@@ -333,6 +336,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
   const profile = await application.host.bootstrapLocalProfile({
     keyHandle: 'keychain:startup', unlockMaterial: Buffer.alloc(32, 9).toString('base64url'), ownerId: 'owner',
   })
+  const localWorker = workerSpecs.find(spec => spec.profileId === profile.profileId)
+  expect(localWorker).toBeDefined()
+  expect(localWorker?.allowPrivateTwin).toBeUndefined()
   const packagesRoot = join(root, 'profiles', profile.profileId, 'skillhub-packages')
   mkdirSync(packagesRoot, { mode: 0o700 })
   expect(() => capturedServerOptions.createSkillHubPackageStore?.(randomUUID(), '1', 'a'.repeat(64)))
@@ -755,6 +761,9 @@ it.skipIf(process.platform === 'win32')('wires profile, extension, and migration
     operationId: randomUUID(), ownerId: 'offline-owner',
   })).toMatchObject({ state: 'offline_ready', profileId: accountProfile.profileId })
 
+  const accountWorkers = workerSpecs.filter(spec => spec.profileId === accountProfile.profileId)
+  expect(accountWorkers).not.toHaveLength(0)
+  expect(accountWorkers.every(spec => spec.allowPrivateTwin === true)).toBe(true)
   application.host.revokeOwner('offline-owner')
   const failedInspection = await application.host.inspectOfflineAccountProfiles({
     expectedEnvironmentId: accountEnvironmentId,
