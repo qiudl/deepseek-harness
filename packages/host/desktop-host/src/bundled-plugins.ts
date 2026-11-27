@@ -51,14 +51,14 @@ function parse(value: unknown): BundledPlugin[] {
   const catalog = value as Record<string, unknown>
   if (Object.keys(catalog).sort().join(',') !== 'plugins,schemaVersion' || catalog.schemaVersion !== 1
     || !Array.isArray(catalog.plugins) || !catalog.plugins.length
-    || (catalog.plugins.length > MAX_CATALOG_PLUGINS && (catalog.plugins.length !== MAX_CATALOG_PLUGINS + 1
-      || catalog.plugins.at(-1)?.name !== 'slark-dsh-private-twin'))) throw Error('invalid_bundled_plugins')
+    || catalog.plugins.length > MAX_CATALOG_PLUGINS + 1) throw Error('invalid_bundled_plugins')
   const identities = new Set<string>(); const files = new Set<string>(); const digests = new Set<string>()
-  return catalog.plugins.map((raw: unknown) => {
+  return catalog.plugins.map((raw: unknown, index: number) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('invalid_bundled_plugins')
     const row = raw as Record<string, unknown>
     if (Object.keys(row).sort().join(',') !== 'entryIds,file,name,repository,sha256,sourceSha,version'
       || typeof row.name !== 'string' || row.name.length > 214 || !packageName.test(row.name)
+      || (index === MAX_CATALOG_PLUGINS && row.name !== 'slark-dsh-private-twin')
       || typeof row.version !== 'string' || !version.test(row.version)
       || identities.has(`${row.name}@${row.version}`)
       || typeof row.file !== 'string' || !archiveName.test(row.file) || files.has(row.file)
