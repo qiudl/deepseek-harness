@@ -21,7 +21,7 @@ import { PrivateTwinTransfer, type PrivateTwinWorkerReceiver } from './private-t
 import { createPrivateTwinControlChannel, type PrivateTwinControlChannel } from './private-twin-client.ts'
 import { HOST_BINDING_INTENT_PURPOSE, HOST_BINDING_RECEIPT_PURPOSE, encodeHostBindingClaims,
   parseHostBindingIntentProof, parseHostBindingReceiptProof,
-  type HostBindingIntentProof, type HostBindingReceiptProof } from '@deepseek-ai/dsh-host-control-protocol'
+  type HostBindingIntentProof, type HostBindingReceiptProof, type HostBindingRegistration } from '@deepseek-ai/dsh-host-control-protocol'
 import type { ProfilePrivateTwinRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostNativeRoomRetirementTarget, parseHostNativeRoomRetirementProof, encodeHostNativeRoomRetirementProofPayload, type HostNativeRoomRetirementCommand, type HostNativeRoomRetirementReply, type HostNativeRoomRetirementTarget, type HostNativeRoomRetirementProof, type ProfileNativeRoomRetirementRequest } from '@deepseek-ai/dsh-host-control-protocol'
 import { parseHostBoundBotRoomsTarget, parseHostBoundBotRoomsResult, parseHostBoundBotRoomsProof,
@@ -2918,6 +2918,18 @@ export class HostControlAuthority {
           const account = commandReadAccount(frame.params, ownerId)
           const authorize = collaborationReadAuthorizer(this.options.host, account, frame.params.expires_at, context.signal, clock)
           const originalProfile = authorize()
+          const bindingClaims = (profile: string, registration: HostBindingRegistration,
+            request: { botId: string; sessionId: string }, maximumExpiry: number) => {
+            const local = this.options.host.authorizeBindingIntentProfile(account)
+            const issuedAt = clock(), expiresAt = Math.min(maximumExpiry, frame.params.expires_at, issuedAt + 30_000)
+            if (profile !== local.profileId || registration.accountBindingVersion !== account.authorityBindingVersion ||
+                expiresAt <= issuedAt) throw new HostAuthorityError('stale')
+            return { ...registration, issuedAt, expiresAt, environmentId: account.authorityEnvironmentId,
+              hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: account.authorityBindingVersion,
+              profileId: local.profileId, profileEpoch: local.generation,
+              installationId: identity.installationId, hostInstanceId: identity.hostInstanceId,
+              processNonce: identity.processNonce, mainBotId: request.botId, sessionId: request.sessionId }
+          }
           const result = await privateTwin.execute(frame.params.command, {
             key: JSON.stringify(account), signal: context.signal, authorize, capture, now: clock,
             observeBindingProfileEpoch: (profile) => {
@@ -2930,35 +2942,18 @@ export class HostControlAuthority {
               throw new HostAuthorityError('stale')
             },
             signBindingIntent: (profile, registration, request) => {
-              const local = this.options.host.authorizeBindingIntentProfile(account)
-              const issuedAt = clock()
-              const expiresAt = Math.min(request.intent.expiresAt, frame.params.expires_at, issuedAt + 30_000)
-              if (profile !== local.profileId || registration.accountBindingVersion !== account.authorityBindingVersion
-                || expiresAt <= issuedAt) throw new HostAuthorityError('stale')
               const claims: HostBindingIntentProof['claims'] = {
-                version: 1, purpose: HOST_BINDING_INTENT_PURPOSE,
-                ...registration, ...request.intent, issuedAt, expiresAt,
-                environmentId: account.authorityEnvironmentId,
-                hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: account.authorityBindingVersion,
-                profileId: local.profileId, profileEpoch: local.generation,
-                installationId: identity.installationId, hostInstanceId: identity.hostInstanceId,
-                processNonce: identity.processNonce, mainBotId: request.botId, sessionId: request.sessionId,
+                version: 1, purpose: HOST_BINDING_INTENT_PURPOSE, ...request.intent,
+                ...bindingClaims(profile, registration, request, request.intent.expiresAt),
                 messageId: request.sourceMessageId,
               }
               return parseHostBindingIntentProof({ claims, signature: signAuthorityPayload(identity, encodeHostBindingClaims(claims)) })
             },
             signBindingReceipt: (profile, registration, request, lookupId) => {
-              const local = this.options.host.authorizeBindingIntentProfile(account), issuedAt = clock()
-              const expiresAt = Math.min(frame.params.expires_at, issuedAt + 30_000)
-              if (profile !== local.profileId || registration.accountBindingVersion !== account.authorityBindingVersion ||
-                  expiresAt <= issuedAt)
-                throw new HostAuthorityError('stale')
               const claims: HostBindingReceiptProof['claims'] = {
-                version: 1, purpose: HOST_BINDING_RECEIPT_PURPOSE, ...registration, issuedAt, expiresAt,
-                environmentId: account.authorityEnvironmentId, hostAccountBindingId: account.accountBindingHandle,
-                hostAccountBindingVersion: account.authorityBindingVersion, profileId: local.profileId, profileEpoch: local.generation,
-                installationId: identity.installationId, hostInstanceId: identity.hostInstanceId, processNonce: identity.processNonce,
-                mainBotId: request.botId, sessionId: request.sessionId, lookupBy: 'request', lookupId,
+                version: 1, purpose: HOST_BINDING_RECEIPT_PURPOSE,
+                ...bindingClaims(profile, registration, request, frame.params.expires_at),
+                lookupBy: 'request', lookupId,
               }
               return parseHostBindingReceiptProof({ claims, signature: signAuthorityPayload(identity, encodeHostBindingClaims(claims)) })
             },

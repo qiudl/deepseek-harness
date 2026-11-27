@@ -775,8 +775,12 @@ export class DesktopHost {
     }
   }
 
-  /** Recheck the Account and return its current Native binding generation for intent signing. */
-  authorizeBindingIntentProfile(input: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]) {
+  /** Recheck the Account and return its current Native binding generation for intent signing.
+   * @param input - The authenticated Account and its current Slark admission.
+   * @returns The authorized Profile ID and Native binding generation.
+   */
+  authorizeBindingIntentProfile(input: Parameters<DesktopHost['authorizeCollaborationRegistration']>[0]):
+  { profileId: PersonProfileId; generation: number } {
     this.authorizeCollaborationRegistration(input)
     const profileId = this.authorizeAccountModelText(input)
     const profile = this.options.registry.resolveProfile(profileId)

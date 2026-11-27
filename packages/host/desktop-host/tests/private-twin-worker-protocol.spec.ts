@@ -155,3 +155,22 @@ it('keeps remote target pages bounded and omits the stable Cloud IDs', () => {
       .map(patch => ({ ...page, items: [{ ...item, ...patch }] })),
   ]) expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
 })
+
+it('allows current binding reads only for a clean source lookup and returns presentation fields', () => {
+  const groupId = 'b3eeeaf0-6d61-4f7c-a6ad-feccae862c10', roomId = 'session-' + groupId
+  const groupSource = { namespaceId: 'ds-bot:workspace', roomId, groupId, memberCount: 2, membersDigest: 'b'.repeat(64) }
+  const lookup = { kind: 'group', sourceRef: ticket, sourceId: roomId,
+    query: null, targetRef: null, cursor: null, current: true, groupSource }
+  const request = { ...source, rootCallId: source.callId, operation: 'binding_targets', lookup }
+  expect(parsePrivateTwinWorkerReply(claim, { request })).toEqual({ request })
+  for (const patch of [{ current: false }, { query: 'forged' }, { sourceId: 'another-group' }, { kind: 'twin' }])
+    expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, lookup: { ...lookup, ...patch } } }))
+      .toThrow('invalid_private_twin_worker_frame')
+  const active = { state: 'current', kind: 'group', relation: { state: 'paused', projectName: '发布项目', targetName: '频道' } }
+  expect(parsePrivateTwinWorkerResult(active)).toEqual(active)
+  const unbound = { state: 'current', kind: 'twin', relation: { state: 'unbound' } }
+  expect(parsePrivateTwinWorkerResult(unbound)).toEqual(unbound)
+  for (const relation of [{ ...active.relation, channelId: groupId }, { ...active.relation, state: 'ended' },
+    { ...active.relation, targetName: '\n' }, { ...unbound.relation, projectName: '发布项目' }])
+    expect(() => parsePrivateTwinWorkerResult({ ...active, relation })).toThrow('invalid_private_twin_worker_frame')
+})

@@ -53,6 +53,13 @@ type BindingTargetLookup = Readonly<{
   query: string | null
   targetRef: string | null
   cursor: string | null
+  current?: true
+  groupSource?: PairingSource
+}>
+type BindingCurrent = Readonly<{
+  state: 'current'
+  kind: BindingKind
+  relation: { state: 'unbound' } | { state: 'active' | 'paused' | 'in_progress'; projectName: string; targetName: string }
 }>
 type BindingTargetPage = Readonly<{
   state: 'candidates'
@@ -89,7 +96,7 @@ type BindingApproval = Readonly<{
 export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
-  | { readonly state: 'accepted' | 'active'; readonly receipt: string }
+  | { readonly state: 'accepted' | 'active' | 'ended'; readonly receipt: string }
   | {
     readonly state: 'group_pairing'
     readonly operationId: string
@@ -118,6 +125,7 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'consent_recorded'; readonly remaining: 'dsh_to_slark' | 'slark_to_dsh'; readonly label: number }
   | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
   | BindingTargetPage
+  | BindingCurrent
   | Readonly<{
     state: 'preview'
     proposalRef: string
@@ -215,13 +223,22 @@ function parsePairingSource(raw: unknown, roomId: string): PairingSource {
 }
 
 function parseBindingTargetLookup(input: unknown): BindingTargetLookup {
-  const row = record(input, ['kind', 'sourceRef', 'sourceId', 'query', 'targetRef', 'cursor'])
+  const row = record(input)
+  const hasCurrent = Object.hasOwn(row, 'current')
+  const hasGroupSource = Object.hasOwn(row, 'groupSource')
+  record(row, ['kind', 'sourceRef', 'sourceId', 'query', 'targetRef', 'cursor',
+    ...(hasCurrent ? ['current'] : []), ...(hasGroupSource ? ['groupSource'] : [])])
   const { kind, query } = row
   if ((kind !== 'twin' && kind !== 'group') || (kind === 'twin' && row.targetRef !== null) ||
       (query !== null && (typeof query !== 'string' || query.length > 200 || /\p{Cc}/u.test(query) ||
         Buffer.from(query).toString('utf8') !== query))) return invalid()
-  return { kind, query, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId),
-    targetRef: row.targetRef === null ? null : opaque(row.targetRef), cursor: row.cursor === null ? null : opaque(row.cursor) }
+  if ((hasCurrent && (row.current !== true || query !== null || row.targetRef !== null || row.cursor !== null)) ||
+      hasGroupSource !== (hasCurrent && kind === 'group')) return invalid()
+  const sourceId = id(row.sourceId)
+  return { kind, query, sourceRef: opaque(row.sourceRef), sourceId,
+    targetRef: row.targetRef === null ? null : opaque(row.targetRef), cursor: row.cursor === null ? null : opaque(row.cursor),
+    ...(hasCurrent ? { current: true as const } : {}),
+    ...(hasGroupSource ? { groupSource: parsePairingSource(row.groupSource, sourceId) } : {}) }
 }
 
 function parseBindingTargetPage(input: Record<string, unknown>): BindingTargetPage {
@@ -285,7 +302,7 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'replied':
       record(input, ['state', 'answer'])
       return { state: input.state, answer: input.answer === null ? null : text(input.answer, PRIVATE_TWIN_MAX_ANSWER_BYTES) }
-    case 'accepted': case 'active':
+    case 'accepted': case 'active': case 'ended':
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
     case 'group_pairing': {
@@ -344,6 +361,20 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     }
     case 'candidates':
       return parseBindingTargetPage(input)
+    case 'current': {
+      record(input, ['state', 'kind', 'relation'])
+      if (input.kind !== 'twin' && input.kind !== 'group') return invalid()
+      const relation = record(input.relation)
+      if (relation.state === 'unbound') {
+        record(relation, ['state'])
+        return { state: 'current', kind: input.kind, relation: { state: 'unbound' } }
+      }
+      record(relation, ['state', 'projectName', 'targetName'])
+      if (relation.state !== 'active' && relation.state !== 'paused' && relation.state !== 'in_progress') return invalid()
+      const projectName = text(relation.projectName, 800), targetName = text(relation.targetName, 800)
+      if ([projectName, targetName].some(value => value.length > 200 || /[\u0000-\u001f\u007f]/u.test(value))) return invalid()
+      return { state: 'current', kind: input.kind, relation: { state: relation.state, projectName, targetName } }
+    }
     case 'preview': {
       record(input, ['state', 'proposalRef', 'label', 'kind', 'action', 'display'])
       const label = positive(input.label)

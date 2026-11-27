@@ -38,11 +38,15 @@ function registration(row: Record<string, unknown>) {
     accountBindingVersion: positive(row.accountBindingVersion), hostEpoch })
 }
 
-/** Detach the Main-provided Cloud registration coordinates. */
-export function parseHostBindingRegistration(value: unknown) {
+/** Detach the Main-provided Cloud registration coordinates.
+ * @param value - Untrusted registration data from Main.
+ * @returns Validated registration fields for this binding claim.
+ */
+export function parseHostBindingRegistration(value: unknown): HostBindingRegistration {
   return registration(record(value, registrationFields))
 }
-export type HostBindingRegistration = ReturnType<typeof parseHostBindingRegistration>
+/** Slark registration coordinates incorporated into the Host proof. */
+export type HostBindingRegistration = ReturnType<typeof registration>
 
 const evidenceFields = ['requestId', 'messageSeq', 'messageDigest', 'previewDigest', 'commandDigest', 'expiresAt'] as const
 function evidence(row: Record<string, unknown>) {
@@ -51,13 +55,19 @@ function evidence(row: Record<string, unknown>) {
     commandDigest: matched(row.commandDigest, digest), expiresAt: positive(row.expiresAt) })
 }
 
-/** Match the immutable evidence stored in a claimed Worker request. */
-export function parseHostBindingWorkerEvidence(value: unknown) {
+/** Match the immutable evidence stored in a claimed Worker request.
+ * @param value - The untrusted Worker evidence.
+ * @returns Validated request and digest coordinates.
+ */
+export function parseHostBindingWorkerEvidence(value: unknown): HostBindingWorkerEvidence {
   return evidence(record(value, evidenceFields))
 }
-export type HostBindingWorkerEvidence = ReturnType<typeof parseHostBindingWorkerEvidence>
+/** Immutable coordinates for the claimed human confirmation. */
+export type HostBindingWorkerEvidence = ReturnType<typeof evidence>
 
+/** Signature purpose for a Slark binding mutation. */
 export const HOST_BINDING_INTENT_PURPOSE = 'slark.dsh.binding-intent/v1'
+/** Signature purpose for reading an original request receipt. */
 export const HOST_BINDING_RECEIPT_PURPOSE = 'slark.dsh.binding-receipt/v1'
 const profileFields = ['environmentId', 'hostAccountBindingId', 'hostAccountBindingVersion', 'profileId', 'profileEpoch',
   'installationId', 'hostInstanceId', 'processNonce', 'mainBotId', 'sessionId', 'issuedAt'] as const
@@ -71,10 +81,17 @@ function profile(row: Record<string, unknown>) {
     sessionId: matched(row.sessionId, id), issuedAt: positive(row.issuedAt) }
 }
 
+/** Read a binding request UUID for receipt lookup.
+ * @param value - Untrusted lookup coordinate.
+ * @returns The validated original request UUID.
+ */
 export function parseHostBindingLookupId(value: unknown): string { return matched(value, uuid) }
 
-/** Detach a complete Host signature, with the same claims Slark verifies. */
-export function parseHostBindingIntentProof(raw: unknown) {
+/** Detach a complete Host signature, with the same claims Slark verifies.
+ * @param raw - Untrusted proof envelope.
+ * @returns The validated and frozen mutation proof.
+ */
+export function parseHostBindingIntentProof(raw: unknown): HostBindingIntentProof {
   const envelope = record(raw, ['claims', 'signature'])
   const row = record(envelope.claims, ['version', 'purpose', ...registrationFields, ...evidenceFields, ...profileFields, 'messageId'])
   if (row.version !== 1 || row.purpose !== HOST_BINDING_INTENT_PURPOSE) return invalid()
@@ -83,10 +100,18 @@ export function parseHostBindingIntentProof(raw: unknown) {
   if (claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > 30_000) return invalid()
   return Object.freeze({ claims, signature: matched(envelope.signature, signature) })
 }
-export type HostBindingIntentProof = ReturnType<typeof parseHostBindingIntentProof>
+/** Host proof for the approved mutation and its exact human message. */
+export type HostBindingIntentProof = Readonly<{
+  claims: Readonly<ReturnType<typeof profile> & HostBindingWorkerEvidence &
+    { version: 1; purpose: typeof HOST_BINDING_INTENT_PURPOSE; messageId: string }>
+  signature: string
+}>
 
-/** Bind recovery to the original request in the current Account, Profile and private chat. */
-export function parseHostBindingReceiptProof(raw: unknown) {
+/** Bind recovery to the original request in the current Account, Profile and private chat.
+ * @param raw - Untrusted receipt proof envelope.
+ * @returns The validated and frozen read-only proof.
+ */
+export function parseHostBindingReceiptProof(raw: unknown): HostBindingReceiptProof {
   const envelope = record(raw, ['claims', 'signature'])
   const row = record(envelope.claims, ['version', 'purpose', ...registrationFields, ...profileFields,
     'lookupBy', 'lookupId', 'expiresAt'])
@@ -96,13 +121,22 @@ export function parseHostBindingReceiptProof(raw: unknown) {
   if (claims.expiresAt <= claims.issuedAt || claims.expiresAt - claims.issuedAt > 30_000) return invalid()
   return Object.freeze({ claims, signature: matched(envelope.signature, signature) })
 }
-export type HostBindingReceiptProof = ReturnType<typeof parseHostBindingReceiptProof>
+/** Read-only Host proof scoped to an original request in the current private chat. */
+export type HostBindingReceiptProof = Readonly<{
+  claims: Readonly<ReturnType<typeof profile> &
+    { version: 1; purpose: typeof HOST_BINDING_RECEIPT_PURPOSE; lookupBy: 'request'; lookupId: string; expiresAt: number }>
+  signature: string
+}>
 
-/** Canonical Slark JSON for this flat signed envelope. */
+/** Canonical Slark JSON for this flat signed envelope.
+ * @param claims - Validated binding mutation or receipt claims.
+ * @returns The canonical UTF-8 bytes to sign or verify.
+ */
 export function encodeHostBindingClaims(claims: HostBindingIntentProof['claims'] | HostBindingReceiptProof['claims']): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(Object.fromEntries(
     Object.keys(claims).sort().map(key => [key, claims[key as keyof typeof claims]]),
   )))
 }
 
+/** Alias for consumers that encode an approved mutation. */
 export const encodeHostBindingIntent = encodeHostBindingClaims

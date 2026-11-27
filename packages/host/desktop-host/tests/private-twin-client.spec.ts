@@ -20,7 +20,9 @@ function fixture(patch: Partial<Record<HostPrivateTwinCommand['operation'], unkn
   const replies = { claim: claimed, read: chunk, check: { state: 'current', ticket },
     finish: { state: 'completed', ticket }, ...patch }
   const call = vi.fn(async (command: HostPrivateTwinCommand) => replies[command.operation])
-  const channel = createPrivateTwinControlChannel({ profileId, assertCurrent, call, ...(verifyBindingIntent ? { verifyBindingIntent } : {}) })
+  const channel = createPrivateTwinControlChannel({
+    profileId, assertCurrent, call, ...(verifyBindingIntent ? { verifyBindingIntent } : {}),
+  })
   return { channel, assertCurrent, signal, call }
 }
 

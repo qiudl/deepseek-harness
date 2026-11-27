@@ -1,6 +1,7 @@
 /** Bounded transfer frames for one live, Account-bound private-twin invocation. */
 import { parseHostBindingIntentProof, parseHostBindingReceiptProof, parseHostBindingRegistration, parseHostBindingLookupId,
   type HostBindingIntentProof, type HostBindingReceiptProof, type HostBindingRegistration } from './private-binding-intent.ts'
+/** Maximum bytes in one private Worker transfer fragment. */
 export const PRIVATE_TWIN_CONTROL_CHUNK_BYTES = 24 * 1024
 /** Maximum serialized tool request, including JSON escaping. */
 export const PRIVATE_TWIN_CONTROL_REQUEST_BYTES = 6 * 32_000 + 8192
