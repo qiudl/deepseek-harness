@@ -142,6 +142,35 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   expect(verify(null, encodeHostBindingClaims(recovered.claims), keys.publicKey, Buffer.from(recovered.signature, 'base64url'))).toBe(true)
   await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal)).resolves.toEqual(recovered)
   await expect(channel.finish(ticket, { state: 'binding_status', status: 'active' }, signal)).resolves.toEqual({ completed: true })
+  const inspection = client.inspection
+  Object.defineProperty(client, 'inspection', { value: { ...inspection,
+    capabilities: inspection.capabilities.filter(capability => capability !== 'profile.binding_intent' &&
+      capability !== 'profile.binding_receipt') } })
+  const legacy = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  try {
+    await expect(legacy.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(legacy.signBindingReceipt(ticket, registration, intent.requestId, signal))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+  } finally { Object.defineProperty(client, 'inspection', { value: inspection }) }
+  const classification = vi.spyOn(host, 'authorizeBindingIntentProfile').mockImplementationOnce(() => {
+    throw Error('registry could not be read')
+  })
+  try { await expect(channel.claim(signal)).rejects.toMatchObject({ code: 'unavailable' }) }
+  finally { classification.mockRestore() }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  const mismatchedVersion = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  await mismatchedVersion.claim(signal)
+  await expect(mismatchedVersion.signBindingIntent(ticket, { ...registration, accountBindingVersion: 2 }, signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_receipt', receipt } })
+  await channel.claim(signal)
+  const originalInstallation = identity.installationId
+  identity.installationId = randomUUID()
+  try {
+    await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+  } finally { identity.installationId = originalInstallation }
+  await channel.finish(ticket, { state: 'unavailable' }, signal)
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   const expiring = client.openPrivateTwinChannel({ ...account, profileId, signal })
   await expiring.claim(signal)
@@ -167,7 +196,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(7)
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(8)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })

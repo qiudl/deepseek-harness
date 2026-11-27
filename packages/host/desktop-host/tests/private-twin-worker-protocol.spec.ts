@@ -102,8 +102,10 @@ it('validates reviewed group coordinates and pairing tickets on the private wire
     defaultAgentRef: ticket, messageSeq: 5, groupSource, groupSourceName: '发布群' }
   const request = { ...source, rootCallId: source.callId, operation: 'binding_propose', proposal }
   expect(parsePrivateTwinWorkerReply(claim, { request })).toEqual({ request })
-  expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, proposal: { ...proposal, sourceId: 'other' } } }))
-    .toThrow('invalid_private_twin_worker_frame')
+  for (const patch of [{ sourceId: 'other' }, { groupSourceName: '发\n布' }, { groupSourceName: 'a'.repeat(201) },
+    { groupCurrent: { bindingId: groupId, version: '1' } }])
+    expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, proposal: { ...proposal, ...patch } } }))
+      .toThrow('invalid_private_twin_worker_frame')
   const handoff = { state: 'group_pairing', endpoint: 'https://slark.example', receipt: ticket, ticket, operationId: groupId,
     expiresAt: 100_000, source: groupSource, target: { projectId: 'project', channelId: 'channel', defaultAgentId: 'agent' } }
   expect(parsePrivateTwinWorkerResult(handoff)).toEqual(handoff)
@@ -112,7 +114,7 @@ it('validates reviewed group coordinates and pairing tickets on the private wire
     const replacement = { ...handoff, replaces, status }
     expect(parsePrivateTwinWorkerResult(replacement)).toEqual(replacement)
   }
-  for (const value of [{ ...handoff, endpoint: 'https://slark.example/extra' },
+  for (const value of [{ ...handoff, endpoint: 'https://slark.example/extra' }, { ...handoff, endpoint: 'not-an-origin' },
     { ...handoff, source: { ...groupSource, memberCount: 1001 } }, { ...handoff, credential: ticket },
     { ...handoff, status: 'active' }, { ...handoff, replaces },
     { ...handoff, replaces, status: 'ended' }, { ...handoff, replaces: { ...replaces, version: '2' }, status: 'active' }])
@@ -130,7 +132,7 @@ it('carries the exact reviewed unlink and recovers only its original terminal st
   const handoff = { state: 'group_end', endpoint: 'https://slark.example', receipt: ticket, status: 'ended',
     operationId: groupId, source: groupSource, bindingId, bindingVersion: 1 }
   expect(parsePrivateTwinWorkerResult(handoff)).toEqual(handoff)
-  for (const patch of [{ status: 'active' }, { bindingVersion: 2 }, { credential: ticket }])
+  for (const patch of [{ status: 'active' }, { bindingVersion: 2 }, { credential: ticket }, { endpoint: 'not-an-origin' }])
     expect(() => parsePrivateTwinWorkerResult({ ...handoff, ...patch })).toThrow('invalid_private_twin_worker_frame')
 })
 
@@ -168,9 +170,20 @@ it('allows current binding reads only for a clean source lookup and returns pres
       .toThrow('invalid_private_twin_worker_frame')
   const active = { state: 'current', kind: 'group', relation: { state: 'paused', projectName: '发布项目', targetName: '频道' } }
   expect(parsePrivateTwinWorkerResult(active)).toEqual(active)
+  expect(() => parsePrivateTwinWorkerResult({ ...active, kind: 'unknown' })).toThrow('invalid_private_twin_worker_frame')
   const unbound = { state: 'current', kind: 'twin', relation: { state: 'unbound' } }
   expect(parsePrivateTwinWorkerResult(unbound)).toEqual(unbound)
   for (const relation of [{ ...active.relation, channelId: groupId }, { ...active.relation, state: 'ended' },
-    { ...active.relation, targetName: '\n' }, { ...unbound.relation, projectName: '发布项目' }])
+    { ...active.relation, targetName: '\n' }, { ...active.relation, targetName: '发布\n频道' },
+    { ...active.relation, projectName: 'a'.repeat(201) }, { ...unbound.relation, projectName: '发布项目' }])
     expect(() => parsePrivateTwinWorkerResult({ ...active, relation })).toThrow('invalid_private_twin_worker_frame')
+})
+
+it('accepts the known receipt statuses and rejects a worker-defined state', () => {
+  for (const status of ['accepted', 'in_progress', 'active', 'ended', 'cancelled', 'denied', 'conflict', 'outcome_unknown', 'missing']) {
+    const result = { state: 'binding_status', status }
+    expect(parsePrivateTwinWorkerResult(result)).toEqual(result)
+  }
+  expect(() => parsePrivateTwinWorkerResult({ state: 'binding_status', status: 'forged' }))
+    .toThrow('invalid_private_twin_worker_frame')
 })

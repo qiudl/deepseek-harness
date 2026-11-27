@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import {
-  encodeHostBindingIntent, HOST_BINDING_INTENT_PURPOSE, parseHostBindingIntentProof,
+  encodeHostBindingIntent, HOST_BINDING_INTENT_PURPOSE, HOST_BINDING_RECEIPT_PURPOSE,
+  parseHostBindingIntentProof, parseHostBindingReceiptProof,
   parseHostBindingRegistration, parseHostBindingWorkerEvidence,
   parseHostPrivateTwinCommand, parseHostPrivateTwinResult, PRIVATE_TWIN_CONTROL_CHUNK_BYTES,
   PRIVATE_TWIN_CONTROL_REQUEST_BYTES,
@@ -71,4 +72,16 @@ it('accepts only exact binding claims, registration, evidence and bounded lifeti
   for (const invalid of [{ ...claims, expiresAt: claims.issuedAt }, { ...claims, expiresAt: 30_101 },
     { ...claims, purpose: 'unsupported' }, { ...claims, version: 2 },
   ]) expect(() => parseHostBindingIntentProof({ claims: invalid, signature })).toThrow('invalid_host_binding_intent')
+  const receipt = {
+    ...registration, version: 1, purpose: HOST_BINDING_RECEIPT_PURPOSE, lookupBy: 'request', lookupId: profile_id,
+    environmentId: claims.environmentId, profileId: claims.profileId, profileEpoch: claims.profileEpoch,
+    hostAccountBindingId: claims.hostAccountBindingId, hostAccountBindingVersion: claims.hostAccountBindingVersion,
+    installationId: claims.installationId, hostInstanceId: claims.hostInstanceId, processNonce: claims.processNonce,
+    mainBotId: claims.mainBotId, sessionId: claims.sessionId, issuedAt: claims.issuedAt, expiresAt: 30_100,
+  }
+  expect(parseHostBindingReceiptProof({ claims: receipt, signature })).toEqual({ claims: receipt, signature })
+  for (const patch of [
+    { lookupBy: 'operation' }, { purpose: HOST_BINDING_INTENT_PURPOSE }, { version: 2 },
+    { expiresAt: 100 }, { expiresAt: 30_101 },
+  ]) expect(() => parseHostBindingReceiptProof({ claims: { ...receipt, ...patch }, signature })).toThrow('invalid_host_binding_intent')
 })
