@@ -20,19 +20,60 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
   | { readonly operation: 'binding_confirmation'; readonly confirmation: BindingConfirmation }
   | { readonly operation: 'binding_propose'; readonly proposal: BindingProposal }
+  | { readonly operation: 'binding_targets'; readonly lookup: BindingTargetLookup }
 )
 
 type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
 type BindingKind = 'twin' | 'group'
 type BindingAction = 'bind' | 'replace' | 'end'
-type BindingProposal = Readonly<{ kind: BindingKind; action: BindingAction; sourceRef: string; sourceId: string;
-  targetRef: string | null; defaultAgentRef: string | null; messageSeq: number }>
-type BindingPreviewDisplay = Readonly<{ sourceName: string; previousTarget: string | null; targetName: string | null;
-  defaultAgent: string | null; impact: string }>
-type BindingConfirmation = Readonly<{ messageSeq: number; text: string; proposalRef: string | null; presentations: readonly Presentation[] }>
-type BindingApproval = Readonly<{ state: 'confirmed'; kind: 'twin' | 'group'; sourceId: string;
-  requestId: string; previewDigest: string; commandDigest: string; confirmationMessageId: string;
-  confirmationMessageSeq: number; expiresAt: number }>
+type BindingProposal = Readonly<{
+  kind: BindingKind
+  action: BindingAction
+  sourceRef: string
+  sourceId: string
+  targetRef: string | null
+  defaultAgentRef: string | null
+  messageSeq: number
+}>
+type BindingTargetLookup = Readonly<{
+  kind: BindingKind
+  sourceRef: string
+  sourceId: string
+  query: string | null
+  targetRef: string | null
+  cursor: string | null
+}>
+type BindingTargetPage = Readonly<{
+  state: 'candidates'
+  category: 'target' | 'default_agent'
+  kind: BindingKind
+  items: readonly Readonly<{ ref: string; display_name: string; availability: 'eligible' | 'occupied' }>[]
+  next_cursor: string | null
+}>
+type BindingPreviewDisplay = Readonly<{
+  sourceName: string
+  previousTarget: string | null
+  targetName: string | null
+  defaultAgent: string | null
+  impact: string
+}>
+type BindingConfirmation = Readonly<{
+  messageSeq: number
+  text: string
+  proposalRef: string | null
+  presentations: readonly Presentation[]
+}>
+type BindingApproval = Readonly<{
+  state: 'confirmed'
+  kind: BindingKind
+  sourceId: string
+  requestId: string
+  previewDigest: string
+  commandDigest: string
+  confirmationMessageId: string
+  confirmationMessageSeq: number
+  expiresAt: number
+}>
 
 export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
@@ -41,8 +82,15 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
   | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
-  | { readonly state: 'preview'; readonly proposalRef: string; readonly label: number;
-      readonly kind: BindingKind; readonly action: BindingAction; readonly display: BindingPreviewDisplay }
+  | BindingTargetPage
+  | Readonly<{
+    state: 'preview'
+    proposalRef: string
+    label: number
+    kind: BindingKind
+    action: BindingAction
+    display: BindingPreviewDisplay
+  }>
 
 export type PrivateTwinWorkerCommand =
   | { readonly operation: 'claim' }
@@ -102,8 +150,35 @@ function parseBindingProposal(input: unknown): BindingProposal {
   const { kind, action } = bindingAction(row.kind, row.action)
   if ((action === 'end') !== (row.targetRef === null) ||
       ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
-  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId), targetRef: row.targetRef === null ? null : opaque(row.targetRef),
+  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId),
+    targetRef: row.targetRef === null ? null : opaque(row.targetRef),
     defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq) }
+}
+
+function parseBindingTargetLookup(input: unknown): BindingTargetLookup {
+  const row = record(input, ['kind', 'sourceRef', 'sourceId', 'query', 'targetRef', 'cursor'])
+  const { kind, query } = row
+  if ((kind !== 'twin' && kind !== 'group') || (kind === 'twin' && row.targetRef !== null) ||
+      (query !== null && (typeof query !== 'string' || query.length > 200 || /\p{Cc}/u.test(query) ||
+        Buffer.from(query).toString('utf8') !== query))) return invalid()
+  return { kind, query, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId),
+    targetRef: row.targetRef === null ? null : opaque(row.targetRef), cursor: row.cursor === null ? null : opaque(row.cursor) }
+}
+
+function parseBindingTargetPage(input: Record<string, unknown>): BindingTargetPage {
+  record(input, ['state', 'category', 'kind', 'items', 'next_cursor'])
+  const { kind, category, items } = input
+  if ((kind !== 'twin' && kind !== 'group') ||
+      (category !== 'target' && (category !== 'default_agent' || kind !== 'group')) ||
+      !Array.isArray(items) || items.length > 20) return invalid()
+  const entries = items.map((raw): BindingTargetPage['items'][number] => {
+    const row = record(raw, ['ref', 'display_name', 'availability'])
+    const label = text(row.display_name, 8000), availability = row.availability
+    if (label.length > 2000 || /\p{Cc}/u.test(label) || (availability !== 'eligible' && availability !== 'occupied')) return invalid()
+    return { ref: opaque(row.ref), display_name: label, availability }
+  })
+  return { state: 'candidates', category, kind, items: entries,
+    next_cursor: input.next_cursor === null ? null : opaque(input.next_cursor) }
 }
 
 function previewLabel(raw: unknown): string {
@@ -123,7 +198,7 @@ function parseBindingConfirmation(raw: unknown): BindingConfirmation {
   const row = record(raw, ['messageSeq', 'text', 'proposalRef', 'presentations'])
   if (!Array.isArray(row.presentations) || row.presentations.length > 16) return invalid()
   return { messageSeq: positive(row.messageSeq), text: text(row.text, 4096),
-    proposalRef: row.proposalRef === null ? null : opaque(row.proposalRef), presentations: row.presentations.map(raw => {
+    proposalRef: row.proposalRef === null ? null : opaque(row.proposalRef), presentations: row.presentations.map((raw) => {
       const item = record(raw, ['ref', 'callId', 'resultSeq'])
       return { ref: opaque(item.ref), callId: id(item.callId), resultSeq: positive(item.resultSeq) }
     }) }
@@ -164,6 +239,8 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'binding_confirmation':
       record(input, ['state', 'approval'])
       return { state: input.state, approval: parseBindingApproval(input.approval) }
+    case 'candidates':
+      return parseBindingTargetPage(input)
     case 'preview': {
       record(input, ['state', 'proposalRef', 'label', 'kind', 'action', 'display'])
       const label = positive(input.label)
@@ -211,24 +288,25 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  const field = { send: 'content', read: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation', binding_propose: 'proposal' } as const
-  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation' && op !== 'binding_propose') return invalid()
+  const field = { send: 'content', read: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation',
+    binding_propose: 'proposal', binding_targets: 'lookup' } as const
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_confirmation' &&
+      op !== 'binding_propose' && op !== 'binding_targets') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
     field[op]])
   const base = { ticket: opaque(fields.ticket), botId: id(fields.botId), sessionId: id(fields.sessionId),
     callId: id(fields.callId), rootCallId: id(fields.rootCallId), sourceMessageId: id(fields.sourceMessageId) }
+  if (op !== 'read' && op !== 'send' && base.callId !== base.rootCallId) return invalid()
   if (op === 'binding_intent') {
-    if (base.callId !== base.rootCallId) return invalid()
     return { request: { ...base, operation: op, intent: parseHostBindingWorkerEvidence(fields.intent) } }
   }
   if (op === 'binding_confirmation') {
-    if (base.callId !== base.rootCallId) return invalid()
     return { request: { ...base, operation: op, confirmation: parseBindingConfirmation(fields.confirmation) } }
   }
   if (op === 'binding_propose') {
-    if (base.callId !== base.rootCallId) return invalid()
     return { request: { ...base, operation: op, proposal: parseBindingProposal(fields.proposal) } }
   }
+  if (op === 'binding_targets') return { request: { ...base, operation: op, lookup: parseBindingTargetLookup(fields.lookup) } }
   return { request: op === 'send'
     ? { ...base, operation: op, content: text(fields.content, maxQuestionBytes) }
     : { ...base, operation: op, receipt: opaque(fields.receipt) } }

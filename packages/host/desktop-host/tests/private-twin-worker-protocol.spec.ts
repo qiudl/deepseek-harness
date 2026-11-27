@@ -50,9 +50,8 @@ it('keeps confirmation evidence private and bounded before requesting a separate
   const confirmation = { messageSeq: 11, text: '确认第1项', proposalRef: null, presentations: [presentation] }
   const request = { ...source, rootCallId: source.callId, operation: 'binding_confirmation', confirmation }
   expect(parsePrivateTwinWorkerReply(claim, { request })).toEqual({ request })
-  expect(parsePrivateTwinWorkerReply(claim, { request: { ...request,
-    confirmation: { ...confirmation, proposalRef: ticket } } })).toEqual({ request: { ...request,
-      confirmation: { ...confirmation, proposalRef: ticket } } })
+  const selected = { ...request, confirmation: { ...confirmation, proposalRef: ticket } }
+  expect(parsePrivateTwinWorkerReply(claim, { request: selected })).toEqual({ request: selected })
   for (const overrides of [{ rootCallId: 'ancestor' }, ...[
     { messageSeq: 0 }, { text: '字'.repeat(1366) }, { presentations: Array(17).fill(presentation) },
     { presentations: [{ ...presentation, callId: '../../other' }] }, { proposalRef: 'untrusted' }, { extra: true },
@@ -88,5 +87,27 @@ it('keeps proposal arguments and public preview output within their exact wire c
     expect(parsePrivateTwinWorkerResult(value)).toEqual(value)
   for (const value of [{ ...preview, label: 1_000_000_000 },
     ...[{ sourceName: 'a'.repeat(201) }, { impact: '换\n行' }, { secret: 'hidden' }].map(patch => ({ ...preview, display: { ...display, ...patch } })),
+  ]) expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
+})
+
+it('keeps remote target pages bounded and omits the stable Cloud IDs', () => {
+  const lookup = { kind: 'twin', sourceRef: ticket, sourceId: 'child', query: null, targetRef: null, cursor: null }
+  const request = { ...source, rootCallId: source.callId, operation: 'binding_targets', lookup }
+  for (const value of [request, { ...request, lookup: { ...lookup, kind: 'group', query: '发布', targetRef: ticket, cursor: ticket } }])
+    expect(parsePrivateTwinWorkerReply(claim, { request: value })).toEqual({ request: value })
+  for (const patch of [
+    { kind: 'other' }, { targetRef: ticket }, { query: 2 }, { query: 'a'.repeat(201) },
+    { query: 'bad\nquery' }, { query: '\ud800' }, { sourceId: 'outside/path' }, { cursor: 'invalid' },
+  ]) expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, lookup: { ...lookup, ...patch } } }))
+    .toThrow('invalid_private_twin_worker_frame')
+  const item = { ref: ticket, display_name: '发布分身', availability: 'eligible' }
+  const page = { state: 'candidates', category: 'target', kind: 'twin', items: [item], next_cursor: null }
+  expect(parsePrivateTwinWorkerResult(page)).toEqual(page)
+  const agents = { ...page, kind: 'group', category: 'default_agent', items: [{ ...item, availability: 'occupied' }], next_cursor: ticket }
+  expect(parsePrivateTwinWorkerResult(agents)).toEqual(agents)
+  for (const value of [{ ...page, kind: 'tool' }, { ...page, category: 'source' }, { ...page, category: 'default_agent' },
+    { ...page, items: null }, { ...page, items: Array(21).fill(item) },
+    ...[{ id: 'private-id' }, { display_name: 'a'.repeat(2001) }, { display_name: 'bad\nname' }, { availability: 'busy' }]
+      .map(patch => ({ ...page, items: [{ ...item, ...patch }] })),
   ]) expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
 })

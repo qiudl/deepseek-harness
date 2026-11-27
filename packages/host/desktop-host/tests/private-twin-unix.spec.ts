@@ -88,6 +88,14 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
 
   const intent = { requestId: randomUUID(), messageSeq: 6, messageDigest: 'a'.repeat(64),
     previewDigest: 'b'.repeat(64), commandDigest: 'c'.repeat(64), expiresAt: 10_000 }
+  const lookup = { kind: 'group' as const, sourceRef: ticket, sourceId: 'local-group',
+    targetRef: receipt, query: '发布', cursor: null }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_targets', lookup } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { lookup } })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'candidates', category: 'default_agent', kind: lookup.kind,
+    items: [{ ref: receipt, display_name: '频道助手', availability: 'eligible' }], next_cursor: null }, signal))
+    .resolves.toEqual({ completed: true })
   const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, sourceId: 'local-group', targetRef: receipt,
     defaultAgentRef: null, messageSeq: 3 }
   operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_propose', proposal } })
@@ -115,7 +123,8 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
     mainBotId: source.botId, sessionId: source.sessionId, messageId: source.sourceMessageId,
     installationId: identity.installationId, requestId: intent.requestId, messageSeq: 6,
     commandDigest: intent.commandDigest, expiresAt: intent.expiresAt })
-  const bytes = Buffer.from(JSON.stringify(Object.fromEntries(Object.entries(proof.claims).sort(([a], [b]) => a < b ? -1 : a === b ? 0 : 1))))
+  const canonical = Object.fromEntries(Object.entries(proof.claims).sort(([a], [b]) => a < b ? -1 : a === b ? 0 : 1))
+  const bytes = Buffer.from(JSON.stringify(canonical))
   expect(verify(null, bytes, keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
   await expect(channel.signBindingIntent(ticket, registration, signal)).resolves.toEqual(proof)
   await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
@@ -144,7 +153,7 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
   await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(5)
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(6)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })
