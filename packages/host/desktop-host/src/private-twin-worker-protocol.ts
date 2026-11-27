@@ -98,7 +98,10 @@ export type PrivateTwinWorkerResult =
     readonly ticket: string
     readonly expiresAt: number
     readonly source: PairingSource
-    readonly target: Readonly<{ projectId: string; channelId: string; defaultAgentId: string }> }
+    readonly target: Readonly<{ projectId: string; channelId: string; defaultAgentId: string }>
+    readonly replaces?: Readonly<{ bindingId: string; version: '1' }>
+    readonly status?: 'in_progress' | 'active' | 'conflict' | 'denied'
+  }
   | {
     readonly state: 'group_end'
     readonly operationId: string
@@ -286,15 +289,24 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
     case 'group_pairing': {
-      record(input, ['state', 'operationId', 'receipt', 'endpoint', 'ticket', 'expiresAt', 'source', 'target'])
+      const fields = ['state', 'operationId', 'receipt', 'endpoint', 'ticket', 'expiresAt', 'source', 'target']
+      const replacement = Object.hasOwn(input, 'replaces')
+      if (replacement) fields.push('replaces', 'status')
+      record(input, fields)
       if (typeof input.endpoint !== 'string' || input.endpoint.length > 200 || !URL.canParse(input.endpoint)) return invalid()
       const endpoint = new URL(input.endpoint)
       if (endpoint.protocol !== 'https:' || endpoint.origin !== input.endpoint) return invalid()
       const source = record(input.source), target = record(input.target, ['projectId', 'channelId', 'defaultAgentId'])
-      const operationId = matched(input.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
-      return { state: input.state, operationId, receipt: opaque(input.receipt), endpoint: endpoint.origin, ticket: opaque(input.ticket),
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      const pairing = { state: input.state, operationId: matched(input.operationId, uuid),
+        receipt: opaque(input.receipt), endpoint: endpoint.origin, ticket: opaque(input.ticket),
         expiresAt: positive(input.expiresAt), source: parsePairingSource(source, id(source.roomId)),
-        target: { projectId: id(target.projectId), channelId: id(target.channelId), defaultAgentId: id(target.defaultAgentId) } }
+        target: { projectId: id(target.projectId), channelId: id(target.channelId), defaultAgentId: id(target.defaultAgentId) } } as const
+      if (!replacement) return pairing
+      const replaces = record(input.replaces, ['bindingId', 'version']), status = input.status
+      if (replaces.version !== '1' || (status !== 'in_progress' && status !== 'active' &&
+          status !== 'conflict' && status !== 'denied')) return invalid()
+      return { ...pairing, replaces: { bindingId: matched(replaces.bindingId, uuid), version: '1' }, status }
     }
     case 'group_end': {
       record(input, ['state', 'operationId', 'receipt', 'endpoint', 'status', 'source', 'bindingId', 'bindingVersion'])

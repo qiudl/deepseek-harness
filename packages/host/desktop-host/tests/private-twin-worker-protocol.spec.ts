@@ -107,8 +107,15 @@ it('validates reviewed group coordinates and pairing tickets on the private wire
   const handoff = { state: 'group_pairing', endpoint: 'https://slark.example', receipt: ticket, ticket, operationId: groupId,
     expiresAt: 100_000, source: groupSource, target: { projectId: 'project', channelId: 'channel', defaultAgentId: 'agent' } }
   expect(parsePrivateTwinWorkerResult(handoff)).toEqual(handoff)
+  const replaces = { bindingId: '2afddc70-f144-4085-9fe0-d929ecdae230', version: '1' }
+  for (const status of ['in_progress', 'active', 'conflict', 'denied']) {
+    const replacement = { ...handoff, replaces, status }
+    expect(parsePrivateTwinWorkerResult(replacement)).toEqual(replacement)
+  }
   for (const value of [{ ...handoff, endpoint: 'https://slark.example/extra' },
-    { ...handoff, source: { ...groupSource, memberCount: 1001 } }, { ...handoff, credential: ticket }])
+    { ...handoff, source: { ...groupSource, memberCount: 1001 } }, { ...handoff, credential: ticket },
+    { ...handoff, status: 'active' }, { ...handoff, replaces },
+    { ...handoff, replaces, status: 'ended' }, { ...handoff, replaces: { ...replaces, version: '2' }, status: 'active' }])
     expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
 })
 
