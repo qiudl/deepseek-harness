@@ -83,9 +83,15 @@ it('accepts the desktop catalog with one pilot addon while keeping a bounded lim
     version: `0.3.${i}`, file: `dsh-duet-0.3.${i}.tgz`, sha256: i.toString(16).padStart(64, '0') }))
   const catalog = BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: entries }), uid)
   expect(catalog.get('dsh-duet', '0.3.32')).toBeDefined()
-  const tooMany = Array.from({ length: 34 }, (_, i) => ({ ...row,
-    version: `0.3.${i}`, file: `dsh-duet-0.3.${i}.tgz`, sha256: i.toString(16).padStart(64, '0') }))
-  expect(() => BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: tooMany }), uid)).toThrow('invalid_bundled_plugins')
+  const pilot = { ...row, name: 'slark-dsh-private-twin', version: '0.1.0',
+    file: 'slark-dsh-private-twin-0.1.0.tgz', sha256: 'f'.repeat(64),
+    entryIds: ['slark-private-twin-worker', 'slark-private-twin-reply'] }
+  const withPilot = BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: [...entries, pilot] }), uid)
+  expect(withPilot.get(pilot.name, pilot.version)?.entryIds).toEqual(pilot.entryIds)
+  for (const extra of [[null], [{ ...pilot, name: 'another-plugin' }], [row, pilot]]) {
+    expect(() => BundledPluginCatalog.load(embedding({ schemaVersion: 1, plugins: [...entries, ...extra] }), uid))
+      .toThrow('invalid_bundled_plugins')
+  }
 })
 
 it('keeps historical signed versions addressable by exact archive digest', () => {

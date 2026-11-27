@@ -1,8 +1,9 @@
-import { generateKeyPairSync, randomUUID } from 'node:crypto'
+import { generateKeyPairSync, randomUUID, verify } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect, it, onTestFinished, vi } from 'vitest'
+import { encodeHostBindingClaims } from '@deepseek-ai/dsh-host-control-protocol'
 import { DesktopHost } from '../src/desktop-host.ts'
 import { acquireSingleHostLock } from '../src/single-instance.ts'
 import { PrivateTwinTransfer } from '../src/private-twin-transfer.ts'
@@ -14,7 +15,8 @@ import { registryFileFixture } from './registry-file-fixture.ts'
 
 it.skipIf(process.platform === 'win32')('chunks both directions through the signed Account peer and revokes the replaced worker', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-twin-uds-'))
-  const uid = process.getuid!(), clock = { now: () => 1000 }
+  let clockNow = 1000
+  const uid = process.getuid!(), clock = { now: () => clockNow }
   const ownership = await acquireSingleHostLock({ root, pid: process.pid, uid, processNonce: 'A'.repeat(43) })
   onTestFinished(async () => {
     try { await ownership.release() } finally { rmSync(root, { recursive: true, force: true }) }
@@ -76,11 +78,107 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   const { profileId } = await client.ensureAccountProfile(account)
   const channel = client.openPrivateTwinChannel({ ...account, profileId, signal })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'send', content } })
+  const registration = { audience: 'https://slark.example', ownerUserId: 'slark-user', computerId: 'computer-1',
+    accountBindingId: 'cloud-binding', accountBindingVersion: 1, hostEpoch: '2' }
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
   await expect(channel.check(ticket, signal)).resolves.toEqual({ current: true })
   await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
   await expect(channel.claim(signal)).resolves.toEqual({ request: { ...source, operation: 'read', receipt } })
   await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).resolves.toEqual({ completed: true })
   expect(operate).toHaveBeenCalledWith({ operation: 'finish', ticket, result: { state: 'replied', answer } }, expect.any(AbortSignal))
+
+  const intent = { requestId: randomUUID(), messageSeq: 6, messageDigest: 'a'.repeat(64),
+    previewDigest: 'b'.repeat(64), commandDigest: 'c'.repeat(64), expiresAt: 10_000 }
+  const lookup = { kind: 'group' as const, sourceRef: ticket, sourceId: 'local-group',
+    targetRef: receipt, query: '发布', cursor: null }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_targets', lookup } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { lookup } })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'candidates', category: 'default_agent', kind: lookup.kind,
+    items: [{ ref: receipt, display_name: '频道助手', availability: 'eligible' }], next_cursor: null }, signal))
+    .resolves.toEqual({ completed: true })
+  const proposal = { kind: 'group' as const, action: 'replace' as const, sourceRef: ticket, sourceId: 'local-group', targetRef: receipt,
+    defaultAgentRef: null, messageSeq: 3 }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_propose', proposal } })
+  const generation = 1 // First Account binding for this fresh registry.
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { proposal }, bindingProfileEpoch: generation })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'preview', proposalRef: receipt, label: 1, kind: proposal.kind, action: proposal.action,
+    display: { sourceName: '发布群', previousTarget: '现频道', targetName: '新频道', defaultAgent: '频道助手', impact: '确认后切换' } }, signal))
+    .resolves.toEqual({ completed: true })
+  const confirmation = { messageSeq: 6, text: '确认换绑', proposalRef: receipt,
+    presentations: [{ ref: receipt, callId: 'proposal', resultSeq: 5 }] }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_confirmation', confirmation } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { confirmation }, bindingProfileEpoch: generation })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  await expect(channel.finish(ticket, { state: 'binding_confirmation', approval: {
+    state: 'confirmed', kind: 'group', sourceId: 'local-group', requestId: intent.requestId, expiresAt: intent.expiresAt,
+    previewDigest: intent.previewDigest, commandDigest: intent.commandDigest,
+    confirmationMessageSeq: intent.messageSeq, confirmationMessageId: source.sourceMessageId,
+  } }, signal)).resolves.toEqual({ completed: true })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { intent }, bindingProfileEpoch: generation })
+  const proof = await channel.signBindingIntent(ticket, registration, signal)
+  await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal))
+    .rejects.toMatchObject({ code: 'unauthorized' })
+  expect(proof.claims).toMatchObject({ purpose: 'slark.dsh.binding-intent/v1',
+    environmentId: account.authorityEnvironmentId, profileId, profileEpoch: generation,
+    hostAccountBindingId: account.accountBindingHandle, hostAccountBindingVersion: 1,
+    mainBotId: source.botId, sessionId: source.sessionId, messageId: source.sourceMessageId,
+    installationId: identity.installationId, requestId: intent.requestId, messageSeq: 6,
+    commandDigest: intent.commandDigest, expiresAt: intent.expiresAt })
+  const canonical = Object.fromEntries(Object.entries(proof.claims).sort(([a], [b]) => a < b ? -1 : a === b ? 0 : 1))
+  const bytes = Buffer.from(JSON.stringify(canonical))
+  expect(verify(null, bytes, keys.publicKey, Buffer.from(proof.signature, 'base64url'))).toBe(true)
+  await expect(channel.signBindingIntent(ticket, registration, signal)).resolves.toEqual(proof)
+  await expect(channel.finish(ticket, { state: 'accepted', receipt }, signal)).resolves.toEqual({ completed: true })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_receipt', receipt } })
+  await expect(channel.claim(signal)).resolves.toMatchObject({ request: { operation: 'binding_receipt', receipt }, bindingProfileEpoch: generation })
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'unauthorized' })
+  const recovered = await channel.signBindingReceipt(ticket, registration, intent.requestId, signal)
+  expect(recovered.claims).toMatchObject({ purpose: 'slark.dsh.binding-receipt/v1',
+    profileId, profileEpoch: generation, mainBotId: source.botId, sessionId: source.sessionId,
+    lookupBy: 'request', lookupId: intent.requestId })
+  expect(verify(null, encodeHostBindingClaims(recovered.claims), keys.publicKey, Buffer.from(recovered.signature, 'base64url'))).toBe(true)
+  await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal)).resolves.toEqual(recovered)
+  await expect(channel.finish(ticket, { state: 'binding_status', status: 'active' }, signal)).resolves.toEqual({ completed: true })
+  const inspection = client.inspection
+  Object.defineProperty(client, 'inspection', { value: { ...inspection,
+    capabilities: inspection.capabilities.filter(capability => capability !== 'profile.binding_intent' &&
+      capability !== 'profile.binding_receipt') } })
+  const legacy = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  try {
+    await expect(legacy.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'upgrade_required' })
+    await expect(legacy.signBindingReceipt(ticket, registration, intent.requestId, signal))
+      .rejects.toMatchObject({ code: 'upgrade_required' })
+  } finally { Object.defineProperty(client, 'inspection', { value: inspection }) }
+  const classification = vi.spyOn(host, 'authorizeBindingIntentProfile').mockImplementationOnce(() => {
+    throw Error('registry could not be read')
+  })
+  try { await expect(channel.claim(signal)).rejects.toMatchObject({ code: 'unavailable' }) }
+  finally { classification.mockRestore() }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  const mismatchedVersion = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  await mismatchedVersion.claim(signal)
+  await expect(mismatchedVersion.signBindingIntent(ticket, { ...registration, accountBindingVersion: 2 }, signal))
+    .rejects.toMatchObject({ code: 'stale' })
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_receipt', receipt } })
+  await channel.claim(signal)
+  const originalInstallation = identity.installationId
+  identity.installationId = randomUUID()
+  try {
+    await expect(channel.signBindingReceipt(ticket, registration, intent.requestId, signal))
+      .rejects.toMatchObject({ code: 'unauthorized' })
+  } finally { identity.installationId = originalInstallation }
+  await channel.finish(ticket, { state: 'unavailable' }, signal)
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
+  const expiring = client.openPrivateTwinChannel({ ...account, profileId, signal })
+  await expiring.claim(signal)
+  await expect(expiring.signBindingIntent(ticket, registration, signal)).resolves.toMatchObject({ claims: { expiresAt: 10_000 } })
+  clockNow = 10_000
+  await expect(expiring.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
+  clockNow = 1000
+
   // Change the observed Profile after the Worker reply and just before the result would be published.
   const otherProfile = await host.bootstrapLocalProfile({
     keyHandle: 'keychain:other', unlockMaterial: account.unlockMaterial, ownerId: 'other-owner',
@@ -94,10 +192,11 @@ it.skipIf(process.platform === 'win32')('chunks both directions through the sign
   operate.mockImplementationOnce(async () => { remainingChecks = 4; return { request: null } })
   try { await expect(channel.claim(signal)).rejects.toMatchObject({ code: 'stale' }) }
   finally { raced.mockRestore() }
+  operate.mockResolvedValueOnce({ request: { ...source, operation: 'binding_intent', intent } })
   await expect(channel.claim(signal)).resolves.toMatchObject({ request: { ticket } })
   await workers.dispose(profileId)
-  await expect(channel.finish(ticket, { state: 'replied', answer }, signal)).rejects.toMatchObject({ code: 'stale' })
-  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(2)
+  await expect(channel.signBindingIntent(ticket, registration, signal)).rejects.toMatchObject({ code: 'stale' })
+  expect(operate.mock.calls.filter(([command]) => command.operation === 'finish')).toHaveLength(8)
   expect(() => capturePrivateTwin(profileId)).toThrow(expect.objectContaining({ code: 'unavailable' }))
 
   const existingChannel = client.openPrivateTwinChannel({ ...account, profileId })

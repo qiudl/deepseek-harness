@@ -1,4 +1,7 @@
 /** Bounded transfer frames for one live, Account-bound private-twin invocation. */
+import { parseHostBindingIntentProof, parseHostBindingReceiptProof, parseHostBindingRegistration, parseHostBindingLookupId,
+  type HostBindingIntentProof, type HostBindingReceiptProof, type HostBindingRegistration } from './private-binding-intent.ts'
+/** Maximum bytes in one private Worker transfer fragment. */
 export const PRIVATE_TWIN_CONTROL_CHUNK_BYTES = 24 * 1024
 /** Maximum serialized tool request, including JSON escaping. */
 export const PRIVATE_TWIN_CONTROL_REQUEST_BYTES = 6 * 32_000 + 8192
@@ -13,19 +16,23 @@ interface PrivateTwinTransfer {
 
 /** Main requests one claim, ticket check, request chunk, or result upload. */
 export type HostPrivateTwinCommand =
-  | { readonly operation: 'claim' }
+  | { readonly operation: 'claim'; readonly binding_profile_epoch?: true }
   | { readonly operation: 'check'; readonly ticket: string }
   | { readonly operation: 'read'; readonly ticket: string; readonly offset: number }
+  | { readonly operation: 'sign_binding'; readonly ticket: string; readonly registration: HostBindingRegistration }
+  | { readonly operation: 'sign_binding_receipt'; readonly ticket: string; readonly registration: HostBindingRegistration; readonly lookup_id: string }
   | ({ readonly operation: 'finish'; readonly offset: number; readonly bytes: string } & PrivateTwinTransfer)
 
 /** Host returns a ticket state, claim metadata, or one request fragment. */
 export type HostPrivateTwinResult =
   | { readonly state: 'idle' }
-  | ({ readonly state: 'claimed'; readonly profile_id: string } & PrivateTwinTransfer)
+  | ({ readonly state: 'claimed'; readonly profile_id: string; readonly binding_profile_epoch?: number } & PrivateTwinTransfer)
   | { readonly state: 'current'; readonly ticket: string }
   | { readonly state: 'chunk'; readonly ticket: string; readonly offset: number; readonly bytes: string }
   | { readonly state: 'staged'; readonly ticket: string; readonly next_offset: number }
   | { readonly state: 'completed'; readonly ticket: string }
+  | { readonly state: 'binding_intent'; readonly ticket: string; readonly proof: HostBindingIntentProof }
+  | { readonly state: 'binding_receipt'; readonly ticket: string; readonly proof: HostBindingReceiptProof }
 
 const profileIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
 
@@ -74,14 +81,25 @@ export function parseHostPrivateTwinCommand(value: unknown): HostPrivateTwinComm
   const { operation } = row
   switch (operation) {
     case 'claim':
-      record(row, ['operation'])
-      return { operation }
+      if (!Object.hasOwn(row, 'binding_profile_epoch')) {
+        record(row, ['operation'])
+        return { operation }
+      }
+      record(row, ['operation', 'binding_profile_epoch'])
+      return row.binding_profile_epoch === true ? { operation, binding_profile_epoch: true } : invalid()
     case 'check':
       record(row, ['operation', 'ticket'])
       return { operation, ticket: ticket(row.ticket) }
     case 'read':
       record(row, ['operation', 'ticket', 'offset'])
       return { operation, ticket: ticket(row.ticket), offset: bounded(row.offset, 0, PRIVATE_TWIN_CONTROL_REQUEST_BYTES - 1) }
+    case 'sign_binding':
+      record(row, ['operation', 'ticket', 'registration'])
+      return { operation, ticket: ticket(row.ticket), registration: parseHostBindingRegistration(row.registration) }
+    case 'sign_binding_receipt':
+      record(row, ['operation', 'ticket', 'registration', 'lookup_id'])
+      return { operation, ticket: ticket(row.ticket), registration: parseHostBindingRegistration(row.registration),
+        lookup_id: parseHostBindingLookupId(row.lookup_id) }
     case 'finish': {
       record(row, ['operation', 'ticket', 'offset', 'total_bytes', 'digest', 'bytes'])
       const header = transfer(row, PRIVATE_TWIN_CONTROL_RESULT_BYTES)
@@ -106,11 +124,15 @@ export function parseHostPrivateTwinResult(value: unknown): HostPrivateTwinResul
       record(row, ['state'])
       return { state }
     case 'claimed': {
-      record(row, ['state', 'ticket', 'total_bytes', 'digest', 'profile_id'])
+      const epoch = Object.hasOwn(row, 'binding_profile_epoch')
+        ? bounded(row.binding_profile_epoch, 1, Number.MAX_SAFE_INTEGER) : undefined
+      record(row, ['state', 'ticket', 'total_bytes', 'digest', 'profile_id',
+        ...(epoch === undefined ? [] : ['binding_profile_epoch'])])
       const { profile_id } = row
       if (typeof profile_id !== 'string'
         || profileIdPattern.exec(profile_id)?.[0] !== profile_id) return invalid()
-      return { state, ...transfer(row, PRIVATE_TWIN_CONTROL_REQUEST_BYTES), profile_id }
+      return { state, ...transfer(row, PRIVATE_TWIN_CONTROL_REQUEST_BYTES), profile_id,
+        ...(epoch === undefined ? {} : { binding_profile_epoch: epoch }) }
     }
     case 'chunk':
       record(row, ['state', 'ticket', 'offset', 'bytes'])
@@ -122,6 +144,12 @@ export function parseHostPrivateTwinResult(value: unknown): HostPrivateTwinResul
     case 'current': case 'completed':
       record(row, ['state', 'ticket'])
       return { state, ticket: ticket(row.ticket) }
+    case 'binding_intent':
+      record(row, ['state', 'ticket', 'proof'])
+      return { state, ticket: ticket(row.ticket), proof: parseHostBindingIntentProof(row.proof) }
+    case 'binding_receipt':
+      record(row, ['state', 'ticket', 'proof'])
+      return { state, ticket: ticket(row.ticket), proof: parseHostBindingReceiptProof(row.proof) }
     default: return invalid()
   }
 }

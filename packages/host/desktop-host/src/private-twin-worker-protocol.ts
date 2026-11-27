@@ -1,4 +1,5 @@
 /** Private wire contract between the Native parent and its attested Profile worker. */
+import { parseHostBindingWorkerEvidence, type HostBindingWorkerEvidence } from '@deepseek-ai/dsh-host-control-protocol'
 export const PRIVATE_TWIN_WORKER_PATH = '/internal/slark-private-twin'
 export const PRIVATE_TWIN_MAX_ANSWER_BYTES = 128 * 1024
 const maxQuestionBytes = 32_000
@@ -16,13 +17,123 @@ interface PrivateTwinSource {
 export type PrivateTwinWorkerRequest = PrivateTwinSource & (
   | { readonly operation: 'send'; readonly content: string }
   | { readonly operation: 'read'; readonly receipt: string }
+  | { readonly operation: 'binding_intent'; readonly intent: HostBindingWorkerEvidence }
+  | { readonly operation: 'binding_receipt'; readonly receipt: string }
+  | { readonly operation: 'binding_confirmation'; readonly confirmation: BindingConfirmation }
+  | { readonly operation: 'binding_propose'; readonly proposal: BindingProposal }
+  | { readonly operation: 'binding_targets'; readonly lookup: BindingTargetLookup }
 )
+
+type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
+type BindingKind = 'twin' | 'group'
+type BindingAction = 'bind' | 'replace' | 'end'
+type PairingSource = Readonly<{
+  namespaceId: string
+  roomId: string
+  groupId: string
+  memberCount: number
+  membersDigest: string
+}>
+type BindingProposal = Readonly<{
+  kind: BindingKind
+  action: BindingAction
+  sourceRef: string
+  sourceId: string
+  targetRef: string | null
+  defaultAgentRef: string | null
+  messageSeq: number
+  groupSource?: PairingSource
+  groupSourceName?: string
+  groupCurrent?: Readonly<{ bindingId: string; version: string }>
+}>
+type BindingTargetLookup = Readonly<{
+  kind: BindingKind
+  sourceRef: string
+  sourceId: string
+  query: string | null
+  targetRef: string | null
+  cursor: string | null
+  current?: true
+  groupSource?: PairingSource
+}>
+type BindingCurrent = Readonly<{
+  state: 'current'
+  kind: BindingKind
+  relation: { state: 'unbound' } | { state: 'active' | 'paused' | 'in_progress'; projectName: string; targetName: string }
+}>
+type BindingTargetPage = Readonly<{
+  state: 'candidates'
+  category: 'target' | 'default_agent'
+  kind: BindingKind
+  items: readonly Readonly<{ ref: string; display_name: string; availability: 'eligible' | 'occupied' }>[]
+  next_cursor: string | null
+}>
+type BindingPreviewDisplay = Readonly<{
+  sourceName: string
+  previousTarget: string | null
+  targetName: string | null
+  defaultAgent: string | null
+  impact: string
+}>
+type BindingConfirmation = Readonly<{
+  messageSeq: number
+  text: string
+  proposalRef: string | null
+  presentations: readonly Presentation[]
+}>
+type BindingApproval = Readonly<{
+  state: 'confirmed'
+  kind: BindingKind
+  sourceId: string
+  requestId: string
+  previewDigest: string
+  commandDigest: string
+  confirmationMessageId: string
+  confirmationMessageSeq: number
+  expiresAt: number
+}>
 
 export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
-  | { readonly state: 'accepted'; readonly receipt: string }
+  | { readonly state: 'accepted' | 'active' | 'ended'; readonly receipt: string }
+  | {
+    readonly state: 'group_pairing'
+    readonly operationId: string
+    readonly receipt: string
+    readonly endpoint: string
+    readonly ticket: string
+    readonly expiresAt: number
+    readonly source: PairingSource
+    readonly target: Readonly<{ projectId: string; channelId: string; defaultAgentId: string }>
+    readonly replaces?: Readonly<{ bindingId: string; version: '1' }>
+    readonly status?: 'in_progress' | 'active' | 'conflict' | 'denied'
+  }
+  | {
+    readonly state: 'group_end'
+    readonly operationId: string
+    readonly receipt: string
+    readonly endpoint: string
+    readonly status: 'in_progress' | 'ended'
+    readonly source: PairingSource
+    readonly bindingId: string
+    readonly bindingVersion: 1
+  }
+  | { readonly state: 'binding_status'; readonly status: 'accepted' | 'in_progress' | 'active' | 'ended' | 'cancelled' | 'denied' | 'conflict' | 'outcome_unknown' | 'missing' }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
+  | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
+  | { readonly state: 'consent_recorded'; readonly remaining: 'dsh_to_slark' | 'slark_to_dsh'; readonly label: number }
+  | { readonly state: 'binding_confirmation'; readonly approval: BindingApproval }
+  | BindingTargetPage
+  | BindingCurrent
+  | Readonly<{
+    state: 'preview'
+    proposalRef: string
+    label: number
+    kind: BindingKind
+    action: BindingAction
+    display: BindingPreviewDisplay
+  }>
 
 export type PrivateTwinWorkerCommand =
   | { readonly operation: 'claim' }
@@ -64,19 +175,174 @@ function text(value: unknown, bytes: number): string {
   return value
 }
 
+function positive(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : invalid()
+}
+
+function matched(value: unknown, pattern: RegExp): string {
+  return typeof value === 'string' && pattern.exec(value)?.[0] === value ? value : invalid()
+}
+
+function bindingAction(kind: unknown, action: unknown): { kind: BindingKind; action: BindingAction } {
+  if ((kind !== 'twin' && kind !== 'group') || (action !== 'bind' && action !== 'replace' && action !== 'end')) return invalid()
+  return { kind, action }
+}
+
+function parseBindingProposal(input: unknown): BindingProposal {
+  const row = record(input)
+  const hasGroupSource = Object.hasOwn(row, 'groupSource')
+  const hasGroupCurrent = Object.hasOwn(row, 'groupCurrent')
+  record(row, ['kind', 'action', 'sourceRef', 'sourceId', 'targetRef', 'defaultAgentRef', 'messageSeq',
+    ...(hasGroupSource ? ['groupSource', 'groupSourceName'] : []), ...(hasGroupCurrent ? ['groupCurrent'] : [])])
+  const { kind, action } = bindingAction(row.kind, row.action)
+  if ((action === 'end') !== (row.targetRef === null) ||
+      ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
+  if ((hasGroupCurrent && !hasGroupSource) || (hasGroupSource && (kind !== 'group' || hasGroupCurrent === (action === 'bind'))))
+    return invalid()
+  const sourceId = id(row.sourceId)
+  const groupSourceName = hasGroupSource ? text(row.groupSourceName, 800) : undefined
+  if (groupSourceName && (groupSourceName.length > 200 || /\p{Cc}/u.test(groupSourceName))) return invalid()
+  const groupCurrent = hasGroupCurrent ? record(row.groupCurrent, ['bindingId', 'version']) : null
+  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId,
+    targetRef: row.targetRef === null ? null : opaque(row.targetRef),
+    defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq),
+    ...(groupSourceName ? { groupSource: parsePairingSource(row.groupSource, sourceId), groupSourceName } : {}),
+    ...(groupCurrent ? { groupCurrent: {
+      bindingId: matched(groupCurrent.bindingId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+      version: matched(groupCurrent.version, /^[1-9][0-9]{0,18}$/u),
+    } } : {}) }
+}
+
+function parsePairingSource(raw: unknown, roomId: string): PairingSource {
+  const row = record(raw, ['namespaceId', 'roomId', 'groupId', 'memberCount', 'membersDigest'])
+  const namespaceId = matched(row.namespaceId, /^ds-bot:[A-Za-z0-9_.:-]{1,249}$/u)
+  const groupId = matched(row.groupId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
+  const memberCount = positive(row.memberCount)
+  if (row.roomId !== roomId || roomId.replace(/^session-/u, '').toLowerCase() !== groupId || memberCount > 1_000) return invalid()
+  return { namespaceId, roomId, groupId, memberCount, membersDigest: matched(row.membersDigest, /^[0-9a-f]{64}$/u) }
+}
+
+function parseBindingTargetLookup(input: unknown): BindingTargetLookup {
+  const row = record(input)
+  const hasCurrent = Object.hasOwn(row, 'current')
+  const hasGroupSource = Object.hasOwn(row, 'groupSource')
+  record(row, ['kind', 'sourceRef', 'sourceId', 'query', 'targetRef', 'cursor',
+    ...(hasCurrent ? ['current'] : []), ...(hasGroupSource ? ['groupSource'] : [])])
+  const { kind, query } = row
+  if ((kind !== 'twin' && kind !== 'group') || (kind === 'twin' && row.targetRef !== null) ||
+      (query !== null && (typeof query !== 'string' || query.length > 200 || /\p{Cc}/u.test(query) ||
+        Buffer.from(query).toString('utf8') !== query))) return invalid()
+  if ((hasCurrent && (row.current !== true || query !== null || row.targetRef !== null || row.cursor !== null)) ||
+      hasGroupSource !== (hasCurrent && kind === 'group')) return invalid()
+  const sourceId = id(row.sourceId)
+  return { kind, query, sourceRef: opaque(row.sourceRef), sourceId,
+    targetRef: row.targetRef === null ? null : opaque(row.targetRef), cursor: row.cursor === null ? null : opaque(row.cursor),
+    ...(hasCurrent ? { current: true as const } : {}),
+    ...(hasGroupSource ? { groupSource: parsePairingSource(row.groupSource, sourceId) } : {}) }
+}
+
+function parseBindingTargetPage(input: Record<string, unknown>): BindingTargetPage {
+  record(input, ['state', 'category', 'kind', 'items', 'next_cursor'])
+  const { kind, category, items } = input
+  if ((kind !== 'twin' && kind !== 'group') ||
+      (category !== 'target' && (category !== 'default_agent' || kind !== 'group')) ||
+      !Array.isArray(items) || items.length > 20) return invalid()
+  const entries = items.map((raw): BindingTargetPage['items'][number] => {
+    const row = record(raw, ['ref', 'display_name', 'availability'])
+    const label = text(row.display_name, 8000), availability = row.availability
+    if (label.length > 2000 || /\p{Cc}/u.test(label) || (availability !== 'eligible' && availability !== 'occupied')) return invalid()
+    return { ref: opaque(row.ref), display_name: label, availability }
+  })
+  return { state: 'candidates', category, kind, items: entries,
+    next_cursor: input.next_cursor === null ? null : opaque(input.next_cursor) }
+}
+
+function previewLabel(raw: unknown): string {
+  const value = text(raw, 800)
+  return value.length <= 200 && !/[\u0000-\u001f\u007f]/u.test(value) ? value : invalid()
+}
+
+function parseBindingPreviewDisplay(raw: unknown): BindingPreviewDisplay {
+  const row = record(raw, ['sourceName', 'previousTarget', 'targetName', 'defaultAgent', 'impact'])
+  return { sourceName: previewLabel(row.sourceName), impact: previewLabel(row.impact),
+    previousTarget: row.previousTarget === null ? null : previewLabel(row.previousTarget),
+    targetName: row.targetName === null ? null : previewLabel(row.targetName),
+    defaultAgent: row.defaultAgent === null ? null : previewLabel(row.defaultAgent) }
+}
+
+function parseBindingConfirmation(raw: unknown): BindingConfirmation {
+  const row = record(raw, ['messageSeq', 'text', 'proposalRef', 'presentations'])
+  if (!Array.isArray(row.presentations) || row.presentations.length > 16) return invalid()
+  return { messageSeq: positive(row.messageSeq), text: text(row.text, 4096),
+    proposalRef: row.proposalRef === null ? null : opaque(row.proposalRef), presentations: row.presentations.map((raw) => {
+      const item = record(raw, ['ref', 'callId', 'resultSeq'])
+      return { ref: opaque(item.ref), callId: id(item.callId), resultSeq: positive(item.resultSeq) }
+    }) }
+}
+
+function parseBindingApproval(raw: unknown): BindingApproval {
+  const row = record(raw, ['state', 'kind', 'sourceId', 'requestId', 'previewDigest', 'commandDigest',
+    'confirmationMessageId', 'confirmationMessageSeq', 'expiresAt'])
+  if (row.state !== 'confirmed' || (row.kind !== 'twin' && row.kind !== 'group')) return invalid()
+  return { state: 'confirmed', kind: row.kind, sourceId: id(row.sourceId),
+    requestId: matched(row.requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u),
+    previewDigest: matched(row.previewDigest, /^[a-f0-9]{64}$/u), commandDigest: matched(row.commandDigest, /^[a-f0-9]{64}$/u),
+    confirmationMessageId: id(row.confirmationMessageId), confirmationMessageSeq: positive(row.confirmationMessageSeq),
+    expiresAt: positive(row.expiresAt) }
+}
+
 /** Validate a worker result before sending it through the private endpoint. */
 export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerResult {
   const input = record(value)
   switch (input.state) {
     case 'unavailable': case 'pending': case 'failed': case 'unconfirmed':
+    case 'needs_confirmation': case 'selection_required': case 'stale': case 'cancelled': case 'conflict': case 'denied':
       record(input, ['state'])
       return { state: input.state }
     case 'replied':
       record(input, ['state', 'answer'])
       return { state: input.state, answer: input.answer === null ? null : text(input.answer, PRIVATE_TWIN_MAX_ANSWER_BYTES) }
-    case 'accepted':
+    case 'accepted': case 'active': case 'ended':
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
+    case 'group_pairing': {
+      const fields = ['state', 'operationId', 'receipt', 'endpoint', 'ticket', 'expiresAt', 'source', 'target']
+      const replacement = Object.hasOwn(input, 'replaces')
+      if (replacement) fields.push('replaces', 'status')
+      record(input, fields)
+      if (typeof input.endpoint !== 'string' || input.endpoint.length > 200 || !URL.canParse(input.endpoint)) return invalid()
+      const endpoint = new URL(input.endpoint)
+      if (endpoint.protocol !== 'https:' || endpoint.origin !== input.endpoint) return invalid()
+      const source = record(input.source), target = record(input.target, ['projectId', 'channelId', 'defaultAgentId'])
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      const pairing = { state: input.state, operationId: matched(input.operationId, uuid),
+        receipt: opaque(input.receipt), endpoint: endpoint.origin, ticket: opaque(input.ticket),
+        expiresAt: positive(input.expiresAt), source: parsePairingSource(source, id(source.roomId)),
+        target: { projectId: id(target.projectId), channelId: id(target.channelId), defaultAgentId: id(target.defaultAgentId) } } as const
+      if (!replacement) return pairing
+      const replaces = record(input.replaces, ['bindingId', 'version']), status = input.status
+      if (replaces.version !== '1' || (status !== 'in_progress' && status !== 'active' &&
+          status !== 'conflict' && status !== 'denied')) return invalid()
+      return { ...pairing, replaces: { bindingId: matched(replaces.bindingId, uuid), version: '1' }, status }
+    }
+    case 'group_end': {
+      record(input, ['state', 'operationId', 'receipt', 'endpoint', 'status', 'source', 'bindingId', 'bindingVersion'])
+      if (typeof input.endpoint !== 'string' || input.endpoint.length > 200 || !URL.canParse(input.endpoint)) return invalid()
+      const endpoint = new URL(input.endpoint), uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u
+      if (endpoint.protocol !== 'https:' || endpoint.origin !== input.endpoint || input.bindingVersion !== 1 ||
+          (input.status !== 'in_progress' && input.status !== 'ended')) return invalid()
+      const source = record(input.source)
+      return { state: input.state, operationId: matched(input.operationId, uuid), receipt: opaque(input.receipt),
+        endpoint: endpoint.origin, status: input.status, source: parsePairingSource(source, id(source.roomId)),
+        bindingId: matched(input.bindingId, uuid), bindingVersion: 1 }
+    }
+    case 'binding_status': {
+      record(input, ['state', 'status'])
+      const status = input.status
+      if (status !== 'accepted' && status !== 'in_progress' && status !== 'active' && status !== 'ended' && status !== 'cancelled' &&
+          status !== 'denied' && status !== 'conflict' && status !== 'outcome_unknown' && status !== 'missing') return invalid()
+      return { state: input.state, status }
+    }
     case 'outcome_unknown':
       if (Object.hasOwn(input, 'receipt')) {
         record(input, ['state', 'receipt'])
@@ -84,6 +350,38 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
       }
       record(input, ['state'])
       return { state: input.state }
+    case 'binding_confirmation':
+      record(input, ['state', 'approval'])
+      return { state: input.state, approval: parseBindingApproval(input.approval) }
+    case 'consent_recorded': {
+      record(input, ['state', 'remaining', 'label'])
+      const label = positive(input.label)
+      if (label > 999_999_999 || (input.remaining !== 'dsh_to_slark' && input.remaining !== 'slark_to_dsh')) return invalid()
+      return { state: input.state, remaining: input.remaining, label }
+    }
+    case 'candidates':
+      return parseBindingTargetPage(input)
+    case 'current': {
+      record(input, ['state', 'kind', 'relation'])
+      if (input.kind !== 'twin' && input.kind !== 'group') return invalid()
+      const relation = record(input.relation)
+      if (relation.state === 'unbound') {
+        record(relation, ['state'])
+        return { state: 'current', kind: input.kind, relation: { state: 'unbound' } }
+      }
+      record(relation, ['state', 'projectName', 'targetName'])
+      if (relation.state !== 'active' && relation.state !== 'paused' && relation.state !== 'in_progress') return invalid()
+      const projectName = text(relation.projectName, 800), targetName = text(relation.targetName, 800)
+      if ([projectName, targetName].some(value => value.length > 200 || /[\u0000-\u001f\u007f]/u.test(value))) return invalid()
+      return { state: 'current', kind: input.kind, relation: { state: relation.state, projectName, targetName } }
+    }
+    case 'preview': {
+      record(input, ['state', 'proposalRef', 'label', 'kind', 'action', 'display'])
+      const label = positive(input.label)
+      if (label > 999_999_999) return invalid()
+      return { state: input.state, proposalRef: opaque(input.proposalRef), label, ...bindingAction(input.kind, input.action),
+        display: parseBindingPreviewDisplay(input.display) }
+    }
     default:
       return invalid()
   }
@@ -124,11 +422,25 @@ export function parsePrivateTwinWorkerReply(command: PrivateTwinWorkerCommand, v
   if (request === null) return { request: null }
   const fields = record(request)
   const op = fields.operation
-  if (op !== 'read' && op !== 'send') return invalid()
+  const field = { send: 'content', read: 'receipt', binding_receipt: 'receipt', binding_intent: 'intent', binding_confirmation: 'confirmation',
+    binding_propose: 'proposal', binding_targets: 'lookup' } as const
+  if (op !== 'read' && op !== 'send' && op !== 'binding_intent' && op !== 'binding_receipt' && op !== 'binding_confirmation' &&
+      op !== 'binding_propose' && op !== 'binding_targets') return invalid()
   record(fields, ['operation', 'ticket', 'botId', 'sessionId', 'callId', 'rootCallId', 'sourceMessageId',
-    op === 'send' ? 'content' : 'receipt'])
+    field[op]])
   const base = { ticket: opaque(fields.ticket), botId: id(fields.botId), sessionId: id(fields.sessionId),
     callId: id(fields.callId), rootCallId: id(fields.rootCallId), sourceMessageId: id(fields.sourceMessageId) }
+  if (op !== 'read' && op !== 'send' && base.callId !== base.rootCallId) return invalid()
+  if (op === 'binding_intent') {
+    return { request: { ...base, operation: op, intent: parseHostBindingWorkerEvidence(fields.intent) } }
+  }
+  if (op === 'binding_confirmation') {
+    return { request: { ...base, operation: op, confirmation: parseBindingConfirmation(fields.confirmation) } }
+  }
+  if (op === 'binding_propose') {
+    return { request: { ...base, operation: op, proposal: parseBindingProposal(fields.proposal) } }
+  }
+  if (op === 'binding_targets') return { request: { ...base, operation: op, lookup: parseBindingTargetLookup(fields.lookup) } }
   return { request: op === 'send'
     ? { ...base, operation: op, content: text(fields.content, maxQuestionBytes) }
     : { ...base, operation: op, receipt: opaque(fields.receipt) } }

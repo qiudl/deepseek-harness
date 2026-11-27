@@ -468,3 +468,10 @@ export type { HostBotCreateRequest, HostBotCreateReceipt } from './bot-create.ts
 export { parseHostPrivateTwinCommand, parseHostPrivateTwinResult, PRIVATE_TWIN_CONTROL_CHUNK_BYTES,
   PRIVATE_TWIN_CONTROL_REQUEST_BYTES, PRIVATE_TWIN_CONTROL_RESULT_BYTES } from './private-twin.ts'
 export type { HostPrivateTwinCommand, HostPrivateTwinResult } from './private-twin.ts'
+
+export {
+  HOST_BINDING_INTENT_PURPOSE, encodeHostBindingIntent, parseHostBindingIntentProof,
+  parseHostBindingRegistration, parseHostBindingWorkerEvidence,
+} from './private-binding-intent.ts'
+export { encodeHostBindingClaims, HOST_BINDING_RECEIPT_PURPOSE, parseHostBindingReceiptProof } from './private-binding-intent.ts'
+export type { HostBindingIntentProof, HostBindingReceiptProof, HostBindingRegistration, HostBindingWorkerEvidence } from './private-binding-intent.ts'

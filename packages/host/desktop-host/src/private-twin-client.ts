@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { PRIVATE_TWIN_CONTROL_CHUNK_BYTES, parseHostPrivateTwinResult,
-  type HostPrivateTwinCommand } from '@deepseek-ai/dsh-host-control-protocol'
+  parseHostBindingRegistration, type HostPrivateTwinCommand, type HostBindingIntentProof,
+  type HostBindingRegistration, type HostBindingReceiptProof } from '@deepseek-ai/dsh-host-control-protocol'
 import { parsePrivateTwinWorkerReply, parsePrivateTwinWorkerResult,
   type PrivateTwinWorkerRequest, type PrivateTwinWorkerResult } from './private-twin-worker-protocol.ts'
 import { HostAuthorityError } from './types.ts'
@@ -9,8 +10,11 @@ import { HostAuthorityError } from './types.ts'
 export interface PrivateTwinControlChannel {
   readonly profileId: string
   assertCurrent(): void
-  claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null }>
+  claim(signal: AbortSignal): Promise<{ readonly request: PrivateTwinWorkerRequest | null; readonly bindingProfileEpoch?: number }>
   check(ticket: string, signal: AbortSignal): Promise<{ readonly current: true }>
+  signBindingIntent(ticket: string, registration: HostBindingRegistration, signal: AbortSignal): Promise<HostBindingIntentProof>
+  signBindingReceipt(ticket: string, registration: HostBindingRegistration, lookupId: string,
+    signal: AbortSignal): Promise<HostBindingReceiptProof>
   finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal): Promise<{ readonly completed: true }>
 }
 
@@ -20,11 +24,15 @@ const stale = (): never => { throw new HostAuthorityError('stale') }
 /** Retain the expected Main-owned Profile, peer guard, and exact claim for all data transfer. */
 export function createPrivateTwinControlChannel(input: Readonly<{
   profileId: string
+  includeBindingProfileEpoch?: boolean
+  verifyBindingIntent?(proof: HostBindingIntentProof): void
+  verifyBindingReceipt?(proof: HostBindingReceiptProof): void
   assertCurrent(): void
   call(command: HostPrivateTwinCommand, signal: AbortSignal): Promise<unknown>
 }>): PrivateTwinControlChannel {
   const profileId = input.profileId
-  let claimed: string | undefined
+  let claimed: PrivateTwinWorkerRequest | undefined
+  let bindingProfileEpoch: number | undefined
   const send = async (command: HostPrivateTwinCommand, signal: AbortSignal) => {
     input.assertCurrent(); signal.throwIfAborted()
     const result = parseHostPrivateTwinResult(await input.call(command, signal))
@@ -36,7 +44,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
     assertCurrent: () => { input.assertCurrent() },
     async claim(signal: AbortSignal) {
       if (claimed !== undefined) return stale()
-      const header = await send({ operation: 'claim' }, signal)
+      const header = await send({ operation: 'claim', ...(input.includeBindingProfileEpoch ? { binding_profile_epoch: true } : {}) }, signal)
       if (header.state === 'idle') return { request: null }
       if (header.state !== 'claimed' || header.profile_id !== profileId) return stale()
       const { ticket } = header
@@ -54,17 +62,56 @@ export function createPrivateTwinControlChannel(input: Readonly<{
       const request: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       const worker = parsePrivateTwinWorkerReply({ operation: 'claim' }, { request })
       if (worker.request?.ticket !== ticket) return stale()
-      claimed = ticket
-      return { request: worker.request }
+      const wantsEpoch = Boolean(input.includeBindingProfileEpoch && worker.request.operation.startsWith('binding_'))
+      if (wantsEpoch !== (header.binding_profile_epoch !== undefined)) return stale()
+      claimed = worker.request
+      bindingProfileEpoch = header.binding_profile_epoch
+      return { request: worker.request, ...(bindingProfileEpoch === undefined ? {} : { bindingProfileEpoch }) }
     },
     async check(ticket: string, signal: AbortSignal) {
-      if (claimed !== ticket) return stale()
+      if (claimed?.ticket !== ticket) return stale()
       const result = await send({ operation: 'check', ticket }, signal)
       if (result.state !== 'current' || result.ticket !== ticket) return stale()
       return { current: true as const }
     },
+    async signBindingIntent(ticket: string, rawRegistration: HostBindingRegistration, signal: AbortSignal) {
+      if (!input.verifyBindingIntent) throw new HostAuthorityError('upgrade_required')
+      const request = claimed
+      if (!request || request.ticket !== ticket || request.operation !== 'binding_intent')
+        throw new HostAuthorityError('unauthorized')
+      const registration = parseHostBindingRegistration(rawRegistration)
+      const result = await send({ operation: 'sign_binding', ticket, registration }, signal)
+      if (result.state !== 'binding_intent' || result.ticket !== ticket || claimed !== request)
+        return stale()
+      const { proof } = result, { claims } = proof
+      if (claims.profileId !== profileId || (bindingProfileEpoch !== undefined && claims.profileEpoch !== bindingProfileEpoch) ||
+          claims.mainBotId !== request.botId ||
+          claims.sessionId !== request.sessionId || claims.messageId !== request.sourceMessageId ||
+          claims.expiresAt > request.intent.expiresAt ||
+          (['requestId', 'messageSeq', 'messageDigest', 'previewDigest', 'commandDigest'] as const)
+            .some(key => claims[key] !== request.intent[key]) ||
+          (Object.keys(registration) as Array<keyof HostBindingRegistration>)
+            .some(key => claims[key] !== registration[key])) return stale()
+      input.verifyBindingIntent(proof)
+      return proof
+    },
+    async signBindingReceipt(ticket: string, rawRegistration: HostBindingRegistration, lookupId: string, signal: AbortSignal) {
+      if (!input.verifyBindingReceipt) throw new HostAuthorityError('upgrade_required')
+      const request = claimed, profileEpoch = bindingProfileEpoch
+      if (!request || request.ticket !== ticket || request.operation !== 'binding_receipt' || profileEpoch === undefined)
+        throw new HostAuthorityError('unauthorized')
+      const registration = parseHostBindingRegistration(rawRegistration)
+      const result = await send({ operation: 'sign_binding_receipt', ticket, registration, lookup_id: lookupId }, signal)
+      if (result.state !== 'binding_receipt' || result.ticket !== ticket || claimed !== request) return stale()
+      const { proof } = result, { claims } = proof
+      if (claims.profileId !== profileId || claims.profileEpoch !== profileEpoch || claims.mainBotId !== request.botId ||
+          claims.sessionId !== request.sessionId || claims.lookupId !== lookupId ||
+          (Object.keys(registration) as Array<keyof HostBindingRegistration>).some(key => claims[key] !== registration[key])) return stale()
+      input.verifyBindingReceipt(proof)
+      return proof
+    },
     async finish(ticket: string, result: PrivateTwinWorkerResult, signal: AbortSignal) {
-      if (claimed !== ticket) return stale()
+      if (claimed?.ticket !== ticket) return stale()
       const bytes = Buffer.from(JSON.stringify(parsePrivateTwinWorkerResult(result)), 'utf8')
       // The validated result is a nonempty JSON object within the wire limit.
       const header = { ticket, total_bytes: bytes.length, digest: digest(bytes) }
@@ -76,6 +123,7 @@ export function createPrivateTwinControlChannel(input: Readonly<{
         if (nextOffset === bytes.length) {
           if (reply.state !== 'completed' || reply.ticket !== ticket) return stale()
           claimed = undefined
+          bindingProfileEpoch = undefined
           return { completed: true as const }
         }
         if (reply.state !== 'staged' || reply.ticket !== ticket || reply.next_offset !== nextOffset) return stale()
