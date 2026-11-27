@@ -179,6 +179,8 @@ MCP 配置解析和运行确认由 POSIX 与 Windows 存储适配器共用一个
 
 受管启动器可以为已通过监听器核验的 Account Profile Worker 启用 Slark 本人分身适配。Native 父进程为每个 Worker 单独生成凭证，仅用于该 Worker 的私有回环路由。经签名的 Unix 控制连接根据当前账户授权正在执行的工具调用的领取、检查和回传。分片传输绑定当前账户、Profile 和 Worker 代次。Profile 变化、Worker 被替换或连接关闭都会使票据失效。
 
+Host 为同一次领取签署绑定意图或回执查询后，才向私有 Worker 转发已确认的群配对码。Worker 为确认时选定的群兑换配对码。Slark 通过原反向桥回执确认是否生效。
+
 私有 task coordination 通过 `taskCoordinationEnvironmentsJson` 使用独立固定的 `urn:slark:task-coordination:v1` 环境策略（macOS launcher 为 `DSH_HOST_TASK_COORDINATION_ENVIRONMENTS`；仅子进程使用 `DSH_PROFILE_TASK_COORDINATION_ENVIRONMENTS`）。Windows 接受相同原始策略或 typed array，两者不能同时传入。策略仅含公钥；缺失时不广告支持。每次当前 control 都验证已认证 Account 和进程 peer。Main 为原 worker cut 签名，并要求同一捕获 worker 持久化 Ack 后才返回 `closed`。receipt 恢复保留原 peer、时间及签名字节。Account、Profile、registry generation 或 worker 失效会取消原 consumer 请求，覆盖其 awaited 执行。[Session Controller](../../api/session-controller/README.zh.md#collaboration-analysis-journal) 拥有持久下限及库存语义。
 
 `profile.collaboration_delivery` 在首个分块捕获当前授权 Account worker，并在每个分块及持久写入后重新核验 worker 和 Account。Host 跨连接最多保留四个上传和 4 MiB，30 秒后使上传过期，并在取消中的写入结束前保留资源额度。它仅签署与原 Profile 持久提交匹配的描述符；重连后的重试恢复 Profile 的首次提交。客户端核验签名、Account、进程、完整不可变正文摘要和分块偏移。Unix 与 Windows 启动仅在安装私有接收器后发布此 capability；云端确认仍是独立操作。

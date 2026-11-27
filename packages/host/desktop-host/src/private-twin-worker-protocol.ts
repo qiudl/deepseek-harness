@@ -27,6 +27,13 @@ export type PrivateTwinWorkerRequest = PrivateTwinSource & (
 type Presentation = Readonly<{ ref: string; callId: string; resultSeq: number }>
 type BindingKind = 'twin' | 'group'
 type BindingAction = 'bind' | 'replace' | 'end'
+type PairingSource = Readonly<{
+  namespaceId: string
+  roomId: string
+  groupId: string
+  memberCount: number
+  membersDigest: string
+}>
 type BindingProposal = Readonly<{
   kind: BindingKind
   action: BindingAction
@@ -35,6 +42,8 @@ type BindingProposal = Readonly<{
   targetRef: string | null
   defaultAgentRef: string | null
   messageSeq: number
+  groupSource?: PairingSource
+  groupSourceName?: string
 }>
 type BindingTargetLookup = Readonly<{
   kind: BindingKind
@@ -80,6 +89,15 @@ export type PrivateTwinWorkerResult =
   | { readonly state: 'unavailable' | 'pending' | 'failed' | 'unconfirmed' }
   | { readonly state: 'replied'; readonly answer: string | null }
   | { readonly state: 'accepted' | 'active'; readonly receipt: string }
+  | {
+    readonly state: 'group_pairing'
+    readonly operationId: string
+    readonly receipt: string
+    readonly endpoint: string
+    readonly ticket: string
+    readonly expiresAt: number
+    readonly source: PairingSource
+    readonly target: Readonly<{ projectId: string; channelId: string; defaultAgentId: string }> }
   | { readonly state: 'binding_status'; readonly status: 'accepted' | 'in_progress' | 'active' | 'ended' | 'cancelled' | 'denied' | 'conflict' | 'outcome_unknown' | 'missing' }
   | { readonly state: 'outcome_unknown'; readonly receipt?: string }
   | { readonly state: 'needs_confirmation' | 'selection_required' | 'stale' | 'cancelled' | 'conflict' | 'denied' }
@@ -149,13 +167,30 @@ function bindingAction(kind: unknown, action: unknown): { kind: BindingKind; act
 }
 
 function parseBindingProposal(input: unknown): BindingProposal {
-  const row = record(input, ['kind', 'action', 'sourceRef', 'sourceId', 'targetRef', 'defaultAgentRef', 'messageSeq'])
+  const row = record(input)
+  const hasGroupSource = Object.hasOwn(row, 'groupSource')
+  record(row, ['kind', 'action', 'sourceRef', 'sourceId', 'targetRef', 'defaultAgentRef', 'messageSeq',
+    ...(hasGroupSource ? ['groupSource', 'groupSourceName'] : [])])
   const { kind, action } = bindingAction(row.kind, row.action)
   if ((action === 'end') !== (row.targetRef === null) ||
       ((kind !== 'group' || action === 'end') && row.defaultAgentRef !== null)) return invalid()
-  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId: id(row.sourceId),
+  if (hasGroupSource && (kind !== 'group' || action !== 'bind')) return invalid()
+  const sourceId = id(row.sourceId)
+  const groupSourceName = hasGroupSource ? text(row.groupSourceName, 800) : undefined
+  if (groupSourceName && (groupSourceName.length > 200 || /\p{Cc}/u.test(groupSourceName))) return invalid()
+  return { kind, action, sourceRef: opaque(row.sourceRef), sourceId,
     targetRef: row.targetRef === null ? null : opaque(row.targetRef),
-    defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq) }
+    defaultAgentRef: row.defaultAgentRef === null ? null : opaque(row.defaultAgentRef), messageSeq: positive(row.messageSeq),
+    ...(groupSourceName ? { groupSource: parsePairingSource(row.groupSource, sourceId), groupSourceName } : {}) }
+}
+
+function parsePairingSource(raw: unknown, roomId: string): PairingSource {
+  const row = record(raw, ['namespaceId', 'roomId', 'groupId', 'memberCount', 'membersDigest'])
+  const namespaceId = matched(row.namespaceId, /^ds-bot:[A-Za-z0-9_.:-]{1,249}$/u)
+  const groupId = matched(row.groupId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
+  const memberCount = positive(row.memberCount)
+  if (row.roomId !== roomId || roomId.replace(/^session-/u, '').toLowerCase() !== groupId || memberCount > 1_000) return invalid()
+  return { namespaceId, roomId, groupId, memberCount, membersDigest: matched(row.membersDigest, /^[0-9a-f]{64}$/u) }
 }
 
 function parseBindingTargetLookup(input: unknown): BindingTargetLookup {
@@ -232,6 +267,17 @@ export function parsePrivateTwinWorkerResult(value: unknown): PrivateTwinWorkerR
     case 'accepted': case 'active':
       record(input, ['state', 'receipt'])
       return { state: input.state, receipt: opaque(input.receipt) }
+    case 'group_pairing': {
+      record(input, ['state', 'operationId', 'receipt', 'endpoint', 'ticket', 'expiresAt', 'source', 'target'])
+      if (typeof input.endpoint !== 'string' || input.endpoint.length > 200 || !URL.canParse(input.endpoint)) return invalid()
+      const endpoint = new URL(input.endpoint)
+      if (endpoint.protocol !== 'https:' || endpoint.origin !== input.endpoint) return invalid()
+      const source = record(input.source), target = record(input.target, ['projectId', 'channelId', 'defaultAgentId'])
+      const operationId = matched(input.operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u)
+      return { state: input.state, operationId, receipt: opaque(input.receipt), endpoint: endpoint.origin, ticket: opaque(input.ticket),
+        expiresAt: positive(input.expiresAt), source: parsePairingSource(source, id(source.roomId)),
+        target: { projectId: id(target.projectId), channelId: id(target.channelId), defaultAgentId: id(target.defaultAgentId) } }
+    }
     case 'binding_status': {
       record(input, ['state', 'status'])
       const status = input.status

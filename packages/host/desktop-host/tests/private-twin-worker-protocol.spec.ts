@@ -95,6 +95,23 @@ it('keeps proposal arguments and public preview output within their exact wire c
   ]) expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
 })
 
+it('validates reviewed group coordinates and pairing tickets on the private wire', () => {
+  const groupId = 'b3eeeaf0-6d61-4f7c-a6ad-feccae862c10', roomId = 'session-' + groupId
+  const groupSource = { namespaceId: 'ds-bot:workspace', roomId, groupId, memberCount: 2, membersDigest: 'b'.repeat(64) }
+  const proposal = { kind: 'group', action: 'bind', sourceId: roomId, sourceRef: ticket, targetRef: ticket,
+    defaultAgentRef: ticket, messageSeq: 5, groupSource, groupSourceName: '发布群' }
+  const request = { ...source, rootCallId: source.callId, operation: 'binding_propose', proposal }
+  expect(parsePrivateTwinWorkerReply(claim, { request })).toEqual({ request })
+  expect(() => parsePrivateTwinWorkerReply(claim, { request: { ...request, proposal: { ...proposal, sourceId: 'other' } } }))
+    .toThrow('invalid_private_twin_worker_frame')
+  const handoff = { state: 'group_pairing', endpoint: 'https://slark.example', receipt: ticket, ticket, operationId: groupId,
+    expiresAt: 100_000, source: groupSource, target: { projectId: 'project', channelId: 'channel', defaultAgentId: 'agent' } }
+  expect(parsePrivateTwinWorkerResult(handoff)).toEqual(handoff)
+  for (const value of [{ ...handoff, endpoint: 'https://slark.example/extra' },
+    { ...handoff, source: { ...groupSource, memberCount: 1001 } }, { ...handoff, credential: ticket }])
+    expect(() => parsePrivateTwinWorkerResult(value)).toThrow('invalid_private_twin_worker_frame')
+})
+
 it('keeps remote target pages bounded and omits the stable Cloud IDs', () => {
   const lookup = { kind: 'twin', sourceRef: ticket, sourceId: 'child', query: null, targetRef: null, cursor: null }
   const request = { ...source, rootCallId: source.callId, operation: 'binding_targets', lookup }

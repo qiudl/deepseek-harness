@@ -123,6 +123,7 @@ export class PrivateTwinTransfer {
         if (upload.offset < upload.bytes.length) return { state: 'staged', ticket: lease.ticket, next_offset: upload.offset }
         if (digest(upload.bytes) !== upload.digest) return stale()
         const result = parsePrivateTwinWorkerResult(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(upload.bytes)))
+        if (result.state === 'group_pairing' && !lease.signedBinding && !lease.signedReceipt) return stale()
         const finish = { operation: 'finish', ticket: lease.ticket, result } as const
         guard()
         parsePrivateTwinWorkerReply(finish, await lease.receiver.operate(finish, signal))
