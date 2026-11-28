@@ -747,7 +747,8 @@ export async function startDesktopHostApplication(
             const prior = bundledCatalog.getForDependency(packageName, originalDependency)
             const layer = loaded.layers.find(row => row.packageName === packageName)
             const patchPath = layer?.patchPaths.length === 1 ? layer.patchPaths[0] : undefined
-            if (prior?.version !== '0.3.8-slark.1.1' || !patchPath) throw Error('upgrade_required')
+            const knownWorkBuddyPredecessor = prior?.version === '0.3.8-slark.1.1' || prior?.version === '0.3.8-slark.1.19'
+            if (!prior || !knownWorkBuddyPredecessor || !patchPath) throw Error('upgrade_required')
             const targetPatch = await readBundledPluginPatch(bundledCatalog, plugin)
             if (targetPatch !== await readBundledPluginPatch(bundledCatalog, prior)
               || targetPatch !== readFileSync(patchPath, 'utf8')) throw Error('plugin_upgrade_shared_entry_changed')
