@@ -43,9 +43,9 @@ import { ProfilePluginExecutor } from './profile-plugin-executor.ts'
 import { runProfilePluginCommand } from './plugin-command.ts'
 import { inspectPluginScripts } from './plugin-script-preflight.ts'
 import { planPluginToggle } from './plugin-toggle-plan.ts'
-import { composedEntryIds, pluginBundleEntries } from './plugin-bundle-entries.ts'
+import { composedEntryIds, pluginBundleContributions, pluginBundleEntries } from './plugin-bundle-entries.ts'
 import { BundledPluginCatalog, bundledDependencySpec, parseBundledPluginSpec } from './bundled-plugins.ts'
-import { verifyCopiedBundledPlugin, verifyProfileRollbackArchive } from './bundled-plugin-recovery.ts'
+import { readBundledPluginPatch, verifyCopiedBundledPlugin, verifyProfileRollbackArchive } from './bundled-plugin-recovery.ts'
 import { prepareBundledPluginUpgrade } from './plugin-upgrade-plan.ts'
 import { parseDocument } from 'yaml'
 import { capturePluginTree } from './plugin-tree-snapshot.ts'
@@ -727,7 +727,9 @@ export async function startDesktopHostApplication(
       ...(bundledCatalog === undefined ? {} : {
         upgradePlan: async (profileId: string, packageName: string, spec: string, patch: string, originalDependency: string) => {
           const requested = parseBundledPluginSpec(spec)
-          if (packageName !== 'ds-bot' || requested?.name !== packageName || requested.version !== '0.2.16') throw Error('upgrade_required')
+          const workBuddyUpdate = requested?.version === '0.3.8-slark.1.20'
+          if (packageName !== 'ds-bot' || requested?.name !== packageName ||
+            (requested.version !== '0.2.16' && !workBuddyUpdate)) throw Error('upgrade_required')
           const plugin = bundledCatalog.get(requested.name, requested.version)
           if (!plugin) throw Error('bundled_plugin_unavailable')
           requiredProfile(registry, profileId)
@@ -737,9 +739,25 @@ export async function startDesktopHostApplication(
           if (loaded.skippedBundles.length) throw Error('plugin_bundle_missing')
           const homePatch = join(profileRoot, 'cordis.patch.yml')
           const overrides = existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : []
-          pluginBundleEntries(loaded.layers, [...loaded.patches, ...overrides], packageName)
           const rollback = await verifyProfileRollbackArchive(webRoot, originalDependency, packageName, uid)
           capturePluginTree(join(webRoot, 'node_modules', packageName), uid)
+          if (workBuddyUpdate) {
+            // These repairs change executable code only. Retain the user's exact Profile
+            // overlay and confirm the same active Bot entries and inactive legacy shell.
+            const prior = bundledCatalog.getForDependency(packageName, originalDependency)
+            const layer = loaded.layers.find(row => row.packageName === packageName)
+            const patchPath = layer?.patchPaths.length === 1 ? layer.patchPaths[0] : undefined
+            if (prior?.version !== '0.3.8-slark.1.1' || !patchPath) throw Error('upgrade_required')
+            const targetPatch = await readBundledPluginPatch(bundledCatalog, plugin)
+            if (targetPatch !== await readBundledPluginPatch(bundledCatalog, prior)
+              || targetPatch !== readFileSync(patchPath, 'utf8')) throw Error('plugin_upgrade_shared_entry_changed')
+            const { active } = pluginBundleContributions(loaded.layers, [...loaded.patches, ...overrides],
+              packageName, 'ui-settings-general')
+            if (JSON.stringify(active.map(row => row.entryId.slice('include:'.length)).sort())
+              !== JSON.stringify([...plugin.entryIds].sort())) throw Error('plugin_entry_conflict')
+            return { patch, rollback }
+          }
+          pluginBundleEntries(loaded.layers, [...loaded.patches, ...overrides], packageName)
           const plan = await prepareBundledPluginUpgrade(bundledCatalog, plugin, loaded.layers, patch, overrides)
           const document = parseDocument(plan.patch)
           if (document.errors.length || document.warnings.length) throw Error('invalid_patch')
