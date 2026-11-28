@@ -835,12 +835,19 @@ export async function startDesktopHostApplication(
         const homePatch = join(profileRoot, 'cordis.patch.yml')
         /* v8 ignore next -- ensureWorker materializes homePatch before plugin acknowledgement. */
         const overrides = [...loaded.patches, ...(existsSync(homePatch) ? loadOverlayPatches('dsh', homePatch) : [])]
-        const expected = pluginBundleEntries(loaded.layers, overrides, packageName)
+        // Only a catalog-backed DS Bot archive may intentionally replace the legacy settings surface.
+        const webRoot = join(profileRoot, 'profiles/web')
+        const manifest = packageName === 'ds-bot' && bundledCatalog
+          ? JSON.parse(readFileSync(join(webRoot, 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown> }
+          : undefined
+        const trustedBot = bundledCatalog?.getForDependency(packageName, manifest?.dependencies?.[packageName])
+        const { active, disabled } = pluginBundleContributions(loaded.layers, overrides, packageName,
+          trustedBot ? 'ui-settings-general' : undefined)
         await workers.dispose(profileId)
         context.guard(); context.signal.throwIfAborted()
         await ensureWorker(profile)
         context.guard(); context.signal.throwIfAborted()
-        await waitForPluginRuntime(await workers.activate(profileId), expected, context.signal)
+        await waitForPluginRuntime(await workers.activate(profileId), active, context.signal, [], disabled)
       },
     })
     const executor = new ProfileExtensionExecutor(mcpExecutor, skillExecutor, pluginExecutor)
